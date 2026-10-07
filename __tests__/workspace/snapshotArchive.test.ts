@@ -23,9 +23,8 @@ import { captureWorkspaceSnapshot, writeWorkspaceSnapshotArchive } from '@/backe
 import { runWithWorkspace } from '@/utils/workspace';
 import { encryptWithPassword, getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
 import { parseSessionKey, open, type EncryptionMetadata } from '@/utils/encryption/format';
-import { CODEX_AUTH_SOURCE_FILE } from '@/backend/services/model/adapters/codexAuth';
 
-const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
+const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_WORKER_SNAPSHOT_KEY', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
 
 describe('portable workspace capture', () => {
   let root: string;
@@ -40,6 +39,7 @@ describe('portable workspace capture', () => {
     process.env.CODEX_HOME = path.join(root, 'personal');
     delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
     delete process.env.FLUJO_PARENT_DATA_DIR;
+    delete process.env.FLUJO_WORKER_SNAPSHOT_KEY;
     delete process.env.FLUJO_SNAPSHOT_MAX_BYTES;
     delete process.env.FLUJO_SNAPSHOT_MAX_FILE_BYTES;
     mockBuildPlan.mockClear();
@@ -96,17 +96,44 @@ describe('portable workspace capture', () => {
     }
   });
 
-  it('seeds subscription auth from the active host without copying Codex runtime databases', async () => {
+  it.each([undefined, 'invalid', randomBytes(32).toString('base64')])('refuses selected subscription auth in the plaintext exporter even with restore key %s', async (key) => {
+    if (key) process.env.FLUJO_WORKER_SNAPSHOT_KEY = key;
     await put('db/models.json', '[{"id":"codex","adapter":"codex-cli","ApiKey":""}]');
     const auth = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'test-access', refresh_token: 'test-refresh' } });
     await fs.mkdir(process.env.CODEX_HOME!, { recursive: true });
     await fs.writeFile(path.join(process.env.CODEX_HOME!, 'auth.json'), auth);
     await put('db/codex-runtime/auth.json', 'stale');
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE', message: expect.stringContaining('plaintext') });
+    expect(await fs.readFile(path.join(process.env.CODEX_HOME!, 'auth.json'), 'utf8')).toBe(auth);
+  });
+
+  it('omits live and stale restricted homes without a selected Codex model', async () => {
+    await put('db/models.json', '[]');
+    for (const home of ['codex-private-live', 'codex-private-stale', 'CODEX-PRIVATE-alias']) {
+      await put(`db/${home}/auth.json`, JSON.stringify({ tokens: { access_token: `canary-${home}` } }));
+      await put(`db/${home}/sessions/session.jsonl`, 'private transcript');
+    }
+    await put('db/codex-private-notes.json', 'also excluded by reserved prefix');
+    await put('userdata/kept.txt', 'ordinary data');
     const captured = await captureWorkspaceSnapshot('research', 1);
-    expect(captured.manifest.runtime.codexAuth).toBe('chatgpt');
-    expect(await captured.zip.file('db/codex-runtime/auth.json')!.async('string')).toBe(auth);
-    expect(JSON.parse(await captured.zip.file(`db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`)!.async('string'))).toEqual({ version: 1, source: 'workspace' });
-    expect(captured.manifest.files.find(file => file.path.endsWith('/auth.json'))?.mode).toBe(0o600);
+    expect(captured.manifest.runtime.codexAuth).toBe('none');
+    expect(Object.keys(captured.zip.files).some(name => /codex-private-/i.test(name))).toBe(false);
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const bytes = await fs.readFile(archive.archivePath);
+      const unpacked = await JSZip.loadAsync(bytes);
+      expect(await unpacked.file('userdata/kept.txt')!.async('string')).toBe('ordinary data');
+      expect(Object.keys(unpacked.files).some(name => /codex-private-/i.test(name))).toBe(false);
+    } finally { await fs.rm(archive.stagingDir, { recursive: true, force: true }); }
+  });
+
+  it('refuses credential-bearing captures at the plaintext writer boundary', async () => {
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    captured.manifest.runtime.codexAuth = 'chatgpt';
+    await expect(writeWorkspaceSnapshotArchive(captured)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+    captured.manifest.runtime.codexAuth = 'none';
+    captured.zip.file('db/codex-private-stale/auth.json', 'synthetic secret');
+    await expect(writeWorkspaceSnapshotArchive(captured)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
   });
 
   it('fails before producing a clone when subscription credentials are unavailable', async () => {

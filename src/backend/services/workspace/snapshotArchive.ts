@@ -9,7 +9,6 @@ import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { addFolderToZipLinkSafe, assertLinkFreeFileParent } from './backupRestoreFs';
 import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorkspaceFlowDependencies, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
-import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
 import { getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
 import type { EncryptionMetadata } from '@/utils/encryption/format';
@@ -213,7 +212,8 @@ export async function captureWorkspaceSnapshot(
     'browser-profile', 'bash-utils', 'db/worker-bootstrap-secrets.json',
   ];
   const skipRuntimePath = (entryPath: string): boolean =>
-    excludedRuntimePaths.some(prefix => entryPath === prefix || entryPath.startsWith(`${prefix}/`));
+    excludedRuntimePaths.some(prefix => entryPath === prefix || entryPath.startsWith(`${prefix}/`))
+      || /^db\/codex-private-[^/]*(?:\/|$)/i.test(entryPath);
 
   for (const subtree of WORKSPACE_SUBTREES) {
     signal?.throwIfAborted();
@@ -317,18 +317,11 @@ export async function captureWorkspaceSnapshot(
     signal?.throwIfAborted();
     throw new SnapshotArchiveError('MCP_UNSUPPORTED', error instanceof Error ? error.message : 'MCP runtime cannot be reconstructed.');
   }
-  let codexAuth: 'chatgpt' | 'none' = 'none';
+  const codexAuth = 'none' as const;
   if (requiresCodexAuth) {
-    try {
-      const auth = await readCodexAuthForTransfer(workspace);
-      signal?.throwIfAborted();
-      putPrivateFile('db/codex-runtime/auth.json', auth);
-      putPrivateFile(`db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`, Buffer.from(JSON.stringify(WORKSPACE_CODEX_AUTH_SOURCE)));
-      codexAuth = 'chatgpt';
-    } catch (error) {
-      signal?.throwIfAborted();
-      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', error instanceof Error ? error.message : 'Codex login is unavailable.');
-    }
+    // This exporter writes a plaintext ZIP. The worker's restore key does not
+    // encrypt it; auth transfer requires a separate encrypted export contract.
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'ChatGPT authentication cannot be exported in a plaintext workspace snapshot. Use an encrypted credential transfer.');
   }
   const encryptionMetadata = await readCapturedJson<EncryptionMetadata>('db/encryption_key.json', {} as EncryptionMetadata);
   const encryption = encryptionMetadata.encryption_type === 'user' ? 'user' : 'default';
@@ -376,6 +369,10 @@ export async function writeWorkspaceSnapshotArchive(
 ): Promise<WorkspaceArchiveResult> {
   const { signal } = options;
   signal?.throwIfAborted();
+  if (captured.manifest.runtime.codexAuth === 'chatgpt'
+      || Object.keys(captured.zip.files).some(name => /^db\/codex-(?:runtime|private-[^/]*)(?:\/|$)/i.test(name))) {
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Codex authentication cannot be written in a plaintext workspace snapshot.');
+  }
   if (await isCredentialMigrationPending(captured.manifest.workspace)) {
     throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
   }
