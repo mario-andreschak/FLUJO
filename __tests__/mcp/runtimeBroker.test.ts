@@ -17,7 +17,7 @@ import {
 import { createStdioTransport } from '@/backend/services/mcp/connection';
 import { runWithWorkspace } from '@/utils/workspace';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
-import { trustedHostMcpApproval } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 
 const PROOF_PREFIX = 'flujo-mcp-app-runtime-proof-v1:';
 const IDE_TOKEN = 'A'.repeat(32);
@@ -143,7 +143,7 @@ describe('MCP App sidecar runtime broker', () => {
     const profile = installTrustedHostProfile({ name: 'runtime-broker-factory-test' });
     const config = profile.config;
     config.enableMcpApps = true;
-    const policy = trustedHostMcpApproval(config).policy;
+    const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames,
       MCP_APP_RUNTIME_REGISTER_URL_ENV, MCP_APP_RUNTIME_REGISTER_TOKEN_ENV] };
     profile.approve();
