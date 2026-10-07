@@ -6,6 +6,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { ownerPolicySchema } from './ownerCredentials';
+import { windowsPrivateAuthorityStamp } from './windowsPrivateAuthority';
 
 /** Admit only own data properties; configuration accessors never run during consent. */
 export function trustedHostEnvironment(config: MCPStdioConfig): Map<string, string> {
@@ -29,12 +30,20 @@ const MAX_SOURCE_BYTES = 256 * 1024 * 1024;
 const MAX_MEMBERS = 16_384;
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 
+export const TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES = [
+  'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+  'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'TMPDIR', 'TMP', 'TEMP',
+  'NPM_CONFIG_CACHE', 'PIP_CACHE_DIR', 'UV_CACHE_DIR',
+  ...(process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH'] : []),
+] as const;
+
 /** A request for explicit host trust, never effective approval or an OS sandbox. */
 export const trustedHostMcpPolicySchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal('trusted-host'),
   privileges: z.literal('owner-account'),
   runtime: z.enum(['node', 'native']),
+  runtimeHome: z.enum(['host', 'isolated']).optional(),
   entryPoint: absolutePath,
   sourceRoot: absolutePath,
   sourceDigest: digestSchema,
@@ -159,6 +168,7 @@ export function readPrivateApproval(filename: string | undefined): unknown {
   if (!filename || !path.isAbsolute(filename)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const relative = path.relative(path.resolve(getDataDir()), path.resolve(filename));
   if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const windowsAuthority = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filename) : undefined;
   if (process.platform !== 'win32' && typeof process.getuid === 'function') {
     const uid = BigInt(process.getuid());
     let directory = path.dirname(path.resolve(filename));
@@ -172,11 +182,14 @@ export function readPrivateApproval(filename: string | undefined): unknown {
     }
   }
   const chunks: Buffer[] = [];
-  const stat = readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk)));
-  if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  if (process.platform !== 'win32' && typeof process.getuid === 'function'
-      && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
+  try {
+    const stat = readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk)));
+    if (windowsAuthority !== undefined && windowsPrivateAuthorityStamp(filename) !== windowsAuthority) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (process.platform !== 'win32' && typeof process.getuid === 'function'
+        && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  }
   finally { for (const chunk of chunks) chunk.fill(0); }
 }
 
@@ -206,7 +219,8 @@ export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
       domain: 'flujo:mcp:trusted-host-consent:v1', command, args, cwd, requestedEnvironment,
       policy: { ...policy, environmentNames: [...policy.environmentNames].sort() },
       capabilities: { roots, sampling: config.sampling ?? null, elicitation: config.elicitation ?? null,
-        apps: config.enableMcpApps === true, skills: config.enableMcpSkills === true, rootPath },
+        apps: config.enableMcpApps === true, skills: config.enableMcpSkills === true, rootPath,
+        runtimeHomeMode: config.runtimeHomeMode ?? null },
     })).digest('hex');
   } catch { throw new TrustedHostMcpError('HOST_POLICY_INVALID'); }
 }
