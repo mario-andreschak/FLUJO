@@ -1,6 +1,7 @@
 import { flattenCustomHeaders, resolveConfigHeaders, resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 import type { MCPStdioConfig, MCPStreamableConfig } from '@/shared/types/mcp';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: async (value: unknown) => value,
@@ -91,21 +92,28 @@ describe('MCP connection data admission', () => {
 
   it('applies env admission to stdio launch construction without spawning a process', () => {
     const inheritedValue = jest.fn(() => 'SYNTHETIC-INHERITED');
-    const env = Object.fromEntries([
-      ['MODE', { value: 'SYNTHETIC' }], ['EMPTY', ''], ['__proto__', 'SYNTHETIC-OWN'],
-      ['BAD=NAME', 'SYNTHETIC-BAD-NAME'], ['BAD\0NAME', 'SYNTHETIC-BAD-NAME'],
-      ['INHERITED', Object.create({ get value() { return inheritedValue(); } })], ['NUMBER', { value: 42 }],
-    ]);
-    const config: MCPStdioConfig = { ...common, transport: 'stdio', command: 'fixture-command', args: [], env };
-    const result = resolveStdioLaunch(config);
+    const approved = installTrustedHostProfile({ environment: Object.fromEntries([
+      ['MODE', 'SYNTHETIC'], ['EMPTY', ''], ['__proto__', 'SYNTHETIC-OWN'],
+    ]) });
+    try {
+    const result = resolveStdioLaunch(approved.config);
     expect(result.env.MODE).toBe('SYNTHETIC');
     expect(result.env.EMPTY).toBe('');
+    expect(Object.getPrototypeOf(result.env)).toBeNull();
     expect(Object.prototype.hasOwnProperty.call(result.env, '__proto__')).toBe(true);
     expect(Object.getOwnPropertyDescriptor(result.env, '__proto__')?.value).toBe('SYNTHETIC-OWN');
-    for (const name of ['BAD=NAME', 'BAD\0NAME', 'INHERITED', 'NUMBER']) {
-      expect(Object.prototype.hasOwnProperty.call(result.env, name)).toBe(false);
+    const malformed = [
+      ['BAD=NAME', 'SYNTHETIC-BAD-NAME'], ['BAD\0NAME', 'SYNTHETIC-BAD-NAME'],
+      ['INHERITED', Object.create({ get value() { return inheritedValue(); } })], ['NUMBER', { value: 42 }],
+    ];
+    for (const [name, value] of malformed) {
+      const config: MCPStdioConfig = { ...approved.config,
+        env: { ...approved.config.env, ...Object.fromEntries([[name, value]]) } };
+      expect(() => approved.approve(config)).toThrow();
+      expect(() => resolveStdioLaunch(config)).toThrow();
     }
     expect(inheritedValue).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();
+    } finally { approved.restore(); }
   });
 });
