@@ -347,8 +347,8 @@ it('refuses queue overload before opening payloads and drains twelve admitted re
     expect(counts.sourceOpened).toBe(4);
     expect(counts.destinationOpened).toBe(4);
     overflow = copy('rejected-parent');
-    expect(getRunResourceCopyPressure()).toMatchObject({ active: 4, queued: 8, rejected: rejectedBefore + 1 });
     expect(await overflow).toEqual({ skipped: 'copy-pressure' });
+    expect(getRunResourceCopyPressure()).toMatchObject({ active: 4, queued: 8, rejected: rejectedBefore + 1 });
     expect(counts.sourceOpened).toBe(4);
   } finally {
     release();
