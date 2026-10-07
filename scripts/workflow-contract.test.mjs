@@ -16,6 +16,10 @@ test('repository workflows retain mandatory verification and immutable direct ac
 });
 
 for (const [label, change] of [
+  ['cold worker candidate cache', files => { files['verify-cloud-worker-image.yml'].jobs['worker-snapshot-image'].steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-from'] = 'type=gha,scope=cloud-worker'; }],
+  ['candidate writing the release cache', files => { files['verify-cloud-worker-image.yml'].jobs['worker-snapshot-image'].steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-to'] = 'type=gha,scope=cloud-worker,mode=max'; }],
+  ['publisher reading a candidate cache', files => { files['publish-cloud-worker.yml'].jobs.publish.steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-from'] += '\ntype=gha,scope=worker-image-candidate'; }],
+  ['publisher writing a candidate cache', files => { files['publish-cloud-worker.yml'].jobs.publish.steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-to'] = 'type=gha,scope=worker-image-candidate,mode=max'; }],
   ['mutable action', (files) => { files['verify.yml'].jobs.typecheck.steps[0].uses = 'actions/checkout@main'; }],
   ['persisted checkout credentials', (files) => { files['verify.yml'].jobs.typecheck.steps[0].with['persist-credentials'] = true; }],
   ['broad default token', (files) => { files['verify.yml'].permissions.contents = 'write'; }],

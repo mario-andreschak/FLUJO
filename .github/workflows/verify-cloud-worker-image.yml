@@ -51,7 +51,9 @@ jobs:
           build-args: |
             FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
             FLUJO_BUILD_REVISION=${{ env.SOURCE_REVISION }}
-          cache-from: type=gha,scope=cloud-worker
+          cache-from: |
+            type=gha,scope=worker-image-candidate
+            type=gha,scope=cloud-worker
           cache-to: type=gha,scope=worker-image-candidate,mode=max
       - name: Inspect immutable candidate and execute both snapshot profiles
         env:

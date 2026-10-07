@@ -125,6 +125,17 @@ function assertInstallerProvenance(workflow) {
 }
 
 export function assertWorkflowContract(workflows) {
+  const candidateBuild = workflows['verify-cloud-worker-image.yml']?.jobs?.['worker-snapshot-image']?.steps
+    ?.find(step => step.uses?.startsWith('docker/build-push-action@'));
+  const publisherBuild = workflows['publish-cloud-worker.yml']?.jobs?.publish?.steps
+    ?.find(step => step.uses?.startsWith('docker/build-push-action@'));
+  const cacheReads = step => String(step?.with?.['cache-from'] ?? '').trim().split(/\r?\n/).map(line => line.trim()).sort();
+  if (JSON.stringify(cacheReads(candidateBuild)) !== JSON.stringify(['type=gha,scope=cloud-worker', 'type=gha,scope=worker-image-candidate'])
+      || candidateBuild?.with?.['cache-to'] !== 'type=gha,scope=worker-image-candidate,mode=max'
+      || JSON.stringify(cacheReads(publisherBuild)) !== JSON.stringify(['type=gha,scope=cloud-worker'])
+      || publisherBuild?.with?.['cache-to'] !== 'type=gha,scope=cloud-worker,mode=max') {
+    throw new Error('Worker candidates must read both caches and write only the candidate cache; the publisher must use only the release cache.');
+  }
   assertInstallerProvenance(workflows['installer.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
