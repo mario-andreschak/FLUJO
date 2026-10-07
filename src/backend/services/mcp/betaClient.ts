@@ -19,7 +19,6 @@ import {
   flattenCustomHeaders,
   httpConfigKey,
   resolveStdioLaunch,
-  attachShippedWorkspaceReadiness,
   stdioConfigKey,
   capabilityKey,
   ClientWithBetaMarker,
@@ -29,6 +28,7 @@ import {
 import { createOAuthClientProvider } from "./oauth";
 import { McpIsolationError } from '../security/isolatedMcp';
 import { attachMcpIsolation } from './isolation';
+import { attachTrustedHost, trustedHostBrokerEnvironment } from './trustedHost';
 import { createRootsListHandler } from "./roots";
 import { samplingEnabled, createSamplingHandler } from "./sampling";
 import { elicitationEnabled, createElicitationHandler } from "./elicitation";
@@ -151,11 +151,13 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
       // working against every existing server.
       // An isolated v1 image uses the classic handshake. The SDK's auto mode
       // clones stdio spawn parameters for a sibling; that cannot share one CID.
-      versionNegotiation: { mode: config.isolation === undefined ? "auto" : "legacy" },
+      // Auto negotiation may clone a stdio transport and spawn an untracked
+      // sibling. Every local process must use the profile-owned generation.
+      versionNegotiation: { mode: config.transport === 'stdio' ? "legacy" : "auto" },
     },
   );
 
-  client.setRequestHandler("roots/list", createRootsListHandler(config));
+  client.setRequestHandler("roots/list", createRootsListHandler(config, client));
   if (serverHasSampling) {
     const handler = createSamplingHandler(config);
     client.setRequestHandler("sampling/createMessage", async (request) =>
@@ -223,7 +225,7 @@ export function createBetaTransport(
   | BetaStreamableHTTPClientTransport
   | BetaSSEClientTransport {
   assertMcpTransport(config);
-  if (config.isolation !== undefined && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+  if ((config.isolation !== undefined || config.trustedHost !== undefined) && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (config.transport === "websocket") {
     throw new Error(
       "The v2-beta MCP SDK has no websocket transport; use the v1 path",
@@ -296,16 +298,22 @@ export function createBetaTransport(
     : undefined;
   let transport: BetaStdioClientTransport;
   try {
-    transport = new BetaStdioClientTransport({
+    const parameters = {
       command,
       args,
-      env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
+      env: runtimeBroker ? { ...env, ...trustedHostBrokerEnvironment(config, runtimeBroker.env) } : env,
       cwd,
-      stderr: isolation ? 'ignore' : 'pipe',
+      stderr: isolation ? 'ignore' as const : 'pipe' as const,
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
-    });
+    };
+    if (!isolation) {
+      Object.freeze(parameters.args);
+      Object.freeze(parameters.env);
+      Object.freeze(parameters);
+    }
+    transport = new BetaStdioClientTransport(parameters);
     if (isolation) attachMcpIsolation(transport, config, isolation);
-    else attachShippedWorkspaceReadiness(transport, config, cwd);
+    else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
   } catch (error) {
     isolation?.close();
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);

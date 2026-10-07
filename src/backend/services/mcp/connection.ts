@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
+import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
   type ManagedMcpIsolation,
@@ -319,6 +320,7 @@ export function stdioConfigKey(
     rootPath: config.rootPath ?? "",
     isolateRuntimeHome,
     isolation: config.isolation,
+    trustedHost: config.trustedHost,
   });
 }
 
@@ -468,7 +470,7 @@ export function createTransport(
   | SSEClientTransport {
   assertMcpTransport(config);
   log.debug("Entering createTransport method");
-  if (config.isolation !== undefined && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+  if ((config.isolation !== undefined || config.trustedHost !== undefined) && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
 
   if (config.transport === "streamable") {
     log.info(
@@ -777,11 +779,13 @@ export function resolveStdioLaunch(
 ): StdioLaunch {
   if (config.transport !== 'stdio') throw new McpTransportError();
   if (config.isolation !== undefined) {
+    if (config.trustedHost !== undefined) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     const isolation = prepareMcpIsolation(config, transformEnv(config.env));
     const { launch } = isolation;
     return { command: launch.command, args: [...launch.args], env: isolatedSdkEnvironment(launch), cwd: launch.cwd, isolation };
   }
   assertHostMcpLaunchAllowed(config);
+  if (config.trustedHost !== undefined) return resolveTrustedHostLaunch(config);
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
   const isShipped = Boolean(shippedDescriptor);
@@ -1007,17 +1011,22 @@ export function createStdioTransport(
   const transportoptions: StdioServerParameters = {
     command: command,
     args: args,
-    env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
+    env: runtimeBroker ? { ...env, ...trustedHostBrokerEnvironment(config, runtimeBroker.env) } : env,
     cwd: cwd,
     stderr: isolation ? 'ignore' : 'pipe',
     ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
   };
+  if (!isolation) {
+    Object.freeze(transportoptions.args);
+    Object.freeze(transportoptions.env);
+    Object.freeze(transportoptions);
+  }
 
   let transport: StdioClientTransport;
   try {
     transport = new StdioClientTransport(transportoptions);
     if (isolation) attachMcpIsolation(transport, config, isolation);
-    else attachShippedWorkspaceReadiness(transport, config, cwd);
+    else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
   } catch (error) {
     isolation?.close();
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
