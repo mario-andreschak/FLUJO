@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Tests for the SchedulerService (Planned Executions #10).
  *
@@ -64,12 +67,13 @@ const readState = (id: string) => store.get(`planned-execution-state/${id}`) as 
 describe('SchedulerService', () => {
   let scheduler: SchedulerService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store.clear();
     runFlowMock.mockReset();
     runFlowMock.mockResolvedValue(completedResult);
     scheduler = new SchedulerService();
-  });
+    privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
+});
 
   it('creates an execution, persists the envelope, and arms the schedule', async () => {
     const { execution, error } = await scheduler.create(scheduleInput());

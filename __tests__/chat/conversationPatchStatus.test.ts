@@ -1,7 +1,7 @@
 import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
 import { installOwnerFixture } from '../utils/ownerFixture';
 let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>> | undefined;
-afterEach(() => { ownerFixture?.restore(); ownerFixture = undefined; });
+afterEach(async () => { await ownerFixture?.restore(); ownerFixture = undefined; });
 let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
 afterEach(async () => { await privateFixture?.restore(); });
 /**

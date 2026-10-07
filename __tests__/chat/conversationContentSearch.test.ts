@@ -62,7 +62,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  ownerFixture?.restore();
+  await ownerFixture?.restore();
   ownerFixture = undefined;
   delete process.env.FLUJO_DATA_DIR;
   await fs.rm(tmpDir, { recursive: true, force: true });
