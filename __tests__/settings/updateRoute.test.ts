@@ -131,8 +131,18 @@ describe('safe branch checks', () => {
   ])('carries checkout %s as literal PowerShell data through cmd/start', async cwd => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
     const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
-    const readSpy = jest.spyOn(fs, 'readFile').mockResolvedValue('{"name":"flujo-ai","version":"test"}');
-    const accessSpy = jest.spyOn(fs, 'access').mockResolvedValue(undefined);
+    const realReadFile = fs.readFile.bind(fs);
+    const realAccess = fs.access.bind(fs);
+    const readSpy = jest.spyOn(fs, 'readFile').mockImplementation((file, options) =>
+      file === path.join(cwd, 'package.json')
+        ? Promise.resolve('{"name":"flujo-ai","version":"test"}')
+        : realReadFile(file, options)
+    );
+    const accessSpy = jest.spyOn(fs, 'access').mockImplementation((file, mode) =>
+      file === path.join(cwd, 'scripts', 'update.ps1')
+        ? Promise.resolve(undefined)
+        : realAccess(file, mode)
+    );
     mockGit.status.mockResolvedValue(cleanStatus({ behind: 1 }));
     try {
       expect(await (await POST(postReq())).json()).toMatchObject({ success: true, restarting: true });
