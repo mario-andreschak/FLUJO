@@ -12,6 +12,7 @@ const INSTALLATION_WIDE = new Set([
   '/api/worker/status',
   '/api/workspaces',
 ]);
+const REMOTE_AVATAR_ROUTES = new Set(['/api/avatar/remote/[voiceAction]', '/api/avatar/remote/availability']);
 const MARKER = 'FLUJO_INSTALLATION_WIDE_ROUTE:';
 
 function collectRouteFiles(dir: string): string[] {
@@ -50,6 +51,17 @@ describe('workspace route coverage', () => {
       }
 
       expect(INSTALLATION_WIDE.has(pathname)).toBe(false);
+      if (REMOTE_AVATAR_ROUTES.has(pathname)) {
+        expect(source).toContain("from '@/backend/services/avatar/remoteVoice'");
+        for (const method of methods) {
+          expect(source).toMatch(new RegExp(`withRemoteAvatarRoute\\(\\s*${method}_handler\\s*\\)`));
+        }
+        const delegate = fs.readFileSync(path.join(process.cwd(), 'src/backend/services/avatar/remoteVoice.ts'), 'utf8');
+        expect(delegate).toContain("from '@/app/api/_workspace'");
+        expect(delegate).toContain('const scoped = withWorkspaceRoute(');
+        expect(delegate).toContain('scoped(selected)');
+        continue;
+      }
       expect(source).toContain("from '@/app/api/_workspace'");
       for (const method of methods) {
         expect(source).toMatch(

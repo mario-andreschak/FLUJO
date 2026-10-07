@@ -1,4 +1,22 @@
+import { TextEncoder, TextDecoder } from 'node:util';
+import { ReadableStream, TransformStream } from 'node:stream/web';
+import { MessagePort } from 'node:worker_threads';
 import { bindPhoneHostRequests, initializeWorkspaceSelection, __resetWorkspaceSelectionForTests } from '@/frontend/utils/workspaceSelection';
+
+// jsdom has no native fetch primitives; use the locked runtime implementation.
+const nativeGlobalNames = ['TextEncoder', 'TextDecoder', 'ReadableStream', 'TransformStream', 'MessagePort', 'Request', 'Response', 'Headers'] as const;
+const originalGlobals = nativeGlobalNames.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+beforeAll(() => {
+  Object.assign(globalThis, { TextEncoder, TextDecoder, ReadableStream, TransformStream, MessagePort });
+  const { Request, Response, Headers } = jest.requireActual<typeof import('undici')>('undici');
+  Object.assign(globalThis, { Request, Response, Headers });
+});
+afterAll(() => {
+  for (const [name, descriptor] of originalGlobals) {
+    if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+    else Reflect.deleteProperty(globalThis, name);
+  }
+});
 
 let lifetime: AbortController;
 let upstream: jest.Mock;

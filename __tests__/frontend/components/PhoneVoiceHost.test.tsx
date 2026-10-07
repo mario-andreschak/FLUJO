@@ -12,7 +12,7 @@ jest.mock('@/frontend/utils/workspaceSelection', () => ({
 }));
 jest.mock('@/frontend/components/AvatarWorld/index', () => {
   const React = jest.requireActual('react');
-  return { __esModule: true, default: ({ voiceTransport }: { voiceTransport: NativeVoiceTransport }) => {
+  return { __esModule: true, default: function MockAvatarWorld({ voiceTransport }: { voiceTransport: NativeVoiceTransport }) {
     mockTransport = voiceTransport;
     React.useEffect(() => { mockMounts++; }, []);
     return null;
