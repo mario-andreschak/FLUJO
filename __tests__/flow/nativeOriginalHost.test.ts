@@ -35,6 +35,7 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createPersonaNativeOriginalHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 let directory: string;
 let previousData: string | undefined;
@@ -46,6 +47,8 @@ let emitHandoff = false;
 let afterHandoffStop: (() => Promise<void>) | undefined;
 let afterPrompt: (() => Promise<void>) | undefined;
 let transcriptText = 'done';
+let lateResultFirst = false;
+let offeredLateUsage: unknown;
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
@@ -54,6 +57,7 @@ beforeEach(async () => {
   selectedModel = { ...modelFixture };
   promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
   afterPrompt = undefined; transcriptText = 'done';
+  lateResultFirst = false; offeredLateUsage = undefined;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -75,6 +79,12 @@ beforeEach(async () => {
       expect(child.exitCode).toBeNull();
       promptCount++;
       await afterPrompt?.();
+      if (lateResultFirst) {
+        const result = { type: 'result', subtype: 'success', result: transcriptText, session_id: 'offline-fixture',
+          num_turns: 1, total_cost_usd: 0.012, duration_ms: 19, usage: { input_tokens: 7, output_tokens: 4 } };
+        offeredLateUsage = result;
+        yield result;
+      }
       yield { type: 'assistant', uuid: 'fixture-assistant', message: { role: 'assistant', content: [{ type: 'text', text: transcriptText }] } };
       if (emitHandoff) {
         const sdk = options as typeof options & {
@@ -196,6 +206,10 @@ async function ledger() {
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
   it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
     transcriptText = 'late-private-persona-transcript';
+    lateResultFirst = true;
+    const events: string[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+    try {
     await withClaim(async (input, goalId) => {
       afterPrompt = async () => {
         expect(promptCount).toBe(1);
@@ -208,16 +222,21 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       const reservation = (await ledger()).reservations[0];
       expect(reservation.state).not.toBe('released');
       expect(reservation.sdkUsage).toBeUndefined();
+      expect(offeredLateUsage).toMatchObject({ type: 'result', result: transcriptText,
+        usage: { input_tokens: 7, output_tokens: 4 }, total_cost_usd: 0.012 });
+      expect(events.join('\n')).not.toContain(transcriptText);
       const saved = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
       expect(saved).toBeDefined();
       expect(JSON.stringify(saved!.messages)).not.toContain(transcriptText);
       const archive = path.join(getWorkspaceDataDir(), 'db', 'model-turns', reservation.owner.conversationId);
-      const outcome = JSON.parse(await fs.readFile(path.join(archive, `${reservation.invocationId}.outcome.json`), 'utf8'));
-      expect(outcome.outcome).not.toBe('completed');
+      const immutable = JSON.parse(gunzipSync(await fs.readFile(path.join(archive, `${reservation.invocationId}.v2.json.gz`))).toString('utf8'));
+      expect(immutable.entry.outcome).toBe('running');
+      await expect(fs.access(path.join(archive, `${reservation.invocationId}.outcome.json`))).rejects.toMatchObject({ code: 'ENOENT' });
       const holdId = createHash('sha256').update(JSON.stringify(reservation.owner.conversationId)).digest('hex');
       expect(JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal',
         'holds', `${holdId}.json`), 'utf8'))).toMatchObject({ invocationId: reservation.invocationId });
     }, 'handoff-refusal');
+    } finally { unsubscribe(); }
   }, 30000);
   it('runs the production Core dispatch through ProcessNode and V2 saved Original to actual child release', async () => {
     await withClaim(async () => {
