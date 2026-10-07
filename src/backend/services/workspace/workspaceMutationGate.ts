@@ -142,18 +142,25 @@ export async function withWorkspaceMutation<T>(
   if (current && !current.participants) throw contextError(false, 'context predates the current admission protocol');
   if (current?.readCaptures?.has(normalizedWorkspace)) throw contextError(false, 'cannot write from a read capture');
   const inherited = current?.participants?.get(normalizedWorkspace);
-  if (inherited) {
-    return runWithWorkspace(normalizedWorkspace, async () => {
-      await checkParticipant(normalizedWorkspace, inherited);
-      // Ownership verification can yield. Never create a child from a retired token.
-      if (!inherited.live) throw contextError(!!inherited.admission.recovery, 'context has finished');
-      return participate(normalizedWorkspace, inherited.admission, async participant => {
+  // Ordinary background callbacks may inherit a retired token. They must obtain
+  // new admission, rather than borrow the old owner's or a surviving sibling's.
+  // Recovery callbacks retain an exclusive capability and must never fall back.
+  if (inherited && !inherited.live && inherited.admission.recovery) {
+    throw contextError(true, 'context has finished');
+  }
+  if (inherited?.live) {
+    await runWithWorkspace(normalizedWorkspace, () => checkParticipant(normalizedWorkspace, inherited));
+    // Ownership verification can yield. A retired ordinary callback starts a
+    // fresh registration below; a retired recovery callback remains refused.
+    if (!inherited.live && inherited.admission.recovery) throw contextError(true, 'context has finished');
+    if (inherited.live) {
+      return runWithWorkspace(normalizedWorkspace, () => participate(normalizedWorkspace, inherited.admission, async participant => {
         await checkParticipant(normalizedWorkspace, participant);
         const result = await task();
         await checkParticipant(normalizedWorkspace, participant);
         return result;
-      });
-    });
+      }));
+    }
   }
 
   const state = stateFor(normalizedWorkspace);
