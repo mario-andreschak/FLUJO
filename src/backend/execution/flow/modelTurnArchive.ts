@@ -21,11 +21,11 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { commitFlowDurableMutation, type FlowDurableMutationContext } from './executionAuthority';
 import {
   MODEL_TURN_ARCHIVE_READ_LIMITS,
-  ModelTurnArchiveReadError,
   readBoundedModelTurnFile,
   readBoundedModelTurnJson,
   withModelTurnArchiveRead,
 } from './modelTurnArchiveReadBudget';
+import { rewriteLegacyModelTurnOutcome } from './legacyModelTurnOutcomeStream';
 
 const gzipAsync = promisify(gzip);
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
@@ -445,30 +445,11 @@ async function updateModelDispatchOutcomeWithinMutation(
     await writeAtomic(outcomePath(conversationId, dispatchId), bytes);
     return;
   }
-  // Historical v1 outcomes require a transcript rewrite. Share the inspection
-  // allowance through replacement so concurrent reads and rewrites cannot each
-  // allocate a separate budget, and reject overload without retaining a queue.
+  // Legacy compatibility retains its JSON shape and complete historical bytes.
+  // Stream validation and the outcome edit instead of allocating a transcript
+  // buffer, UTF-16 source, parsed object, and serialization for every update.
   const file = snapshotPath(conversationId, dispatchId, 1);
-  await withModelTurnArchiveRead(async () => {
-    const snapshot = await readBoundedModelTurnJson<ModelTurnSnapshot>(file);
-    snapshot.entry.outcome = outcome;
-    const serialized = JSON.stringify(snapshot);
-    const limitError = () => new ModelTurnArchiveReadError(
-      'MODEL_TURN_ARCHIVE_READ_LIMIT',
-      'Legacy model-turn outcome exceeds archive inspection limits. The persisted archive is unchanged.',
-    );
-    if (Buffer.byteLength(serialized, 'utf8') > MODEL_TURN_ARCHIVE_READ_LIMITS.decodedSnapshotBytes) throw limitError();
-    let compressed: Buffer;
-    try {
-      compressed = await gzipAsync(Buffer.from(serialized, 'utf8'), {
-        maxOutputLength: MODEL_TURN_ARCHIVE_READ_LIMITS.compressedSnapshotBytes,
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw limitError();
-      throw error;
-    }
-    await writeAtomic(file, compressed);
-  });
+  await withModelTurnArchiveRead(() => rewriteLegacyModelTurnOutcome(file, outcome));
 }
 
 export async function readModelTurnSnapshot(
