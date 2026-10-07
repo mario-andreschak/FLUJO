@@ -136,7 +136,7 @@ it('observes signed terminal uncertainty without reconciling it, writing storage
   const occurrenceAt = nextOccurrence().toISOString();
   expect(await claimWorkerOccurrence(plan, occurrenceAt, 'diagnostic-pending-run')).toBe('eligible');
   await recordWorkerTerminalObservation(plan, { runId: 'diagnostic-pending-run', executionGenerationId: plan.generationId,
-    firedAt: occurrenceAt, finishedAt: occurrenceAt, status: 'completed', triggerSummary: 'Fixture' });
+    conversationId: 'diagnostic-conversation', firedAt: occurrenceAt, finishedAt: occurrenceAt, status: 'completed', triggerSummary: 'Fixture' });
   const controlFile = path.join(getDataDir(), '.worker-local-recovery', getCurrentWorkspace(),
     `${createHash('sha256').update(`${getCurrentWorkspace()}\0${plan.id}`).digest('hex')}.json`);
   const before = await fs.readFile(controlFile);
