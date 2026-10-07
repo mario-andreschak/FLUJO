@@ -6,12 +6,13 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { ENCRYPTION_LOCKED_EVENT } from '@/frontend/utils/encryptionLock';
 
-type Inventory = { planToken: string; credentials: number; protection: 'passphrase' | 'operator-file' };
+type Inventory = { planToken: string; credentials: number; protection: 'passphrase' | 'operator-file'; retireActiveKey: boolean; activeKeyWillChange: boolean };
 const stores = new Set(['models', 'mcp_servers', 'global_env_vars', 'registry_account']);
 function inventory(value: unknown): Inventory {
-  const data = value as { planToken?: unknown; protection?: unknown; stores?: unknown };
+  const data = value as { planToken?: unknown; protection?: unknown; stores?: unknown; retireActiveKey?: unknown; activeKeyWillChange?: unknown };
   if (!data || typeof data.planToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.planToken)
-      || !['passphrase', 'operator-file'].includes(String(data.protection)) || !Array.isArray(data.stores)) throw new Error();
+      || !['passphrase', 'operator-file'].includes(String(data.protection)) || !Array.isArray(data.stores)
+      || typeof data.retireActiveKey !== 'boolean' || typeof data.activeKeyWillChange !== 'boolean') throw new Error();
   let credentials = 0;
   const seen = new Set<string>();
   for (const row of data.stores) {
@@ -19,7 +20,8 @@ function inventory(value: unknown): Inventory {
     seen.add(row.store); credentials += row.credentials;
   }
   if (!Number.isSafeInteger(credentials)) throw new Error();
-  return { planToken: data.planToken, credentials, protection: data.protection as Inventory['protection'] };
+  return { planToken: data.planToken, credentials, protection: data.protection as Inventory['protection'],
+    retireActiveKey: data.retireActiveKey, activeKeyWillChange: data.activeKeyWillChange };
 }
 
 export default function CredentialMigrationSettings() {
@@ -29,6 +31,7 @@ export default function CredentialMigrationSettings() {
   const [recovery, setRecovery] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [operator, setOperator] = useState(false);
+  const [retireActiveKey, setRetireActiveKey] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [plan, setPlan] = useState<Inventory | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,7 +53,7 @@ export default function CredentialMigrationSettings() {
       const response = await fetch(withWorkspaceUrl('/api/credential-migration', workspace), {
         method: 'POST', cache: 'no-store', signal: request.signal, headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: migrate ? 'migrate' : 'preflight', sourcePassphrase: source || undefined,
-          recoveryPassphrase: recovery, protection: operator ? 'operator-file' : 'passphrase',
+          recoveryPassphrase: recovery, protection: operator ? 'operator-file' : 'passphrase', retireActiveKey,
           ...(migrate ? { planToken: plan!.planToken, confirmMigration: true } : {}) }),
       });
       const data = await response.json();
@@ -61,7 +64,8 @@ export default function CredentialMigrationSettings() {
         clear(); setResult('done');
       } else {
         const prepared = inventory(data);
-        if (prepared.protection !== (operator ? 'operator-file' : 'passphrase')) throw new Error();
+        if (prepared.protection !== (operator ? 'operator-file' : 'passphrase') || prepared.retireActiveKey !== retireActiveKey
+          || (retireActiveKey && !prepared.activeKeyWillChange)) throw new Error();
         setPlan(prepared); setConfirmed(false);
       }
     } catch {
@@ -91,9 +95,12 @@ export default function CredentialMigrationSettings() {
       value={confirmation} onChange={event => { invalidate(); setConfirmation(event.target.value); }} />
     <FormControlLabel control={<Checkbox checked={operator} disabled={busy} onChange={event => { invalidate(); setOperator(event.target.checked); }} />}
       label={t('settings.migration.operator')} />
+    <FormControlLabel control={<Checkbox checked={retireActiveKey} disabled={busy} onChange={event => { invalidate(); setRetireActiveKey(event.target.checked); }} />}
+      label={t('settings.migration.retireKey')} />
     <Button disabled={busy || !valid} onClick={() => void run(false)}>{t('settings.migration.preflight')}</Button>
     {plan && <>
       <Typography>{t('settings.migration.inventory', { count: plan.credentials })}</Typography>
+      <Typography>{t(plan.activeKeyWillChange ? 'settings.migration.keyReplaced' : 'settings.migration.keyRetained')}</Typography>
       <FormControlLabel control={<Checkbox checked={confirmed} disabled={busy} onChange={event => setConfirmed(event.target.checked)} />}
         label={t('settings.migration.confirm')} />
       <Button disabled={busy || !confirmed || !valid} onClick={() => void run(true)}>{t('settings.migration.migrate')}</Button>

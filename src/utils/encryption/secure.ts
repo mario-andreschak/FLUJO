@@ -31,6 +31,13 @@ export class EncryptionLockedError extends Error {
   }
 }
 
+export class CredentialMigrationRequiredError extends Error {
+  constructor() {
+    super('Run credential migration preflight and confirm migration to retire the public-default active key before enabling private encryption.');
+    this.name = 'CredentialMigrationRequiredError';
+  }
+}
+
 declare global {
   var __flujo_encryption_metadata_locks: Map<string, Promise<unknown>> | undefined;
 }
@@ -137,13 +144,15 @@ export async function initializeEncryption(password: string): Promise<boolean> {
     return await withMetadataLock(async () => {
       const metadata = await readMetadata();
       if (metadata?.encryption_type === 'user') return false;
-      const ring = !metadata ? newKeyring()
-        : metadata.encryption_version === 2 ? await unwrapKeyring(metadata, DEFAULT_PASSWORD)
-          : newKeyring(await unwrapLegacyKey(metadata, DEFAULT_PASSWORD));
+      if (metadata?.encryption_version === 2) throw new CredentialMigrationRequiredError();
+      const ring = !metadata ? newKeyring() : newKeyring(await unwrapLegacyKey(metadata, DEFAULT_PASSWORD));
       const committed = await persist(ring, 'user', password, 'passphrase', !metadata);
       return committed.key_id === keyId(ring);
     });
-  } catch { log.error('Could not initialize password encryption'); return false; }
+  } catch (error) {
+    if (error instanceof CredentialMigrationRequiredError) throw error;
+    log.error('Could not initialize password encryption'); return false;
+  }
 }
 
 export async function migrateToUserEncryption(password: string): Promise<boolean> {
@@ -157,6 +166,7 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
     return await withMetadataLock(async () => {
       const metadata = await readMetadata();
       if (!metadata) return false;
+      if (metadata.encryption_version === 2 && metadata.encryption_type !== 'user') throw new CredentialMigrationRequiredError();
       const password = metadata.key_protection === 'operator-file' ? readOperatorSecret()
         : metadata.encryption_type === 'user' ? oldPassword : DEFAULT_PASSWORD;
       if (!password) return false;
@@ -166,7 +176,10 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
       if (getServerDek()) unlockServer(serializeKeyring(ring, metadataRevision(committed)));
       return true;
     });
-  } catch { log.error('Could not change encryption password'); return false; }
+  } catch (error) {
+    if (error instanceof CredentialMigrationRequiredError) throw error;
+    log.error('Could not change encryption password'); return false;
+  }
 }
 
 async function workerRootIdentity(root: string) {

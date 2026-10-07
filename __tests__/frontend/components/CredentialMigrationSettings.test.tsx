@@ -9,7 +9,7 @@ jest.mock('@/frontend/utils/workspaceSelection', () => ({
 jest.mock('@/frontend/utils/encryptionLock', () => ({ ENCRYPTION_LOCKED_EVENT: 'fixture-locked' }));
 const savedFetch = global.fetch;
 let mockFetch: jest.Mock;
-const plan = { planToken: 'a'.repeat(64), protection: 'passphrase', stores: [{ store: 'models', credentials: 3 }] };
+const plan = { planToken: 'a'.repeat(64), protection: 'passphrase', retireActiveKey: false, activeKeyWillChange: false, stores: [{ store: 'models', credentials: 3 }] };
 const response = (body: unknown, ok = true) => ({ ok, json: async () => body }) as Response;
 beforeEach(() => { mockFetch = jest.fn().mockResolvedValue(response(plan)); global.fetch = mockFetch; });
 afterEach(() => { global.fetch = savedFetch; });
@@ -27,7 +27,7 @@ test('preflight authenticates explicit private inputs without mutation or exposi
   await preflight();
   expect(mockFetch.mock.calls[0][0]).toBe('/api/credential-migration?workspace=mounted-source');
   expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ action: 'preflight', sourcePassphrase: 'source-private-passphrase',
-    recoveryPassphrase: 'recovery-private-passphrase', protection: 'passphrase' });
+    recoveryPassphrase: 'recovery-private-passphrase', protection: 'passphrase', retireActiveKey: false });
   expect(screen.getByRole('button', { name: 'settings.migration.migrate' })).toBeDisabled();
 });
 test('passphrase mismatch prevents requests', () => {
@@ -65,6 +65,27 @@ test('operator target is an explicit choice and invalidates the old plan', async
   fireEvent.click(screen.getByRole('button', { name: 'settings.migration.preflight' }));
   await screen.findByText('settings.migration.inventory');
   expect(JSON.parse(mockFetch.mock.calls[1][1].body).protection).toBe('operator-file');
+});
+
+test('explicit key retirement invalidates the plan and displays the reviewed key replacement', async () => {
+  await preflight();
+  fireEvent.click(screen.getByLabelText('settings.migration.confirm'));
+  fireEvent.click(screen.getByLabelText('settings.migration.retireKey'));
+  expect(screen.queryByText('settings.migration.inventory')).not.toBeInTheDocument();
+  mockFetch.mockResolvedValueOnce(response({ ...plan, retireActiveKey: true, activeKeyWillChange: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.migration.preflight' }));
+  await screen.findByText('settings.migration.keyReplaced');
+  expect(JSON.parse(mockFetch.mock.calls[1][1].body).retireActiveKey).toBe(true);
+  expect(screen.getByRole('button', { name: 'settings.migration.migrate' })).toBeDisabled();
+});
+
+test('retirement preflight cannot substitute a retained active key', async () => {
+  render(<CredentialMigrationSettings />); fill();
+  fireEvent.click(screen.getByLabelText('settings.migration.retireKey'));
+  mockFetch.mockResolvedValueOnce(response({ ...plan, retireActiveKey: true, activeKeyWillChange: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.migration.preflight' }));
+  await screen.findByText('settings.migration.failed');
+  expect(screen.queryByRole('button', { name: 'settings.migration.migrate' })).not.toBeInTheDocument();
 });
 test.each([response({ error: 'private-server-secret' }, false), response({ ...plan, stores: [{ store: 'private-server-secret', credentials: 1 }] })])
 ('failure and invalid inventory use fixed remediation and clear all passphrases', async reply => {

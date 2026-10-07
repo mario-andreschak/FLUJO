@@ -29,9 +29,10 @@ async function POST_handler(request: NextRequest) {
     finally { bytes.fill(0); }
     if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.recoveryPassphrase !== 'string'
         || (input.sourcePassphrase !== undefined && typeof input.sourcePassphrase !== 'string')
+        || (input.retireActiveKey !== undefined && typeof input.retireActiveKey !== 'boolean')
         || (input.protection !== undefined && !['passphrase', 'operator-file'].includes(String(input.protection)))) return json({ error: 'Invalid migration request.' }, 400);
     const options = { recoveryPassphrase: input.recoveryPassphrase, sourcePassphrase: input.sourcePassphrase as string | undefined,
-      protection: input.protection as 'passphrase' | 'operator-file' | undefined, signal: request.signal };
+      protection: input.protection as 'passphrase' | 'operator-file' | undefined, retireActiveKey: input.retireActiveKey as boolean | undefined, signal: request.signal };
     if (input.action === 'preflight') return json(await preflightCredentialMigration(options));
     if (input.confirmMigration !== true) return json({ error: 'Explicit migration or recovery confirmation is required.' }, 400);
     if (input.action === 'migrate' && typeof input.planToken === 'string' && /^[a-f0-9]{64}$/.test(input.planToken)) return json(await migrateCredentials(options, input.planToken));

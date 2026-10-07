@@ -6,13 +6,15 @@ import { preflightCredentialMigration, migrateCredentials, recoverCredentialMigr
 import { DEFAULT_PASSWORD, newKeyring, open, seal, unwrapKeyring, wrapKeyring } from '@/utils/encryption/format';
 import { credentialMigrationPath, isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
 import { openRecipientTransfer } from '@/utils/encryption/recipientTransfer';
-import { authenticate, decryptWithPassword, getEncryptionStatus, isEncryptionLocked } from '@/utils/encryption/secure';
+import { authenticate, decryptWithPassword, encryptWithPassword, initializeEncryption, changeEncryptionPassword,
+  CredentialMigrationRequiredError, getEncryptionStatus, isEncryptionLocked } from '@/utils/encryption/secure';
 import { clearItem, loadItem, saveItem, writeFileAtomic } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { getWorkspaceDir, runWithWorkspace } from '@/utils/workspace';
 import { spawnSync } from 'node:child_process';
 import { NextRequest } from 'next/server';
 import { POST as migrationRoute } from '@/app/api/credential-migration/route';
+import { POST as secureRoute } from '@/app/api/encryption/secure/route';
 import { issueOwnerCredential } from '@/backend/services/security/ownerCredentials';
 import { readOAuthTokens, readOAuthClientInformation, readOAuthCodeVerifier, sealOAuthCredential } from '@/backend/services/mcp/oauthCredentialStorage';
 import { captureWorkspaceSnapshot } from '@/backend/services/workspace/snapshotArchive';
@@ -382,4 +384,91 @@ test('already private v2 migration preserves the active key while changing its p
   const inventory = await preflightCredentialMigration(options);
   await migrateCredentials(options, inventory.planToken);
   expect((await unwrapKeyring(await readStore('encryption_key'), recoveryPassphrase)).activeKey).toBe(original.activeKey);
+});
+
+test('DEFAULT v2 initialization and password changes refuse metadata-only rewrapping without modifying any credential file', async () => {
+  await publicDefaultSource();
+  await expect(initializeEncryption(recoveryPassphrase)).rejects.toBeInstanceOf(CredentialMigrationRequiredError);
+  await expect(changeEncryptionPassword(DEFAULT_PASSWORD, recoveryPassphrase)).rejects.toBeInstanceOf(CredentialMigrationRequiredError);
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+  expect(await isCredentialMigrationPending()).toBe(false);
+});
+
+test('the authorized secure HTTP route returns actionable migration refusal for DEFAULT v2', async () => {
+  await publicDefaultSource();
+  const issued = issueOwnerCredential(['control:admin', 'secrets:read'], Date.now() + 60_000);
+  const policy = path.join(root, 'owner-policy.json');
+  await fs.writeFile(policy, JSON.stringify({ schemaVersion: 1, ownerId: 'migration-owner', credentials: [issued.record] }), { mode: 0o600 });
+  process.env.FLUJO_OWNER_AUTH_FILE = policy; process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+  for (const body of [{ action: 'initialize', password: recoveryPassphrase },
+    { action: 'change_password', oldPassword: DEFAULT_PASSWORD, newPassword: recoveryPassphrase }]) {
+    const request = new NextRequest('http://localhost/api/encryption/secure', {
+      method: 'POST', headers: { host: 'localhost', authorization: `Bearer ${issued.token}` }, body: JSON.stringify(body),
+    });
+    const response = await secureRoute(request);
+    expect(response.status).toBe(409);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({ code: 'credential_migration_required', remediation: expect.stringContaining('migration preflight') });
+  }
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+});
+
+test('explicit retirement protects future credentials from copied DEFAULT metadata after historical USER rewrapping', async () => {
+  const exposed = await publicDefaultSource();
+  const copiedPublicMetadata = await readStore('encryption_key');
+  await fs.writeFile(fileFor('encryption_key'), JSON.stringify(await wrapKeyring(exposed, 'user', sourcePassphrase, 'passphrase')));
+  const retirement = { ...options, retireActiveKey: true };
+  const inventory = await preflightCredentialMigration(retirement);
+  expect(inventory).toMatchObject({ retireActiveKey: true, activeKeyWillChange: true });
+  const oldToken = await authenticate(sourcePassphrase);
+  if (!oldToken) throw new Error('Source authentication failed');
+  await migrateCredentials(retirement, inventory.planToken);
+  expect(await isEncryptionLocked()).toBe(true);
+  await expect(encryptWithPassword('blocked-before-unlock')).rejects.toThrow('locked');
+  await expect(encryptWithPassword('blocked-old-session', oldToken, true)).rejects.toThrow('metadata changed');
+  await assertMigrated(true);
+  const target = await unwrapKeyring(await readStore('encryption_key'), recoveryPassphrase);
+  expect(target.activeKey).not.toBe(exposed.activeKey);
+  const attacker = await unwrapKeyring(copiedPublicMetadata, DEFAULT_PASSWORD);
+  expect(await authenticate(recoveryPassphrase)).not.toBeNull();
+  await expect(encryptWithPassword('blocked-old-session-after-unlock', oldToken, true)).rejects.toThrow('metadata changed');
+  const future = await encryptWithPassword('future-private-canary');
+  if (!future) throw new Error('Future credential encryption failed');
+  expect(open(future, target.activeKey, 'flujo:secret:v2')).toBe('future-private-canary');
+  expect(() => open(future, attacker.activeKey, 'flujo:secret:v2')).toThrow();
+  for (const store of ['models', 'mcp_servers', 'global_env_vars', 'registry_account']) {
+    for (const ciphertext of ciphertexts(await readStore(store))) expect(() => open(ciphertext, attacker.activeKey, 'flujo:secret:v2')).toThrow();
+  }
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'fixtures/credential-migration-child.cjs'), process.cwd(), require.resolve('typescript')],
+    { env: { ...process.env, LOG_LEVEL: 'error' }, windowsHide: true, encoding: 'utf8', timeout: 30_000,
+      input: JSON.stringify({ operation: 'read', recoveryPassphrase, expected: ['v2-canary', 'legacy-canary', 'plaintext-canary', 'failed-canary'] }) });
+  expect(result.error).toBeUndefined(); expect(result.status).toBe(0); expect(result.stderr).toBe('');
+  expect(result.stdout).toContain('MIGRATION_SOURCE_PASS');
+});
+
+test.each([false, true])('a preflight cannot change the retirement choice (%s)', async retireActiveKey => {
+  const inventory = await preflightCredentialMigration({ ...options, retireActiveKey });
+  await expect(migrateCredentials({ ...options, retireActiveKey: !retireActiveKey }, inventory.planToken)).rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
+  expect(await isCredentialMigrationPending()).toBe(false);
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+});
+
+test.each([false, true])('interrupted explicit retirement recovers the authenticated journal (rollback=%s)', async rollback => {
+  const original = await unwrapKeyring(await readStore('encryption_key'), sourcePassphrase);
+  const retirement = { ...options, retireActiveKey: true };
+  const inventory = await preflightCredentialMigration(retirement);
+  await expect(migrateCredentials({ ...retirement, checkpoint: async step => {
+    if (step === 'record_written') throw new Error('Interrupted explicit key retirement');
+  } }, inventory.planToken)).rejects.toThrow('Interrupted explicit key retirement');
+  expect(await isCredentialMigrationPending()).toBe(true);
+  // Recovery follows its authenticated after-image even without the request flag.
+  await recoverCredentialMigration(options, rollback);
+  expect(await isCredentialMigrationPending()).toBe(false);
+  if (rollback) {
+    for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+    expect((await unwrapKeyring(await readStore('encryption_key'), sourcePassphrase)).activeKey).toBe(original.activeKey);
+  } else {
+    await assertMigrated(true);
+    expect((await unwrapKeyring(await readStore('encryption_key'), recoveryPassphrase)).activeKey).not.toBe(original.activeKey);
+  }
 });

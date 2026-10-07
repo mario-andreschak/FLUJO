@@ -40,6 +40,8 @@ export interface CredentialMigrationOptions {
   sourcePassphrase?: string;
   recoveryPassphrase: string;
   protection?: Protection;
+  /** Explicit retirement for keys that may have been publicly wrapped historically. */
+  retireActiveKey?: boolean;
   signal?: AbortSignal;
   /** Fault injection only; never sourced from an HTTP request. */
   checkpoint?: (step: 'journal_written' | 'record_written' | 'before_commit', store?: string) => Promise<void>;
@@ -48,6 +50,8 @@ export interface CredentialMigrationInventory {
   planToken: string;
   stores: Array<{ store: string; credentials: number; plaintext: number; v1: number; v2: number; failedPlaintext: number }>;
   protection: Protection;
+  retireActiveKey: boolean;
+  activeKeyWillChange: boolean;
 }
 function fileFor(store: string) { return path.join(getWorkspaceDataDir(), 'db', `${store}.json`); }
 async function readFile(file: string, maxBytes = MAX_RECORD_BYTES): Promise<Buffer> {
@@ -56,7 +60,8 @@ async function readFile(file: string, maxBytes = MAX_RECORD_BYTES): Promise<Buff
 function validateOptions(options: CredentialMigrationOptions) {
   const value = options.recoveryPassphrase;
   if (typeof value !== 'string' || value.length < 16 || Buffer.byteLength(value) > 1024 || value === DEFAULT_PASSWORD
-      || !['passphrase', 'operator-file'].includes(options.protection ?? 'passphrase') || isWorkerMode()) throw new CredentialMigrationError('PROFILE_UNAVAILABLE');
+      || !['passphrase', 'operator-file'].includes(options.protection ?? 'passphrase')
+      || (options.retireActiveKey !== undefined && typeof options.retireActiveKey !== 'boolean') || isWorkerMode()) throw new CredentialMigrationError('PROFILE_UNAVAILABLE');
 }
 async function prepare(options: CredentialMigrationOptions, planSalt = randomBytes(16)): Promise<{ journal: Journal; inventory: CredentialMigrationInventory }> {
   validateOptions(options);
@@ -88,7 +93,8 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
     // A copied public-default wrapper already exposes its active DEK. Rewrapping
     // that key cannot protect future ciphertext; retire it for all live writes.
     // Retain the v1 read key only for the declared legacy compatibility contract.
-    const targetRing = publiclyWrapped ? newKeyring(ring.legacyKey) : ring;
+    const activeKeyWillChange = publiclyWrapped || options.retireActiveKey === true;
+    const targetRing = activeKeyWillChange ? newKeyring(ring.legacyKey) : ring;
     const targetMetadata = await wrapKeyring(targetRing, 'user', targetPassword, protection);
     after.set(StorageKey.ENCRYPTION_KEY, Buffer.from(JSON.stringify(targetMetadata)));
     const stores: CredentialMigrationInventory['stores'] = [];
@@ -149,14 +155,14 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
     let planToken: string;
     try {
       const mac = createHmac('sha256', planKey).update(JSON.stringify([
-        'flujo:credential-migration:plan:v1', getCurrentWorkspace(), path.resolve(getWorkspaceDataDir()), protection,
+        'flujo:credential-migration:plan:v2', getCurrentWorkspace(), path.resolve(getWorkspaceDataDir()), protection, options.retireActiveKey === true,
         Object.entries(entries).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([store, entry]) => [store, entry.beforeHash]),
       ])).digest();
       planToken = planSalt.toString('hex') + mac.subarray(0, 16).toString('hex');
     } finally { planKey.fill(0); }
     const journal: Journal = { version: 1, workspace: getCurrentWorkspace(), id: randomUUID(), createdAt: Date.now(), protection, entries };
     if (Buffer.byteLength(JSON.stringify(journal)) > MAX_TRANSFER_BYTES) throw new CredentialMigrationError('LIMIT_EXCEEDED');
-    return { journal, inventory: { planToken, stores, protection } };
+    return { journal, inventory: { planToken, stores, protection, retireActiveKey: options.retireActiveKey === true, activeKeyWillChange } };
   } finally { planSalt.fill(0); for (const bytes of [...before.values(), ...after.values()]) bytes.fill(0); }
 }
 export async function preflightCredentialMigration(options: CredentialMigrationOptions): Promise<CredentialMigrationInventory> {

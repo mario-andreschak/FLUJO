@@ -13,7 +13,8 @@ import {
   getEncryptionStatus,
   authenticate,
   logout,
-  EncryptionLockedError
+  EncryptionLockedError,
+  CredentialMigrationRequiredError
 } from '@/utils/encryption/secure';
 import { onUnlocked } from '@/backend/init';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -195,6 +196,9 @@ async function POST_handler(req: NextRequest) {
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
   } catch (error) {
+    if (error instanceof CredentialMigrationRequiredError) return NextResponse.json({
+      error: 'Credential migration is required.', code: 'credential_migration_required', remediation: error.message,
+    }, { status: 409, headers: { 'Cache-Control': 'no-store' } });
     if (error instanceof EncryptionLockedError) return NextResponse.json({
       error: 'Private encryption must be initialized or unlocked before accessing credentials.',
       code: 'encryption_locked',
