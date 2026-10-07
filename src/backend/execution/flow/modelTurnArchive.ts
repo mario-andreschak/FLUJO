@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import { gzip } from 'zlib';
+import { gzip, gunzip } from 'zlib';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -28,12 +28,13 @@ import {
 import { rewriteLegacyModelTurnOutcome } from './legacyModelTurnOutcomeStream';
 
 const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 let archiveDirOverride: string | undefined;
 
-const archiveRoot = () =>
-  archiveDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'model-turns');
+const archiveRoot = (workspace?: string) =>
+  archiveDirOverride ?? path.join(getWorkspaceDataDir(workspace), 'db', 'model-turns');
 
 export function _setModelTurnArchiveDirForTests(dir: string | undefined): string | undefined {
   const previous = archiveDirOverride;
@@ -45,19 +46,19 @@ function assertSafeId(value: string, label: string): void {
   if (!SAFE_ID.test(value)) throw new Error(`Unsafe ${label}`);
 }
 
-function conversationDir(conversationId: string): string {
+function conversationDir(conversationId: string, workspace?: string): string {
   assertSafeId(conversationId, 'conversation id');
-  return path.join(archiveRoot(), conversationId);
+  return path.join(archiveRoot(workspace), conversationId);
 }
 
-function snapshotPath(conversationId: string, dispatchId: string, version: 1 | 2 = 2): string {
+function snapshotPath(conversationId: string, dispatchId: string, version: 1 | 2 = 2, workspace?: string): string {
   assertSafeId(dispatchId, 'dispatch id');
-  return path.join(conversationDir(conversationId), `${dispatchId}${version === 2 ? '.v2' : ''}.json.gz`);
+  return path.join(conversationDir(conversationId, workspace), `${dispatchId}${version === 2 ? '.v2' : ''}.json.gz`);
 }
 
-function outcomePath(conversationId: string, dispatchId: string): string {
+function outcomePath(conversationId: string, dispatchId: string, workspace?: string): string {
   assertSafeId(dispatchId, 'dispatch id');
-  return path.join(conversationDir(conversationId), `${dispatchId}.outcome.json`);
+  return path.join(conversationDir(conversationId, workspace), `${dispatchId}.outcome.json`);
 }
 
 async function readOutcome(conversationId: string, dispatchId: string, signal?: AbortSignal) {
@@ -316,19 +317,31 @@ async function sanitizeValue(
   return out;
 }
 
-async function writeAtomic(file: string, data: Buffer): Promise<void> {
+async function writeAtomic(file: string, data: Buffer, durable = false): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(temp, data);
+    if (durable) {
+      const handle = await fs.open(temp, 'wx', 0o600);
+      try { await handle.writeFile(data); await handle.sync(); }
+      finally { await handle.close(); }
+    } else {
+      await fs.writeFile(temp, data);
+    }
     await fs.rename(temp, file);
-  } catch (error) {
-    await fs.rm(temp, { force: true }).catch(() => undefined);
-    throw error;
+  }
+  catch (error) { await fs.rm(temp, { force: true }).catch(() => undefined); throw error; }
+  if (durable) {
+    try {
+      const directory = await fs.open(path.dirname(file), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    } catch { /* directory fsync is unavailable on some Windows filesystems */ }
   }
 }
 
 export interface ArchiveModelDispatchInput {
+  /** Mandatory preallocated origin ID for a journalled native dispatch. */
+  id?: string;
   durableContext?: FlowDurableMutationContext;
   conversationId: string;
   runId?: string;
@@ -355,7 +368,16 @@ export function archiveModelDispatch(input: ArchiveModelDispatchInput): Promise<
 async function archiveModelDispatchWithinMutation(
   input: ArchiveModelDispatchInput,
 ): Promise<ModelTurnIndexEntry> {
-  const id = randomUUID();
+  const id = input.id ?? randomUUID();
+  assertSafeId(id, 'dispatch id');
+  if (input.id) {
+    try {
+      await fs.access(snapshotPath(input.conversationId, id));
+      throw new Error('Native dispatch archive already exists; query the original invocation.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   const ctx: SanitizeContext = {
     conversationId: input.conversationId,
     media: [],
@@ -403,11 +425,11 @@ async function archiveModelDispatchWithinMutation(
     try {
       await fs.access(target);
     } catch {
-      await writeAtomic(target, bytes);
+      await writeAtomic(target, bytes, Boolean(input.id));
     }
   }));
   const compressed = await gzipAsync(Buffer.from(JSON.stringify(snapshot), 'utf8'));
-  await writeAtomic(snapshotPath(input.conversationId, id), compressed);
+  await writeAtomic(snapshotPath(input.conversationId, id), compressed, Boolean(input.id));
   return entry;
 }
 
@@ -483,6 +505,94 @@ async function readModelTurnSnapshotWithinAdmission(
   const record = await readOutcome(conversationId, dispatchId, signal);
   if (record) snapshot.entry.outcome = record.outcome;
   return snapshot;
+}
+
+/** Bounded private read for native original/terminal reconciliation. */
+export async function readNativeModelTurnSnapshot(
+  conversationId: string, dispatchId: string, workspace: string,
+  signal?: AbortSignal,
+): Promise<ModelTurnSnapshot> {
+  return withModelTurnArchiveRead(async () => {
+    signal?.throwIfAborted();
+    for (const directory of [archiveRoot(workspace), conversationDir(conversationId, workspace)]) {
+      const stat = await fs.lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error('Native model-turn archive directory is unsafe.');
+      }
+    }
+    let bytes: Buffer;
+    let version: 1 | 2 = 2;
+    try {
+      bytes = await readNativeArchiveFile(snapshotPath(conversationId, dispatchId, 2, workspace),
+        8 * 1024 * 1024, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      version = 1;
+      bytes = await readNativeArchiveFile(snapshotPath(conversationId, dispatchId, 1, workspace),
+        8 * 1024 * 1024, signal);
+    }
+    const snapshot = JSON.parse((await gunzipAsync(bytes,
+      { maxOutputLength: 32 * 1024 * 1024 })).toString('utf8')) as ModelTurnSnapshot;
+    signal?.throwIfAborted();
+    if (snapshot.version !== version || snapshot.entry?.archiveVersion !== version
+      || snapshot.entry.id !== dispatchId || snapshot.entry.conversationId !== conversationId
+      || !['running', 'completed', 'error', 'cancelled'].includes(snapshot.entry.outcome)
+      || (version === 2 && snapshot.entry.outcome !== 'running')) {
+      throw new Error('Invalid native model-turn snapshot');
+    }
+    if (version === 2) {
+      let outcome: Buffer | undefined;
+      try {
+        outcome = await readNativeArchiveFile(outcomePath(conversationId, dispatchId, workspace),
+          MODEL_TURN_OUTCOME_MAX_BYTES, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (outcome) snapshot.entry.outcome = parseModelTurnOutcomeRecord(
+        JSON.parse(outcome.toString('utf8')), conversationId, dispatchId).outcome;
+    }
+    return snapshot;
+  }, signal);
+}
+
+/** The private snapshot and V2 outcome share admission and the same strict
+ * descriptor/path identity checks. No public inspection reader is substituted. */
+async function readNativeArchiveFile(file: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
+  signal?.throwIfAborted();
+  const entry = await fs.lstat(file, { bigint: true });
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
+    || entry.size < BigInt(1) || entry.size > BigInt(maxBytes)) {
+    throw new Error('Native model-turn archive is missing or unsafe.');
+  }
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  try {
+    const stat = await handle.stat({ bigint: true });
+    const current = await fs.lstat(file, { bigint: true });
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
+      || stat.dev !== entry.dev || stat.ino !== entry.ino
+      || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
+      || current.dev !== entry.dev || current.ino !== entry.ino) {
+      throw new Error('Native model-turn archive changed.');
+    }
+    const bytes = Buffer.alloc(Number(stat.size) + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      signal?.throwIfAborted();
+      const result = await handle.read(bytes, read, bytes.length - read, read);
+      if (!result.bytesRead) break;
+      read += result.bytesRead;
+    }
+    if (BigInt(read) !== stat.size) throw new Error('Native model-turn archive changed.');
+    const after = await handle.stat({ bigint: true });
+    const finalPath = await fs.lstat(file, { bigint: true });
+    if (!after.isFile() || after.nlink !== BigInt(1) || after.size !== stat.size
+      || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs
+      || !finalPath.isFile() || finalPath.isSymbolicLink() || finalPath.nlink !== BigInt(1)
+      || finalPath.dev !== stat.dev || finalPath.ino !== stat.ino
+      || finalPath.size !== stat.size) throw new Error('Native model-turn archive changed.');
+    signal?.throwIfAborted();
+    return bytes.subarray(0, read);
+  } finally { await handle.close(); }
 }
 
 export async function readModelTurnMedia(

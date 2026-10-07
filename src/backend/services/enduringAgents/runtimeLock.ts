@@ -690,6 +690,14 @@ export interface RuntimeProcessIdentity {
   processBirthMarkerV2?: string;
 }
 
+/** Bind a newly spawned child to an OS birth observation, never to PID alone. */
+export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeProcessIdentity> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid child PID.');
+  const birth = await queryProcessBirthMarker(pid);
+  if (!birth || !birthMarkerVersion(birth)) throw new Error('Child process birth identity is unavailable.');
+  return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
+}
+
 export async function getRuntimeProcessIdentity(): Promise<RuntimeProcessIdentity> {
   const birth = await getOwnProcessBirthMarkerV2();
   return {
