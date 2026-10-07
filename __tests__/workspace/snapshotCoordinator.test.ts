@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import type {
   CapturedWorkspaceSnapshot,
@@ -38,6 +39,8 @@ const archive = (name: string): WorkspaceArchiveResult => ({
   archivePath: `/snapshot-test/${name}/workspace.snapshot.zip`,
   stagingDir: `/snapshot-test/${name}`,
   sha256: 'test-sha256',
+  plaintextSha256: 'test-sha256',
+  encrypted: false,
   size: 10,
   files: 1,
   bytes: 7,
@@ -73,6 +76,28 @@ describe('snapshot coordinator cancellation and ownership', () => {
       layoutVersion: 2, workerProtocolVersion: 1,
     });
     expect(info.capability).toBe('available');
+  });
+
+  it('publishes distinct restore and wire digests and detects altered download bytes', async () => {
+    const wire = Buffer.from('authenticated encrypted envelope bytes');
+    const wireHash = createHash('sha256').update(wire).digest('hex');
+    const plaintextHash = 'b'.repeat(64);
+    mockWriteArchive.mockResolvedValueOnce({ ...archive('encrypted'), sha256: wireHash,
+      plaintextSha256: plaintextHash, encrypted: true, size: wire.length });
+    const read = jest.spyOn(fs, 'readFile').mockResolvedValue(wire);
+    try {
+      const started = await snapshotCoordinator.begin('encrypted-download');
+      await flushMicrotasks();
+      await expect(snapshotCoordinator.status(started.sessionId, 'encrypted-download')).resolves.toMatchObject({
+        state: 'ready', sha256: wireHash, plaintextSha256: plaintextHash, encrypted: true,
+      });
+      await expect(snapshotCoordinator.readDownload(started.sessionId, 'encrypted-download')).resolves.toMatchObject({
+        content: wire, sha256: wireHash, plaintextSha256: plaintextHash, encrypted: true,
+      });
+      read.mockResolvedValueOnce(Buffer.from('changed encrypted envelope bytes'));
+      await expect(snapshotCoordinator.readDownload(started.sessionId, 'encrypted-download')).rejects.toMatchObject({ code: 'SNAPSHOT_INTEGRITY' });
+      await expect(snapshotCoordinator.status(started.sessionId, 'encrypted-download')).resolves.toMatchObject({ state: 'failed' });
+    } finally { read.mockRestore(); }
   });
 
   it('reserves a workspace atomically for concurrent begin requests', async () => {

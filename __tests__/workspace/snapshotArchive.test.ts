@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import JSZip from 'jszip';
 import type { Model } from '@/shared/types/model';
 import type { MCPServerConfig } from '@/shared/types/mcp';
@@ -63,7 +63,34 @@ describe('portable workspace capture', () => {
     await fs.writeFile(file, value);
   }
 
+  function decryptArchive(wire: Buffer): Buffer {
+    const envelope = JSON.parse(wire.toString());
+    const decipher = createDecipheriv('aes-256-gcm', Buffer.from(process.env.FLUJO_WORKER_SNAPSHOT_KEY!, 'base64'), Buffer.from(envelope.iv, 'base64'));
+    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
+  }
+
+  it.each([
+    ['models', '[{"ApiKey":"public-profile-api-secret"}]'],
+    ['mcp_servers', '{"server":{"env":{"PRIVATE_TOKEN":"plain-secret"}}}'],
+    ['global_env_vars', '{"PRIVATE_TOKEN":"global-secret"}'],
+    ['registry_account', '{"token":"registry-secret"}'],
+  ])('requires encryption for credential material in %s even in a default profile', async (store, contents) => {
+    await put(`db/${store}.json`, contents);
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const wire = await fs.readFile(archive.archivePath);
+      expect(archive.encrypted).toBe(true);
+      const zip = await JSZip.loadAsync(decryptArchive(wire));
+      expect(await zip.file(`db/${store}.json`)!.async('string')).toBe(contents);
+    } finally { await fs.rm(archive.stagingDir, { recursive: true, force: true }); }
+  });
+
   it('captures FLUJO entities and private MCP settings while excluding disposable runtime state', async () => {
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
     const records = {
       'db/models.json': '[{"id":"model-one","adapter":"openai","ApiKey":"encrypted:test"}]',
       'db/flows/flow-one.json': '{"id":"flow-one","model":"model-one","mcp":"test-server"}',
@@ -89,22 +116,67 @@ describe('portable workspace capture', () => {
     try {
       const bytes = await fs.readFile(archive.archivePath);
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(archive.sha256);
-      const unpacked = await JSZip.loadAsync(bytes);
+      const unpacked = await JSZip.loadAsync(decryptArchive(bytes));
       expect(JSON.parse(await unpacked.file('snapshot-manifest.json')!.async('string'))).toEqual(captured.manifest);
     } finally {
       await fs.rm(archive.stagingDir, { recursive: true, force: true });
     }
   });
 
-  it.each([undefined, 'invalid', randomBytes(32).toString('base64')])('refuses selected subscription auth in the plaintext exporter even with restore key %s', async (key) => {
+  it.each([undefined, 'invalid'])('refuses selected subscription auth without a valid encryption key %s', async (key) => {
     if (key) process.env.FLUJO_WORKER_SNAPSHOT_KEY = key;
     await put('db/models.json', '[{"id":"codex","adapter":"codex-cli","ApiKey":""}]');
     const auth = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'test-access', refresh_token: 'test-refresh' } });
     await fs.mkdir(process.env.CODEX_HOME!, { recursive: true });
     await fs.writeFile(path.join(process.env.CODEX_HOME!, 'auth.json'), auth);
     await put('db/codex-runtime/auth.json', 'stale');
-    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE', message: expect.stringContaining('plaintext') });
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
     expect(await fs.readFile(path.join(process.env.CODEX_HOME!, 'auth.json'), 'utf8')).toBe(auth);
+  });
+
+  it('writes selected auth only inside an authenticated envelope and separates wire and restore digests', async () => {
+    const key = randomBytes(32);
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = key.toString('base64');
+    await put('db/models.json', '[{"id":"codex","adapter":"codex-cli","ApiKey":""}]');
+    const auth = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'encrypted-export-canary', refresh_token: 'refresh-canary' } });
+    await fs.mkdir(process.env.CODEX_HOME!, { recursive: true });
+    await fs.writeFile(path.join(process.env.CODEX_HOME!, 'auth.json'), auth);
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const wire = await fs.readFile(archive.archivePath);
+      expect(wire.toString()).not.toContain('encrypted-export-canary');
+      expect(archive.encrypted).toBe(true);
+      expect(archive.sha256).toBe(createHash('sha256').update(wire).digest('hex'));
+      const envelope = JSON.parse(wire.toString());
+      expect(envelope).toMatchObject({ format: 'flujo-workspace-encrypted', version: 1 });
+      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+      const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
+      expect(archive.plaintextSha256).toBe(createHash('sha256').update(plaintext).digest('hex'));
+      expect(archive.sha256).not.toBe(archive.plaintextSha256);
+      const refreshed = await writeWorkspaceSnapshotArchive(captured);
+      try {
+        const refreshedEnvelope = JSON.parse((await fs.readFile(refreshed.archivePath)).toString());
+        expect(refreshedEnvelope.iv).not.toBe(envelope.iv);
+        expect(refreshed.sha256).not.toBe(archive.sha256);
+        expect(refreshed.plaintextSha256).toBe(archive.plaintextSha256);
+      } finally { await fs.rm(refreshed.stagingDir, { recursive: true, force: true }); }
+
+      const restored = await JSZip.loadAsync(plaintext);
+      expect(await restored.file('db/codex-runtime/auth.json')!.async('string')).toBe(auth);
+      expect(await fs.readdir(archive.stagingDir)).toEqual(['workspace.snapshot.zip']);
+    } finally { await fs.rm(archive.stagingDir, { recursive: true, force: true }); }
+  });
+
+  it.each(['remove', 'replace', 'invalid'])('refuses key %s between capture and write', async (change) => {
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    if (change === 'remove') delete process.env.FLUJO_WORKER_SNAPSHOT_KEY;
+    else process.env.FLUJO_WORKER_SNAPSHOT_KEY = change === 'invalid' ? 'invalid' : randomBytes(32).toString('base64');
+    const staging = jest.spyOn(fs, 'mkdtemp');
+    await expect(writeWorkspaceSnapshotArchive(captured)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+    expect(staging).not.toHaveBeenCalled();
   });
 
   it('omits live and stale restricted homes without a selected Codex model', async () => {
@@ -143,6 +215,7 @@ describe('portable workspace capture', () => {
 
   it('does not require a ChatGPT login for API-key Codex models', async () => {
     await put('db/models.json', '[{"adapter":"codex-cli","ApiKey":"encrypted:synthetic"}]');
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
     expect((await captureWorkspaceSnapshot('research', 1)).manifest.runtime.codexAuth).toBe('none');
   });
 
@@ -150,9 +223,20 @@ describe('portable workspace capture', () => {
     await put('db/encryption_key.json', '{"encryption_type":"user"}');
     await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
     mockDek.mockReturnValue('a'.repeat(16));
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
     const captured = await captureWorkspaceSnapshot('research', 1);
     expect(captured.manifest.runtime.encryption).toBe('user');
     expect(JSON.parse(await captured.zip.file('db/worker-bootstrap-secrets.json')!.async('string'))).toEqual({ version: 1, workspaceDek: 'a'.repeat(16) });
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const wire = await fs.readFile(archive.archivePath);
+      expect(archive.encrypted).toBe(true);
+      expect(wire.toString()).not.toContain('a'.repeat(16));
+      expect(() => JSON.parse(wire.toString())).not.toThrow();
+      await expect(JSZip.loadAsync(wire)).rejects.toThrow();
+    } finally { await fs.rm(archive.stagingDir, { recursive: true, force: true }); }
+
   });
 
   it('captures a headless operator profile without an interactive key and refuses missing or changed mounts', async () => {
@@ -165,6 +249,8 @@ describe('portable workspace capture', () => {
       const ciphertext = await runWithWorkspace('research', () => encryptWithPassword('operator-worker-token'));
       await put('db/models.json', JSON.stringify([{ id: 'headless', ApiKey: `encrypted:${ciphertext}` }]));
       expect(mockDek()).toBeNull();
+      await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+      process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
       const captured = await captureWorkspaceSnapshot('research', 1);
       const bootstrap = JSON.parse(await captured.zip.file('db/worker-bootstrap-secrets.json')!.async('string'));
       const ring = parseSessionKey(bootstrap.workspaceDek);
@@ -208,6 +294,7 @@ describe('portable workspace capture', () => {
       configs: [{ name: 'desktop', transport: 'stdio', command: 'desktop.exe', env: {}, disabled: true, rootPath: '.', _buildCommand: '', _installCommand: '' }],
       flowIds: ['selected'], mcpServerNames: [], requiresCodexAuth: false,
     });
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
     const captured = await captureWorkspaceSnapshot('research', 1, { flowIds: ['selected'] });
     expect(mockSelection).toHaveBeenCalledWith(['selected'], expect.objectContaining({
       flows: [expect.objectContaining({ id: 'selected' })],
