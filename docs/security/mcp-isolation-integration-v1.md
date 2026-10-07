@@ -71,9 +71,16 @@ from this path. Installation/build commands elsewhere in the application are not
 isolated by this change and remain an acceptance gap.
 
 V1 rejects MCP Apps, Skills, sampling and elicitation opt-ins; it advertises no
-stdio OAuth/URL elicitation capability and returns no host roots. These host
-brokers need separate permission design. Beta clients use the SDK's documented
-legacy negotiation mode so its disposable sibling cannot clone the attach command
+stdio OAuth/URL elicitation capability and returns no host roots. Host brokers
+need separate permission design. Roots are also denied to an existing host
+connection when the current config gains an isolation profile, is disabled,
+is missing, or cannot be read/validated.
+The handler checks current admission before reading host root or global values.
+An existing private isolation grant also denies host roots if the current config
+omits its profile.
+
+Beta clients use the SDK's documented legacy negotiation mode so its disposable
+sibling cannot clone the attach command
 for the same container. Classic MCP servers work through either SDK; modern-only
 servers requiring discovery are not qualified for this v1 profile. Ordinary
 nonisolated beta auto-negotiation remains unchanged.
@@ -112,7 +119,7 @@ diagnostics. Literal caller-provided arguments still reach the approved server.
 These controls do not certify all application log/export surfaces, aggregate host
 RSS/CPU across every MCP server, or absence of secrets from allowed tool results.
 
-## Current integration checks
+## Initial #838 integration checks
 
 On Windows with Node 22.23.3 and locked Next 16.3.8, the full application
 TypeScript check passes. All 280 assertions in 22 complete backend suites and

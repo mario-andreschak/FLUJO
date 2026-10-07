@@ -7,6 +7,8 @@ import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { StorageKey, type Settings } from '@/shared/types/storage';
+import { isMcpTransport } from './transportAdmission';
+import { assertHostMcpLaunchAllowed } from './isolation';
 import {
   bindToCurrentWorkspace,
   DEFAULT_WORKSPACE,
@@ -269,23 +271,22 @@ export async function resolveServerRoots(
 /**
  * The freshest config for a server: re-read from storage by name so a roots or rootPath
  * edit made AFTER connect is served correctly (roots changes never rebuild the client,
- * so the closed-over connect-time config can go stale). Falls back to the connect-time
- * config when storage can't provide one (e.g. load failure, or a rename that is about
- * to reconnect anyway).
+ * so the closed-over connect-time config can go stale). A missing or invalid current
+ * config cannot authorize host roots through that stale snapshot.
  */
-async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPServerConfig> {
+async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPServerConfig | undefined> {
   try {
     // Dynamic import to keep module init order flat (roots.ts is imported by connection.ts).
     const { loadServerConfigs } = await import('./config');
     const configs = await loadServerConfigs();
     if (Array.isArray(configs)) {
       const current = configs.find((c) => c.name === connectTimeConfig.name);
-      if (current) return current;
+      if (current && isMcpTransport(current.transport)) return current;
     }
-  } catch (error) {
-    log.warn(`Could not re-load config for ${connectTimeConfig.name}, using connect-time config:`, error);
+  } catch {
+    log.warn(`Could not re-load config for ${connectTimeConfig.name}; roots/list denied`);
   }
-  return connectTimeConfig;
+  return undefined;
 }
 
 /**
@@ -300,6 +301,12 @@ export function createRootsListHandler(config: MCPServerConfig): () => Promise<{
     // Container paths are granted by the private OS policy. Do not advertise
     // installation roots or interpolate host secrets into an isolated server.
     if (config.isolation !== undefined) return { roots: [] };
+    const current = await freshestConfig(config);
+    if (!current || current.disabled || current.isolation !== undefined) return { roots: [] };
+    if (current.transport === 'stdio') {
+      try { assertHostMcpLaunchAllowed(current); }
+      catch { return { roots: [] }; }
+    }
     const [restricted, workspaceRoots] = await Promise.all([
       loadMcpRootsRestriction(),
       loadWorkspaceRoots(),
@@ -307,7 +314,7 @@ export function createRootsListHandler(config: MCPServerConfig): () => Promise<{
     // Choosing workspace folders is itself an explicit scope. Preserve the
     // legacy unrestricted-host behavior only while no workspace scope exists.
     const roots = restricted || workspaceRoots.length > 0
-      ? await resolveServerRoots(await freshestConfig(config), workspaceRoots)
+      ? await resolveServerRoots(current, workspaceRoots)
       : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
