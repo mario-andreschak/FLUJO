@@ -18,7 +18,8 @@ if (mode === 'child') {
     throw new Error('Node changed immediately before native fixture child entry');
   }
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), mode === 'natural' ? 'child' : 'held'],
-    { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+    // Orphan skips libuv's parent-owned kill-on-close job; the controller job forbids breakaway.
+    { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, detached: mode === 'orphan' });
   child.once('error', () => { process.exitCode = 1; });
   if (mode === 'natural') child.once('close', code => { assert.equal(code, 0); console.log('synthetic original root terminal'); });
   else child.once('spawn', () => process.exit(0));
