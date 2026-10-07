@@ -21,7 +21,7 @@ is substantive when it resolves observed friction or behavior and is accepted
 after meaningful review; typo volume and automated commits are not a bus-factor
 metric.
 
-## Reviewable invitation draft (not sent)
+## Reviewable invitation draft
 
 > FLUJO is looking for willing contributors to review core behavior and improve
 > onboarding. You can start with a small offline task using synthetic data and no
@@ -31,5 +31,7 @@ metric.
 > consent to record continuity evidence. Please share your preferred scope and
 > availability; no repository or account permission is granted by this invitation.
 
-The owner must approve recipients and channel before any outreach. No email,
-Slack message, enrollment or permission grant has been performed by this program.
+The owner must approve recipients and channel before any outreach. Record the
+authorized invitation and any response separately from participation consent,
+accepted work, training and access evidence. An invitation does not enroll its
+recipient or grant permissions.
