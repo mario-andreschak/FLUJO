@@ -49,6 +49,8 @@ Record the outcome in a `proxy-reuse` control record with same-connection, disco
 
 ## Weekly normal-workflow cards
 
+For preparation, [read-only reference workflows](reference-workflows.md) supply synthetic inbox, document and page comparison tasks. Their enum-only MCP server and receipt checker let operators rehearse locally without credentials or provider calls. These practice tasks do not count as recurring benefit, model use or human observations.
+
 Before the cohort freezes, each participant chooses a real recurring problem and records a private task definition, expected result, MCP server/tools and success check. Hash that definition into a workflow record with `purpose: normal-workflow`. The assessor checks that three counted protocols represent distinct problems, not renamed duplicates. Rehearsal of the supplied practice file uses `purpose: practice-fixture` and cannot count as recurring benefit.
 
 Candidate templates to adapt to actual user needs:
