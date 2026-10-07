@@ -49,6 +49,11 @@ Record the outcome in a `proxy-reuse` control record with same-connection, disco
 
 ## Weekly normal-workflow cards
 
+For technical rehearsal, use the [three read-only reference workflows](reference-workflows.md)
+from their separately pinned fixture checkout. They exercise triage, document
+comparison and captured-page filtering without private data. Keep the timed
+Card 1 unchanged; practice-fixture results do not count as recurring user benefit.
+
 Before the cohort freezes, each participant chooses a real recurring problem and records a private task definition, expected result, MCP server/tools and success check. Hash that definition into a workflow record with `purpose: normal-workflow`. The assessor checks that three counted protocols represent distinct problems, not renamed duplicates. Rehearsal of the supplied practice file uses `purpose: practice-fixture` and cannot count as recurring benefit.
 
 Candidate templates to adapt to actual user needs:

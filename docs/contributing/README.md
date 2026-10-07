@@ -1,7 +1,7 @@
 # Contributing to Flujo
 
 You can run the focused checks below without a model account, private files,
-an existing FLUJO installation, or paid tool calls. Node.js **22 or newer**, npm
+an existing FLUJO installation, or paid tool calls. Node.js **22.17.0 or newer in the 22.x line, or 24.2.0 or newer in the 24.x line**, npm
 and Git are required. Start from a fresh clone; preserve any existing checkout.
 
 ## Reproducible setup
@@ -29,19 +29,23 @@ PowerShell:
 $contributorData = Join-Path $env:TEMP ('flujo-contributor-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $contributorData | Out-Null
 $env:FLUJO_DATA_DIR = $contributorData
-node scripts/launch-next.mjs dev --webpack --port 4300
+$env:FLUJO_EXPOSURE_MODE = 'localhost'
+node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
 
 POSIX shell:
 
 ```sh
 export FLUJO_DATA_DIR="$(mktemp -d -t flujo-contributor.XXXXXX)"
-node scripts/launch-next.mjs dev --webpack --port 4300
+export FLUJO_EXPOSURE_MODE=localhost
+node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
 
-Open `http://localhost:4300`, keep the terminal running, and stop with Ctrl+C.
-Use a fresh terminal afterward so the disposable data variable does not affect
-your regular installation. Do not import a personal backup or log into a provider
+Open `http://127.0.0.1:4300`, keep the terminal running, and stop with Ctrl+C.
+These commands select both local request policy and a loopback listener, even
+when the shell inherited a network/public exposure setting. Use a fresh terminal
+afterward so the disposable data and exposure variables do not affect your
+regular installation. Do not import a personal backup or log into a provider
 for the offline first PR. UI/model/MCP journeys have separate acceptance gates.
 See [getting started](../getting-started/README.md) when you deliberately choose
 to connect a provider or external tool.
@@ -57,8 +61,10 @@ Read this checkout's `AGENTS.md` and the relevant installed guide under
 3. Reproduce the behavior, make one small change, and test the observable boundary.
 4. Explain the before/after result, revision, commands, failures and skips in the PR.
    Include screenshots for visible UI changes using synthetic data.
-5. Request a human review. Revise from that review and retain its link. A bot PR or
-   an unreviewed draft is useful work but does not count as independent human continuity.
+5. Request the review appropriate to the changed boundary and retain its link.
+   Authorized development and publication can proceed under the current session.
+   Independent human continuity requires an actual consenting human review;
+   automation or an unreviewed draft cannot establish it.
 
 Record setup friction and help received in the [onboarding evidence form](maintainership.md#evidence-record).
 A contributor completing this guide without live coaching is a separate human
@@ -89,11 +95,11 @@ assertion, quarantine a new failure, or regenerate expected output solely to mak
 a check green. Retain skipped/manual/installed-release work as visible gaps.
 
 Execution, credentials, authentication, MCP privileges, install/update, migrations
-and release changes need a human reviewer familiar with the boundary and an
-explicit compatibility/rollback assessment. The author must not self-certify
-independent review. If no qualified reviewer is available, leave the PR pending
-and record the missing backup. Repository enforcement is owned by #565; this
-policy alone does not prove branch protection is enabled.
+and release changes need boundary-focused review and an explicit compatibility/rollback
+assessment. Follow the applicable repository controls and existing session authorization
+for development and publication. Record missing independent human review when it is
+required for a release or continuity claim; the author cannot self-certify it.
+Repository enforcement is owned by #565; this guide does not establish branch protection.
 
 Raise non-sensitive decisions in the linked issue with evidence, alternatives and
 affected consumers. Integration owners settle cross-stream compatibility. Escalate
