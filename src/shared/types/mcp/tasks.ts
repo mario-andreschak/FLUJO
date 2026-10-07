@@ -2,7 +2,7 @@
  * Official MCP Tasks extension — wire contract (issue #404).
  *
  * PROTOCOL FREEZE (plan step 1). The contract below is pinned against the
- * repository's resolved `@modelcontextprotocol/sdk` (1.30.0,
+ * repository's resolved `@modelcontextprotocol/sdk` (1.x,
  * `experimental/tasks`), which is the only Tasks implementation FLUJO can
  * actually interoperate with today. Two deviations from the planning notes are
  * deliberate and load-bearing:
@@ -77,7 +77,7 @@ export function isTerminalMcpTaskStatus(status: McpTaskStatus): boolean {
 /**
  * A pollable task as defined by the Tasks extension. `taskId` and `status` are
  * the only fields FLUJO requires: `ttl`/`createdAt`/`lastUpdatedAt` are
- * required by SDK 1.30.0 but have moved across draft revisions, so they are
+ * required by SDK 1.x but have moved across draft revisions, so they are
  * validated when present and tolerated when absent rather than rejected (a
  * missing timestamp cannot change any lifecycle decision FLUJO makes).
  */
@@ -186,7 +186,7 @@ export function parseCreateTaskResult(value: unknown): McpTaskParseResult {
 }
 
 /**
- * Validate a `tasks/get` / `tasks/cancel` result. SDK 1.30.0 merges the Task
+ * Validate a `tasks/get` / `tasks/cancel` result. SDK 1.x merges the Task
  * into the *top level* of those results, while `CreateTaskResult` nests it
  * under `task`; both shapes are accepted so FLUJO interoperates with servers
  * built against either revision.

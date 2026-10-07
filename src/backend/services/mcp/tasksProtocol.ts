@@ -2,7 +2,7 @@
  * MCP Tasks extension — protocol/SDK adapter (issue #404, plan step 1 & 3).
  *
  * This module is the ONLY place in FLUJO that talks to the experimental Tasks
- * APIs of `@modelcontextprotocol/sdk` (pinned: 1.30.0, `experimental/tasks`).
+ * APIs of the resolved `@modelcontextprotocol/sdk` 1.x (`experimental/tasks`).
  * Everything else consumes the narrow, validated surface exported here, so an
  * SDK/spec revision only has to be absorbed in this file.
  *
