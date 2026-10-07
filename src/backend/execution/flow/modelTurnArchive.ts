@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
@@ -64,13 +64,14 @@ async function readOutcome(conversationId: string, dispatchId: string, signal?: 
   let handle;
   try {
     signal?.throwIfAborted();
-    handle = await fs.open(outcomePath(conversationId, dispatchId), 'r');
+    handle = await fs.open(outcomePath(conversationId, dispatchId), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
   try {
     signal?.throwIfAborted();
+    if (!(await handle.stat()).isFile()) throw new Error('Model-turn outcome is not a regular file');
     // Read at most the limit plus one byte, even if the file grows after open.
     const bytes = Buffer.alloc(MODEL_TURN_OUTCOME_MAX_BYTES + 1);
     let bytesRead = 0;
