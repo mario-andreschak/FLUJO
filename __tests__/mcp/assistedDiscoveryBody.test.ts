@@ -336,7 +336,7 @@ describe('offline actual MCP research body admission', () => {
     const second = bodyFixture([encode('unrelated list')]);
     const controls = mockDiscovery([first.response, second.response]);
     const result = await research();
-    expect(explanationEvidence().web.awesome).toEqual([{ label: 'Alpha Bridge', url: 'https://example.test/alpha', line: ALPHA_LINE.replace(/<[^>]+>/g, '') }]);
+    expect(explanationEvidence().web.awesome).toEqual([{ label: 'Alpha Bridge', url: 'https://example.test/alpha', line: 'calendar [Alpha Bridge](https://example.test/alpha) calendar connector' }]);
     expect(result.candidates.map(candidate => [candidate.registryName, candidate.score, candidate.recommended])).toEqual([
       ['io.example/alpha', 0.755, true], ['io.example/beta', 0.695, false],
     ]);
@@ -350,6 +350,18 @@ describe('offline actual MCP research body admission', () => {
     expect(controls.timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([12_000, 12_000, 12_000, 12_000]);
     expect(first.text).not.toHaveBeenCalled();
     expect(second.text).not.toHaveBeenCalled();
+    expectNoSideEffects();
+  });
+
+  it('keeps nested tags and unmatched delimiters out of discovery snippets', async () => {
+    const hostile = `${ALPHA_LINE} <scr<script>ipt>alert(1)</scr</script>ipt> <SCRIPT>upper</SCRIPT> <unfinished`;
+    mockDiscovery([bodyFixture([encode(hostile)]).response, bodyFixture([encode('unrelated list')]).response]);
+    await research();
+    const [snippet] = explanationEvidence().web.awesome;
+    expect(snippet.label).toBe('Alpha Bridge');
+    expect(snippet.url).toBe('https://example.test/alpha');
+    expect(snippet.line).not.toMatch(/[<>]/);
+    expect(snippet.line).toContain('calendar connector');
     expectNoSideEffects();
   });
 

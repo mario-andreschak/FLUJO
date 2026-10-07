@@ -259,6 +259,20 @@ const AWESOME_LISTS = [
   { label: 'appcypher/awesome-mcp-servers', page: 'https://github.com/appcypher/awesome-mcp-servers', raw: 'https://raw.githubusercontent.com/appcypher/awesome-mcp-servers/main/README.md' },
 ] as const;
 
+function discoverySnippet(line: string): string {
+  // Collect bounded plain text in one pass. Nested or unmatched delimiters
+  // cannot reveal another tag when an inner fragment is removed.
+  let text = '';
+  let depth = 0;
+  for (const character of line) {
+    if (character === '<') depth++;
+    else if (character === '>') depth = Math.max(0, depth - 1);
+    else if (depth === 0) text += character;
+    if (text.length >= 500) break;
+  }
+  return text.slice(0, 500);
+}
+
 async function discoverAwesome(query: string): Promise<WebDiscovery['awesome']> {
   const queryWords = words(query);
   const results = await Promise.all(AWESOME_LISTS.map(async (list) => {
@@ -269,7 +283,7 @@ async function discoverAwesome(query: string): Promise<WebDiscovery['awesome']> 
       return text.split(/\r?\n/).flatMap((line) => {
         if (!line.includes('](') || !queryWords.some((word) => line.toLocaleLowerCase().includes(word))) return [];
         const match = line.match(/\[([^\]]+)]\((https?:\/\/[^)]+)\)/);
-        return match ? [{ label: match[1].slice(0, 120), url: match[2], line: line.replace(/<[^>]+>/g, '').slice(0, 500) }] : [];
+        return match ? [{ label: match[1].slice(0, 120), url: match[2], line: discoverySnippet(line) }] : [];
       }).slice(0, 10);
     } catch {
       return [];
