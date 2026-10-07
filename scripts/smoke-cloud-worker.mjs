@@ -13,6 +13,7 @@ import JSZip from 'jszip';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkHealth } from './healthcheck.mjs';
+import { createPrivateSmokeProfile } from './smoke-cloud-worker-profile.mjs';
 
 // Recovery equipment is loaded only by the explicit opt-in profile.
 if (!process.argv.includes('--worker-recovery')) {
@@ -174,7 +175,10 @@ try {
   const edge = (source, target) => ({ id: `${source.id}:${source.type}-bottom->${target.id}:${target.type}-top`, source: source.id, target: target.id,
     sourceHandle: `${source.type}-bottom`, targetHandle: `${target.type}-top`, type: 'custom', data: { edgeType: 'standard' } });
   const flow = { id: 'smoke-flow', name: 'CloudSmoke', nodes, edges: [edge(nodes[0], nodes[1]), edge(nodes[1], nodes[2])], updatedAt: Date.now() };
+  const privateProfile = await createPrivateSmokeProfile();
   const files = {
+    'db/encryption_key.json': JSON.stringify(privateProfile.metadata),
+    'db/worker-bootstrap-secrets.json': JSON.stringify(privateProfile.bootstrap),
     // Configured MCP roots are an opt-in restriction; enable it so the smoke
     // verifies Windows-to-worker root remapping instead of the default host root.
     'db/speech_settings.json': JSON.stringify({ experimental: { restrictMcpFilesystemToRoots: true } }),
@@ -184,7 +188,7 @@ try {
       env: {}, roots: [`${sourceWorkspaceRoot}\\userdata`], disabled: false,
       exposeAsMcpServer: true, source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' },
     } }),
-    'db/models.json': JSON.stringify([{ id: 'smoke-model', name: 'cloud-smoke-model', provider: 'openai', adapter: 'openai', ApiKey: 'synthetic-smoke-key', baseUrl: `http://127.0.0.1:${modelPort}/v1` }]),
+    'db/models.json': JSON.stringify([{ id: 'smoke-model', name: 'cloud-smoke-model', provider: 'openai', adapter: 'openai', ApiKey: privateProfile.encryptedApiKey, baseUrl: `http://127.0.0.1:${modelPort}/v1` }]),
     'db/flows/smoke-flow.json': JSON.stringify(flow),
     'userdata/mcp-smoke-input.txt': 'restored filesystem smoke input',
   };
@@ -194,7 +198,7 @@ try {
     createdAt: new Date().toISOString(), coherence: 'registered-flujo-writers', externalRootsIncluded: false, subtrees,
     files: Object.entries(files).map(([name, content]) => ({ path: name, size: Buffer.byteLength(content), sha256: sha256(content) })),
     source: { version: packageJson.version, platform: process.platform },
-    runtime: { codexAuth: 'none', encryption: 'default', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot,
+    runtime: { codexAuth: 'none', encryption: 'user', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot,
       servers: [{ name: 'filesystem', kind: 'bundled', sourceRootPath: sourceFilesystemRoot }] } },
   }));
   const plaintext = await zip.generateAsync({ type: 'nodebuffer' });
@@ -555,7 +559,10 @@ async function performSmoke() {
   const edge = (source, target) => ({ id: `${source.id}:${source.type}-bottom->${target.id}:${target.type}-top`, source: source.id, target: target.id,
     sourceHandle: `${source.type}-bottom`, targetHandle: `${target.type}-top`, type: 'custom', data: { edgeType: 'standard' } });
   const flow = { id: 'smoke-flow', name: 'CloudSmoke', nodes, edges: [edge(nodes[0], nodes[1]), edge(nodes[1], nodes[2])], updatedAt: Date.now() };
+  const privateProfile = await createPrivateSmokeProfile();
   const files = {
+    'db/encryption_key.json': JSON.stringify(privateProfile.metadata),
+    'db/worker-bootstrap-secrets.json': JSON.stringify(privateProfile.bootstrap),
     // Configured MCP roots are an opt-in restriction; enable it so the smoke
     // verifies Windows-to-worker root remapping instead of the default host root.
     'db/speech_settings.json': JSON.stringify({ experimental: { restrictMcpFilesystemToRoots: true } }),
@@ -565,7 +572,7 @@ async function performSmoke() {
       env: {}, roots: [`${sourceWorkspaceRoot}\\userdata`], disabled: false,
       exposeAsMcpServer: true, source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' },
     } }),
-    'db/models.json': JSON.stringify([{ id: 'smoke-model', name: 'cloud-smoke-model', provider: 'openai', adapter: 'openai', ApiKey: 'synthetic-smoke-key', baseUrl: `http://127.0.0.1:${modelPort}/v1` }]),
+    'db/models.json': JSON.stringify([{ id: 'smoke-model', name: 'cloud-smoke-model', provider: 'openai', adapter: 'openai', ApiKey: privateProfile.encryptedApiKey, baseUrl: `http://127.0.0.1:${modelPort}/v1` }]),
     'db/flows/smoke-flow.json': JSON.stringify(flow),
     'userdata/mcp-smoke-input.txt': 'restored filesystem smoke input',
   };
@@ -580,7 +587,7 @@ async function performSmoke() {
     createdAt: new Date().toISOString(), coherence: 'registered-flujo-writers', externalRootsIncluded: false, subtrees,
     files: Object.entries(files).map(([name, content]) => ({ path: name, size: Buffer.byteLength(content), sha256: sha256(content) })),
     source: { version: packageJson.version, platform: process.platform },
-    runtime: { codexAuth: 'none', encryption: 'default', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot,
+    runtime: { codexAuth: 'none', encryption: 'user', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot,
       servers: workerRecovery ? [] : [{ name: 'filesystem', kind: 'bundled', sourceRootPath: sourceFilesystemRoot }] } },
   }));
   const plaintext = await zip.generateAsync({ type: 'nodebuffer' });
