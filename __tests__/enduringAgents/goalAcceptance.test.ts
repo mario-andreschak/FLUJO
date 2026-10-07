@@ -22,6 +22,8 @@ import type { PersonaWorkItem } from '@/shared/types/enduringAgent';
 import { buildTestRoleDefinition, buildTestRoleVersion } from './fixtures/personaFactory';
 import fixture from '../../scripts/persona-goal-acceptance/fixture.cjs';
 import terminalFixture from '../../scripts/persona-goal-acceptance/terminal-fixture.cjs';
+import { unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
+import { isEncryptionLocked } from '@/utils/encryption/secure';
 
 declare global {
   var __personaGoalAcceptanceNativeCodex: typeof import('@openai/codex-sdk').Codex | undefined;
@@ -153,6 +155,8 @@ function offlineCompletion(directory: string) {
     await runWithWorkspace(workspaceId, async () => {
       let personaId: string | undefined;
       try {
+        await unlockPrivateFixtureInCurrentWorkspace();
+        expect(await isEncryptionLocked()).toBe(false);
         await saveItem(StorageKey.MODELS, [model]);
         await saveItem(StorageKey.MCP_SERVERS, { 'goal-acceptance': {
           name: 'goal-acceptance', transport: 'stdio', command: process.execPath,
