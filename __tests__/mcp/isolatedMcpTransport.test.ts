@@ -107,6 +107,49 @@ test('MCP roots do not disclose host roots or interpolate global secrets to an i
   expect(await createRootsListHandler(config)()).toEqual({ roots: [] });
 });
 
+test.each(['approved profile', 'invalid null profile'])('a host roots handler denies host reads after current config gains %s', async kind => {
+  const handler = createRootsListHandler({ ...config, isolation: undefined });
+  configs.mockResolvedValue([{ ...config, isolation: kind === 'approved profile' ? config.isolation : null }]);
+  const storage = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
+  storage.loadItem.mockClear();
+  expect(await handler()).toEqual({ roots: [] });
+  expect(storage.loadItem).not.toHaveBeenCalled();
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+});
+
+test.each(['missing', 'service error', 'invalid transport', 'disabled', 'thrown read'])('a host roots handler denies host reads when current config is %s', async kind => {
+  const handler = createRootsListHandler({ ...config, isolation: undefined });
+  if (kind === 'missing') configs.mockResolvedValue([]);
+  if (kind === 'service error') configs.mockResolvedValue({ success: false, error: 'synthetic private config diagnostic' });
+  if (kind === 'invalid transport') configs.mockResolvedValue([{ ...config, isolation: undefined, transport: 'invalid' } as unknown as MCPStdioConfig]);
+  if (kind === 'disabled') configs.mockResolvedValue([{ ...config, isolation: undefined, disabled: true }]);
+  if (kind === 'thrown read') configs.mockRejectedValue(new Error('synthetic private config diagnostic'));
+  const storage = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
+  storage.loadItem.mockClear();
+  expect(await handler()).toEqual({ roots: [] });
+  expect(storage.loadItem).not.toHaveBeenCalled();
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+});
+
+test('a current enabled host config retains its normal roots behavior', async () => {
+  delete process.env.FLUJO_MCP_ISOLATION_FILE;
+  const host = { ...config, isolation: undefined };
+  configs.mockResolvedValue([host]);
+  const result = await createRootsListHandler(host)();
+  expect(result.roots.length).toBeGreaterThan(0);
+  expect(result.roots.every(root => root.uri.startsWith('file://'))).toBe(true);
+});
+
+test('a current host config cannot expose roots by omitting its private isolation grant', async () => {
+  const host = { ...config, isolation: undefined };
+  configs.mockResolvedValue([host]);
+  const storage = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
+  storage.loadItem.mockClear();
+  expect(await createRootsListHandler(host)()).toEqual({ roots: [] });
+  expect(storage.loadItem).not.toHaveBeenCalled();
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+});
+
 test.each(['missing approval', 'wrong workspace', 'wrong owner', 'expired grant', 'changed policy'])('rejects %s before container creation', reason => {
   if (reason === 'missing approval') approvals.approvals = [];
   if (reason === 'wrong workspace') approvals.approvals[0].workspace = 'another-workspace';
