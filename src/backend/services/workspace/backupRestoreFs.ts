@@ -222,7 +222,7 @@ export async function addFolderToZipLinkSafe(
       let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
       try {
         const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-        handle = await fs.open(fullPath, fsConstants.O_RDONLY | noFollow);
+        handle = await fs.open(fullPath, fsConstants.O_RDONLY | noFollow | (fsConstants.O_NONBLOCK ?? 0));
         const openedStats = await handle.stat({ bigint: true });
         const canonicalFile = await fs.realpath(fullPath);
         if (

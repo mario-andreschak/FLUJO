@@ -1,4 +1,5 @@
-import { promises as fs } from 'node:fs';
+import { constants, openSync, closeSync, promises as fs } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
@@ -65,6 +66,47 @@ describe('MCP backup/restore link safety', () => {
       'mcp-servers',
       workspaceRoot,
     )).rejects.toThrow(/real directory/i);
+  });
+
+  it('rejects an admitted file replaced by a non-regular entry before open without reading it', async () => {
+    const file = path.join(mcpRoot, 'replaced.json');
+    await fs.writeFile(file, 'admitted fixture');
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    let watchdogReleased = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let read: jest.SpyInstance | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === file) {
+        expect(args[1]).toBe(constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        await fs.unlink(file);
+        if (process.platform === 'win32') await fs.mkdir(file);
+        else {
+          execFileSync('mkfifo', [file], { timeout: 1000, windowsHide: true });
+          // Release a blocking predecessor so regression failure cannot strand
+          // libuv's open. A correct nonblocking read never needs this writer.
+          watchdog = setTimeout(() => {
+            watchdogReleased = true;
+            try { closeSync(openSync(file, constants.O_WRONLY | constants.O_NONBLOCK)); }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENXIO') throw error; }
+          }, 750);
+        }
+        replaced = true;
+      }
+      const handle = await open(...args);
+      if (String(args[0]) === file) read = jest.spyOn(handle, 'read');
+      return handle;
+    });
+    const skipped: string[] = [];
+    const zip = new JSZip();
+    try {
+      await addFolderToZipLinkSafe(zip, mcpRoot, 'mcp-servers', workspaceRoot, entry => skipped.push(entry));
+    } finally { clearTimeout(watchdog); }
+    expect(replaced).toBe(true);
+    expect(watchdogReleased).toBe(false);
+    expect(zip.file('mcp-servers/replaced.json')).toBeNull();
+    expect(skipped).toContain('mcp-servers/replaced.json');
+    if (read) expect(read).not.toHaveBeenCalled();
   });
 
   it('skips a file whose checked/opened inode values collide as Numbers', async () => {
