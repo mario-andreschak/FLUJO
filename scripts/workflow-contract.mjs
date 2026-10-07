@@ -29,7 +29,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
       }
     }
   }
-  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity']
+  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security']
     .map((name) => `scripts/${name}.test.mjs`);
   const contractSteps = workflows['verify.yml']?.jobs?.['workflow-contract']?.steps ?? [];
   if (!contractSteps.some((step) => {
