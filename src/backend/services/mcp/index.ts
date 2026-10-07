@@ -152,6 +152,7 @@ import {
 import { TestConnectionEvent } from "@/shared/types/streaming";
 import { loadServerConfigs, saveConfig } from "./config";
 import { hasOAuthIssuer } from "./oauth";
+import { readOAuthTokens } from './oauthCredentialStorage';
 import {
   beginConnect,
   beginTeardown,
@@ -3356,10 +3357,11 @@ export class MCPService {
         streamableConfig.oauthScopes.length > 0
       ) {
         // This server requires OAuth authentication
+        const tokens = await readOAuthTokens(streamableConfig);
         if (
-          !streamableConfig.oauthTokens ||
-          !hasOAuthIssuer(streamableConfig.oauthTokens) ||
-          !streamableConfig.oauthTokens.access_token
+          !tokens ||
+          !hasOAuthIssuer(tokens) ||
+          !tokens.access_token
         ) {
           log.info(
             `getServerStatus: Server ${serverName} requires OAuth authentication but has no valid tokens`,
@@ -3375,13 +3377,13 @@ export class MCPService {
         // token to renew it with. With a refresh_token stored, the next connection attempt
         // refreshes silently (see MCPOAuthClientProvider.tokens), so fall through to the
         // real connection state instead of flashing the auth badge after every restart.
-        const issuedAt = (streamableConfig.oauthTokens as typeof streamableConfig.oauthTokens & { issued_at?: number }).issued_at;
+        const issuedAt = (tokens as typeof tokens & { issued_at?: number }).issued_at;
         if (
-          !streamableConfig.oauthTokens.refresh_token &&
-          streamableConfig.oauthTokens.expires_in &&
+          !tokens.refresh_token &&
+          tokens.expires_in &&
           issuedAt
         ) {
-          const expiresIn = streamableConfig.oauthTokens.expires_in;
+          const expiresIn = tokens.expires_in;
           const currentTime = Math.floor(Date.now() / 1000);
           const expirationTime = issuedAt + expiresIn;
 

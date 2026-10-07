@@ -541,12 +541,9 @@ export function createTransport(
 
       // Check if we have stored tokens, for logging purposes only - actual freshness/expiry
       // is resolved async by oauthProvider.tokens() when the transport uses it.
-      if (streamableConfig.oauthTokens?.access_token) {
+      if (streamableConfig.oauthTokens) {
         log.debug(
           `OAuth provider configured for ${config.name} with existing tokens`,
-        );
-        log.debug(
-          `Token expires in: ${streamableConfig.oauthTokens.expires_in} seconds`,
         );
       } else {
         log.debug(
