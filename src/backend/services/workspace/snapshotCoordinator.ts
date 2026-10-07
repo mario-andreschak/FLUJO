@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   getCurrentWorkspace,
   normalizeWorkspaceName,
@@ -9,14 +9,15 @@ import {
   captureWorkspaceSnapshot,
   SnapshotArchiveError,
   writeWorkspaceSnapshotArchive,
+  resolveSnapshotKey,
 } from './snapshotArchive';
 import {
-  beginWorkspaceSnapshotBoundary,
+  withWorkspaceRecoveryCapture,
   workspaceMutationStatus,
-  type WorkspaceSnapshotBoundary,
 } from './workspaceMutationGate';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { getWorkerCompatibility, type WorkerCompatibility } from './workerCompatibility';
+import { openSnapshotDownload } from './snapshotStreaming';
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -46,6 +47,7 @@ export interface SnapshotInfo {
   sha256?: string;
   plaintextSha256?: string;
   encrypted?: boolean;
+  recipientKeyUsed?: boolean;
   errorCode?: string;
   error?: string;
 }
@@ -63,6 +65,7 @@ interface SnapshotSessionRecord {
   sha256?: string;
   plaintextSha256?: string;
   encrypted?: boolean;
+  recipientKeyUsed?: boolean;
   archivePath?: string;
   stagingDir?: string;
   errorCode?: string;
@@ -70,6 +73,7 @@ interface SnapshotSessionRecord {
   abortRequested: boolean;
   controller: AbortController;
   flowIds?: string[];
+  recipientKey?: string;
   expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -124,6 +128,7 @@ function publicInfo(session: SnapshotSessionRecord): SnapshotInfo {
     sha256: session.sha256,
     plaintextSha256: session.plaintextSha256,
     encrypted: session.encrypted,
+    recipientKeyUsed: session.recipientKeyUsed,
     errorCode: session.errorCode,
     error: session.error,
   };
@@ -189,7 +194,7 @@ function requireSession(workspace: string, sessionId: string): SnapshotSessionRe
 }
 
 async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
-  let boundary: WorkspaceSnapshotBoundary | undefined;
+  let captured: Awaited<ReturnType<typeof captureWorkspaceSnapshot>> | undefined;
   const { signal } = session.controller;
   // Bound the whole write pause, including draining existing writers. The
   // boundary listens to this signal itself, so cancellation releases it even
@@ -205,24 +210,18 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
   }, pauseBudget);
   captureTimer.unref?.();
   try {
-    boundary = await beginWorkspaceSnapshotBoundary(session.workspace, pauseBudget, signal);
-    session.generation = boundary.generation;
-    signal.throwIfAborted();
-    session.state = 'staging';
-
-    const captured = await captureWorkspaceSnapshot(
-      session.workspace,
-      session.generation,
-      { signal, flowIds: session.flowIds },
-    );
+    captured = await withWorkspaceRecoveryCapture(async generation => {
+      session.generation = generation;
+      signal.throwIfAborted();
+      session.state = 'staging';
+      captured = await captureWorkspaceSnapshot(session.workspace, generation,
+        { signal, flowIds: session.flowIds, recipientKey: session.recipientKey });
+      return captured;
+    }, { workspace: session.workspace, timeoutMs: pauseBudget, signal });
     signal.throwIfAborted();
     session.bytesStaged = captured.bytes;
     session.filesStaged = captured.files;
-
-    // The ZIP now owns immutable buffers for the selected generation. Resume
-    // managed writes before compression and archive persistence.
-    boundary.release();
-    boundary = undefined;
+    // Source bytes are immutable encrypted spool ranges before writers resume.
     clearTimeout(captureTimer);
 
     const archive = await writeWorkspaceSnapshotArchive(captured, { signal });
@@ -232,6 +231,10 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
     session.sha256 = archive.sha256;
     session.plaintextSha256 = archive.plaintextSha256;
     session.encrypted = archive.encrypted;
+    session.recipientKeyUsed = archive.recipientKeyUsed ?? false;
+    session.recipientKey = undefined;
+    await captured.dispose?.();
+    captured = undefined;
 
     if (session.abortRequested) {
       if (session.errorCode !== 'SNAPSHOT_TIMEOUT') session.state = 'aborted';
@@ -258,8 +261,9 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
     }
     await removeStaging(session);
   } finally {
+    session.recipientKey = undefined;
     clearTimeout(captureTimer);
-    boundary?.release();
+    await captured?.dispose?.().catch(() => undefined);
   }
 }
 
@@ -288,7 +292,8 @@ export const snapshotCoordinator = {
     };
   },
 
-  async begin(workspace = getCurrentWorkspace(), options: { flowIds?: string[] } = {}): Promise<SnapshotInfo> {
+  async begin(workspace = getCurrentWorkspace(), options: { flowIds?: string[]; recipientKey?: string } = {}): Promise<SnapshotInfo> {
+    if (options.recipientKey !== undefined) resolveSnapshotKey(options.recipientKey)?.fill(0);
     const normalizedWorkspace = normalizeWorkspaceName(workspace);
     // Admission must be synchronous through sessions.set(). An await while
     // checking or cleaning the old record lets two callers reserve the same
@@ -325,6 +330,7 @@ export const snapshotCoordinator = {
       abortRequested: false,
       controller: new AbortController(),
       flowIds: options.flowIds ? [...options.flowIds] : undefined,
+      recipientKey: options.recipientKey,
     };
     sessions.set(normalizedWorkspace, session);
     const expiryTimer = setTimeout(() => {
@@ -351,7 +357,7 @@ export const snapshotCoordinator = {
   async readDownload(
     sessionId: string,
     workspace = getCurrentWorkspace(),
-  ): Promise<{ content: Buffer; sha256: string; plaintextSha256: string; encrypted: boolean; size: number }> {
+  ): Promise<{ content: ReadableStream<Uint8Array>; sha256: string; plaintextSha256: string; encrypted: boolean; recipientKeyUsed: boolean; size: number }> {
     const normalizedWorkspace = normalizeWorkspaceName(workspace);
     const session = requireSession(normalizedWorkspace, sessionId);
     await expireIfNeeded(session);
@@ -375,9 +381,12 @@ export const snapshotCoordinator = {
       );
     }
 
-    const content = await fs.readFile(session.archivePath);
-    const sha256 = createHash('sha256').update(content).digest('hex');
-    if (content.byteLength !== session.archiveBytes || sha256 !== session.sha256) {
+    let content: ReadableStream<Uint8Array>;
+    try {
+      content = await openSnapshotDownload(session.archivePath, session.archiveBytes, session.sha256, session.controller.signal, () => {
+        if (session.state !== 'ready' || Date.now() > session.expiresAtMs) throw new Error('Snapshot session is no longer available.');
+      });
+    } catch {
       session.state = 'failed';
       session.errorCode = 'SNAPSHOT_INTEGRITY';
       await removeStaging(session);
@@ -387,7 +396,8 @@ export const snapshotCoordinator = {
         'Snapshot archive failed its integrity check.',
       );
     }
-    return { content, sha256, plaintextSha256: session.plaintextSha256 ?? sha256, encrypted: session.encrypted ?? false, size: content.byteLength };
+    return { content, sha256: session.sha256, plaintextSha256: session.plaintextSha256 ?? session.sha256,
+      encrypted: session.encrypted ?? false, recipientKeyUsed: session.recipientKeyUsed ?? false, size: session.archiveBytes };
   },
 
   async finalize(

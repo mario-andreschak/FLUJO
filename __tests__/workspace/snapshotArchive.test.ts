@@ -19,10 +19,17 @@ jest.mock('@/backend/services/packages/workspaceMcpTransfer', () => ({
 const mockDek = jest.fn< string | null, []>(() => null);
 jest.mock('@/utils/encryption/session', () => ({ getServerDek: () => mockDek() }));
 
-import { captureWorkspaceSnapshot, writeWorkspaceSnapshotArchive } from '@/backend/services/workspace/snapshotArchive';
+import { captureWorkspaceSnapshot as captureProductionSnapshot, writeWorkspaceSnapshotArchive } from '@/backend/services/workspace/snapshotArchive';
 import { runWithWorkspace } from '@/utils/workspace';
 import { encryptWithPassword, getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
 import { parseSessionKey, open, type EncryptionMetadata } from '@/utils/encryption/format';
+
+const captures: Awaited<ReturnType<typeof captureProductionSnapshot>>[] = [];
+async function captureWorkspaceSnapshot(...args: Parameters<typeof captureProductionSnapshot>) {
+  const captured = await captureProductionSnapshot(...args);
+  captures.push(captured);
+  return captured;
+}
 
 const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_WORKER_SNAPSHOT_KEY', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
 
@@ -49,12 +56,30 @@ describe('portable workspace capture', () => {
   });
 
   afterEach(async () => {
+    for (const captured of captures.splice(0)) await captured.dispose?.();
     jest.restoreAllMocks();
     environmentKeys.forEach((key, index) => {
       if (previous[index] === undefined) delete process.env[key];
       else process.env[key] = previous[index];
     });
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('preserves repeated ZIP generation and member inspection from immutable spool bytes', async () => {
+    await put('userdata/member.txt', 'captured generation');
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    await put('userdata/member.txt', 'later generation');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await captured.zip.file('userdata/member.txt')!.async('string')).toBe('captured generation');
+      expect(await captured.zip.file('userdata/member.txt')!.async('base64')).toBe(Buffer.from('captured generation').toString('base64'));
+      const generated = await JSZip.loadAsync(await captured.zip.generateAsync({ type: 'nodebuffer' }));
+      expect(await generated.file('userdata/member.txt')!.async('string')).toBe('captured generation');
+    }
+  });
+
+  it('rejects SQLite state disguised as workspace metadata', async () => {
+    await put('.workspace.json', Buffer.from('SQLite format 3\0extra'));
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'UNSAFE_ENTRY' });
   });
 
   async function put(name: string, value: string | Buffer) {

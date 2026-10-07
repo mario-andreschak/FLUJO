@@ -14,6 +14,7 @@ export interface ArchiveTraversalOptions {
   skippedDirectories?: ReadonlySet<string>;
   allowHardLinks?: boolean;
   onFile?: (entryPath: string, content: Buffer, stats: BigIntStats) => void;
+  onFileStream?: (entryPath: string, chunks: AsyncIterable<Buffer>, stats: BigIntStats) => Promise<void>;
   /** Rebuildable runtime paths can be omitted before following or inspecting them. */
   skipPath?: (entryPath: string) => boolean;
   signal?: AbortSignal;
@@ -220,6 +221,7 @@ export async function addFolderToZipLinkSafe(
       }
 
       let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+      let readFailed = false;
       try {
         const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
         handle = await fs.open(fullPath, fsConstants.O_RDONLY | noFollow | (fsConstants.O_NONBLOCK ?? 0));
@@ -235,6 +237,25 @@ export async function addFolderToZipLinkSafe(
           onSkip(archivePath, 'file changed or escaped while being opened');
           continue;
         }
+        if (options.onFileStream) {
+          const ownedHandle = handle;
+          async function* chunks() {
+            for (let position = 0; position < Number(openedStats.size);) {
+              options.signal?.throwIfAborted();
+              const buffer = Buffer.alloc(Math.min(64 * 1024, Number(openedStats.size) - position));
+              const { bytesRead } = await ownedHandle.read(buffer, 0, buffer.length, position);
+              if (!bytesRead) throw new Error('File ended before its admitted size.');
+              position += bytesRead;
+              yield buffer.subarray(0, bytesRead);
+            }
+            const finalStats = await ownedHandle.stat({ bigint: true });
+            const pathStats = await fs.lstat(fullPath, { bigint: true });
+            if (!sameFileIdentity(openedStats, finalStats) || !sameFileIdentity(openedStats, pathStats)
+                || !isInside(canonicalRoot, await fs.realpath(fullPath))) throw new Error('File changed while being captured.');
+          }
+          await options.onFileStream(archivePath, chunks(), openedStats);
+          continue;
+        }
         const content = await readBoundedFile(handle, Number(openedStats.size), options.signal);
         const finalStats = await handle.stat({ bigint: true });
         if (BigInt(content.byteLength) !== openedStats.size || !sameFileIdentity(openedStats, finalStats)) {
@@ -247,10 +268,11 @@ export async function addFolderToZipLinkSafe(
           ? { unixPermissions: Number(finalStats.mode & BigInt(0o100777)) }
           : undefined);
       } catch (error) {
+        readFailed = true;
         options.signal?.throwIfAborted();
         onSkip(archivePath, `file could not be read safely: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        await handle?.close().catch(() => undefined);
+        try { await handle?.close(); } catch (error) { if (options.onFileStream && !readFailed) throw error; }
       }
     }
   };

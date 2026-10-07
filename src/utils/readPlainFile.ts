@@ -39,6 +39,8 @@ export async function readPlainFile(file: string, options: {
   ownerOnly?: boolean;
   signal?: AbortSignal;
   verifyPath?: () => Promise<void>;
+  /** Await each borrowed chunk; capture must remain unpublished until final identity checks pass. */
+  consume?: (chunk: Buffer) => Promise<void>;
 } = {}): Promise<Buffer> {
   options.signal?.throwIfAborted();
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
@@ -65,12 +67,16 @@ export async function readPlainFile(file: string, options: {
     await options.verifyPath?.();
     // Conversion is only for a size already bounded below Buffer.MAX_LENGTH;
     // filesystem identity and nanosecond timestamps never pass through Number.
-    const bytes = Buffer.alloc(Number(opened.size) + 1);
+    const admittedLength = Number(opened.size) + 1;
+    const bytes = Buffer.alloc(options.consume ? Math.min(64 * 1024, admittedLength) : admittedLength);
     let offset = 0;
-    while (offset < bytes.length) {
+    while (offset < admittedLength) {
       options.signal?.throwIfAborted();
-      const { bytesRead } = await handle.read(bytes, offset, Math.min(bytes.length - offset, 1024 * 1024), offset);
+      const targetOffset = options.consume ? 0 : offset;
+      const { bytesRead } = await handle.read(bytes, targetOffset,
+        Math.min(admittedLength - offset, options.consume ? bytes.length : 1024 * 1024), offset);
       if (bytesRead === 0) break;
+      if (options.consume) await options.consume(bytes.subarray(0, bytesRead));
       offset += bytesRead;
     }
     if (BigInt(offset) !== opened.size || !sameFile(opened, await handle.stat({ bigint: true }))) throw new PlainFileReadError('FILE_CHANGED');
@@ -78,7 +84,7 @@ export async function readPlainFile(file: string, options: {
     if (finalNamed.isSymbolicLink() || !sameFile(opened, finalNamed)) throw new PlainFileReadError('FILE_CHANGED');
     await options.verifyPath?.();
     options.signal?.throwIfAborted();
-    return bytes.subarray(0, offset);
+    return options.consume ? Buffer.alloc(0) : bytes.subarray(0, offset);
   } finally {
     await handle.close();
   }

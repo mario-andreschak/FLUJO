@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+const realRemove = fs.rm.bind(fs);
 import type {
   CapturedWorkspaceSnapshot,
   WorkspaceArchiveResult,
@@ -10,12 +13,14 @@ const mockWriteArchive = jest.fn<Promise<WorkspaceArchiveResult>, [CapturedWorks
 
 jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
   withWorkspaceProcessMutation: (task: () => Promise<unknown>) => task(),
+  withWorkspaceProcessSnapshot: (task: () => Promise<unknown>) => task(),
 }));
 
 jest.mock('@/backend/services/workspace/snapshotArchive', () => ({
   captureWorkspaceSnapshot: (...args: Parameters<typeof mockCapture>) => mockCapture(...args),
   writeWorkspaceSnapshotArchive: (...args: Parameters<typeof mockWriteArchive>) => mockWriteArchive(...args),
   SnapshotArchiveError: class extends Error {},
+  resolveSnapshotKey: (value: string) => jest.requireActual('@/backend/services/workspace/snapshotArchive').resolveSnapshotKey(value),
 }));
 
 import { snapshotCoordinator } from '@/backend/services/workspace/snapshotCoordinator';
@@ -69,6 +74,16 @@ describe('snapshot coordinator cancellation and ownership', () => {
     delete process.env.FLUJO_SNAPSHOT_SESSION_TTL_MS;
   });
 
+  it('fails and removes the archive when captured spool cleanup fails', async () => {
+    const dispose = jest.fn().mockRejectedValue(new Error('injected captured cleanup failure'));
+    mockCapture.mockResolvedValueOnce({ ...captured, dispose });
+    const session = await snapshotCoordinator.begin('capture-cleanup-failure');
+    await flushMicrotasks();
+    expect(await snapshotCoordinator.status(session.sessionId, 'capture-cleanup-failure')).toMatchObject({ state: 'failed', errorCode: 'SNAPSHOT_FAILED' });
+    expect(dispose).toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith('/snapshot-test/ready', { recursive: true, force: true });
+  });
+
   it('advertises worker compatibility in authenticated snapshot information', async () => {
     const info = await snapshotCoordinator.info('compatibility');
     expect(info.workerCompatibility).toMatchObject({
@@ -82,22 +97,26 @@ describe('snapshot coordinator cancellation and ownership', () => {
     const wire = Buffer.from('authenticated encrypted envelope bytes');
     const wireHash = createHash('sha256').update(wire).digest('hex');
     const plaintextHash = 'b'.repeat(64);
-    mockWriteArchive.mockResolvedValueOnce({ ...archive('encrypted'), sha256: wireHash,
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'flujo-download-coordinator-'));
+    const archivePath = path.join(root, 'snapshot');
+    await fs.writeFile(archivePath, wire, { mode: 0o600 });
+    mockWriteArchive.mockResolvedValueOnce({ ...archive('encrypted'), archivePath, stagingDir: root, sha256: wireHash,
       plaintextSha256: plaintextHash, encrypted: true, size: wire.length });
-    const read = jest.spyOn(fs, 'readFile').mockResolvedValue(wire);
     try {
       const started = await snapshotCoordinator.begin('encrypted-download');
       await flushMicrotasks();
       await expect(snapshotCoordinator.status(started.sessionId, 'encrypted-download')).resolves.toMatchObject({
         state: 'ready', sha256: wireHash, plaintextSha256: plaintextHash, encrypted: true,
       });
-      await expect(snapshotCoordinator.readDownload(started.sessionId, 'encrypted-download')).resolves.toMatchObject({
-        content: wire, sha256: wireHash, plaintextSha256: plaintextHash, encrypted: true,
-      });
-      read.mockResolvedValueOnce(Buffer.from('changed encrypted envelope bytes'));
+      const download = await snapshotCoordinator.readDownload(started.sessionId, 'encrypted-download');
+      expect(download).toMatchObject({ sha256: wireHash, plaintextSha256: plaintextHash, encrypted: true });
+      const reader = download.content.getReader(); const chunks: Uint8Array[] = [];
+      for (;;) { const result = await reader.read(); if (result.done) break; chunks.push(result.value); }
+      expect(Buffer.concat(chunks)).toEqual(wire);
+      await fs.writeFile(archivePath, 'changed encrypted envelope bytes');
       await expect(snapshotCoordinator.readDownload(started.sessionId, 'encrypted-download')).rejects.toMatchObject({ code: 'SNAPSHOT_INTEGRITY' });
       await expect(snapshotCoordinator.status(started.sessionId, 'encrypted-download')).resolves.toMatchObject({ state: 'failed' });
-    } finally { read.mockRestore(); }
+    } finally { await realRemove(root, { recursive: true, force: true }); }
   });
 
   it('reserves a workspace atomically for concurrent begin requests', async () => {
@@ -121,6 +140,7 @@ describe('snapshot coordinator cancellation and ownership', () => {
     const pendingCapture = deferred<CapturedWorkspaceSnapshot>();
     mockCapture.mockReturnValueOnce(pendingCapture.promise);
     const session = await snapshotCoordinator.begin('abort-capture');
+    await flushMicrotasks();
     const writer = jest.fn(async () => undefined);
     const queued = withWorkspaceMutation(writer, 'abort-capture');
     expect(workspaceMutationStatus('abort-capture').blocked).toBe(true);
