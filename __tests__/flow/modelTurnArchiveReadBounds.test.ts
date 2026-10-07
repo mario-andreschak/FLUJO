@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FileHandle } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -72,9 +73,11 @@ describe('model-turn archive inspection bounds', () => {
     const unchanged = Buffer.alloc(9);
     const verifyRead = handle.read.bind(handle);
     const realClose = handle.close.bind(handle);
-    jest.spyOn(fs, 'open').mockResolvedValueOnce(handle);
+    const realOpen = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation((...args) => args[0] === file ? Promise.resolve(handle) : realOpen(...args));
+    const inspectionScope = new AsyncLocalStorage<boolean>();
     const read = jest.spyOn(handle, 'read');
-    const close = jest.spyOn(handle, 'close').mockImplementation(async () => {
+    const close = jest.spyOn(handle, 'close').mockImplementation(() => inspectionScope.exit(async () => {
       try {
         // This control reads the original fixture only after the helper rejects
         // it. Keep it separate from the production read and allocation spies.
@@ -86,11 +89,22 @@ describe('model-turn archive inspection bounds', () => {
           expect(named[field]).toBe(original[field]);
         }
       } finally { await realClose(); }
+    }));
+    const bodyAllocation = jest.fn();
+    const realAllocate = Buffer.alloc;
+    const allocate = jest.spyOn(Buffer, 'alloc').mockImplementation((...args) => {
+      if (inspectionScope.getStore()) bodyAllocation(...args);
+      return realAllocate(...args);
     });
-    const allocate = jest.spyOn(Buffer, 'alloc');
-    await expect(readBoundedModelTurnFile(file, 8)).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_LIMIT', status: 413 });
+    // Schedule independent work before entering the inspection context. Its
+    // allocation must not obscure the zero-allocation archive boundary.
+    const independent = new Promise<Buffer>(resolve => setImmediate(() => resolve(Buffer.alloc(7))));
+    await expect(inspectionScope.run(true, () => readBoundedModelTurnFile(file, 8)))
+      .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_LIMIT', status: 413 });
+    expect((await independent).length).toBe(7);
+    expect(allocate).toHaveBeenCalledWith(7);
     expect(read).not.toHaveBeenCalled();
-    expect(allocate).not.toHaveBeenCalled();
+    expect(bodyAllocation).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
     expect(unchanged).toEqual(Buffer.from('123456789'));
   });
