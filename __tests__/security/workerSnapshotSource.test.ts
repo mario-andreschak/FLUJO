@@ -55,7 +55,7 @@ describe('explicit private worker snapshot-source admission', () => {
 
   async function denied(expected: number, selected = 'source', options: Parameters<typeof request>[0] = {}) {
     const req = request({ body: 'this body must not be read', ...options });
-    const body = jest.spyOn(req, 'text');
+    const body = jest.spyOn(req.body!, 'getReader');
     const response = await runWithWorkspace(selected, () => POST(req));
     expect(response.status).toBe(expected);
     expect(body).not.toHaveBeenCalled();
@@ -69,6 +69,46 @@ describe('explicit private worker snapshot-source admission', () => {
     const selected = await runWithWorkspace('source', () => POST(request({ body: '{"flowIds":["flow-a","flow-a"]}' })));
     expect(selected.status).toBe(202);
     expect(snapshotCoordinator.begin).toHaveBeenLastCalledWith('source', { flowIds: ['flow-a'] });
+  });
+
+  it('forwards a canonical recipient key with the retained flow selection', async () => {
+    const recipientKey = Buffer.alloc(32, 7).toString('base64');
+    const response = await runWithWorkspace('source', () => POST(request({ body: JSON.stringify({ recipientKey, flowIds: ['flow-a', 'flow-a'] }) })));
+    expect(response.status).toBe(202);
+    expect(snapshotCoordinator.begin).toHaveBeenLastCalledWith('source', { recipientKey, flowIds: ['flow-a'] });
+  });
+
+  it.each([
+    Buffer.alloc(31).toString('base64'), Buffer.alloc(33).toString('base64'),
+    Buffer.alloc(32).toString('base64').slice(0, -2) + 'B=', ' '.repeat(44), null, 42,
+  ])('rejects noncanonical recipient key without beginning capture (%#)', async recipientKey => {
+    const response = await runWithWorkspace('source', () => POST(request({ body: JSON.stringify({ recipientKey }) })));
+    expect(response.status).toBe(400);
+    expect(snapshotCoordinator.begin).not.toHaveBeenCalled();
+    expect(await response.text()).toContain('canonical base64');
+  });
+
+  it('bounds body bytes rather than UTF-16 character count', async () => {
+    const response = await runWithWorkspace('source', () => POST(request({ body: JSON.stringify({ other: 'é'.repeat(9000) }) })));
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('too large');
+    expect(snapshotCoordinator.begin).not.toHaveBeenCalled();
+  });
+
+  it('cancels an oversized streamed body before parsing or capture', async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); },
+      cancel() { cancelled = true; },
+    });
+    const req = new Request('http://source.internal/api/snapshot/begin?workspace=source', {
+      method: 'POST', headers: { host: 'source.internal:4200', authorization: `Bearer ${token}` },
+      body, duplex: 'half',
+    } as RequestInit & { duplex: 'half' }) as NextRequest;
+    const response = await runWithWorkspace('source', () => POST(req));
+    expect(response.status).toBe(400);
+    expect(cancelled).toBe(true);
+    expect(snapshotCoordinator.begin).not.toHaveBeenCalled();
   });
 
   it('admits private IPv4 and an exact matching browser Origin', async () => {
