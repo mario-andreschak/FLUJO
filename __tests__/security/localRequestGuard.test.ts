@@ -49,7 +49,7 @@ const simpleGitFactory = jest.fn(() => ({
 }));
 jest.mock('simple-git', () => ({
   __esModule: true,
-  default: (...args: unknown[]) => simpleGitFactory(...(args as [])),
+  simpleGit: (...args: unknown[]) => simpleGitFactory(...(args as [])),
 }));
 
 // Force the encryption gate open so only the origin guard is under test.
@@ -618,5 +618,52 @@ describe('POST /api/env origin guard', () => {
       })
     );
     expect(res.status).not.toBe(403);
+  });
+});
+
+describe('MCP connection unexpected-error response contract', () => {
+  it.each<[string, string | undefined, unknown]>([
+    ['same-origin Error', 'http://localhost:4200', new Error('EACCES C:/private/workspace/db/config.json Bearer synthetic_private_credential')],
+    ['native Error', undefined, new Error('Unexpected internal failure sk-synthetic_private_key')],
+    ['same-origin string', 'http://localhost:4200', 'C:/private/workspace/db/config.json Bearer synthetic_private_credential'],
+    ['native string', undefined, 'sk-synthetic_private_key'],
+  ])('returns a bounded 500 response for %s', async (_label, origin, failure) => {
+    testConnectionMock.mockRejectedValueOnce(failure);
+    const response = await testConnPost(makeRequest('http://localhost:4200/api/mcp/test-connection', {
+      host: 'localhost:4200', origin, body: stdioBody,
+    }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ success: false, error: 'Failed to test MCP connection.' });
+    expect(testConnectionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the expected invalid-config 400 response before the service call', async () => {
+    const response = await testConnPost(makeRequest('http://localhost:4200/api/mcp/test-connection', {
+      host: 'localhost:4200', origin: 'http://localhost:4200', body: { name: 'invalid' },
+    }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ success: false, error: 'Missing or invalid server config' });
+    expect(testConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves service-returned 200 connection and authentication diagnostics', async () => {
+    const result = { success: false, error: 'OAuth authentication required', requiresAuthentication: true, oauthCapable: true };
+    testConnectionMock.mockResolvedValueOnce(result);
+    const response = await testConnPost(makeRequest('http://localhost:4200/api/mcp/test-connection', {
+      host: 'localhost:4200', origin: 'http://localhost:4200', body: stdioBody,
+    }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(result);
+  });
+
+  it('preserves the lock response before the service call', async () => {
+    const { assertUnlocked } = await import('@/utils/encryption/lockGate');
+    const locked = new Response(JSON.stringify({ error: 'Locked' }), { status: 423 });
+    (assertUnlocked as jest.Mock).mockResolvedValueOnce(locked);
+    const response = await testConnPost(makeRequest('http://localhost:4200/api/mcp/test-connection', {
+      host: 'localhost:4200', origin: 'http://localhost:4200', body: stdioBody,
+    }));
+    expect(response).toBe(locked);
+    expect(testConnectionMock).not.toHaveBeenCalled();
   });
 });

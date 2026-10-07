@@ -128,14 +128,57 @@ they cover every required installed scenario:
 
 ## A second maintainer's exercise
 
-On a disposable checkout, independently locate the unattended classification
-and explain why API runs are interactive. Change a fixture, run its regression,
-and show the failing then passing behavior. Separately locate `beginConnect` /
-`beginTeardown`, explain workspace and generation ownership, and modify a
-reconnection fixture so that a stale close cannot remove the new client. Record
-the human reviewer, revision, commands, observation and review. An AI-generated
-guide or passing CI does not satisfy #571's second-human acceptance; Community
-owns arranging/recording that exercise through #576.
+Use a consenting second human and an identified independent observer on a
+disposable checkout of an exact reviewed source. Record operator acceptance,
+observer identity and their relationship to the original author in
+[#661](https://github.com/mario-andreschak/FLUJO/issues/661) before beginning.
+Nomination or assignment does not establish consent or independence. Community
+owns arranging and recording the exercise through #576.
+
+The operator must locate, explain and repair a production execution behavior
+and a production MCP lifecycle behavior. Changing only a test fixture, running
+an author-prepared repair script, or checking out the original file does not
+demonstrate that ability. The observer records the clean base revision, then
+supplies a separately recorded small seeded production regression for each
+task. The original author must not operate the participant's checkout or write
+their repair; retain all hints and interventions.
+
+- **Execution:** start with `src/shared/types/execution/invocation.ts` and its
+  `runFlow` caller. Diagnose direct API execution incorrectly classified as
+  unattended. Explain why explicit invocation context governs drive-forward
+  rather than the legacy Flow flag. Repair the production decision and preserve
+  all other source classifications and the existing expectations in
+  `flow/invocationSource.test.ts` and `flow/unattendedDriveForward.test.ts`.
+  The latter uses real orchestration with a controlled graph engine; it does
+  not invoke a provider or external tool.
+- **MCP:** start with `src/backend/services/mcp/index.ts` and
+  `lifecycleCoordinator.ts`. Diagnose a late close from a replaced transport
+  removing the healthy client or scheduling another connection. Repair the
+  production ownership decision in `transport.onclose`. Explain workspace,
+  active-transport and generation ownership, including `beginConnect` and
+  `beginTeardown`. Preserve unexpected-live-close reconnection and intentional
+  disconnect behavior. Keep the expectations in `mcp/mcpRestartLoop.test.ts`,
+  which controls connection/configuration collaborators and fake timers; it
+  is not an installed process-shutdown observation.
+
+Install locked dependencies locally in the disposable checkout and retain the
+complete focused suites, without a test-name filter:
+
+```sh
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts --json --outputFile=maintainer-core-results.json
+node scripts/check-import-boundaries.cjs
+```
+
+For the clean baseline, each seeded fault and each human-authored repair, retain
+the source SHA/diff, file hashes, raw logs, result JSON, commands, natural exit
+statuses and pending/skipped/todo counts. Retain OS/Node/npm, start/end times,
+setup friction, the operator's ownership explanation, the observer's review
+and every assistance event using the
+[maintainership evidence form](../contributing/maintainership.md#evidence-record).
+Link the human record from #661, #571 and #576. Do not weaken expectations,
+skip cases or restore author-written repairs to manufacture a pass. A failed
+or incomplete attempt remains such; AI rehearsal and CI cannot supply the
+independent human operation or review required by #571.
 
 ## Size inventory and evidence limits
 

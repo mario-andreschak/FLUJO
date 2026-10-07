@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-06T12:43:06.751Z",
+  "kind": "derived-current-candidate-api-observation",
+  "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+  "sourceTree": "dd5f5c47c8c17e45f7fe3bb690bb8352959fb413",
+  "baseSha": "0be972ac7b748703d09e407ef96beba45ab17b2a",
+  "pullRequest": 803,
+  "pullRequestUrl": "https://github.com/mario-andreschak/FLUJO/pull/803",
+  "run": {
+    "id": 37369397033,
+    "attempt": 1,
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033",
+    "status": "completed",
+    "conclusion": "failure"
+  },
+  "ordinaryVerification": {
+    "successfulJobs": 5,
+    "cancelledJobs": 7,
+    "failedAggregateJobs": 1,
+    "excludedDiagnosticSkips": 1,
+    "unsatisfiedRequiredJobs": 8,
+    "jobs": [
+      {
+        "id": 111962473955,
+        "name": "typecheck",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962473955"
+      },
+      {
+        "id": 111962474162,
+        "name": "test",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474162"
+      },
+      {
+        "id": 111962474281,
+        "name": "dependency-security",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474281"
+      },
+      {
+        "id": 111962474325,
+        "name": "workflow-contract",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474325"
+      },
+      {
+        "id": 111962474365,
+        "name": "Release safety (ubuntu-latest)",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474365"
+      },
+      {
+        "id": 111962474368,
+        "name": "Production build (windows-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474368"
+      },
+      {
+        "id": 111962474385,
+        "name": "lint",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474385"
+      },
+      {
+        "id": 111962474445,
+        "name": "Production build (ubuntu-latest)",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474445"
+      },
+      {
+        "id": 111962474535,
+        "name": "CodeQL (actions)",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474535"
+      },
+      {
+        "id": 111962474553,
+        "name": "test-isolated",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474553"
+      },
+      {
+        "id": 111962474570,
+        "name": "Release safety (windows-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474570"
+      },
+      {
+        "id": 111962474661,
+        "name": "CodeQL (javascript-typescript)",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474661"
+      },
+      {
+        "id": 111962475805,
+        "name": "diagnostic Persona memory profile (not release acceptance)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962475805"
+      },
+      {
+        "id": 111977249987,
+        "name": "verification",
+        "status": "completed",
+        "conclusion": "failure",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111977249987"
+      }
+    ]
+  },
+  "codeql": {
+    "jobs": [
+      {
+        "id": 111962474535,
+        "name": "CodeQL (actions)",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474535"
+      },
+      {
+        "id": 111962474661,
+        "name": "CodeQL (javascript-typescript)",
+        "conclusion": "cancelled",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/111962474661"
+      }
+    ],
+    "analysesApiAccessible": true,
+    "returnedAnalyses": 0,
+    "exactSourceAnalyses": 0,
+    "acceptedClearance": false,
+    "observation": "Both CodeQL jobs were cancelled. An empty analyses response is an absence of qualifying analysis evidence, not a findings-clearance result."
+  },
+  "snapshotPins": [
+    {
+      "name": "pr803",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/pr803.json",
+      "bytes": 21500,
+      "sha256": "b466bf783b53eeda7a96768fcd9793a4893874fbe022b78a095cffbf2d80ddd6",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/pulls/803"
+      ],
+      "startedAt": "2026-10-06T12:43:04.482Z",
+      "completedAt": "2026-10-06T12:43:06.062Z",
+      "exitCode": 0
+    },
+    {
+      "name": "verify-attempt1",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-attempt1.json",
+      "bytes": 13737,
+      "sha256": "cb18387e3d536ba45f9959c98e7da4618116436c783bc3023cb45bfb1b0fd43c",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1"
+      ],
+      "startedAt": "2026-10-06T12:43:04.491Z",
+      "completedAt": "2026-10-06T12:43:05.270Z",
+      "exitCode": 0
+    },
+    {
+      "name": "verify-jobs",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-jobs.json",
+      "bytes": 29463,
+      "sha256": "a6e6db17013404414ec513392276b2584399e436072e5e48b54536d81305c4b7",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1/jobs?per_page=100"
+      ],
+      "startedAt": "2026-10-06T12:43:04.496Z",
+      "completedAt": "2026-10-06T12:43:06.750Z",
+      "exitCode": 0
+    },
+    {
+      "name": "head-check-runs",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/head-check-runs.json",
+      "bytes": 75073,
+      "sha256": "78eece2bb8b23e64b1d997706c33f24830bc1ea76e500e3c7a4171466cf69792",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100"
+      ],
+      "startedAt": "2026-10-06T12:43:04.502Z",
+      "completedAt": "2026-10-06T12:43:05.432Z",
+      "exitCode": 0
+    },
+    {
+      "name": "codeql-analyses",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/codeql-analyses.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "command": [
+        "gh",
+        "api",
+        "-X",
+        "GET",
+        "repos/mario-andreschak/FLUJO/code-scanning/analyses",
+        "-f",
+        "ref=refs/heads/codex/filesystem-read-snapshot-integration-20261005",
+        "-f",
+        "per_page=100"
+      ],
+      "startedAt": "2026-10-06T12:43:04.507Z",
+      "completedAt": "2026-10-06T12:43:05.277Z",
+      "exitCode": 0
+    },
+    {
+      "name": "source-commit",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/source-commit.json",
+      "bytes": 1671,
+      "sha256": "89b709867e94044066f3bb5f87c850ac3afa3038fcf7fd8144c9f63c2c2cc20a",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/git/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22"
+      ],
+      "startedAt": "2026-10-06T12:43:04.521Z",
+      "completedAt": "2026-10-06T12:43:05.238Z",
+      "exitCode": 0
+    },
+    {
+      "name": "main-ref",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/main-ref.json",
+      "bytes": 342,
+      "sha256": "5cbae4a73fcf590fb7d876e6ad3871d1018b316d78995923c52a9b17034fcfb3",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/git/ref/heads/main"
+      ],
+      "startedAt": "2026-10-06T12:43:04.527Z",
+      "completedAt": "2026-10-06T12:43:05.240Z",
+      "exitCode": 0
+    }
+  ],
+  "composition": {
+    "reviewedComponentSha": "56912d4700933a3efaec045647d7a1e85136f01c",
+    "componentPullRequest": "https://github.com/mario-andreschak/FLUJO/pull/791",
+    "method": "Apply the single accepted documentation commit onto exact candidate e622ccfe, then append this separate API observation.",
+    "acceptedFourFileBytesUnchanged": true,
+    "acceptedFilePins": [
+      {
+        "file": "docs/audits/scorecard-563/README.md",
+        "sha256": "ecf0f2e8c55c19177dbe71eaab952c1b0094d29a43279fd63f624c8ee571708f"
+      },
+      {
+        "file": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+        "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d"
+      },
+      {
+        "file": "docs/audits/scorecard-563/publication-reconciliation.md",
+        "sha256": "da5a7c3944fb6844b457d8f431c3a704206b6e7eb3371ad5d9618e0b1e368621"
+      },
+      {
+        "file": "docs/audits/scorecard-563/scorecard.json",
+        "sha256": "141d287bfcb0ff5bd664761b2236e48de9d5f487a67b6396ff84797ed025bf0f"
+      }
+    ],
+    "compositionCommit": "90f79304b0f7ded32cad9fc8eef6892f535d8a14",
+    "canonicalCandidateChangedByThisProposal": false
+  },
+  "acceptance": {
+    "allPriorLedgerRecordsAndFailuresPreserved": true,
+    "allHumanOwnersUnassigned": true,
+    "allGateClaimRubricBudgetProfileAssessmentStatesUnchanged": true,
+    "installedReleaseAccepted": false,
+    "humanAdoptionAccepted": false,
+    "independentAMinusAccepted": false
+  },
+  "nextEvidence": [
+    "Obtain complete, source-bound ordinary verification and original reports for the selected candidate, including cancelled prerequisite jobs.",
+    "Complete CodeQL analysis and review individual applicable findings; retain cancelled checks and historical findings without inferred disposition.",
+    "Select distributed artifacts bound to a release source and record installed/runtime/recovery/security observations for each accepted profile.",
+    "Agree the rubric and numeric envelopes, assign nine named accountable human owners, and retain actual maintainer, contributor and sustained-use evidence before independent reassessment."
+  ],
+  "limits": [
+    "This is an API metadata observation. No workflow rerun, artifact download, runtime execution, model call or old inventory replay was performed.",
+    "The eight unsatisfied ordinary required jobs comprise seven cancellations and the failed aggregate verification gate. Other workflow cancellations are counted separately.",
+    "Passing individual job metadata is not an assertion-count, runtime-profile or installed-release qualification.",
+    "The current PR merge SHA is prospective API metadata; the actual checkout for this original run has not been independently joined.",
+    "The original B078/445/cb1 results, fixed v25/v33 reports, earlier failures and component results remain on their own immutable sources. They are not retargeted to e622 or this Docs proposal.",
+    "Source review of #791 applies to its accepted component; this changed composition needs its own focused checks and independent review."
+  ]
+}

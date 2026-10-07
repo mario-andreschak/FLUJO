@@ -37,7 +37,7 @@ jest.mock('simple-git', () => {
   };
   return {
     __esModule: true,
-    default: jest.fn((opts?: { baseDir?: string }) => {
+    simpleGit: jest.fn((opts?: { baseDir?: string }) => {
       git.__baseDir = opts?.baseDir || '';
       return git;
     }),

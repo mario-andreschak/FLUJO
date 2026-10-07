@@ -1,6 +1,7 @@
 {
   "name": "flujo-ai",
   "version": "3.46.3",
+  "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://flujo.com.co/",
   "repository": {
     "type": "git",
@@ -23,13 +24,16 @@
     "flujo": "bin/flujo.mjs"
   },
   "files": [
+    "LICENSE",
     ".next/**/*",
     "!.next/cache/**",
     "!.next/dev/**",
+    "!.next/trace",
     "public/**/*",
     "scripts/launch-next.mjs",
     "scripts/local-instance.mjs",
     "scripts/healthcheck.mjs",
+    "scripts/operations-inspect.mjs",
     "scripts/exclude-workspaces-from-next-glob.cjs",
     "scripts/exposure-mode.mjs",
     "scripts/migration-landscape-demo.mjs",
@@ -39,6 +43,7 @@
     "mcp-servers/README.md",
     "mcp-servers/*/dist/**/*",
     "mcp-servers/*/package.json",
+    "mcp-servers/*/LICENSE",
     "mcp-servers/browser/scripts/install-browser.mjs",
     "next.config.mjs"
   ],
@@ -93,9 +98,9 @@
     "@mario.andreschak/mcp-browser": "3.46.3",
     "@mario.andreschak/mcp-filesystem": "3.46.3",
     "@mario.andreschak/mcp-flujo": "3.46.3",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "2.2.0",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@mui/icons-material": "^6.5.0",
     "@mui/material": "^6.5.0",
     "@openai/codex-sdk": "^0.153.3",
@@ -118,7 +123,7 @@
     "react-markdown": "^10.1.0",
     "react-window": "^1.8.11",
     "remark-gfm": "^4.0.1",
-    "simple-git": "^3.36.0",
+    "simple-git": "^4.0.2",
     "slate": "^0.126.0",
     "slate-dom": "^0.126.0",
     "slate-history": "^0.113.1",
@@ -133,7 +138,7 @@
     "fast-glob": "$fast-glob",
     "zod": "$zod",
     "postcss": "$postcss",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -144,8 +149,8 @@
     "@types/crypto-js": "^4.2.2",
     "@types/jest": "^30.0.0",
     "@types/lodash": "^4.17.25",
-    "@types/micromatch": "^4.0.10",
     "@types/node": "^22.20.1",
+    "@types/picomatch": "^4.0.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19",
     "@types/react-window": "^1.8.8",
@@ -160,6 +165,7 @@
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
     "node-loader": "^2.1.0",
+    "picomatch": "^4.0.5",
     "postcss": "^8.5.25",
     "postcss-flexbugs-fixes": "^5.0.2",
     "postcss-preset-env": "^11.3.2",

@@ -2456,6 +2456,581 @@
         "persistent-worker"
       ],
       "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-b078484c-passed",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "b078484c35b485c973c8a47f9640028f219281fb",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained ordinary-ci-b078484c-passed receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "B078 ordinary verification completed all 13 required jobs; original reports, both-OS source/runtime matrix and complete run logs were retained separately from the failing native findings gate.",
+      "limits": [
+        "All 13 passing jobs belong to the ordinary verification workflow. The separate native findings gate remains failed.",
+        "Eight supported source/runtime records and two historical Node 22.13.1 build-only records do not qualify the selected distributed application or installed FLUJO profiles.",
+        "The AA 1,800,000 ms timeout and DB4 1,711,284 ms pass stay separate historical outcomes; the B078 pass proves no timeout cause or performance grade.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/611",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37333223553",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "native-codeql-b078484c-failure",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "b078484c35b485c973c8a47f9640028f219281fb",
+      "artifactId": null,
+      "ownerId": "security",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained native-codeql-b078484c-failure receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "B078 native findings protection failed with 49 new findings and 78 open alerts; the retained original source-flow review does not provide individual dispositions or clearance.",
+      "limits": [
+        "A lower open-alert count and snapshot absence are not formal finding disposition, backlog clearance or universal absence.",
+        "The 262 related-location URI/index disagreements remain an explicit original-evidence limitation; their provenance and cause are not inferred.",
+        "Source-scanner results establish neither a verified exploit nor scanner-attributed applicability to an installed profile.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/611",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "recording-ad0b1a9b-passed",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "ad0b1a9b0c53c4745c7b775ada5cc3a2403f8944",
+      "artifactId": null,
+      "ownerId": "security",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained recording-ad0b1a9b-passed receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "Recording component AD0 passed its own 13 required jobs and all 55 selected browser assertions after the warning matcher correction.",
+      "limits": [
+        "The v25 pending AD0 row remains a historical observation. This is a new component-scoped outcome; B078 has its own separate original reports.",
+        "Passing browser assertions do not dispose of the global native findings or establish installed-profile acceptance.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/784",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "worker-fixtures-b5abe6eb-passed",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "b5abe6eb27270b4360d980c3b1919db0f7f94e08",
+      "artifactId": null,
+      "ownerId": "production",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained worker-fixtures-b5abe6eb-passed receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "The selected worker payload event passed nine original export fixtures, with exporter proposal, executing workflow and compiled application kept as separate source identities.",
+      "limits": [
+        "This derived row covers the original fixture result. It does not independently requalify the production inner archive, native loading or worker behavior.",
+        "The fixed v33 checkpoint separately reports the later retained payload metadata review; that broader evidence is not borrowed as acceptance by this fixture-only row.",
+        "Earlier #783 export refusal and the separately failed ordinary workflow-contract runs remain distinct. The v25 pending successor row is unchanged.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/785",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37321117422",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "persistent-worker"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-e622ccfe-failure",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-06T12:43:06.751Z",
+      "environment": {
+        "platform": "GitHub REST metadata observed from the owned Windows Docs checkout",
+        "node": "Per-job runtime and artifact records were not independently qualified by this API observation",
+        "provider": "GitHub API; no model or live provider workload",
+        "tools": "gh api; immutable Git byte comparison of the composed four-file Docs component"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/pulls/803",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100",
+        "gh api -X GET repos/mario-andreschak/FLUJO/code-scanning/analyses -f ref=refs/heads/codex/filesystem-read-snapshot-integration-20261005 -f per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/git/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22",
+        "gh api repos/mario-andreschak/FLUJO/git/ref/heads/main"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06.json",
+          "sha256": "73d94432b6ec6563f7dd60ef33decab2cc46424eb939fc1ea73fc1ec0031ee8f",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/pr803.json",
+          "sha256": "b466bf783b53eeda7a96768fcd9793a4893874fbe022b78a095cffbf2d80ddd6",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-attempt1.json",
+          "sha256": "cb18387e3d536ba45f9959c98e7da4618116436c783bc3023cb45bfb1b0fd43c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-jobs.json",
+          "sha256": "a6e6db17013404414ec513392276b2584399e436072e5e48b54536d81305c4b7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/head-check-runs.json",
+          "sha256": "78eece2bb8b23e64b1d997706c33f24830bc1ea76e500e3c7a4171466cf69792",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/codeql-analyses.json",
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/source-commit.json",
+          "sha256": "89b709867e94044066f3bb5f87c850ac3afa3038fcf7fd8144c9f63c2c2cc20a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/main-ref.json",
+          "sha256": "5cbae4a73fcf590fb7d876e6ad3871d1018b316d78995923c52a9b17034fcfb3",
+          "verification": "local"
+        }
+      ],
+      "scope": "PR803 original verify attempt1 failed: five successful jobs, seven cancellations and aggregate verification failure; the diagnostic skip is excluded.",
+      "limits": [
+        "This is an API metadata observation. No workflow rerun, artifact download, runtime execution, model call or old inventory replay was performed.",
+        "The eight unsatisfied ordinary required jobs comprise seven cancellations and the failed aggregate verification gate. Other workflow cancellations are counted separately.",
+        "Passing individual job metadata is not an assertion-count, runtime-profile or installed-release qualification.",
+        "The current PR merge SHA is prospective API metadata; the actual checkout for this original run has not been independently joined.",
+        "The original B078/445/cb1 results, fixed v25/v33 reports, earlier failures and component results remain on their own immutable sources. They are not retargeted to e622 or this Docs proposal.",
+        "Source review of #791 applies to its accepted component; this changed composition needs its own focused checks and independent review."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "codeql-e622ccfe-cancelled",
+      "kind": "source-check",
+      "result": "pending",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "security",
+      "observedAt": "2026-10-06T12:43:06.751Z",
+      "environment": {
+        "platform": "GitHub REST metadata observed from the owned Windows Docs checkout",
+        "node": "Per-job runtime and artifact records were not independently qualified by this API observation",
+        "provider": "GitHub API; no model or live provider workload",
+        "tools": "gh api; immutable Git byte comparison of the composed four-file Docs component"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/pulls/803",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100",
+        "gh api -X GET repos/mario-andreschak/FLUJO/code-scanning/analyses -f ref=refs/heads/codex/filesystem-read-snapshot-integration-20261005 -f per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/git/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22",
+        "gh api repos/mario-andreschak/FLUJO/git/ref/heads/main"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06.json",
+          "sha256": "73d94432b6ec6563f7dd60ef33decab2cc46424eb939fc1ea73fc1ec0031ee8f",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/pr803.json",
+          "sha256": "b466bf783b53eeda7a96768fcd9793a4893874fbe022b78a095cffbf2d80ddd6",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-attempt1.json",
+          "sha256": "cb18387e3d536ba45f9959c98e7da4618116436c783bc3023cb45bfb1b0fd43c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-jobs.json",
+          "sha256": "a6e6db17013404414ec513392276b2584399e436072e5e48b54536d81305c4b7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/head-check-runs.json",
+          "sha256": "78eece2bb8b23e64b1d997706c33f24830bc1ea76e500e3c7a4171466cf69792",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/codeql-analyses.json",
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/source-commit.json",
+          "sha256": "89b709867e94044066f3bb5f87c850ac3afa3038fcf7fd8144c9f63c2c2cc20a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/main-ref.json",
+          "sha256": "5cbae4a73fcf590fb7d876e6ad3871d1018b316d78995923c52a9b17034fcfb3",
+          "verification": "local"
+        }
+      ],
+      "scope": "Both current-candidate CodeQL jobs were cancelled. No qualifying exact-source analysis or findings clearance is established by an empty API response.",
+      "limits": [
+        "This is an API metadata observation. No workflow rerun, artifact download, runtime execution, model call or old inventory replay was performed.",
+        "The eight unsatisfied ordinary required jobs comprise seven cancellations and the failed aggregate verification gate. Other workflow cancellations are counted separately.",
+        "Passing individual job metadata is not an assertion-count, runtime-profile or installed-release qualification.",
+        "The current PR merge SHA is prospective API metadata; the actual checkout for this original run has not been independently joined.",
+        "The original B078/445/cb1 results, fixed v25/v33 reports, earlier failures and component results remain on their own immutable sources. They are not retargeted to e622 or this Docs proposal.",
+        "Source review of #791 applies to its accepted component; this changed composition needs its own focused checks and independent review."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-e622ccfe-attempt2-observation",
+      "kind": "source-check",
+      "result": "pending",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-06T12:48:53.229Z",
+      "environment": {
+        "platform": "Attempt-specific GitHub REST metadata",
+        "node": "Runtime artifacts and exact binaries not qualified by this API snapshot",
+        "provider": "GitHub API; no live/model provider",
+        "tools": "gh api; original success job-id comparison"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/1",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json",
+          "sha256": "dc61f2e3acdbe1dfde44bacf1707ebc1f4cbac429f6c5d994cd57526766b4d30",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/verify-attempt2.json",
+          "sha256": "42d35622aa06ea6af48a30e6832324070c2bfac148487deb667d43fe6af71a25",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/verify-jobs-attempt2.json",
+          "sha256": "392cd59a1bef8fcee2083e727f373a1f365fab872929d8b17a1ca17571956e65",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/installer-attempt1.json",
+          "sha256": "c4c25d12dc391803e5feb19f2873392449ff531a2e1343901530f8d2ae7fcf21",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/installer-attempt2.json",
+          "sha256": "65dc4ab0cb91c1fcc46e6d4cb938d1daa29dfbbf0f8fda5b2530ad303042556c",
+          "verification": "local"
+        }
+      ],
+      "scope": "Separate verify and installer recovery attempt2 metadata at exact e622ccfe, with original failed attempt1 and reused successful job IDs kept distinct. Complete recovery qualification remains pending.",
+      "limits": [
+        "Recovery API metadata is distinct from the immutable original failed attempt. Job IDs shared with original successful attempt1 jobs are explicitly labelled reused.",
+        "GitHub may carry original successful jobs into recovery. Their presence in attempt2 metadata is not a fresh execution or a new assertion/runtime measurement.",
+        "This capture dispatched neither recovery nor tests. Original logs, annotations, artifacts and runtime controls were not downloaded or requalified.",
+        "No full recovery, native findings, selected release, sustained use, human or independent-grade acceptance is inferred from active or successful individual jobs."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397040"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-e622ccfe-attempt2-terminal-failure",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-06T13:21:52.987Z",
+      "environment": {
+        "platform": "Exact attempt2 GitHub REST metadata and original dependency audit artifact",
+        "node": "No additional runtime or installation qualification by Docs",
+        "provider": "GitHub API and retained original npm audit payload; no live/model provider",
+        "tools": "Original timestamp/full-step joins; SHA-256 server ZIP/member comparison; no target execution"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/1/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/artifacts/11413899334",
+        "gh api repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100",
+        "Read retained original artifact 11413899334; server digest and archive member bytes independently joined without an audit rerun"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06.json",
+          "sha256": "df8cc68d04f37b751bbcf723b97c60cd492a976464588a69266fdfa91a40d858",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/verify-attempt2.json",
+          "sha256": "d602fda1f0e2693a20f14ff9c9bf67fb9e9ba8653e712b14eedfb3d7fb744ad9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/verify-jobs-attempt2.json",
+          "sha256": "08139b4bd8f157b32de4e7df72dd4e40f9366784e1f8dc580005e96bad3d0ae0",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-original-jobs.json",
+          "sha256": "422901237ac1102396cfd02ba92b7e1eddeec181c8db0385c6731c2836e04f86",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-attempt2.json",
+          "sha256": "ab8b1641bfff4e426e9b7fb62ebae02f861595e3cafcba418e996cd12f530fc7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-jobs-attempt2.json",
+          "sha256": "1db8a4857329bb038f1063f56aa0d3e31e529264f7a273daecba32319cea9190",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/dependency-audit-artifact.json",
+          "sha256": "9780ec4fee553aaa0da987bc68dcfcfcaf41b2cef83c3c5e7d150c5edc0be44a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/head-check-runs.json",
+          "sha256": "f643aa56d2086ca2e5f86fdb1e44a84daf56fa4f86876f23abf6e2630637f543",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/dependency-audit.json",
+          "sha256": "6fecb51926241ce147815114e0a5779fdd49dc9edcc6207f2fe0f056388fe53b",
+          "verification": "local"
+        }
+      ],
+      "scope": "Terminal e622 attempt2 verify failed while installer workflow succeeded. Five verify successes and one Pester execution were retained from attempt1 under new IDs. Actual dependency audit reports three critical and one high affected package, with 21 moderate.",
+      "limits": [
+        "Reuse is independently joined here from original and later exact timestamps and complete API steps despite changed job IDs. Later runner wrapper metadata differs and is retained explicitly; it is not evidence of fresh execution. Queue retains the separate original runner/log joins.",
+        "The dependency audit alone is downloaded original producer data. Other raw CI artifacts, installer EXE identity/signature/installation and full runtime profiles were not requalified by Docs.",
+        "Analysis-job completion and individual success do not supply native findings disposition, complete release acceptance or human/grade acceptance.",
+        "Attempt2 ordinary verification is failed: dependency-security and aggregate verification failed. Eleven successful job records include five retained original executions; the diagnostic skip is excluded.",
+        "The installer workflow success includes a retained original Pester execution. Docs does not qualify the new EXE digest, signature or installation by reading workflow metadata.",
+        "npm reports 25 affected packages: three critical, one high and 21 moderate. These are metadata affected-package counts, not unique advisory counts or new independently scored threat severities.",
+        "The original failed attempt1, fixed 12:48 attempt2 snapshot, v25/v33 cuts, all previous failures and accepted #791/#805 components remain unchanged.",
+        "No new recovery, audit, model call, target workload or multi-thousand-pin inventory was entered for this record."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397040"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
@@ -2496,7 +3071,10 @@
       "description": "Authenticated/scoped ingress, credential migration and MCP enforcement accepted on local release.",
       "evidenceIds": [
         "native-codeql-integration-80-failure",
-        "native-codeql-aa924df5-failure"
+        "native-codeql-aa924df5-failure",
+        "native-codeql-b078484c-failure",
+        "recording-ad0b1a9b-passed",
+        "codeql-e622ccfe-cancelled"
       ]
     },
     {
@@ -2510,7 +3088,8 @@
       "description": "Fenced local schedule recovery, generation-bound process receipts, backup/restore/audit/health/resource acceptance.",
       "evidenceIds": [
         "worker-export-8800ecfe-failure",
-        "worker-export-b5abe6eb-pending"
+        "worker-export-b5abe6eb-pending",
+        "worker-fixtures-b5abe6eb-passed"
       ]
     },
     {
@@ -2613,7 +3192,8 @@
       "evidenceIds": [
         "dependency-audit-2026-10-03",
         "dependency-remediation-59b65de8",
-        "dependency-audit-hosted-b8cf905f"
+        "dependency-audit-hosted-b8cf905f",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ]
     },
     {
@@ -2633,7 +3213,11 @@
         "build-verification-hosted-c255b867",
         "ordinary-ci-aa924df5-failure",
         "marker-component-c69fba0f",
-        "mapped-integration-db4bb26f-pending"
+        "mapped-integration-db4bb26f-pending",
+        "ordinary-ci-b078484c-passed",
+        "ordinary-ci-e622ccfe-failure",
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ]
     }
   ],
@@ -2692,7 +3276,11 @@
       "evidenceIds": [
         "ordinary-ci-aa924df5-failure",
         "marker-component-c69fba0f",
-        "mapped-integration-db4bb26f-pending"
+        "mapped-integration-db4bb26f-pending",
+        "ordinary-ci-b078484c-passed",
+        "ordinary-ci-e622ccfe-failure",
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -2735,7 +3323,11 @@
         "native-codeql-integration-80-failure",
         "native-codeql-aa924df5-failure",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "native-codeql-b078484c-failure",
+        "recording-ad0b1a9b-passed",
+        "codeql-e622ccfe-cancelled",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -2829,7 +3421,14 @@
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "ordinary-ci-b078484c-passed",
+        "native-codeql-b078484c-failure",
+        "recording-ad0b1a9b-passed",
+        "ordinary-ci-e622ccfe-failure",
+        "codeql-e622ccfe-cancelled",
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -2958,7 +3557,8 @@
       "evidenceIds": [
         "publication-reconciliation-2026-10-03",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "recording-ad0b1a9b-passed"
       ],
       "budgetIds": [
         "high-findings"
@@ -3031,7 +3631,8 @@
       "evidenceIds": [
         "publication-reconciliation-2026-10-03",
         "worker-export-8800ecfe-failure",
-        "worker-export-b5abe6eb-pending"
+        "worker-export-b5abe6eb-pending",
+        "worker-fixtures-b5abe6eb-passed"
       ],
       "budgetIds": [
         "recovery-rto",
@@ -3058,7 +3659,8 @@
       "evidenceIds": [
         "publication-reconciliation-2026-10-03",
         "marker-component-c69fba0f",
-        "ordinary-ci-aa924df5-failure"
+        "ordinary-ci-aa924df5-failure",
+        "ordinary-ci-b078484c-passed"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3083,7 +3685,13 @@
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "ordinary-ci-b078484c-passed",
+        "native-codeql-b078484c-failure",
+        "ordinary-ci-e622ccfe-failure",
+        "codeql-e622ccfe-cancelled",
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3210,7 +3818,8 @@
       ],
       "evidenceIds": [
         "worker-export-8800ecfe-failure",
-        "worker-export-b5abe6eb-pending"
+        "worker-export-b5abe6eb-pending",
+        "worker-fixtures-b5abe6eb-passed"
       ],
       "budgetIds": [
         "recovery-rto",

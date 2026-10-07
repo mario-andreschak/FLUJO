@@ -50,7 +50,115 @@ const complexTool = () => ({
   },
 });
 
+const objectAndArrayTool = () => ({
+  ...complexTool(),
+  inputSchema: { ...complexTool().inputSchema, properties: {
+    ...complexTool().inputSchema.properties,
+    tags: { type: 'array', items: { type: 'string' } },
+  } },
+});
+
+const validComplexArguments = {
+  url: 'https://example.test/page',
+  options: { depth: 1 },
+  tags: ['one'],
+};
+
 describe('ToolTester complex parameter lifecycle', () => {
+  it.each([
+    ['object', '[]'], ['object', 'null'], ['object', '"text"'], ['object', '7'], ['object', 'true'],
+    ['array', '{}'], ['array', 'null'], ['array', '"text"'], ['array', '7'], ['array', 'false'],
+  ] as const)('blocks a JSON %s draft with the wrong shape %s until repaired', async (type, text) => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    render(<ToolTester serverName="fixture" tools={[objectAndArrayTool()]} onTestTool={onTestTool}
+      prefill={{ toolName: 'firecrawl_scrape', arguments: validComplexArguments }} />);
+    const key = type === 'object' ? 'options' : 'tags';
+    const input = await screen.findByRole('textbox', { name: `${key} (JSON ${type})` });
+    fireEvent.change(input, { target: { value: text } });
+    expect(input).toHaveValue(text);
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText(type === 'object' ? 'schema.expectedObject' : 'schema.expectedArray')).toBeInTheDocument();
+    const run = screen.getByRole('button', { name: 'mcp.tester.test' });
+    expect(run).toBeDisabled();
+    fireEvent.click(run);
+    expect(onTestTool).not.toHaveBeenCalled();
+    const repaired = type === 'object' ? { depth: 2, nested: { formats: ['markdown'], include: false } } : ['two', '三'];
+    fireEvent.change(input, { target: { value: JSON.stringify(repaired) } });
+    await waitFor(() => expect(run).toBeEnabled());
+    expect(input).toHaveAttribute('aria-invalid', 'false');
+    expect(onTestTool).not.toHaveBeenCalled();
+    fireEvent.click(run);
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledWith('firecrawl_scrape',
+      { ...validComplexArguments, [key]: repaired }, 60));
+    expect(onTestTool).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['object', 'array'] as const)('blocks a prefilled JSON %s value with the wrong shape', async type => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    const key = type === 'object' ? 'options' : 'tags';
+    const invalidValue = type === 'object' ? [] : {};
+    render(<ToolTester serverName="fixture" tools={[objectAndArrayTool()]} onTestTool={onTestTool}
+      prefill={{ toolName: 'firecrawl_scrape', arguments: { ...validComplexArguments, [key]: invalidValue } }} />);
+    const input = await screen.findByRole('textbox', { name: `${key} (JSON ${type})` });
+    const run = screen.getByRole('button', { name: 'mcp.tester.test' });
+    await waitFor(() => expect(run).toBeDisabled());
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(run);
+    expect(onTestTool).not.toHaveBeenCalled();
+    const repaired = type === 'object' ? { depth: 2 } : ['two'];
+    fireEvent.change(input, { target: { value: JSON.stringify(repaired) } });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledWith('firecrawl_scrape',
+      { ...validComplexArguments, [key]: repaired }, 60));
+    expect(onTestTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Test blocked when repairing one field leaves another wrong-shaped draft', async () => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    const prefill = { toolName: 'firecrawl_scrape', arguments: validComplexArguments };
+    const view = render(<ToolTester serverName="fixture" tools={[objectAndArrayTool()]} onTestTool={onTestTool} prefill={prefill} />);
+    const options = await screen.findByRole('textbox', { name: 'options (JSON object)' });
+    const tags = screen.getByRole('textbox', { name: 'tags (JSON array)' });
+    const run = screen.getByRole('button', { name: 'mcp.tester.test' });
+    fireEvent.change(options, { target: { value: 'null' } });
+    fireEvent.change(tags, { target: { value: '{}' } });
+    fireEvent.change(options, { target: { value: '{"depth":3}' } });
+    expect(run).toBeDisabled();
+    view.rerender(<ToolTester serverName="fixture" tools={[objectAndArrayTool()]} onTestTool={onTestTool} prefill={prefill} />);
+    expect(tags).toHaveValue('{}');
+    expect(run).toBeDisabled();
+    fireEvent.click(run);
+    expect(onTestTool).not.toHaveBeenCalled();
+    fireEvent.change(tags, { target: { value: '["two"]' } });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledWith('firecrawl_scrape',
+      { ...validComplexArguments, options: { depth: 3 }, tags: ['two'] }, 60));
+    expect(onTestTool).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['object', 'array'] as const)('clears an optional wrong-shaped JSON %s draft without sending the old value', async type => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    render(<ToolTester serverName="fixture" tools={[objectAndArrayTool()]} onTestTool={onTestTool}
+      prefill={{ toolName: 'firecrawl_scrape', arguments: validComplexArguments }} />);
+    const key = type === 'object' ? 'options' : 'tags';
+    const input = await screen.findByRole('textbox', { name: `${key} (JSON ${type})` });
+    const run = screen.getByRole('button', { name: 'mcp.tester.test' });
+    fireEvent.change(input, { target: { value: type === 'object' ? '[]' : '{}' } });
+    expect(run).toBeDisabled();
+    expect(onTestTool).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '  ' } });
+    await waitFor(() => expect(run).toBeEnabled());
+    expect(input).toHaveValue('  ');
+    fireEvent.click(run);
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledTimes(1));
+    const sent = onTestTool.mock.calls[0][1];
+    expect(Object.hasOwn(sent, key)).toBe(false);
+    expect(sent.url).toBe(validComplexArguments.url);
+    expect(sent[type === 'object' ? 'tags' : 'options']).toEqual(validComplexArguments[type === 'object' ? 'tags' : 'options']);
+  });
+
   it('edits and clears own prototype-like JSON keys from empty values while preserving validity', async () => {
     const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
     const keys = ['__proto__', 'constructor', 'toString'];

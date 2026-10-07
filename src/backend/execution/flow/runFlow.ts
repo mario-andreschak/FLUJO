@@ -1354,6 +1354,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     }
     // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
     let resolvedFlowId = input.flowDefinition ? input.flowDefinition.id : input.flowId;
+    let resolvedFlow: Flow | undefined;
     if (!resolvedFlowId && data.model) {
       const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
       const reactFlow = await flowService.getFlowByName(flowName);
@@ -1371,6 +1372,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         });
       }
       resolvedFlowId = reactFlow.id;
+      resolvedFlow = reactFlow;
     }
     if (!resolvedFlowId) {
       log.error('No flow specified for run (neither flowId nor model provided).');
@@ -1385,6 +1387,16 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       });
     }
     sharedState.flowId = resolvedFlowId;
+
+    // Pin the actual saved definition before the first persistence or engine
+    // step. Named root runs and by-id subflow children use the same seam, so
+    // later edits to the catalog cannot change an in-flight or resumed run.
+    // Loaded conversations deliberately keep their original snapshot (or its
+    // absence for legacy runs); current catalog data is not historical proof.
+    if (!input.flowDefinition) {
+      resolvedFlow ??= await flowService.getFlow(resolvedFlowId) ?? undefined;
+      if (resolvedFlow) sharedState.flowSnapshot = structuredClone(resolvedFlow);
+    }
 
     // Preserve caller-provided ids/timestamps (like the resume path below).
     // The chat frontend sends its optimistic message id; keeping it means the
@@ -1515,9 +1527,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       const executionFlow = sharedState.flowSnapshot
         ?? await flowService.getFlow(sharedState.flowId);
       sharedState.statisticsFlowName ??= executionFlow?.name;
-      // Opaque, installation-local fingerprint of the SAVED flow configuration
-      // (graph plus node configuration). The configuration itself is never
-      // persisted; the fingerprint only makes revisions comparable over time.
+      // Opaque, installation-local fingerprint of the execution configuration
+      // (graph plus node configuration). Statistics store only the fingerprint;
+      // the conversation's snapshot separately preserves its definition.
       if (executionFlow && !sharedState.statisticsFlowRevisionId) {
         sharedState.statisticsFlowRevisionId = await statisticsRevisionId('flow', {
           id: executionFlow.id,
@@ -1767,8 +1779,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // error path below formats the result (and emits run:done).
   if ((userTurn || stateSource === 'new') && sharedState.flowId) {
     try {
-      // Quick-Chat snapshots aren't in the store, so validate the in-memory
-      // object; everything else validates by id (unchanged path).
+      // Validate the pinned execution definition, including saved-flow runs.
+      // Legacy conversations without a snapshot retain the by-id path.
       const validation = sharedState.flowSnapshot
         ? await validateFlowObjectForRun(sharedState.flowSnapshot)
         : await validateFlowForRun(sharedState.flowId);

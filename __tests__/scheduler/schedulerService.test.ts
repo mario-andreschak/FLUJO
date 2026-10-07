@@ -324,21 +324,35 @@ describe('SchedulerService', () => {
     expect(scheduler.getStatus(execution!).running).toBe(false);
     expect(scheduler.getStatus(execution!).runningSince).toBeUndefined();
 
+    let signalEntered!: () => void;
+    const entered = new Promise<void>(resolve => { signalEntered = resolve; });
     let release!: () => void;
-    runFlowMock.mockImplementationOnce(
-      () => new Promise(resolve => { release = () => resolve(completedResult); })
-    );
+    const heldResult = new Promise<typeof completedResult>(resolve => {
+      release = () => resolve(completedResult);
+    });
+    runFlowMock.mockImplementationOnce(() => {
+      signalEntered();
+      return heldResult;
+    });
 
     const inFlight = scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
-    // Let the fire take the running lock.
-    await new Promise(r => setTimeout(r, 10));
+    try {
+      // Admission can await filesystem work. Observe actual flow entry instead
+      // of assuming a fixed timer delay means the running lock was acquired.
+      await Promise.race([
+        entered,
+        inFlight.then(() => { throw new Error('Fire settled before entering the held flow fixture.'); }),
+      ]);
 
-    const during = scheduler.getStatus(execution!);
-    expect(during.running).toBe(true);
-    expect(during.runningSince).toMatch(/^\d{4}-/); // ISO start time for the elapsed timer
-
-    release();
-    await inFlight;
+      const during = scheduler.getStatus(execution!);
+      expect(during.running).toBe(true);
+      expect(during.runningSince).toMatch(/^\d{4}-/); // ISO start time for the elapsed timer
+    } finally {
+      // Settle this exact fire even if an assertion fails, before the next
+      // beforeEach clears storage and resets the shared flow mock.
+      release();
+      await inFlight;
+    }
 
     // Cleared once the run resolves (finally deletes the entry).
     const after = scheduler.getStatus(execution!);

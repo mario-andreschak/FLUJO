@@ -21,7 +21,7 @@
  * clients); errors are returned as `isError: true` results rather than thrown.
  */
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import readline from 'node:readline';
@@ -33,7 +33,7 @@ import {
 } from '@flujo-ai/mcp-shared';
 import { confineFilesystemPath } from './pathConfinement.js';
 import { recordTouchedFile } from './resources.js';
-import { detectMediaFile, mimeTypeFromExtension, mediaTypeFromMime, looksBinaryHeuristic } from './media.js';
+import { detectMediaFile, looksBinaryHeuristic } from './media.js';
 
 const FILESYSTEM_SERVER_NAME = 'filesystem';
 
@@ -696,58 +696,70 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   const pattern = suppliedPattern.trim() ? suppliedPattern : '';
   const patternRegex = compileReadPattern(pattern);
 
-  // #287: guard whole-file reads of large files. Stat first so we never buffer a
-  // huge file just to reject it. An explicit line range or a `pattern` opts out.
-  let stat: Awaited<ReturnType<typeof fs.stat>> | undefined;
+  // Admit, classify and consume the same open file. A separate pathname stat
+  // and readFile let replacement or growth bypass the text/media size gates.
+  const handle = await fs.open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  let buf: Buffer;
   try {
-    stat = await fs.stat(filePath);
-  } catch {
-    // fall through: fs.readFile below surfaces the real ENOENT/EACCES error.
-  }
-  if (stat && !stat.isFile()) {
-    throw new Error('Expected a regular file to read.');
-  }
-  const size = Number(stat?.size ?? 0);
-
-  // #365: decide whether this is media BEFORE the text-oriented size gate.
-  // Start with the cheap extension signal, then probe a bounded header when the
-  // extension is missing or misleading. The probe is essential for large media
-  // with extensionless paths: without it `pattern: "*"` could still bypass the
-  // media cap and make readFile buffer an arbitrarily large payload.
-  const likelyMediaMime = mimeTypeFromExtension(filePath);
-  let likelyMedia = likelyMediaMime !== null && mediaTypeFromMime(likelyMediaMime) !== 'file';
-  if (!likelyMedia && size > LARGE_FILE_BYTES) {
-    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-    try {
-      handle = await fs.open(filePath, 'r');
-      const header = Buffer.alloc(Math.min(size, 512));
-      const { bytesRead } = await handle.read(header, 0, header.length, 0);
-      likelyMedia = detectMediaFile(header.subarray(0, bytesRead), filePath) !== null;
-    } finally {
-      await handle?.close();
+    const admitted = await handle.stat({ bigint: true });
+    if (!admitted.isFile()) throw new Error('Expected a regular file to read.');
+    if (admitted.size < BigInt(0) || admitted.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error('File size cannot be read safely.');
     }
-  }
+    const size = Number(admitted.size);
+    const identityFields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
+    const assertUnchanged = async () => {
+      const current = await handle.stat({ bigint: true });
+      if (!current.isFile() || identityFields.some(field => current[field] !== admitted[field])) {
+        throw new Error('File changed while reading; retry the read.');
+      }
+    };
 
-  if (likelyMedia && size > MAX_MEDIA_BYTES) {
-    return errorResult(
-      `Media file is too large to load (${size} bytes > ${MAX_MEDIA_BYTES} limit). ` +
-      `Reading it would buffer the whole file in memory and exceed the run-resource size cap. ` +
-      `Use the file path directly with a tool that streams it instead.`
-    );
-  }
+    // Reuse the bounded probe as the first body chunk. Fill short reads so the
+    // full signature is available even when a descriptor returns partial I/O.
+    const header = Buffer.alloc(Math.min(size, 512));
+    let headerBytes = 0;
+    while (headerBytes < header.length) {
+      const { bytesRead } = await handle.read(header, headerBytes, header.length - headerBytes, headerBytes);
+      if (!bytesRead) throw new Error('File changed while reading; retry the read.');
+      headerBytes += bytesRead;
+    }
+    await assertUnchanged();
+    const likelyMedia = detectMediaFile(header, filePath) !== null;
+    if (likelyMedia && size > MAX_MEDIA_BYTES) {
+      return errorResult(
+        `Media file is too large to load (${size} bytes > ${MAX_MEDIA_BYTES} limit). ` +
+        `Reading it would buffer the whole file in memory and exceed the run-resource size cap. ` +
+        `Use the file path directly with a tool that streams it instead.`
+      );
+    }
+    if (!likelyMedia && size > LARGE_FILE_BYTES && !hasRange && !pattern) {
+      return errorResult(
+        `File is large (${size} bytes > ${LARGE_FILE_BYTES} threshold). Reading it whole would flood the context. ` +
+        `Provide a "pattern" to grep for (matching lines + context are returned, then read targeted ranges with "from"/"to"), ` +
+        `or pass pattern "*" to read the whole file anyway.`
+      );
+    }
 
-  if (!likelyMedia && size > LARGE_FILE_BYTES && !hasRange && !pattern) {
-    return errorResult(
-      `File is large (${size} bytes > ${LARGE_FILE_BYTES} threshold). Reading it whole would flood the context. ` +
-      `Provide a "pattern" to grep for (matching lines + context are returned, then read targeted ranges with "from"/"to"), ` +
-      `or pass pattern "*" to read the whole file anyway.`
-    );
+    const chunks = header.length ? [header] : [];
+    let total = header.length;
+    for (;;) {
+      // Read at most the admitted body plus one byte to detect growth. This
+      // also bounds growth when an explicit text pattern/range opts out.
+      const chunk = Buffer.alloc(Math.min(64 * 1024, size - total + 1));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, total);
+      if (!bytesRead) break;
+      total += bytesRead;
+      if (total > size) throw new Error('File changed while reading; retry the read.');
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    if (total !== size) throw new Error('File changed while reading; retry the read.');
+    await assertUnchanged();
+    buf = Buffer.concat(chunks, total);
+  } finally {
+    await handle.close();
   }
-
-  // #365: Read as buffer first to detect media files BEFORE any text processing.
-  // This ensures pattern/range on media files are rejected appropriately.
-  const buf = await fs.readFile(filePath);
-  recordTouchedFile(filePath, 'read', size);
+  recordTouchedFile(filePath, 'read', buf.length);
 
   // #365: Check if this is a media file (image/audio/video).
   const mediaDetection = detectMediaFile(buf, filePath);

@@ -376,3 +376,55 @@ worker/native behavior, maintainer participation, sustained usage or an independ
 grade. All nine human owners remain unassigned. Rubric agreement, profile
 acceptance, proposed budgets and independent reassessment remain unresolved as
 previously recorded.
+
+## Later B078 source results
+
+The separate [B078 terminal observation](evidence/source-outcomes-2026-10-05-b078-terminal.json)
+retains the complete original verification reports, source/runtime matrix and run
+logs after the fixed v33 publication cut. All 13 ordinary verification jobs passed;
+the separate native findings gate still failed with 49 new findings and 78 open
+alerts. The 262 related-location URI/index disagreements remain an explicit
+evidence limitation. No individual disposition or security clearance is inferred.
+
+Its four derived records also retain the recording component's own 55 selected
+passes and the selected worker event's nine fixture passes, with proposal, workflow
+and compiled application identities kept distinct. Worker native/runtime acceptance
+remains pending. The v25 report and every earlier failure or pending record stay
+unchanged. CI/source checks, archive retention and automated reviewer selection do
+not establish installed release, human acceptance or an independent A-minus grade.
+
+## Current candidate and remaining acceptance work
+
+The separate [October 6 candidate observation](evidence/current-candidate-e622ccfe-2026-10-06.json)
+binds PR #803 source `e622ccfe` / tree `dd5f5c47` to original verification
+run 37369397033, attempt 1. The API records five successful jobs, seven cancelled
+jobs and failed aggregate verification. The diagnostic skip is excluded. Both
+CodeQL jobs were cancelled; an empty analyses response establishes no clearance.
+Individual successful job metadata supplies no original assertion counts or
+installed-release acceptance. Earlier B078 results remain historical.
+
+The accepted four-file #791 documentation commit applies unchanged onto this
+candidate. This proposal adds two distinct API observations and preserves every
+prior record, failure, rubric, budget, profile, human owner and acceptance status.
+The composed source needs its own focused checks and review.
+
+Acceptance next needs complete source-bound verification and original reports;
+completed scanner analysis with individual finding review; selected distributed
+artifacts and per-profile installation/runtime/recovery evidence; and rubric,
+numeric-envelope and named-owner agreement. Actual maintainer, contributor and
+sustained-use observations are still required for independent reassessment.
+
+The [separate recovery observation](evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json)
+records verify and installer attempt 2 at the same candidate. The original attempt 1
+failure stays unchanged. Any successful jobs reused from attempt 1 must retain
+their original identity and do not count as fresh execution. Full recovery qualification and
+scanner, release, human and grade acceptance remain pending.
+
+The later [terminal recovery record](evidence/current-candidate-e622ccfe-terminal-2026-10-06.json)
+records failed verification and a successful installer workflow. Five verify
+executions and the installer's Pester execution were retained from attempt 1
+under new IDs. Their original timestamps and full steps match; they are not fresh
+execution. The fixed 12:48 snapshot's ID-only reuse flags remain unchanged and
+are explicitly limited by this later correction. The original audit reports three
+critical, one high and 21 moderate affected packages. Scanner job completion and
+installer workflow success grant no findings clearance or installed acceptance.

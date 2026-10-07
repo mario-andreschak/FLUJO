@@ -245,6 +245,8 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   // OAuth configuration fields
   oauthClientId?: string;
   oauthClientSecret?: string;
+  /** Trusted authorization issuer for a pre-registered client, supplied by the operator. */
+  oauthIssuer?: string;
   oauthScopes?: string[];
   // Stored OAuth data
   oauthClientMetadata?: OAuthClientMetadata;

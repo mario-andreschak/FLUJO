@@ -28,13 +28,17 @@ jest.mock('@/backend/services/model/provider', () => ({
   getProviderFromBaseUrl: jest.fn(() => 'ollama'),
 }));
 
-jest.mock('@/backend/services/model/cache', () => ({
-  modelCache: {
-    get: jest.fn(),
-    set: jest.fn(),
-  },
-  filterModels: jest.fn((models: unknown[]) => models),
-}));
+jest.mock('@/backend/services/model/cache', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/model/cache')>('@/backend/services/model/cache');
+  return {
+    modelCache: {
+      get: jest.fn(),
+      set: jest.fn(),
+      credentialFingerprint: actual.modelCache.credentialFingerprint.bind(actual.modelCache),
+    },
+    filterModels: jest.fn((models: unknown[]) => models),
+  };
+});
 
 import { modelService } from '@/backend/services/model';
 
@@ -139,6 +143,42 @@ describe('profile-aware provider model service', () => {
     )).resolves.toEqual([]);
 
     expect(cacheMock.modelCache.set).not.toHaveBeenCalled();
+  });
+
+  it('reuses the cache identity when different stored forms resolve to the same credential', async () => {
+    encryptionMock.resolveAndDecryptApiKey.mockResolvedValue('SYNTHETIC-RESOLVED-CREDENTIAL');
+    await modelService.fetchProviderModels('', undefined, undefined, '${global:SYNTHETIC}', 'gemini-native');
+    const [firstIdentity] = cacheMock.modelCache.set.mock.calls[0];
+    cacheMock.modelCache.get.mockImplementation(identity =>
+      JSON.stringify(identity) === JSON.stringify(firstIdentity) ? discovered : null);
+
+    expect(await modelService.fetchProviderModels('', undefined, undefined, 'encrypted:SYNTHETIC', 'gemini-native')).toEqual(discovered);
+    expect(providerMock.fetchModelsFromProvider).toHaveBeenCalledTimes(1);
+    expect(cacheMock.modelCache.set).toHaveBeenCalledTimes(1);
+    expect(encryptionMock.resolveAndDecryptApiKey).toHaveBeenCalledTimes(2);
+  });
+
+  it('changes the cache identity when the resolved credential changes without leaking it in diagnostics', async () => {
+    encryptionMock.resolveAndDecryptApiKey.mockResolvedValueOnce('SYNTHETIC-CREDENTIAL-A').mockResolvedValueOnce('SYNTHETIC-CREDENTIAL-B');
+    await modelService.fetchProviderModels('', undefined, undefined, 'SYNTHETIC-INPUT-A', 'gemini-native');
+    const [firstIdentity] = cacheMock.modelCache.set.mock.calls[0];
+    cacheMock.modelCache.get.mockImplementation(identity =>
+      JSON.stringify(identity) === JSON.stringify(firstIdentity) ? discovered : null);
+    await modelService.fetchProviderModels('', undefined, undefined, 'SYNTHETIC-INPUT-B', 'gemini-native');
+
+    const [secondIdentity] = cacheMock.modelCache.set.mock.calls[1];
+    expect(secondIdentity.credentialFingerprint).not.toBe(firstIdentity.credentialFingerprint);
+    expect(providerMock.fetchModelsFromProvider).toHaveBeenCalledTimes(2);
+    const logger = jest.requireMock('@/utils/logger') as { createLogger: jest.Mock };
+    const diagnostics = JSON.stringify(logger.createLogger.mock.results.flatMap(({ value }) =>
+      Object.values(value).flatMap(fn => (fn as jest.Mock).mock.calls)));
+    const identities = JSON.stringify([firstIdentity, secondIdentity]);
+    for (const secret of ['SYNTHETIC-INPUT-A', 'SYNTHETIC-INPUT-B', 'SYNTHETIC-CREDENTIAL-A', 'SYNTHETIC-CREDENTIAL-B']) {
+      expect(diagnostics).not.toContain(secret);
+      expect(identities).not.toContain(secret);
+    }
+    expect(diagnostics).not.toContain(firstIdentity.credentialFingerprint);
+    expect(diagnostics).not.toContain(secondIdentity.credentialFingerprint);
   });
 
   it.each(['https://other.example/v1', 'https://api.openai.com/other', 'https://api.openai.com/v1//', 'http://api.openai.com/v1',

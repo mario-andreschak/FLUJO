@@ -153,3 +153,83 @@ profile acceptance or assessment. The nine accountable human owners, participati
 contributor activity, sustained usage and independent reassessment still need actual
 evidence. Source consistency and publication authorization grant no grade or human
 acceptance and do not close #563.
+
+## B078 terminal evidence after the fixed v33 checkpoint
+
+The [separate terminal observation](evidence/source-outcomes-2026-10-05-b078-terminal.json)
+binds source `b078484c` / tree `cb1eb750` to actual merge `445d59ae` and
+original run 37333223553, attempt 1. Queue retained nine original server archives,
+20 expanded report/profile members and the complete original run archive's 110
+logs before this Docs successor was prepared. Docs rehashed 266 explicit original
+file pins and joined the 19 unchanged source inputs without repeating workloads.
+The committed observation is derived; access to the private originals remains
+necessary for independent raw-evidence review.
+
+All 13 ordinary verification jobs passed. Main retained 8,708 passing tests in
+910 passing suites, zero failures, and the existing 11 skips in five suites;
+isolated retained 105 passing tests in nine suites with zero skips or failures.
+The fresh combined reports retain all 17 new recording and 38 unchanged browser
+assertions across nine selected suites, plus 16 marker and 20 unchanged transfer
+assertions. Eight supported source/runtime matrix records passed their Ubuntu
+and Windows installed/packed MCP and proxy controls; the two Node 22.13.1 records
+remain historical build-only rows. Those control scopes do not qualify a selected
+distributed FLUJO release or the ledger's installed profiles.
+
+The unchanged 20,000-append assertion passed in 1,210,662 ms. Its 19 original input
+objects remain unchanged. AA's 1,800,000 ms timeout and DB4's 1,711,284 ms pass stay
+on their original sources; no timeout cause, append-p95 result or performance
+grade follows from comparing those durations. The separate B078 native finding
+check remains failed: 49 new (28 high, 21 medium), 78 open (43 high, 35 medium),
+zero critical. Its 262 related URI/index disagreements and their unproven cause
+remain visible. Snapshot absence of browser finding #167 grants no disposition.
+
+Recording AD0's own 55 selected passes and worker B5's nine original fixture
+passes are separate later observations. The fixture record does not independently
+requalify the worker production inner archive or native/runtime behavior. The
+fixed v33 context retains the separate payload metadata review, finite native
+controls, expired 100/250 diagnostic grants, launcher refusals and unrun runtime
+acceptance. Preferences draft #788 requires its own distinct qualification.
+
+The original v25 observations, claim/gate statuses, rubric, numeric budgets,
+profiles, human owners and assessment remain unchanged. This new Docs leaf needs
+fresh focused source checks. The earlier addbc result is not transferred; neither
+source validation nor CI success supplies installed, human or A-minus acceptance.
+
+## October 6 current-candidate API observation
+
+The [current candidate record](evidence/current-candidate-e622ccfe-2026-10-06.json)
+retains seven exact API snapshots for PR #803, its immutable source/tree, main,
+original verify attempt 1 and jobs, current check runs and CodeQL analyses. At
+the observation, main remained `0be972ac`; candidate source was `e622ccfe` /
+tree `dd5f5c47`. The original run failed after five jobs succeeded and seven
+were cancelled; the aggregate verification gate failed separately. The skipped
+diagnostic is excluded. Cancellations from other workflows are not combined into
+this count. Both CodeQL jobs were cancelled and no exact-source analysis was
+returned. This establishes missing analysis evidence, without scanner clearance.
+
+The minimal composition applies the accepted #791 commit `56912d47` onto the
+exact candidate, retaining all four accepted file bytes, then adds this observation.
+No product, workflow or runtime source changes are needed for that Docs composition.
+Fresh validation belongs to the resulting Docs source. The fixed v25/v33 reports
+and B078/445/cb1 qualification stay immutable; no prior result qualifies the new
+composition. Release/profile acceptance, all named human responsibilities, rubric
+agreement and the independent nine-row assessment remain pending.
+
+A [separate attempt-2 snapshot](evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json)
+retains the verify and installer recovery metadata without changing attempt 1.
+Any original successful jobs carried by GitHub must retain their original job
+identity; this reuse is not new execution. Recovery remains unqualified until its
+complete exact-source reports and original evidence are reviewed. This Docs
+observation initiated no retry or target workload.
+
+The [later terminal record](evidence/current-candidate-e622ccfe-terminal-2026-10-06.json)
+keeps the failed attempt-2 verification, successful installer workflow and actual
+dependency-audit failure separate. Eleven successful verify job records include
+five original executions retained under new IDs; the installer similarly retains
+its original Pester execution. Timestamp and full-step equality prove this reuse.
+Later runner wrapper metadata differs; Queue retains the separate original
+runner/log joins. An ID-only comparison was insufficient in the fixed 12:48 cut,
+which stays immutable. The original audit server ZIP and its JSON member are
+joined by bytes and digest: 25 affected packages, including three critical and
+one high. No audit or recovery was repeated and no installer identity/signature,
+profile, human, grade or native findings acceptance is supplied by this update.

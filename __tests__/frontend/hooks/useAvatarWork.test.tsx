@@ -24,6 +24,49 @@ describe('avatar work uses the existing runtime', () => {
       { name: 'flujo', source: { type: 'npm', id: 'unrelated-package' } },
     ] as never);
   });
+  it('reloads canonical controls before reconnecting at the supplied cursor without new execution', async () => {
+    jest.useFakeTimers();
+    try {
+      const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+      window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'recover');
+      jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical('running'), id: 'recover' });
+      const { result, unmount } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'en', context }));
+      await act(async () => { await Promise.resolve(); });
+      const original = handlers;
+      let complete!: (value: Conversation) => void;
+      jest.mocked(chatService.getConversation).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+      act(() => original.onReset?.({ version: 1, reason: 'replay-gap', recovery: 'reload-snapshot', nextSeq: 42 }));
+      act(() => jest.advanceTimersByTime(3000));
+      expect(chatService.subscribeToEvents).toHaveBeenCalledTimes(1);
+      await act(async () => complete({ ...canonical('awaiting_tool_approval'), id: 'recover' }));
+      expect(result.current.phase).toBe('waiting');
+      act(() => jest.advanceTimersByTime(3000));
+      expect(chatService.subscribeToEvents).toHaveBeenLastCalledWith('recover', expect.objectContaining({ onReset: expect.any(Function) }), 42, { activityOnly: true });
+      expect(chatService.subscribeToEvents).toHaveBeenCalledTimes(2);
+      expect(chatService.createConversation).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      unmount();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('cancels pending snapshot recovery on unmount and ignores a retired stream after selection changes', async () => {
+    jest.useFakeTimers();
+    try {
+      const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+      window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'retired');
+      jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), id: 'retired' });
+      const { result, unmount } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'en', context }));
+      await act(async () => { await Promise.resolve(); });
+      const original = handlers;
+      act(() => { result.current.newChat({ kind: 'flow', id: 'other', name: 'Other' }); });
+      const reads = jest.mocked(chatService.getConversation).mock.calls.length;
+      act(() => original.onReset?.({ version: 1, reason: 'replay-gap', recovery: 'reload-snapshot', nextSeq: 42 }));
+      expect(chatService.getConversation).toHaveBeenCalledTimes(reads);
+      unmount();
+      act(() => jest.advanceTimersByTime(3000));
+      expect(chatService.subscribeToEvents).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
   it('binds the chosen work model only to a new snapshot and uses renamed shipped connections', async () => {
     const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
     await act(() => result.current.send('Build me an agent'));

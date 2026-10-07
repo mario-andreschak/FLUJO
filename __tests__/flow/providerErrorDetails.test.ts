@@ -6,6 +6,7 @@
  * including when metadata.raw is a plain (non-JSON) string.
  */
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { normalizeChatError } from '@/backend/execution/flow/normalizeError';
 
 // The method is private; call it through a typed-loose handle.
 const extract = (body: unknown, base?: string) =>
@@ -67,5 +68,44 @@ describe('ModelHandler.extractProviderErrorDetails', () => {
     expect(r.message).toBe('plain error');
     expect(r.code).toBe('bad_request');
     expect(r.retryAfter).toBeUndefined();
+  });
+});
+
+describe('provider raw reasons at the normalization boundary', () => {
+  const key = 'sk-providerSECRET12345678';
+  const token = 'provider-token-12345678';
+  const raw = 'Provider refused credential ' + key + ' and bEaReR ' + token + '.';
+  const safe = 'Provider refused credential [REDACTED] and Bearer [REDACTED]';
+  const metadataBody = (reason: unknown) => ({
+    message: 'Provider returned error', metadata: { provider_name: 'Fixture provider', raw: reason },
+  });
+
+  it.each<[string, unknown, string | undefined]>([
+    ['body.message', { message: raw }, undefined],
+    ['SDK base message', { message: 'Provider returned error' }, raw],
+    ['plain metadata.raw', metadataBody(raw), '429 Provider returned error'],
+    ['JSON metadata.raw', metadataBody(JSON.stringify({ error: { message: raw } })), '429 Provider returned error'],
+    ['nested object metadata.raw', metadataBody({ error: { message: raw } }), undefined],
+    ['flat object metadata.raw', metadataBody({ message: raw }), undefined],
+  ])('masks the actual extracted %s before serialization', (_label, body, base) => {
+    const extracted = extract(body, base);
+    expect(extracted.message).toContain(raw);
+    expect(extracted.providerError).toBe(body);
+    const error = Object.assign(new Error(extracted.message), {
+      details: {
+        status: 429, code: 'rate_limit_exceeded', type: 'rate_limit_error',
+        retryAfter: '7', providerError: extracted.providerError,
+      },
+    });
+    const norm = normalizeChatError(error);
+    expect(norm.message).toContain(safe);
+    expect(norm).toMatchObject({
+      httpStatus: 429, code: 'rate_limit_exceeded', providerType: 'rate_limit_error',
+      retryAfter: '7', errorClass: 'rate_limit',
+    });
+    const serialized = JSON.stringify(norm);
+    expect(serialized).not.toContain(key);
+    expect(serialized).not.toContain(token);
+    expect(error.message).toBe(extracted.message);
   });
 });

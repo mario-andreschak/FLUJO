@@ -42,6 +42,9 @@ runtime/archive string binding, not provider identity or semantic consumption.
    and inspect the fixture connection. Run the #693 connection steps and repeat
    #517's actual public Firecrawl form and #526's full discovery/retention cases
    on these installed bytes. Keep those reports separate from the synthetic echo.
+   Include the [object/array shape checks](README.md#object-and-array-shape-checks)
+   with fixture counters and actual echoes. Use a different synthetic marker
+   for the later agent call; form tests remain separate from model dispatches.
 4. Create an ordinary guided agent through the UI with the tested model and only
    the fixture tool. Create a fresh Chat conversation before its first dispatch.
    Select tool approval and the debugger through their UI controls. Record the
@@ -116,21 +119,36 @@ always has `fullFeatureAcceptance: false` and `gradeAwarded: false`.
 
 ## Queued verification
 
+These commands describe future candidate verification under the coordinator's
+allocation. Do not replay an unchanged focused suite merely to update this guide.
+
 ```powershell
 node --test scripts/feature-surface-acceptance/live-journey-observer.test.mjs
-node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/featureSurface/liveJourneyObserver.test.ts __tests__/flow/processToolCallsConcurrency.test.ts __tests__/flow/processToolCallsCapture.test.ts
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/featureSurface/liveJourneyObserver.test.ts __tests__/flow/processToolCallsConcurrency.test.ts __tests__/flow/processToolCallsCapture.test.ts __tests__/flow/boundToolResult.test.ts
 ```
 
-The authored native suite contains 46 synthetic controls, including same-ID
+The authored native suite contains 48 synthetic controls, including same-ID
 wrong-content, missing bindings, duplicate matches, byte/serialization mismatch,
 long UTF-8 results and identical previews with different tails, plus receipt
-allowlisting, nested-metadata refusal and aggregate/final output budgets. The two existing
-Jest caller suites additionally check the actual `ModelHandler` event producer
-with mocked MCP data, including the captured/rewritten tool-message content.
+allowlisting, nested-metadata refusal, aggregate/final output budgets and rejection
+of transport/protocol error results. The producer/capture suites check actual
+`ModelHandler` code with mocked MCP data, including captured/rewritten tool-message
+content and preserved error status. The bounds suite additionally covers actual
+line-limit behavior below the byte limit. Mocked capture projections do not prove
+that the unchanged capture helper stores protocol-error binary content.
+
+The #794 component's original ordinary bridge report enforced all 48 native
+controls, zero failure/cancellation/skip/todo counters and 23 required names.
+The child TAP was consumed by the bridge and was not separately retained; keep
+that report's exact source and analysis identity rather than inventing a separate
+raw native result. The later JSON shape guard has its own 26 focused unit cases
+(22 ToolTester, two modal, two localization) on frozen `fc5b276a`. The ToolTester
+cases use a mocked tool callback; those checks do not qualify the installed form
+actions or model journey.
 The frozen #751 native34 and producer/provider-attempt Jest51 receipts and #760's
 named equal-byte/different-digest control belong to their exact prior sources.
-The privacy successor needs its own serial native result and later combined
-ordinary-Jest verification; those earlier receipts do not validate this change.
+All such component receipts retain their original inputs. A new composition or
+installed candidate requires its own allocated qualification and observations.
 
 These are synthetic controls for correlation, redaction, SSE framing,
 sequence ordering and incomplete/false-positive observations. They do not call a

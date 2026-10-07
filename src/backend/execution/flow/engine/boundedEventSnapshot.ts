@@ -36,7 +36,8 @@ export interface EventSnapshot {
  * refuses oversized strings before building a full serialized copy. Accessors,
  * proxies, custom prototypes and callable toJSON hooks are uncacheable: this
  * cache must not invoke new publisher callbacks just to retain an event.
- * Keys/commas are conservatively charged even for array indices or omitted
+ * The walk admits at most 100,000 values and depth 64. Keys/commas are
+ * conservatively charged even for array indices or omitted
  * properties; admission can be below the limit.
  *
  * Only the returned JSON's UTF-8 bytes are bounded. Caller-owned objects,
@@ -46,12 +47,14 @@ export interface EventSnapshot {
 export function boundedEventSnapshot(value: unknown, maxUtf8Bytes: number): EventSnapshot | undefined {
   if (!Number.isSafeInteger(maxUtf8Bytes) || maxUtf8Bytes <= 0) return undefined;
   let remaining = maxUtf8Bytes;
+  let values = 0;
   const ancestors = new WeakSet<object>();
   const reserve = (bytes: number) => {
     if (bytes > remaining) throw budgetExceeded;
     remaining -= bytes;
   };
-  const copyData = (item: unknown): unknown => {
+  const copyData = (item: unknown, depth = 0): unknown => {
+    if (++values > 100_000 || depth > 64) throw budgetExceeded;
     if (typeof item === 'string') { reserve(quotedStringBytes(item, remaining)); return item; }
     if (item === null) { reserve(4); return null; }
     if (typeof item === 'boolean') { reserve(item ? 4 : 5); return item; }
@@ -78,7 +81,7 @@ export function boundedEventSnapshot(value: unknown, maxUtf8Bytes: number): Even
       if (descriptor?.get || descriptor?.set) throw budgetExceeded;
       if (!descriptor && (Object.getOwnPropertyDescriptor(Array.prototype, key) ||
           Object.getOwnPropertyDescriptor(Object.prototype, key))) throw budgetExceeded;
-      return copyData(descriptor?.value);
+      return copyData(descriptor?.value, depth + 1);
     };
     try {
       if (array) {

@@ -35,6 +35,7 @@ import {
 } from '@/utils/mcp/registry';
 import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
 import { createLogger } from '@/utils/logger';
+import { readUtf8TextPrefix } from '@/utils/http/readUtf8TextPrefix';
 
 const log = createLogger('backend/services/mcp/assistedInstall');
 const FETCH_TIMEOUT_MS = 12_000;
@@ -264,7 +265,7 @@ async function discoverAwesome(query: string): Promise<WebDiscovery['awesome']> 
     try {
       const response = await fetch(list.raw, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!response.ok) return [];
-      const text = (await response.text()).slice(0, 2_000_000);
+      const text = await readUtf8TextPrefix(response, 2_000_000);
       return text.split(/\r?\n/).flatMap((line) => {
         if (!line.includes('](') || !queryWords.some((word) => line.toLocaleLowerCase().includes(word))) return [];
         const match = line.match(/\[([^\]]+)]\((https?:\/\/[^)]+)\)/);

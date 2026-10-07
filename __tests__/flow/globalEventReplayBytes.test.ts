@@ -82,8 +82,12 @@ it('bounds global replay bytes below the old event-count limit and keeps a conti
   );
   expect(bus.currentGlobalSeq()).toBe(8);
   expect(bus.getGlobalBufferedSince(7).map(entry => entry.globalSeq)).toEqual([7]);
-  // This slice does not clip per-conversation/fast-completion replay.
-  expect(bus.getBufferedSince('medium', 0)).toHaveLength(8);
+  // The conversation ledger now has its own byte cap and available suffix.
+  const conversationReplay = bus.getBufferedSince('medium', 0);
+  expect(conversationReplay.length).toBeGreaterThan(0);
+  expect(conversationReplay.map(event => event.seq)).toEqual(Array.from({ length: conversationReplay.length }, (_, index) => 8 - conversationReplay.length + index));
+  expect(retainedBytes() + conversationReplay.reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)), 0)).toBeLessThanOrEqual(workspaceBudget);
+  expect(bus.currentSeq('medium')).toBe(8);
 });
 
 it('bounds UTF-8 and escaped payload bytes rather than JS string length', () => {
@@ -114,9 +118,10 @@ it('detaches global snapshots so a producer mutation cannot regrow cached payloa
   message.content = 'x'.repeat(workspaceBudget + 1);
   expect(retainedBytes()).toBeLessThanOrEqual(workspaceBudget);
   expect(bus.getGlobalBufferedSince(0)[0].event).toMatchObject({ message: { content: 'small' } });
-  // Publisher/log/per-conversation objects retain their original semantics.
+  // Publisher/log objects retain their identity; replay is detached.
   expect(appendFromBus).toHaveBeenCalledWith(event);
-  expect(bus.getBufferedSince('mutated', 0)[0]).toBe(event);
+  expect(bus.getBufferedSince('mutated', 0)[0]).not.toBe(event);
+  expect(bus.getBufferedSince('mutated', 0)[0]).toMatchObject({ message: { content: 'small' } });
 });
 
 it('detaches returned global replay values from later readers', () => {
@@ -150,18 +155,25 @@ it('bounds aggregate global replay bytes across independently named workspaces',
     expect(bus.currentGlobalSeq()).toBe(1);
   }
   let allBytes = 0;
+  let allConversationBytes = 0;
   for (const workspace of workspaces) {
     setWorkspace(workspace);
     allBytes += retainedBytes();
     expect(bus.currentGlobalSeq()).toBe(1);
     expect(bus.currentSeq('same-id')).toBe(1);
-    expect(bus.getBufferedSince('same-id', 0)).toHaveLength(1);
+    const conversationReplay = bus.getBufferedSince('same-id', 0);
+    expect(conversationReplay.length).toBeLessThanOrEqual(1);
+    allConversationBytes += conversationReplay.reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)), 0);
+    if (conversationReplay.length) expect(conversationReplay[0].seq).toBe(0);
   }
   expect(allBytes).toBeLessThanOrEqual(processBudget);
+  expect(allBytes + allConversationBytes).toBeLessThanOrEqual(processBudget);
+  expect(bus.getReplayPressure().processUtf8Bytes).toBe(allBytes + allConversationBytes);
   setWorkspace('space-0');
   expect(bus.getGlobalBufferedSince(0)).toEqual([]);
   setWorkspace('space-17');
   expect(bus.getGlobalBufferedSince(0)).toHaveLength(1);
+  expect(bus.getBufferedSince('same-id', 0)).toHaveLength(1);
 });
 
 it('releases aggregate eviction storage while preserving an empty workspace high-water mark', () => {
@@ -228,7 +240,7 @@ it.each<RawExecutionEvent>([
   const paused = bus.emit('paused-large', raw);
   unsubscribe();
   jest.advanceTimersByTime(ttl * 3);
-  expect(bus.getBufferedSince('paused-large', 0)).toHaveLength(3);
+  expect(bus.getBufferedSince('paused-large', 0)).toEqual([paused]);
   expect(bus.getBufferedSince('paused-large', 2)).toEqual([paused]);
   expect(bus.currentSeq('paused-large')).toBe(3);
   expect(jest.getTimerCount()).toBe(0);

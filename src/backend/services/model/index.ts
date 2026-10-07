@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -456,7 +455,7 @@ class ModelService {
       }
 
       // Resolve the credential before consulting the cache because catalogue
-      // visibility can vary by account. Only its one-way digest enters the key.
+      // visibility can vary by account. Only its cache-lifetime keyed fingerprint enters the key.
       let resolvedApiKey: string | null = null;
       if (apiKey && apiKey !== MASKED_API_KEY) {
         resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
@@ -480,9 +479,7 @@ class ModelService {
         log.warn('Provider fetch will be unauthenticated');
       }
 
-      const credentialFingerprint = createHash('sha256')
-        .update(resolvedApiKey ?? '')
-        .digest('hex');
+      const credentialFingerprint = modelCache.credentialFingerprint(resolvedApiKey ?? '');
       const cacheIdentity = {
         baseUrl,
         provider,
