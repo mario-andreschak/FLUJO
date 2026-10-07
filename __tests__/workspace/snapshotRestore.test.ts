@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createHash, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import JSZip from 'jszip';
 import { version } from '../../package.json';
@@ -201,16 +201,64 @@ describe('worker snapshot restore', () => {
     await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow('decryption failed');
   });
 
-  it.each(['legacy', 'v2'])('unlocks USER encryption using a validated %s scoped bootstrap key', async (format) => {
-    const workspaceDek = format === 'legacy' ? '30313233343536373839616263646566' : serializeKeyring(newKeyring());
-    await archive({ files: { 'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek }) },
-      mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
+  it.each(['legacy', 'v2'])('unlocks USER encryption using matching %s metadata and actual credential decryption', async format => {
+    let workspaceDek: string; let metadata; let ciphertext: string;
+    if (format === 'legacy') {
+      const generated = '0123456789abcdef';
+      workspaceDek = Buffer.from(generated).toString('hex');
+      const salt = randomBytes(16); const wrapIv = randomBytes(16);
+      const wrapping = createCipheriv('aes-256-cbc', pbkdf2Sync('legacy-password', salt, 100_000, 32, 'sha256'), wrapIv);
+      metadata = { encryption_version: 1, encryption_type: 'user' as const,
+        data_encryption_key: Buffer.concat([wrapping.update(generated), wrapping.final()]).toString('base64'),
+        data_encryption_salt: salt.toString('hex'), data_encryption_iv: wrapIv.toString('hex') };
+      const iv = randomBytes(16); const cipher = createCipheriv('aes-128-cbc', Buffer.from(workspaceDek, 'hex'), iv);
+      ciphertext = `${iv.toString('hex')}:${Buffer.concat([cipher.update('transferred-credential'), cipher.final()]).toString('base64')}`;
+    } else {
+      const ring = newKeyring(); metadata = await wrapKeyring(ring, 'user', 'worker-password', 'passphrase');
+      workspaceDek = serializeKeyring(ring, metadataRevision(metadata));
+      ciphertext = seal('transferred-credential', ring.activeKey, 'flujo:secret:v2');
+    }
+    await archive({ files: {
+      'db/encryption_key.json': JSON.stringify(metadata),
+      'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek }),
+      'db/models.json': JSON.stringify([{ id: 'credential', ApiKey: `encrypted:${ciphertext}` }]),
+    }, mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
     const result = (await restoreConfiguredWorkerSnapshot())!;
     await runWithWorkspace('research', async () => {
       await unlockWorkerSnapshot(result);
       expect(getServerDek()).toBe(workspaceDek);
+      expect(await decryptWithPassword(ciphertext)).toBe('transferred-credential');
     });
     expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain(workspaceDek);
+  });
+
+  it('refuses worker unlock without matching encryption metadata', async () => {
+    await archive({ files: { 'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek: serializeKeyring(newKeyring()) }) },
+      mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    await expect(runWithWorkspace('research', () => unlockWorkerSnapshot(result))).rejects.toThrow();
+  });
+
+  it('unlocks a verified transferred operator profile on a worker with no source mount configured', async () => {
+    const ring = newKeyring();
+    const metadata = await wrapKeyring(ring, 'user', randomBytes(32).toString('base64url'), 'operator-file');
+    const ciphertext = seal('transferred-worker-token', ring.activeKey, 'flujo:secret:v2');
+    delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
+    await archive({ files: {
+      'db/encryption_key.json': JSON.stringify(metadata),
+      'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek: serializeKeyring(ring, metadataRevision(metadata)) }),
+      'db/models.json': JSON.stringify([{ id: 'transferred', ApiKey: `encrypted:${ciphertext}` }]),
+    }, mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    await runWithWorkspace('research', async () => {
+      await unlockWorkerSnapshot(result);
+      expect(await isEncryptionLocked()).toBe(false);
+      expect(await decryptWithPassword(ciphertext)).toBe('transferred-worker-token');
+      // A configured missing mount must remain authoritative even after transfer unlock.
+      process.env.FLUJO_ENCRYPTION_SECRET_FILE = path.join(root, 'missing-configured-mount');
+      expect(await isEncryptionLocked()).toBe(true);
+      expect(await decryptWithPassword(ciphertext)).toBeNull();
+    });
   });
 
   it('restores operator credentials across restart while requiring the independent worker mount even with a bootstrap key', async () => {
@@ -265,7 +313,7 @@ describe('worker snapshot restore', () => {
     };
     await archive({ files: {
       'db/encryption_key.json': JSON.stringify(metadata),
-      'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek: serializeKeyring(ring) }),
+      'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek: serializeKeyring(ring, metadataRevision(metadata)) }),
       'db/test-secrets.json': JSON.stringify(secrets),
     }, mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
     const result = (await restoreConfiguredWorkerSnapshot())!;

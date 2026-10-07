@@ -20,5 +20,7 @@ it('captures, downloads and restores 420 MiB above the legacy string limit with 
     expect(result.restored).toBe(3);
     expect(result.wireBytes).toBeGreaterThan(constants.MAX_STRING_LENGTH);
     expect(result.peakRss).toBeGreaterThan(0);
+    // Below the captured payload itself: retaining all source buffers must fail this regression.
+    expect(result.peakRss).toBeLessThan(384 * 1024 * 1024);
   } finally { clearTimeout(timeout); if (child.exitCode === null) child.kill(); }
 }, 310_000);

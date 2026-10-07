@@ -521,55 +521,57 @@ export async function writeWorkspaceSnapshotArchive(
   signal?.throwIfAborted();
   const capture = captureKeys.get(captured);
   const key = capture?.recipientKeyUsed ? Buffer.from(capture.key!) : resolveSnapshotKey();
-  if (captureKeys.has(captured)) {
-    const original = capture?.key;
-    if (Boolean(original) !== Boolean(key) || (original && key && !timingSafeEqual(original, key))) {
-      key?.fill(0);
-      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Snapshot encryption key changed. Start a new capture.');
-    }
-  }
-  const paths = Object.keys(captured.zip.files);
-  const allowedRuntime = new Set(['db/codex-runtime/', 'db/codex-runtime/auth.json', `db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`]);
-  if (paths.some(name => /^db\/codex-private-/i.test(name))
-      || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name) && !allowedRuntime.has(name))
-      || (!key && (captured.manifest.runtime.codexAuth === 'chatgpt' || captured.manifest.runtime.encryption === 'user' || paths.includes('db/worker-bootstrap-secrets.json') || await hasStoredCredentials(captured.zip) || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name))))) {
-    key?.fill(0);
-    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Credential-bearing snapshots require encryption; runtime homes cannot be exported.');
-  }
-  if (await isCredentialMigrationPending(captured.manifest.workspace)) {
-    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
-  }
-  const stagingDir = await fs.mkdtemp(path.join(tmpdir(), 'flujo-hot-clone-'));
-  await fs.chmod(stagingDir, 0o700).catch(() => undefined);
-  const archivePath = path.join(stagingDir, 'workspace.snapshot.zip');
-
   try {
-    const zip = zipForCapturedSnapshot(captured);
-    const source = zip.generateNodeStream({
-      type: 'nodebuffer',
-      streamFiles: true,
-      compression: 'DEFLATE',
-      compressionOptions: { level: 6 },
-      platform: 'UNIX',
-    }, () => signal?.throwIfAborted());
-    const persisted = await writeSnapshotStream(new Readable({ highWaterMark: 64 * 1024 }).wrap(source as Readable), archivePath, key, signal);
-    await fs.chmod(archivePath, 0o600).catch(() => undefined);
-    signal?.throwIfAborted();
+    if (captureKeys.has(captured)) {
+      const original = capture?.key;
+      if (Boolean(original) !== Boolean(key) || (original && key && !timingSafeEqual(original, key))) {
+        key?.fill(0);
+        throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Snapshot encryption key changed. Start a new capture.');
+      }
+    }
+    const paths = Object.keys(captured.zip.files);
+    const allowedRuntime = new Set(['db/codex-runtime/', 'db/codex-runtime/auth.json', `db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`]);
+    if (paths.some(name => /^db\/codex-private-/i.test(name))
+        || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name) && !allowedRuntime.has(name))
+        || (!key && (captured.manifest.runtime.codexAuth === 'chatgpt' || captured.manifest.runtime.encryption === 'user' || paths.includes('db/worker-bootstrap-secrets.json') || await hasStoredCredentials(captured.zip) || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name))))) {
+      key?.fill(0);
+      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Credential-bearing snapshots require encryption; runtime homes cannot be exported.');
+    }
+    if (await isCredentialMigrationPending(captured.manifest.workspace)) {
+      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
+    }
+    const stagingDir = await fs.mkdtemp(path.join(tmpdir(), 'flujo-hot-clone-'));
+    await fs.chmod(stagingDir, 0o700).catch(() => undefined);
+    const archivePath = path.join(stagingDir, 'workspace.snapshot.zip');
 
-    return {
-      archivePath,
-      stagingDir,
-      sha256: persisted.sha256,
-      plaintextSha256: persisted.plaintextSha256,
-      encrypted: Boolean(key),
-      recipientKeyUsed: capture?.recipientKeyUsed ?? false,
-      size: persisted.size,
-      files: captured.files,
-      bytes: captured.bytes,
-    };
-  } catch (error) {
-    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    try {
+      const zip = zipForCapturedSnapshot(captured);
+      const source = zip.generateNodeStream({
+        type: 'nodebuffer',
+        streamFiles: true,
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+        platform: 'UNIX',
+      }, () => signal?.throwIfAborted());
+      const persisted = await writeSnapshotStream(new Readable({ highWaterMark: 64 * 1024 }).wrap(source as Readable), archivePath, key, signal);
+      await fs.chmod(archivePath, 0o600).catch(() => undefined);
+      signal?.throwIfAborted();
+
+      return {
+        archivePath,
+        stagingDir,
+        sha256: persisted.sha256,
+        plaintextSha256: persisted.plaintextSha256,
+        encrypted: Boolean(key),
+        recipientKeyUsed: capture?.recipientKeyUsed ?? false,
+        size: persisted.size,
+        files: captured.files,
+        bytes: captured.bytes,
+      };
+    } catch (error) {
+      await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
   } finally {
     key?.fill(0);
   }

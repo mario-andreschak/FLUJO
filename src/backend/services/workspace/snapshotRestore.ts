@@ -6,7 +6,7 @@ import { inspectSnapshotZip, snapshotMemberChunks } from './snapshotZip';
 import path from 'node:path';
 import applicationPackage from '../../../../package.json';
 import { getDataDir } from '@/utils/paths';
-import { unlockServer } from '@/utils/encryption/session';
+import { unlockValidatedWorkerTransfer } from '@/utils/encryption/secure';
 import { isValidEncryptionSessionKey } from '@/utils/encryption/format';
 import {
   assertValidWorkspaceName, getWorkspaceDir, getWorkspacesDir, WORKSPACE_SUBTREES,
@@ -179,7 +179,7 @@ async function readWorkerUnlockKey(result: WorkerSnapshotRestoreResult, root = g
 export async function unlockWorkerSnapshot(result: WorkerSnapshotRestoreResult): Promise<void> {
   if (getCurrentWorkspace() !== result.workspace) throw new Error('Worker encryption unlock workspace mismatch.');
   const key = await readWorkerUnlockKey(result);
-  if (key) unlockServer(key);
+  if (key) await unlockValidatedWorkerTransfer(key, { workspace: result.workspace, root: getWorkspaceDir(result.workspace) });
 }
 
 async function restoreArchive(archivePath: string, digest: string): Promise<WorkerSnapshotRestoreResult> {

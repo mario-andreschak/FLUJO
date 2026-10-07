@@ -4,6 +4,8 @@ import { Readable } from 'node:stream';
 
 /** Persist only wire bytes; ZIP and base64 chunks never become whole-archive strings. */
 export async function writeSnapshotStream(source: Readable, destination: string, key: Buffer | null, signal?: AbortSignal) {
+  const observeError = () => undefined;
+  source.on('error', observeError);
   let output;
   try { output = await fs.open(destination, 'wx', 0o600); }
   catch (error) { source.destroy(); throw error; }
@@ -35,8 +37,6 @@ export async function writeSnapshotStream(source: Readable, destination: string,
     carry = Buffer.from(joined.subarray(end));
   };
   const abort = () => source.destroy(signal?.reason instanceof Error ? signal.reason : new Error('Snapshot aborted.'));
-  const observeError = () => undefined;
-  source.on('error', observeError);
   signal?.addEventListener('abort', abort, { once: true });
   let primaryFailure = false;
   try {

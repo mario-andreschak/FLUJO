@@ -53,6 +53,18 @@ describe('bounded authenticated snapshot transport', () => {
     const input = await openSnapshotInput(file, key.toString('base64'), 1024 * 1024, sha(bytes));
     try { expect(await input.read(0, bytes.length)).toEqual(bytes); } finally { await input.close(); }
   });
+  it('contains source errors while output acquisition is pending', async () => {
+    const source = new Readable({ read() {} });
+    const open = fs.open.bind(fs);
+    const acquisition = jest.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
+      const handle = await open(...args);
+      source.destroy(new Error('injected early source failure'));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      return handle;
+    });
+    try { await expect(writeSnapshotStream(source, path.join(root, 'early-error'), null)).rejects.toThrow('early source failure'); }
+    finally { acquisition.mockRestore(); }
+  });
   it('closes a source descriptor when output creation fails', async () => {
     const file = path.join(root, 'existing'); await fs.writeFile(file, 'existing');
     const source = createReadStream(file);

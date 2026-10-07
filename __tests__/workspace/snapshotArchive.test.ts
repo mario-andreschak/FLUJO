@@ -65,6 +65,27 @@ describe('portable workspace capture', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it('pins an explicit recipient key without changing or depending on the ambient key', async () => {
+    await put('userdata/member.txt', 'recipient transfer');
+    const recipient = randomBytes(32);
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = 'invalid ambient key';
+    const captured = await captureWorkspaceSnapshot('research', 1, { recipientKey: recipient.toString('base64') });
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+    const ambient = process.env.FLUJO_WORKER_SNAPSHOT_KEY;
+    const result = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      expect(result.recipientKeyUsed).toBe(true);
+      expect(process.env.FLUJO_WORKER_SNAPSHOT_KEY).toBe(ambient);
+      const envelope = JSON.parse((await fs.readFile(result.archivePath)).toString());
+      const decipher = createDecipheriv('aes-256-gcm', recipient, Buffer.from(envelope.iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+      const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
+      expect(createHash('sha256').update(plaintext).digest('hex')).toBe(result.plaintextSha256);
+      const restored = await JSZip.loadAsync(plaintext);
+      expect(await restored.file('userdata/member.txt')!.async('string')).toBe('recipient transfer');
+    } finally { await fs.rm(result.stagingDir, { recursive: true, force: true }); }
+  });
+
   it('preserves repeated ZIP generation and member inspection from immutable spool bytes', async () => {
     await put('userdata/member.txt', 'captured generation');
     const captured = await captureWorkspaceSnapshot('research', 1);

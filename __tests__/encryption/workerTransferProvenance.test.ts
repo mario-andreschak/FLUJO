@@ -128,8 +128,10 @@ test('a cold OS worker restores an authenticated operator snapshot and uses real
     const key = randomBytes(32);
     process.env.FLUJO_WORKER_SNAPSHOT_KEY = key.toString('base64');
     const captured = await captureWorkspaceSnapshot(workspace, 1);
-    const archive = await writeWorkspaceSnapshotArchive(captured);
+    let archive: Awaited<ReturnType<typeof writeWorkspaceSnapshotArchive>> | undefined;
+    let failed = false;
     try {
+      archive = await writeWorkspaceSnapshotArchive(captured);
       const result = spawnSync(process.execPath, [path.resolve('__tests__/encryption/fixtures/worker-transfer-child.cjs'),
         process.cwd(), require.resolve('typescript')], { encoding: 'utf8', timeout: 30_000,
         env: { ...process.env, FLUJO_DATA_DIR: path.join(root, 'worker'), FLUJO_ENCRYPTION_SECRET_FILE: undefined,
@@ -137,6 +139,12 @@ test('a cold OS worker restores an authenticated operator snapshot and uses real
           FLUJO_WORKER_SNAPSHOT_SHA256: archive.plaintextSha256 } });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('WORKER_TRANSFER_SOURCE_PASS');
-    } finally { await fs.rm(archive.stagingDir, { recursive: true, force: true }); }
+    } catch (error) { failed = true; throw error; } finally {
+      const cleanup = await Promise.allSettled([
+        captured.dispose?.(),
+        ...(archive ? [fs.rm(archive.stagingDir, { recursive: true, force: true })] : []),
+      ]);
+      if (!failed) for (const result of cleanup) if (result.status === 'rejected') throw result.reason;
+    }
   });
 });
