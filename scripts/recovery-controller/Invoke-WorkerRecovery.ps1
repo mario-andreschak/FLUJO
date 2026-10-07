@@ -153,7 +153,7 @@ for ($archiveIndex = 0; $archiveIndex -lt $expectedPackageArchives.Count; $archi
 }
 if ($admission.equipment.qualification.status -cne 'QUALIFIED' -or $admission.equipment.qualification.nodeCases -ne 47 -or $admission.equipment.qualification.nativeCases -ne 4) { throw 'Separate47 fixture and4 native-control qualification held' }
 if ($admission.controller.status -cne 'QUALIFIED' -or $admission.controller.profile -cne 'atomic-job-list-before-resume-windows-job') { throw 'Native controller qualification held' }
-if ($admission.lease.maximumEntries -ne 1 -or $admission.lease.driverMs -ne 1860000 -or $admission.lease.finalizationMs -ne 30000 -or [DateTime]::UtcNow -ge [DateTime]::Parse($admission.lease.expiresAtUtc).ToUniversalTime()) { throw 'Lease missing/expired or widened' }
+if ($admission.lease.maximumEntries -ne 1 -or $admission.lease.driverMs -ne 1860000 -or $admission.lease.finalizationMs -ne 30000 -or [DateTime]::UtcNow -ge $admission.lease.expiresAtUtc.ToUniversalTime()) { throw 'Lease missing/expired or widened' }
 if ([IO.Path]::GetFullPath($OutputDirectory) -cne $admission.controller.outputDirectory) { throw 'Output namespace changed' }
 $equipmentRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 if ($equipmentRoot -cne $admission.equipment.root) { throw 'Equipment root changed' }
@@ -199,6 +199,7 @@ Check-Window
 $arguments = @((Join-Path $equipmentRoot 'scripts/smoke-cloud-worker.mjs'),'--production','--worker-recovery','--application',$admission.applicationRoot,'--binding',$Binding,'--binding-sha256',$BindingSha256)
 Check-Pin $admission.node
 Check-Window
+if ([DateTime]::UtcNow -ge $admission.lease.expiresAtUtc.ToUniversalTime()) { throw 'Lease expired before original entry' }
 $receipt = [WindowsRecoveryJob]::Run($admission.node.path,$arguments,$equipmentRoot,$environmentText,$OutputDirectory)
 $terminal = [ordered]@{bindingSha256=$BindingSha256;producer=$admission.producer.identity;equipmentHead=$admission.equipment.head;originalOwnedJob=$receipt;applicationWitnesses='Separate original driver stage/input/final report verification required';fixtureDeletion=$false;admissionDeletion=$false;completedAtUtc=[DateTime]::UtcNow.ToString('o')}
 $terminalStream = [IO.File]::Open((Join-Path $OutputDirectory 'controller-terminal.json'),[IO.FileMode]::CreateNew)
