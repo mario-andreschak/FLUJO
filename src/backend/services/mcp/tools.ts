@@ -29,6 +29,8 @@ import {
 import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
 import { stampMcpAppOwnerScope } from "@/shared/utils/mcpAppOwnerScope";
 import { listCompleteTools } from './toolDiscovery';
+import { assertMcpIsolationDispatch, getManagedMcpIsolation, assertIsolatedMcpArguments } from './isolation';
+import { McpIsolationError } from '../security/isolatedMcp';
 import {
   assertExecutionToolDispatch,
   assertExecutionExtensionCurrent,
@@ -210,6 +212,7 @@ export async function callTool(
     timeout !== undefined && timeout > 0
       ? Math.min(timeout * 1000, MAX_TIMEOUT_MS)
       : MAX_TIMEOUT_MS;
+  const isolated = Boolean(getManagedMcpIsolation(client.transport));
 
   try {
     const privateExecution = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
@@ -247,9 +250,10 @@ export async function callTool(
     }
 
     // Resolve any global variable references in the arguments
-    if (!privateExecution) log.debug(`Original args for tool ${toolName}:`, args);
+    if (isolated) assertIsolatedMcpArguments(args);
+    if (!privateExecution && !isolated) log.debug(`Original args for tool ${toolName}:`, args);
     // Private execution arguments do not read the shared interpolation/secret store.
-    const resolvedArgs = privateExecution ? args : await resolveGlobalVars(args);
+    const resolvedArgs = privateExecution || isolated ? args : await resolveGlobalVars(args);
 
     // Ensure resolvedArgs is a record before normalizing
     const argsRecord =
@@ -261,7 +265,7 @@ export async function callTool(
     // This ensures we don't pass undefined values to MCP servers
     const normalizedArgs = privateExecution ? normalizeExecutionToolArguments(executionExtensionContext!, toolName, argsRecord)
       : normalizeToolArguments(argsRecord, toolName);
-    if (!privateExecution) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
+    if (!privateExecution && !isolated) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
 
     log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
     const callOptions = {
@@ -270,7 +274,7 @@ export async function callTool(
       ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
         if (!privateExecution) {
-          log.debug(
+          if (!isolated) log.debug(
             `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
           );
           onProgress?.(progress);
@@ -315,6 +319,7 @@ export async function callTool(
           }
         : {}),
     };
+    await assertMcpIsolationDispatch(client, serverName);
     const response = isBetaClient(client)
       ? await (
           client.callTool as unknown as (
@@ -397,6 +402,9 @@ export async function callTool(
       data: stampMcpAppOwnerScope(response, ownerScope),
     };
   } catch (error) {
+    if (error instanceof McpIsolationError) return { success: false, error: error.code,
+      errorType: 'mcp-isolation', statusCode: error.code === 'ISOLATION_UNAVAILABLE' ? 503 : 403 };
+    if (isolated) return { success: false, error: 'ISOLATED_TOOL_FAILED', errorType: 'mcp-isolation', statusCode: 502 };
     if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
       // SDK exceptions can contain request metadata. Never log or serialize them.
       return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_tool_unavailable',

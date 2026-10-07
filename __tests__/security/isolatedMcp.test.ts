@@ -75,6 +75,7 @@ test('creates a stopped container with OS restrictions, then attaches by its exa
   expect(args).toEqual(expect.arrayContaining([
     '--pull=never', '--read-only', '--network=none', '--cap-drop=ALL',
     '--security-opt=no-new-privileges:true', '--user=65534:65534', '--no-healthcheck',
+    '--log-driver=none',
     '--memory', '128m', '--memory-swap', '--cpus', '0.5', '--pids-limit', '32',
   ]));
   expect(args.some(arg => arg.includes('target=/grants/public,readonly'))).toBe(true);
@@ -100,6 +101,17 @@ test('changes to capabilities require renewed approval before contacting Docker'
   policy.memoryMiB = 256;
   expect(() => createIsolatedMcpLaunch(policy, approved, workspace)).toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
   expect(execute).not.toHaveBeenCalled();
+});
+
+test('a trusted ownership key binds the atomic container name across random generations', () => {
+  const key = 'd'.repeat(64);
+  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+    { TEST_GRANTED_TOKEN: 'fixture' }, { key });
+  const args = execute.mock.calls.find(([, args]) => args?.includes('create'))![1]!;
+  expect(args).toContain(`flujo-mcp-${key}`);
+  expect(args).toContain(`co.flujo.mcp-ownership=${key}`);
+  expect(result.ownershipKey).toBe(key);
+  result.close();
 });
 
 test('the digest is independent of set ordering and binds command, image, mounts and daemon', () => {

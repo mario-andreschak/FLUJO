@@ -1,8 +1,10 @@
 # MCP isolation v1 source primitive and evidence
 
-This proposed component advances #568 under epic #563. It is not called by the
-application's MCP transport yet and does not establish that FLUJO's current MCP
-servers execute in isolation. #568 remains open.
+This component advances #568 under epic #563. The application now calls this
+primitive for explicitly approved isolated stdio profiles through the
+[container transport integration](./mcp-isolation-integration-v1.md). Legacy
+unconfigured servers still launch on the host. #568 remains open for the
+acceptance gaps recorded in that integration document.
 
 ## Enforcement and approval contract
 
@@ -109,9 +111,10 @@ or installed FLUJO test, an independent audit, or a complete MCP journey.
 
 ## Remaining acceptance work
 
-Transport integration must cover ordinary and beta clients, reconnection keys,
-every tool dispatch, revocation, and generation-bound cleanup receipts without
-changing MCP pagination/schema/task metadata. Owner/workspace grant persistence,
+The transport integration adds ordinary and beta client launch, reconnect keys,
+final tool dispatch, approval revocation and generation-bound cleanup receipts;
+its current checks and live-container limitation are recorded separately.
+Owner/workspace grant persistence,
 browser approval/review flows, install-time isolation, destination-specific egress,
 supported-artifact negatives, scanner/review signals, human review, and independent
 reassessment remain required. AI review under #101/#527 is evidence only and never
