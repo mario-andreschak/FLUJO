@@ -206,6 +206,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'behaviors.replace',
       'behaviors.activate',
       'behaviors.remove',
+      'behaviors.reconcile-core',
     ],
     backendEndpoints: [
       'GET /v1/personas/[personaId]/composition',
@@ -213,6 +214,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'POST /v1/personas/[personaId]/composition/copy',
       'POST /v1/personas/[personaId]/composition/behaviors',
       'POST /v1/personas/[personaId]/behaviors/[behaviorId]/activate',
+      'POST /v1/personas/[personaId]/core/reconcile',
     ],
     ui: {
       area: 'setup',
