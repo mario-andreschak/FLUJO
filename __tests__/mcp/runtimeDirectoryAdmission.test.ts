@@ -6,6 +6,7 @@ import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 
 const denied = { name: 'RuntimeDirectoryAdmissionError', code: 'UNSAFE_MCP_RUNTIME_DIRECTORY',
   message: 'Isolated MCP runtime directory is unavailable or unsafe.' };
@@ -323,7 +324,8 @@ describe('isolated MCP runtime directory admission', () => {
     // they are not inherited implicitly from the parent account.
     approved.config.env.FLUJO_DATA_DIR = getWorkspaceDataDir();
     approved.config.env.FLUJO_PARENT_DATA_DIR = process.env.FLUJO_PARENT_DATA_DIR!;
-    approved.config.trustedHost!.environmentNames.push('FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR');
+    const policy = trustedHostMcpPolicySchema.parse(approved.config.trustedHost);
+    approved.config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames, 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR'] };
     approved.approve();
     return getWorkspaceDataDir();
   }
