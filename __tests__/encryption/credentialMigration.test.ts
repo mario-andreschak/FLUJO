@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
+import { createCipheriv, createHash, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { preflightCredentialMigration, migrateCredentials, recoverCredentialMigration } from '@/backend/services/workspace/credentialMigration';
 import { DEFAULT_PASSWORD, newKeyring, open, seal, unwrapKeyring, wrapKeyring } from '@/utils/encryption/format';
 import { credentialMigrationPath, isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
@@ -9,7 +9,7 @@ import { openRecipientTransfer } from '@/utils/encryption/recipientTransfer';
 import { authenticate, decryptWithPassword, getEncryptionStatus, isEncryptionLocked } from '@/utils/encryption/secure';
 import { clearItem, loadItem, saveItem, writeFileAtomic } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { getWorkspaceDir } from '@/utils/workspace';
+import { getWorkspaceDir, runWithWorkspace } from '@/utils/workspace';
 import { spawnSync } from 'node:child_process';
 import { NextRequest } from 'next/server';
 import { POST as migrationRoute } from '@/app/api/credential-migration/route';
@@ -162,6 +162,56 @@ test('stale preflight token refuses migration and creates no pending journal', a
   await expect(migrateCredentials(options, inventory.planToken)).rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
   expect(await isCredentialMigrationPending()).toBe(false);
   expect(await fs.readFile(fileFor('registry_account'), 'utf8')).toBe('{"accessToken":"changed-canary"}');
+});
+
+test('preflight tokens are independently salted and the issued token remains valid', async () => {
+  const first = await preflightCredentialMigration(options);
+  const second = await preflightCredentialMigration(options);
+  expect(first.planToken).toMatch(/^[a-f0-9]{64}$/);
+  expect(second.planToken).not.toBe(first.planToken);
+  expect(await migrateCredentials(options, first.planToken)).toMatchObject({ status: 'committed' });
+  await assertMigrated();
+});
+
+test('old deterministic preflight tokens require a new preflight without changing source bytes', async () => {
+  const beforeHashes = [...sourceBytes].map(([store, bytes]) => [store, createHash('sha256').update(bytes).digest('hex')]);
+  const legacyToken = createHash('sha256').update(JSON.stringify(beforeHashes)).digest('hex');
+  await expect(migrateCredentials(options, legacyToken)).rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
+  expect(await isCredentialMigrationPending()).toBe(false);
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+});
+
+test('the reviewed token refuses a different recovery passphrase without mutation', async () => {
+  const inventory = await preflightCredentialMigration(options);
+  await expect(migrateCredentials({ ...options, recoveryPassphrase: 'different-private-recovery-passphrase' }, inventory.planToken))
+    .rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
+  expect(await isCredentialMigrationPending()).toBe(false);
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+});
+
+test('the reviewed token refuses a different authenticated target protection', async () => {
+  const inventory = await preflightCredentialMigration(options);
+  const secretFile = `${root}.operator-secret`;
+  await fs.writeFile(secretFile, randomBytes(48).toString('base64url'), { mode: 0o600, flag: 'wx' });
+  process.env.FLUJO_ENCRYPTION_SECRET_FILE = secretFile;
+  try {
+    await expect(migrateCredentials({ ...options, protection: 'operator-file' }, inventory.planToken))
+      .rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
+    expect(await isCredentialMigrationPending()).toBe(false);
+    for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+  } finally { await fs.unlink(secretFile); }
+});
+
+test('the reviewed token cannot migrate identical source bytes in another workspace', async () => {
+  const inventory = await preflightCredentialMigration(options);
+  const otherDb = path.join(getWorkspaceDir('other-workspace'), 'db');
+  await fs.mkdir(otherDb, { recursive: true });
+  for (const [store, bytes] of sourceBytes) await fs.writeFile(path.join(otherDb, `${store}.json`), bytes, { mode: 0o600 });
+  await runWithWorkspace('other-workspace', async () => {
+    await expect(migrateCredentials(options, inventory.planToken)).rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
+    expect(await isCredentialMigrationPending()).toBe(false);
+    for (const [store, bytes] of sourceBytes) expect(await fs.readFile(path.join(otherDb, `${store}.json`))).toEqual(bytes);
+  });
 });
 
 test('final commit refuses a record reverted after verification; restart resume finishes it', async () => {

@@ -1,12 +1,13 @@
 import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, pbkdf2, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { StorageKey } from '@/shared/types/storage';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { CREDENTIAL_STORE_NAMES, credentialMigrationPath, isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
-import { DEFAULT_PASSWORD, decryptLegacy, newKeyring, open, seal, unwrapKeyring, unwrapLegacyKey, wrapKeyring, type EncryptionMetadata, type Keyring } from '@/utils/encryption/format';
+import { DEFAULT_PASSWORD, KDF_ITERATIONS, decryptLegacy, newKeyring, open, seal, unwrapKeyring, unwrapLegacyKey, wrapKeyring, type EncryptionMetadata, type Keyring } from '@/utils/encryption/format';
 import { MAX_TRANSFER_BYTES, openRecipientTransfer, sealRecipientTransfer } from '@/utils/encryption/recipientTransfer';
 import { encodeOAuthValue, OAUTH_CREDENTIAL_FORMAT, readSourceOAuthValue } from '@/utils/encryption/oauthCredentialEnvelope';
 import { readOperatorSecret } from '@/utils/encryption/operatorSecret';
@@ -19,6 +20,7 @@ import { isWorkerMode } from './workerMode';
 const PURPOSE = 'flujo:secret:v2';
 const MAX_RECORD_BYTES = 5 * 1024 * 1024;
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+const derivePlanKey = promisify(pbkdf2);
 type Protection = 'passphrase' | 'operator-file';
 type Entry = { before: string; after: string; beforeHash: string; afterHash: string };
 type Journal = { version: 1; workspace: string; id: string; createdAt: number; protection: Protection; entries: Record<string, Entry> };
@@ -56,7 +58,7 @@ function validateOptions(options: CredentialMigrationOptions) {
   if (typeof value !== 'string' || value.length < 16 || Buffer.byteLength(value) > 1024 || value === DEFAULT_PASSWORD
       || !['passphrase', 'operator-file'].includes(options.protection ?? 'passphrase') || isWorkerMode()) throw new CredentialMigrationError('PROFILE_UNAVAILABLE');
 }
-async function prepare(options: CredentialMigrationOptions): Promise<{ journal: Journal; inventory: CredentialMigrationInventory }> {
+async function prepare(options: CredentialMigrationOptions, planSalt = randomBytes(16)): Promise<{ journal: Journal; inventory: CredentialMigrationInventory }> {
   validateOptions(options);
   if (await isCredentialMigrationPending()) throw new CredentialMigrationError('MIGRATION_PENDING');
   const before = new Map<string, Buffer>();
@@ -135,11 +137,21 @@ async function prepare(options: CredentialMigrationOptions): Promise<{ journal: 
     const entries = Object.fromEntries([...before].map(([store, bytes]) => [store, {
       before: bytes.toString('base64'), after: after.get(store)!.toString('base64'), beforeHash: hash(bytes), afterHash: hash(after.get(store)!),
     }]));
-    const planToken = hash(Buffer.from(JSON.stringify(Object.entries(entries).map(([store, entry]) => [store, entry.beforeHash]))));
+    // The browser receives a salted, recovery-authenticated plan, never a bare
+    // deterministic fingerprint of potentially plaintext legacy credentials.
+    const planKey = await derivePlanKey(options.recoveryPassphrase, planSalt, KDF_ITERATIONS, 32, 'sha256');
+    let planToken: string;
+    try {
+      const mac = createHmac('sha256', planKey).update(JSON.stringify([
+        'flujo:credential-migration:plan:v1', getCurrentWorkspace(), path.resolve(getWorkspaceDataDir()), protection,
+        Object.entries(entries).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([store, entry]) => [store, entry.beforeHash]),
+      ])).digest();
+      planToken = planSalt.toString('hex') + mac.subarray(0, 16).toString('hex');
+    } finally { planKey.fill(0); }
     const journal: Journal = { version: 1, workspace: getCurrentWorkspace(), id: randomUUID(), createdAt: Date.now(), protection, entries };
     if (Buffer.byteLength(JSON.stringify(journal)) > MAX_TRANSFER_BYTES) throw new CredentialMigrationError('LIMIT_EXCEEDED');
     return { journal, inventory: { planToken, stores, protection } };
-  } finally { for (const bytes of [...before.values(), ...after.values()]) bytes.fill(0); }
+  } finally { planSalt.fill(0); for (const bytes of [...before.values(), ...after.values()]) bytes.fill(0); }
 }
 export async function preflightCredentialMigration(options: CredentialMigrationOptions): Promise<CredentialMigrationInventory> {
   return withWorkspaceRecoveryCapture(async () => (await prepare(options)).inventory, { signal: options.signal });
@@ -236,8 +248,9 @@ async function applyJournal(journal: Journal, rollback: boolean, options: Creden
 }
 export async function migrateCredentials(options: CredentialMigrationOptions, expectedPlanToken: string) {
   return withWorkspaceRecoveryCapture(async () => {
-    const { journal, inventory } = await prepare(options);
-    if (inventory.planToken !== expectedPlanToken) throw new CredentialMigrationError('SOURCE_CHANGED');
+    if (typeof expectedPlanToken !== 'string' || !/^[a-f0-9]{64}$/.test(expectedPlanToken)) throw new CredentialMigrationError('SOURCE_CHANGED');
+    const { journal, inventory } = await prepare(options, Buffer.from(expectedPlanToken.slice(0, 32), 'hex'));
+    if (!timingSafeEqual(Buffer.from(inventory.planToken, 'hex'), Buffer.from(expectedPlanToken, 'hex'))) throw new CredentialMigrationError('SOURCE_CHANGED');
     const plaintext = Buffer.from(JSON.stringify(journal));
     let envelope: Buffer;
     try { envelope = await sealRecipientTransfer(plaintext, options.recoveryPassphrase); }
