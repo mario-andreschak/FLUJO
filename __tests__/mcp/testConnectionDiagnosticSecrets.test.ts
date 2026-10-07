@@ -108,3 +108,32 @@ it('decodes split UTF-8 bytes before secret matching', async () => {
   const result = await new MCPService().testConnection(stdio);
   expect(result.error).toBe('rejected [REDACTED]');
 });
+
+it.each([
+  ['string', 'synthetic-private-workspace-path'],
+  ['object', { message: 'synthetic-private-workspace-path', stack: 'synthetic-private-stack' }],
+  ['array', ['synthetic-private-workspace-path']],
+  ['hostile formatter', {
+    get message() { throw new Error('synthetic-private-message-getter'); },
+    toString() { throw new Error('synthetic-private-stringifier'); },
+  }],
+])('bounds non-Error %s connection failures without stderr', async (_kind, failure) => {
+  clientFor(async () => { throw failure; });
+  const events: CommandStreamEvent[] = [];
+  const result = await new MCPService().testConnection(stdio, (event) => events.push(event));
+  expect(result.success).toBe(false);
+  expect(result.error).toBe('Failed to connect to MCP server.');
+  expect(JSON.stringify({ result, events })).not.toContain('synthetic-private');
+  expect(events.at(-1)).toMatchObject({ type: 'result', success: false, error: result.error });
+});
+
+it('retains masked stderr guidance for a non-Error connection failure', async () => {
+  clientFor(async (transport) => {
+    transport.stderr.emit('data', Buffer.from(`handshake refused ${token}\n`));
+    throw 'synthetic-private-workspace-path';
+  });
+  const result = await new MCPService().testConnection(stdio);
+  expect(result.error).toBe('handshake refused [REDACTED]');
+  expect(JSON.stringify(result)).not.toContain(token);
+  expect(JSON.stringify(result)).not.toContain('synthetic-private');
+});

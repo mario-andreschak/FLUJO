@@ -127,12 +127,14 @@ function tlsTrustHint(): string {
  * relevant error code(s) and, when the failure is TLS-related, an actionable hint.
  */
 export function formatErrorChain(error: unknown): string {
+  // Unknown thrown values can expose internals or execute hostile getters/stringifiers.
+  if (!(error instanceof Error)) return 'Unknown MCP connection failure.';
   const { messages, codes } = collectErrorChain(error);
   const uniqueMessages = Array.from(new Set(messages.filter(Boolean)));
   let combined = uniqueMessages.join(': ');
 
   if (!combined) {
-    combined = error instanceof Error ? (error.message || error.name) : String(error);
+    combined = error.message || error.name;
   }
 
   const uniqueCodes = Array.from(new Set(codes));
@@ -186,7 +188,7 @@ function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, st
   }
   
   if (!(error instanceof Error)) {
-    return formatErrorChain(error);
+    return 'Failed to connect to MCP server.';
   }
 
   const errorMessage = error.message;
