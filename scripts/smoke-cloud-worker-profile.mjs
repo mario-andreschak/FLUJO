@@ -30,7 +30,7 @@ export async function createPrivateSmokeProfile(passphrase = randomBytes(32).toS
     return {
       metadata,
       bootstrap: { version: 1, workspaceDek: `v2:${JSON.stringify({ ...ring, metadataRevision: sha256(JSON.stringify(metadata)) })}` },
-      encryptedApiKey: seal('synthetic-smoke-key', activeKey, 'flujo:secret:v2'),
+      encryptedApiKey: `encrypted:${seal('synthetic-smoke-key', activeKey, 'flujo:secret:v2')}`,
     };
   } finally {
     activeKey.fill(0); salt.fill(0); wrappingKey?.fill(0);
