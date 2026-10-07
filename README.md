@@ -1,4 +1,5 @@
 <div align="center">
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=mario-andreschak%2Fflujo&type=date&legend=top-left">
@@ -8,6 +9,7 @@
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&legend=top-left" />
  </picture>
 </a>
+
 # FLUJO
 
 ### Build private AI agents visually. Run them your way.
