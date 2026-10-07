@@ -1,5 +1,15 @@
 <div align="center">
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=mario-andreschak%2Fflujo&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&legend=top-left" />
+ </picture>
+</a>
+
 # FLUJO
 
 ### Build private AI agents visually. Run them your way.
