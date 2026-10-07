@@ -26,6 +26,10 @@ browser operation remain separate acceptance work.
 
 ## Decision Records
 
+- [Shared model-input and wire-preview contract](./model-input-contract.md):
+  Debugger data contracts and backend compatibility type exports.
+- [Shared debugger state view](./debugger-state-view.md):
+  Consumer state, step and boundary views without backend execution capabilities.
 - [Package flow identity and legacy references](./package-flow-identity.md):
   Complete flow identities, ledger ownership and safe compatibility for installs.
 - [Execution and MCP ownership contracts](./execution-module-boundaries.md):

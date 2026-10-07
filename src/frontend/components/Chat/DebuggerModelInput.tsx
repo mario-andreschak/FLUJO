@@ -6,7 +6,7 @@ import {
   Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { ModelInputSnapshot, WireStatus, ModelInputProvenanceEntry } from '@/backend/execution/flow/types';
+import type { ModelInputSnapshot, WireStatus, ModelInputProvenanceEntry } from '@/shared/types/execution/modelInput';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
