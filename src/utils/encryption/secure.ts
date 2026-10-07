@@ -3,9 +3,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadItem, saveItem, writeFileAtomic } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
+import { getCurrentWorkspace, getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
-import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked } from './session';
+import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked,
+  recordWorkerTransferProvenance, getWorkerTransferProvenance } from './session';
 import {
   DEFAULT_PASSWORD, decryptLegacy, keyId, metadataRevision, newKeyring, open, parseSessionKey, seal,
   serializeKeyring, unwrapKeyring, unwrapLegacyKey, wrapKeyring,
@@ -14,6 +15,9 @@ import {
 import { assertCredentialMigrationReady, isCredentialMigrationPending } from './credentialMigrationState';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { readOperatorSecret } from './operatorSecret';
+import { isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { getDataDir } from '@/utils/paths';
+import { assertLinkFreeFileParent } from '@/backend/services/workspace/backupRestoreFs';
 export { isValidEncryptionSessionKey } from './format';
 
 const log = createLogger('utils/encryption/secure');
@@ -165,12 +169,68 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
   } catch { log.error('Could not change encryption password'); return false; }
 }
 
+async function workerRootIdentity(root: string) {
+  const expected = path.resolve(getWorkspaceDataDir());
+  if (path.resolve(root) !== expected) throw new EncryptionLockedError('Worker transfer root mismatch');
+  await assertLinkFreeFileParent(getDataDir(), path.join(expected, 'probe'));
+  const stat = await fs.lstat(expected, { bigint: true });
+  const canonical = await fs.realpath(expected);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || path.relative(expected, canonical) !== '') {
+    throw new EncryptionLockedError('Worker transfer root is unavailable');
+  }
+  return { root: canonical, rootDevice: stat.dev.toString(), rootInode: stat.ino.toString() };
+}
+
+/** Called only after authenticated restore validates its private bootstrap file. */
+export async function unlockValidatedWorkerTransfer(serializedKey: string, context: { workspace: string; root: string }): Promise<void> {
+  await withMetadataLock(async () => {
+    if (!isWorkerMode() || context.workspace !== getCurrentWorkspace() || await isCredentialMigrationPending()) {
+      throw new EncryptionLockedError('Worker transfer is unavailable');
+    }
+    const identity = await workerRootIdentity(context.root);
+    const metadata = await readMetadata();
+    const ring = parseSessionKey(serializedKey);
+    if (!metadata || metadata.encryption_type !== 'user'
+        || (metadata.key_protection === 'operator-file' && metadata.encryption_version !== 2)
+        || (metadata.encryption_version === 2 && (!('activeKey' in ring) || keyId(ring) !== metadata.key_id
+          || (ring.metadataRevision !== undefined && ring.metadataRevision !== metadataRevision(metadata))
+          || ((metadata.key_protection === 'operator-file' || metadata.key_protection === 'passphrase')
+            && ring.metadataRevision === undefined)))
+        || (metadata.encryption_version === 1 && !('legacyKey' in ring))) {
+      throw new EncryptionLockedError('Worker transfer does not match encryption metadata');
+    }
+    const after = await workerRootIdentity(context.root);
+    if (JSON.stringify(after) !== JSON.stringify(identity)) throw new EncryptionLockedError('Worker transfer root changed');
+    unlockServer(serializedKey);
+    if (metadata.key_protection === 'operator-file' && 'activeKey' in ring) recordWorkerTransferProvenance({
+      workspace: context.workspace, ...identity, keyId: keyId(ring), metadataRevision: metadataRevision(metadata),
+    });
+  });
+}
+
+async function transferredWorkerKeys(metadata: EncryptionMetadata): Promise<Keyring | null> {
+  if (!isWorkerMode() || process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined) return null;
+  const provenance = getWorkerTransferProvenance();
+  if (!provenance || provenance.workspace !== getCurrentWorkspace()
+      || metadata.key_protection !== 'operator-file' || metadata.encryption_type !== 'user'
+      || provenance.metadataRevision !== metadataRevision(metadata) || provenance.keyId !== metadata.key_id) return null;
+  const identity = await workerRootIdentity(provenance.root);
+  if (identity.root !== provenance.root || identity.rootDevice !== provenance.rootDevice || identity.rootInode !== provenance.rootInode) return null;
+  const serialized = getServerDek();
+  if (!serialized) return null;
+  const ring = parseSessionKey(serialized);
+  return 'activeKey' in ring && ring.metadataRevision === provenance.metadataRevision
+    && keyId(ring) === provenance.keyId ? ring : null;
+}
+
 async function getKeys(passwordOrToken?: string, isToken = false, allowInitialize = false): Promise<Keyring | { legacyKey: string }> {
   return withMetadataLock(async () => {
     if (await isCredentialMigrationPending()) throw new EncryptionLockedError('Credential migration is pending; resume or roll back it before unlocking');
     const metadata = allowInitialize ? await metadataOrInitialize() : await readMetadata();
     if (!metadata) throw new EncryptionLockedError('Restore matching encryption metadata before decrypting credentials');
     if (metadata.key_protection === 'operator-file') {
+      const transferred = await transferredWorkerKeys(metadata);
+      if (transferred) return transferred;
       const secret = readOperatorSecret();
       if (!secret) throw new EncryptionLockedError('Private encryption operator secret is unavailable');
       // Re-read the independent mount even after the process was unlocked.
@@ -293,6 +353,7 @@ export async function isEncryptionLocked(): Promise<boolean> {
   }
   if (metadata.key_protection === 'operator-file') {
     try {
+      if (await transferredWorkerKeys(metadata)) return false;
       const secret = readOperatorSecret();
       if (!secret) return true;
       await unwrapKeyring(metadata, secret);
