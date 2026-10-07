@@ -14,6 +14,8 @@ jest.mock('child_process', () => ({
 
 import { GET, POST } from '@/app/api/update/route';
 import { makeLocalRequest } from '../utils/localRequest';
+import fs from 'fs/promises';
+import path from 'path';
 
 const { __git: mockGit, simpleGit: simpleGitFactory } = jest.requireMock('simple-git') as {
   __git: Record<string, jest.Mock>; simpleGit: jest.Mock;
@@ -120,6 +122,39 @@ describe('safe branch checks', () => {
     expect(await response.json()).toMatchObject({ success: true, restarting: true });
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockSpawn.mock.invocationCallOrder[0]).toBeGreaterThan(mockGit.status.mock.invocationCallOrder[1]);
+  });
+
+  it.each([
+    'C:\\FLUJO & echo marker & rem',
+    'C:\\FLUJO%USERNAME%!USERNAME!^(copy)',
+    "C:\\Moe's FLUJO; $marker `literal`",
+  ])('carries checkout %s as literal PowerShell data through cmd/start', async cwd => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
+    const readSpy = jest.spyOn(fs, 'readFile').mockResolvedValue('{"name":"flujo-ai","version":"test"}');
+    const accessSpy = jest.spyOn(fs, 'access').mockResolvedValue(undefined);
+    mockGit.status.mockResolvedValue(cleanStatus({ behind: 1 }));
+    try {
+      expect(await (await POST(postReq())).json()).toMatchObject({ success: true, restarting: true });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], Record<string, unknown>];
+      expect(command).toBe('cmd.exe');
+      expect(args.slice(0, -1)).toEqual([
+        '/c', 'start', '""', 'powershell.exe',
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand',
+      ]);
+      const encoded = args.at(-1)!;
+      expect(encoded).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+      const script = path.join(cwd, 'scripts', 'update.ps1');
+      const decoded = Buffer.from(encoded, 'base64').toString('utf16le');
+      expect(decoded).toBe(`& '${script.replaceAll("'", "''")}' -Dir '${cwd.replaceAll("'", "''")}'`);
+      expect(options).toMatchObject({ detached: true, stdio: 'ignore', windowsHide: true });
+      expect(mockSpawn.mock.invocationCallOrder[0]).toBeGreaterThan(mockGit.status.mock.invocationCallOrder[1]);
+    } finally {
+      accessSpy.mockRestore();
+      readSpy.mockRestore();
+      cwdSpy.mockRestore();
+    }
   });
 });
 
