@@ -6,7 +6,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { readPlainFile } from '@/utils/readPlainFile';
-import { CREDENTIAL_STORE_NAMES, credentialMigrationPath, isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
+import { credentialMigrationPath, isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
 import { DEFAULT_PASSWORD, KDF_ITERATIONS, decryptLegacy, newKeyring, open, seal, unwrapKeyring, unwrapLegacyKey, wrapKeyring, type EncryptionMetadata, type Keyring } from '@/utils/encryption/format';
 import { MAX_TRANSFER_BYTES, openRecipientTransfer, sealRecipientTransfer } from '@/utils/encryption/recipientTransfer';
 import { encodeOAuthValue, OAUTH_CREDENTIAL_FORMAT, readSourceOAuthValue } from '@/utils/encryption/oauthCredentialEnvelope';
@@ -23,7 +23,13 @@ const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('h
 const derivePlanKey = promisify(pbkdf2);
 type Protection = 'passphrase' | 'operator-file';
 type Entry = { before: string; after: string; beforeHash: string; afterHash: string };
-type Journal = { version: 1; workspace: string; id: string; createdAt: number; protection: Protection; entries: Record<string, Entry> };
+type JournalBase = { workspace: string; id: string; createdAt: number; protection: Protection; entries: Record<string, Entry> };
+type InventoryEntry = { store: string; present: boolean };
+type Journal = JournalBase & ({ version: 1 } | { version: 2; inventory: InventoryEntry[] });
+const JOURNAL_STORES = [...CREDENTIAL_TRANSFER_STORES, StorageKey.ENCRYPTION_KEY];
+// Version 1's producer attempted every one of these stores and skipped only
+// ENOENT. Its omissions witness absence only for this original inventory.
+const LEGACY_JOURNAL_STORES = ['models', 'mcp_servers', 'global_env_vars', 'registry_account', 'encryption_key'] as const;
 export type CredentialMigrationCode = 'SOURCE_INVALID' | 'SOURCE_CHANGED' | 'RECOVERY_INVALID' | 'MIGRATION_PENDING' | 'PROFILE_UNAVAILABLE' | 'LIMIT_EXCEEDED';
 export class CredentialMigrationError extends Error {
   constructor(readonly code: CredentialMigrationCode, readonly store?: string) {
@@ -149,18 +155,19 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
     const entries = Object.fromEntries([...before].map(([store, bytes]) => [store, {
       before: bytes.toString('base64'), after: after.get(store)!.toString('base64'), beforeHash: hash(bytes), afterHash: hash(after.get(store)!),
     }]));
+    const inventory = JOURNAL_STORES.map(store => ({ store, present: before.has(store) }));
     // The browser receives a salted, recovery-authenticated plan, never a bare
     // deterministic fingerprint of potentially plaintext legacy credentials.
     const planKey = await derivePlanKey(options.recoveryPassphrase, planSalt, KDF_ITERATIONS, 32, 'sha256');
     let planToken: string;
     try {
       const mac = createHmac('sha256', planKey).update(JSON.stringify([
-        'flujo:credential-migration:plan:v2', getCurrentWorkspace(), path.resolve(getWorkspaceDataDir()), protection, options.retireActiveKey === true,
+        'flujo:credential-migration:plan:v3', getCurrentWorkspace(), path.resolve(getWorkspaceDataDir()), protection, options.retireActiveKey === true, inventory,
         Object.entries(entries).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([store, entry]) => [store, entry.beforeHash]),
       ])).digest();
       planToken = planSalt.toString('hex') + mac.subarray(0, 16).toString('hex');
     } finally { planKey.fill(0); }
-    const journal: Journal = { version: 1, workspace: getCurrentWorkspace(), id: randomUUID(), createdAt: Date.now(), protection, entries };
+    const journal: Journal = { version: 2, workspace: getCurrentWorkspace(), id: randomUUID(), createdAt: Date.now(), protection, entries, inventory };
     if (Buffer.byteLength(JSON.stringify(journal)) > MAX_TRANSFER_BYTES) throw new CredentialMigrationError('LIMIT_EXCEEDED');
     return { journal, inventory: { planToken, stores, protection, retireActiveKey: options.retireActiveKey === true, activeKeyWillChange } };
   } finally { planSalt.fill(0); for (const bytes of [...before.values(), ...after.values()]) bytes.fill(0); }
@@ -184,7 +191,31 @@ async function syncParent() {
     await parent.sync();
   } finally { await parent.close(); }
 }
+async function validateAbsent(journal: Journal) {
+  const absent = journal.version === 2 ? journal.inventory.filter(item => !item.present).map(item => item.store)
+    : LEGACY_JOURNAL_STORES.filter(store => !Object.hasOwn(journal.entries, store));
+  for (const store of absent) {
+    const file = fileFor(store);
+    try {
+      await assertLinkFreeFileParent(getDataDir(), file);
+      try { await fs.lstat(file); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+    } catch { throw new CredentialMigrationError('SOURCE_CHANGED', store); }
+    throw new CredentialMigrationError('SOURCE_CHANGED', store);
+  }
+}
+function inventoryGuard(journal: Journal, operation: WorkspaceRecoveryOperation) {
+  return async () => {
+    await operation.assertOwned();
+    await validateAbsent(journal);
+    await operation.assertOwned();
+  };
+}
 async function validateCurrent(journal: Journal, exactSide?: 'before' | 'after') {
+  await validateAbsent(journal);
   for (const [store, entry] of Object.entries(journal.entries)) {
     let bytes: Buffer;
     try { bytes = await readFile(fileFor(store), MAX_TRANSFER_BYTES); }
@@ -200,13 +231,23 @@ async function readJournal(passphrase: string): Promise<Journal> {
     bytes = await readFile(credentialMigrationPath(), MAX_TRANSFER_BYTES + 56);
     plaintext = await openRecipientTransfer(bytes, passphrase);
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plaintext)) as Journal;
-    if (!value || value.version !== 1 || value.workspace !== getCurrentWorkspace() || !/^[a-f0-9-]{36}$/.test(value.id)
+    if (!value || ![1, 2].includes(value.version) || value.workspace !== getCurrentWorkspace() || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.id)
         || !Number.isSafeInteger(value.createdAt) || !['passphrase', 'operator-file'].includes(value.protection)
+        || Object.keys(value).sort().join(',') !== (value.version === 2 ? 'createdAt,entries,id,inventory,protection,version,workspace' : 'createdAt,entries,id,protection,version,workspace')
         || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries)
         || !Object.hasOwn(value.entries, StorageKey.ENCRYPTION_KEY)
-        || Object.keys(value.entries).some(store => !(CREDENTIAL_STORE_NAMES as readonly string[]).includes(store))) throw new Error();
+        || Object.keys(value.entries).some(store => !(value.version === 2 ? JOURNAL_STORES : LEGACY_JOURNAL_STORES as readonly string[]).includes(store))) throw new Error();
+    if (value.version === 2) {
+      if (!Array.isArray(value.inventory) || value.inventory.length !== JOURNAL_STORES.length
+          || value.inventory.some((item, index) => !item || Object.keys(item).sort().join(',') !== 'present,store'
+            || item.store !== JOURNAL_STORES[index] || typeof item.present !== 'boolean'
+            || item.present !== Object.hasOwn(value.entries, item.store))
+          || !value.inventory.find(item => item.store === StorageKey.ENCRYPTION_KEY)?.present) throw new Error();
+    }
     for (const entry of Object.values(value.entries)) {
-      if (!entry || typeof entry.before !== 'string' || typeof entry.after !== 'string'
+      if (!entry || Object.keys(entry).sort().join(',') !== 'after,afterHash,before,beforeHash'
+          || typeof entry.before !== 'string' || typeof entry.after !== 'string'
+          || entry.before.length > 4 * Math.ceil(MAX_RECORD_BYTES / 3) || entry.after.length > 4 * Math.ceil(MAX_TRANSFER_BYTES / 3)
           || !/^[a-f0-9]{64}$/.test(entry.beforeHash) || !/^[a-f0-9]{64}$/.test(entry.afterHash)) throw new Error();
       for (const side of ['before', 'after'] as const) {
         const decoded = Buffer.from(entry[side], 'base64');
@@ -219,6 +260,7 @@ async function readJournal(passphrase: string): Promise<Journal> {
   finally { bytes?.fill(0); plaintext?.fill(0); }
 }
 async function applyJournal(journal: Journal, rollback: boolean, options: CredentialMigrationOptions, operation: WorkspaceRecoveryOperation) {
+  const assertInventoryOwned = inventoryGuard(journal, operation);
   await operation.assertOwned();
   await validateCurrent(journal);
   await operation.assertOwned(); // Check the entire inventory before replacing any file.
@@ -238,7 +280,7 @@ async function applyJournal(journal: Journal, rollback: boolean, options: Creden
     await operation.assertOwned();
     const bytes = Buffer.from(journal.entries[store][side], 'base64');
     try {
-      await atomicWriteWithoutLinks(getDataDir(), fileFor(store), bytes, { mode: 0o600, assertOwned: operation.assertOwned });
+      await atomicWriteWithoutLinks(getDataDir(), fileFor(store), bytes, { mode: 0o600, assertOwned: assertInventoryOwned });
       await operation.assertOwned();
       const actual = await readFile(fileFor(store), MAX_TRANSFER_BYTES);
       try { if (!actual.equals(bytes)) throw new CredentialMigrationError('SOURCE_CHANGED', store); }
@@ -258,7 +300,7 @@ async function applyJournal(journal: Journal, rollback: boolean, options: Creden
   await assertLinkFreeFileParent(getDataDir(), pending);
   // This single rename publishes the logical transaction; pending readers and
   // writers remain denied until every record and metadata byte is verified.
-  await operation.assertOwned();
+  await assertInventoryOwned();
   await fs.rename(pending, path.join(path.dirname(pending), `.credential-migration.${journal.id}.${rollback ? 'rolled-back' : 'committed'}`));
   await operation.assertOwned();
   await syncParent();
@@ -284,7 +326,7 @@ export async function migrateCredentials(options: CredentialMigrationOptions, ex
     try {
       // Coherent capture serializes registered writers across OS processes.
       if (await isCredentialMigrationPending()) throw new CredentialMigrationError('MIGRATION_PENDING');
-      await atomicWriteWithoutLinks(getDataDir(), pending, envelope, { mode: 0o600, assertOwned: operation.assertOwned });
+      await atomicWriteWithoutLinks(getDataDir(), pending, envelope, { mode: 0o600, assertOwned: inventoryGuard(journal, operation) });
       await operation.assertOwned();
       await syncParent();
       await operation.assertOwned();
