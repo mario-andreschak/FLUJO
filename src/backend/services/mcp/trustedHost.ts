@@ -3,7 +3,7 @@ import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/std
 import { DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpPolicyDigest, verifyTrustedHostMcp } from '../security/trustedHostMcp';
+import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, sameTrustedHostConsent, verifyTrustedHostMcp } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 
@@ -98,15 +98,17 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
     retire: () => { if (!retired) { retired = true; cancellation.abort(); onRetire?.(); } },
     assertCurrent: async (current: MCPStdioConfig) => {
       checkLive();
-      if (current.name !== captured.name || current.disabled || trustedHostMcpPolicyDigest(current) !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (current.name !== captured.name || current.disabled || !sameTrustedHostConsent(current, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       const authority = await verifyTrustedHostMcp(current, cancellation.signal);
       // Fingerprinting yields. A snapshot from before that await cannot admit
       // a server that was removed, disabled or retargeted while checking bytes.
       const latest = await currentConfig(captured.name);
-      const fresh = trustedHostMcpApproval(latest);
+      const fresh = await trustedHostMcpApprovalAsync(latest, cancellation.signal);
+      const final = await currentConfig(captured.name);
       checkLive();
       if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
-          || fresh.ownerId !== initial.ownerId || fresh.digest !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+          || fresh.ownerId !== initial.ownerId || fresh.digest !== initial.digest
+          || !sameTrustedHostConsent(final, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     },
   });
   managedHosts.set(transport, managed);
@@ -123,9 +125,11 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
       // Runtime consent performs no package preparation or installer execution.
       await managed.assertCurrent(await currentConfig(captured.name));
       const fresh = await currentConfig(captured.name);
-      const authority = trustedHostMcpApproval(fresh);
+      const authority = await trustedHostMcpApprovalAsync(fresh, cancellation.signal);
+      const final = await currentConfig(captured.name);
       checkLive();
-      if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
+          || !sameTrustedHostConsent(final, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       await start();
       // A revocation while the SDK awaited process startup closes this generation.
       await managed.assertCurrent(await currentConfig(captured.name));
