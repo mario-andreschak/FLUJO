@@ -12,6 +12,8 @@ import type { ExecutionEvent } from '@/shared/types/execution/events';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { StorageKey } from '@/shared/types/storage';
 import path from 'node:path';
+import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { ChildProcess } from 'node:child_process';
 
 const mockFlows = new Map<string, Flow>();
@@ -147,15 +149,18 @@ function answer(response: ServerResponse, body: Record<string, unknown>, content
 }
 
 async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
-  toolProfile = installTrustedHostProfile({ name: 'ordering-fixture' });
+  const source = fs.readFileSync(path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs'), 'utf8')
+    .replace(/from '(@modelcontextprotocol\/[^']+)'/g, (_match, moduleName: string) =>
+      `from ${JSON.stringify(pathToFileURL(require.resolve(moduleName)).href)}`);
+  toolProfile = installTrustedHostProfile({ name: 'ordering-fixture', nodeSource: source });
   const config = toolProfile.config;
-  const entryPoint = path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs');
-  config.command = process.execPath;
+  const originalEntryPoint = config.trustedHost!.entryPoint;
+  const entryPoint = path.join(config.trustedHost!.sourceRoot, 'processBoundaryServer.mjs');
+  fs.renameSync(originalEntryPoint, entryPoint);
   config.args = [entryPoint];
-  config.cwd = process.cwd();
   config.source = { type: 'local' };
   Object.assign(config.trustedHost!, { runtime: 'node', entryPoint,
-    sourceRoot: path.dirname(entryPoint), sourceDigest: fingerprintTrustedHostSource(path.dirname(entryPoint)),
+    sourceDigest: fingerprintTrustedHostSource(config.trustedHost!.sourceRoot),
     executableDigest: fingerprintTrustedHostExecutable(process.execPath) });
   toolProfile.approve();
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });
