@@ -80,7 +80,7 @@ import { loadItem } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpApproval } from '@/backend/services/security/trustedHostMcp';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 
@@ -154,13 +154,14 @@ async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
       `from ${JSON.stringify(pathToFileURL(require.resolve(moduleName)).href)}`);
   toolProfile = installTrustedHostProfile({ name: 'ordering-fixture', nodeSource: source });
   const config = toolProfile.config;
-  const originalEntryPoint = config.trustedHost!.entryPoint;
-  const entryPoint = path.join(config.trustedHost!.sourceRoot, 'processBoundaryServer.mjs');
+  const policy = trustedHostMcpApproval(config).policy;
+  const originalEntryPoint = policy.entryPoint;
+  const entryPoint = path.join(policy.sourceRoot, 'processBoundaryServer.mjs');
   fs.renameSync(originalEntryPoint, entryPoint);
   config.args = [entryPoint];
   config.source = { type: 'local' };
   Object.assign(config.trustedHost!, { runtime: 'node', entryPoint,
-    sourceDigest: fingerprintTrustedHostSource(config.trustedHost!.sourceRoot),
+    sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot),
     executableDigest: fingerprintTrustedHostExecutable(process.execPath) });
   toolProfile.approve();
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });

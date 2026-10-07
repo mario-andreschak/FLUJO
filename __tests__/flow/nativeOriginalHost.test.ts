@@ -44,6 +44,8 @@ let children: SpawnedProcess[] = [];
 let beforePrompt: (() => Promise<void>) | undefined;
 let emitHandoff = false;
 let afterHandoffStop: (() => Promise<void>) | undefined;
+let afterPrompt: (() => Promise<void>) | undefined;
+let transcriptText = 'done';
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
@@ -51,6 +53,7 @@ beforeEach(async () => {
   process.env.FLUJO_DATA_DIR = directory;
   selectedModel = { ...modelFixture };
   promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
+  afterPrompt = undefined; transcriptText = 'done';
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -71,7 +74,8 @@ beforeEach(async () => {
       expect((await ledger()).reservations[0].state).toBe('registered');
       expect(child.exitCode).toBeNull();
       promptCount++;
-      yield { type: 'assistant', uuid: 'fixture-assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } };
+      await afterPrompt?.();
+      yield { type: 'assistant', uuid: 'fixture-assistant', message: { role: 'assistant', content: [{ type: 'text', text: transcriptText }] } };
       if (emitHandoff) {
         const sdk = options as typeof options & {
           mcpServers: { flujo: { tools: { name: string; handler(args: Record<string, unknown>): Promise<unknown> }[] } };
@@ -190,6 +194,31 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
+    transcriptText = 'late-private-persona-transcript';
+    await withClaim(async (input, goalId) => {
+      afterPrompt = async () => {
+        expect(promptCount).toBe(1);
+        expect((await ledger()).reservations[0].state).toBe('registered');
+        const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+        await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+      };
+    }, async () => {
+      expect(promptCount).toBe(1);
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.sdkUsage).toBeUndefined();
+      const saved = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(saved).toBeDefined();
+      expect(JSON.stringify(saved!.messages)).not.toContain(transcriptText);
+      const archive = path.join(getWorkspaceDataDir(), 'db', 'model-turns', reservation.owner.conversationId);
+      const outcome = JSON.parse(await fs.readFile(path.join(archive, `${reservation.invocationId}.outcome.json`), 'utf8'));
+      expect(outcome.outcome).not.toBe('completed');
+      const holdId = createHash('sha256').update(JSON.stringify(reservation.owner.conversationId)).digest('hex');
+      expect(JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal',
+        'holds', `${holdId}.json`), 'utf8'))).toMatchObject({ invocationId: reservation.invocationId });
+    }, 'handoff-refusal');
+  }, 30000);
   it('runs the production Core dispatch through ProcessNode and V2 saved Original to actual child release', async () => {
     await withClaim(async () => {
       beforePrompt = async () => {

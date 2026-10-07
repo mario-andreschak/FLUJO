@@ -47,7 +47,7 @@ test('refuses content changed through the held file and clears the rejected read
     const handle = await open(...args);
     const read = handle.read.bind(handle);
     jest.spyOn(handle, 'read').mockImplementationOnce(async (...readArgs: Parameters<typeof read>) => {
-      buffer = readArgs[0] as Buffer;
+      buffer = readArgs[0] as unknown as Buffer;
       const result = await read(...readArgs);
       await fs.appendFile(file, 'changed');
       return result;
