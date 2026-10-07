@@ -14,4 +14,4 @@ Ordinary exports omit recognized credential fields and encrypted/failed-encrypti
 
 Restoring these ordinary archives requires reconfiguring credentials and connections. The export never modifies the source stores. User-authored flow/chat text and descriptive metadata are preserved; a credential embedded in prose or code is not detected by this structural filter. Review that content before sharing.
 
-Older ZIPs remain readable by the existing restore endpoint, including its existing explicit legacy selections. This change does not migrate stored ciphertext, rotate keys, provide an encrypted recipient transfer, or qualify an installed artifact. Those remain separate work.
+Older ZIPs remain readable by the existing restore endpoint, including its existing explicit legacy selections. Ordinary backups do not migrate stored ciphertext or rotate keys. Deliberate encrypted recipient transfer uses separate endpoints and fresh recipient keying; see [the transfer contract](../../../../docs/security/recipient-credential-transfer-v1.md). Installed-artifact qualification and resumable in-place migration remain separate work.
