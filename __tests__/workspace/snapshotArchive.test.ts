@@ -23,6 +23,7 @@ import { captureWorkspaceSnapshot as captureProductionSnapshot, writeWorkspaceSn
 import { runWithWorkspace } from '@/utils/workspace';
 import { encryptWithPassword, getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
 import { parseSessionKey, open, type EncryptionMetadata } from '@/utils/encryption/format';
+import { archiveModelDispatch } from '@/backend/execution/flow/modelTurnArchive';
 
 const captures: Awaited<ReturnType<typeof captureProductionSnapshot>>[] = [];
 async function captureWorkspaceSnapshot(...args: Parameters<typeof captureProductionSnapshot>) {
@@ -155,15 +156,24 @@ describe('portable workspace capture', () => {
       'db/native-tool-journal/calls/original.json',
       'db/native-session-payloads/original/payload.json',
       'db/native-session-origins/original.json',
-      'db/model-turns/chat-one/original.json.gz',
+      'db/native-session-origins/host-ledger/goal-original.json',
     ];
     for (const name of nativePrivatePaths) await put(name, 'private native request or journal');
+    const ordinary = await runWithWorkspace('research', () => archiveModelDispatch({
+      conversationId: 'chat-one', runId: 'ordinary-core-run', nodeId: 'ordinary-process',
+      modelId: 'model-one', modelName: 'ordinary fixture', adapter: 'openai', operation: 'create', attempt: 1,
+      canonicalMessages: [{ id: 'ordinary-user', role: 'user', content: 'Preserve ordinary Core history', timestamp: 1 }],
+      genericWire: [{ role: 'user', content: 'Preserve ordinary Core history' }], sdkRequest: { ordinary: true },
+    }));
+    const ordinaryPath = `db/model-turns/chat-one/${ordinary.id}.v2.json.gz`;
+    const ordinaryBytes = await fs.readFile(path.join(workspace, ordinaryPath));
     await put('mcp-servers/old-path/node_modules/dependency/index.js', 'old runtime');
     await put('userdata/mcp-runtime/provider-state.sqlite', Buffer.from('SQLite format 3\0synthetic'));
     await put('browser-profile/browser-state', 'local profile');
     const captured = await captureWorkspaceSnapshot('research', 3);
     for (const [name, value] of Object.entries(records)) expect(await captured.zip.file(name)!.async('string')).toBe(value);
-    expect(captured.manifest.files.map(file => file.path)).toEqual(Object.keys(records).sort((a, b) => a.localeCompare(b)));
+    expect(captured.manifest.files.map(file => file.path)).toEqual([...Object.keys(records), ordinaryPath].sort((a, b) => a.localeCompare(b)));
+    expect(await captured.zip.file(ordinaryPath)!.async('nodebuffer')).toEqual(ordinaryBytes);
     expect(captured.manifest.runtime.codexAuth).toBe('none');
     expect(mockBuildPlan).toHaveBeenCalledWith([expect.objectContaining({ name: 'test-server', env: { API_KEY: 'encrypted:synthetic' } })], workspace);
     expect(captured.zip.file('db/codex-runtime/state_5.sqlite')).toBeNull();
@@ -177,6 +187,8 @@ describe('portable workspace capture', () => {
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(archive.sha256);
       const unpacked = await JSZip.loadAsync(decryptArchive(bytes));
       expect(JSON.parse(await unpacked.file('snapshot-manifest.json')!.async('string'))).toEqual(captured.manifest);
+      expect(archive.encrypted).toBe(true);
+      expect(await unpacked.file(ordinaryPath)!.async('nodebuffer')).toEqual(ordinaryBytes);
       for (const name of nativePrivatePaths) expect(unpacked.file(name)).toBeNull();
     } finally {
       await fs.rm(archive.stagingDir, { recursive: true, force: true });

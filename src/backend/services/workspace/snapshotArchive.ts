@@ -279,7 +279,7 @@ export async function captureWorkspaceSnapshot(
       'browser-profile', 'bash-utils', 'db/worker-bootstrap-secrets.json',
       // Original receipts, payloads and host bindings are runtime authority.
       'db/native-tool-journal', 'db/native-session-payloads',
-      'db/native-session-origins', 'db/model-turns',
+      'db/native-session-origins',
     ];
     const skipRuntimePath = (entryPath: string): boolean =>
       excludedRuntimePaths.some(prefix => entryPath === prefix || entryPath.startsWith(`${prefix}/`))

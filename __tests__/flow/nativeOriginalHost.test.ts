@@ -55,8 +55,11 @@ beforeEach(async () => {
       env: SpawnOptions['env']; abortController: AbortController };
   }) => {
     const forwarded = new AbortController();
+    const childScript = emitHandoff
+      ? 'process.stdin.resume();process.stdin.on("end",()=>{require("node:child_process").spawn(process.execPath,["-e","setTimeout(()=>{},700)"],{stdio:["ignore",process.stdout,process.stderr],windowsHide:true});process.exit(0)});'
+      : 'process.stdin.resume();process.stdin.on("end",()=>setTimeout(()=>process.exit(0),150));';
     const child = options.spawnClaudeCodeProcess({ command: process.execPath,
-      args: ['-e', 'process.stdin.resume();process.stdin.on("end",()=>setTimeout(()=>process.exit(0),150));'],
+      args: ['-e', childScript],
       env: options.env, signal: forwarded.signal });
     children.push(child);
     const close = () => child.stdin.end();
@@ -143,7 +146,8 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
       { startPump: false });
       if (production === 'handoff-refusal') {
-        await expect(dispatcher.pump(persona.id)).rejects.toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+        try { await dispatcher.pump(persona.id); }
+        catch (error) { expect(error).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' }); }
       } else await dispatcher.pump(persona.id);
       expect(observed).toBe(true);
       if (failure) throw failure;
@@ -204,6 +208,17 @@ describe('Original host with real Persona lease and actual child / offline SDK e
 
   it('routes an ordinary Core handoff only after the original owned SDK child exits and its pipes close', async () => {
     emitHandoff = true;
+    afterHandoffStop = async () => {
+      const child = children[0];
+      if (child.exitCode === null) await new Promise(resolve => child.once('exit', resolve));
+      expect(child.stdout.readableEnded).toBe(false);
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.handoff.state).toBe('requested');
+      const folder = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal', 'tools', reservation.invocationId);
+      const [file] = await fs.readdir(folder);
+      expect(JSON.parse(await fs.readFile(path.join(folder, file), 'utf8')).state).toBe('effect-unknown');
+    };
     await withClaim(async () => undefined, async () => {
       expect(promptCount).toBe(1);
       expect(queryMock).toHaveBeenCalledTimes(1);

@@ -323,7 +323,10 @@ export async function createPersonaNativeOriginalHost(input: {
     acknowledgeLive: async value => { if (value !== original || !child || exited || closed) return held(); await assertCurrent(); },
     acknowledgeSdkOutcome: async (value, outcome) => {
       if (value !== original || !child || !exited || !closed) return held();
-      await authority.commitWhileCurrent!(() => update(async reservation => { reservation.sdkOutcome = outcome; }));
+      await authority.commitWhileCurrent!(() => update(async reservation => {
+        if (outcome === 'completed' && reservation.handoff && reservation.handoff.state !== 'confirmed') return held();
+        reservation.sdkOutcome = outcome;
+      }));
     },
     acknowledgeTerminalReady: async value => {
       if (value !== original || !child || !exited || !closed) return held();
@@ -333,6 +336,7 @@ export async function createPersonaNativeOriginalHost(input: {
   const processHost: NativeOriginalProcessHost = {
     prepareHandoff: async (invocationId, toolInvocationId) => {
       if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
+        || original.descriptor.inventory.terminationProtocol !== 'owned-claude-exit-close-v1'
         || handoffStopRequested || !toolInvocationId || toolInvocationId.length > 256
         || handoffIds.size >= 32 || handoffIds.has(toolInvocationId)) return held();
       await processHost.beforeFirstPrompt();
@@ -426,7 +430,10 @@ export async function createPersonaNativeOriginalHost(input: {
         expectedOwner: value.descriptor.receipt.owner, expectedLineageDigest: value.descriptor.lineage.digest,
         expectedDescriptorDigest: nativeDigest(value.descriptor), expectedWorkspace: binding.workspace,
         assertReadAuthorized: async () => { if (value !== original || !exited || !closed) return held(); } }); };
-      await update(async reservation => { if (reservation.sdkOutcome !== 'completed') return held(); reservation.state = 'released'; },
+      await update(async reservation => {
+        if (reservation.sdkOutcome !== 'completed' || (reservation.handoff && reservation.handoff.state !== 'confirmed')) return held();
+        reservation.state = 'released';
+      },
         { assertCurrent: terminalCap, assertActive: () => { if (value !== original || !exited || !closed) return held(); } });
     },
   };
