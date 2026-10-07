@@ -95,9 +95,9 @@ for (const [transport, title, endpoint] of [
       expect(environment.fixture.state.snapshot().toolCalls).toBe(0);
       record('actual connection handshake passed without a tool invocation');
       expect((await environment.request('/api/mcp/servers')).some(config => config.name === name)).toBe(false);
-      // The manual handoff prefills initialConfig, so the current draft button
-      // says Update server. Its onAdd handler creates the first saved entry.
-      await configure.getByRole('button', { name: 'Update server', exact: true }).click();
+      // The manual handoff supplies a prefilled draft without an update callback;
+      // saving creates its first persisted configuration.
+      await configure.getByRole('button', { name: 'Add server', exact: true }).click();
       await expect(configure).not.toBeVisible();
       await expect.poll(async () => (await environment.request('/api/mcp/servers'))
         .some(config => config.name === name && config.disabled !== true)).toBe(true);
