@@ -156,6 +156,8 @@ describe('deny-by-default coverage guard', () => {
       'src/app/api/encryption/secure/route.ts',
       // Owner sign-in/logout has independent durable owner authority and must
       // work before encryption unlock; it returns no stored workspace secrets.
+      // First-owner pairing authenticates its private one-time capability while locked.
+      'src/app/api/owner/bootstrap/route.ts',
       'src/app/api/owner/session/route.ts',
       // Owner-authorized transfer restore writes only a fresh namespace under a
       // fresh recipient key; it cannot read or overwrite the locked source.

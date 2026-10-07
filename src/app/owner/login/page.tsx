@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import FirstOwnerPairing from '@/frontend/components/FirstOwnerPairing';
 import { useRouter } from 'next/navigation';
 
 export default function OwnerLoginPage() {
@@ -58,5 +59,6 @@ export default function OwnerLoginPage() {
     </form>
     <button type="button" disabled={busy} onClick={logout} className="mt-4 rounded border px-4 py-2">Sign out</button>
     {message && <p role="status" className="mt-4">{message}</p>}
+    <FirstOwnerPairing />
   </main>;
 }

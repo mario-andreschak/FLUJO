@@ -1,4 +1,5 @@
 import { getExposureMode } from '@/utils/http/exposureMode';
+import { isOwnerBootstrapAvailable } from './ownerBootstrap';
 import { readOwnerPolicy } from './ownerPolicy';
 
 const recovery = 'Owner authentication is required for Network/Public exposure. '
@@ -20,5 +21,8 @@ export function assertOwnerStartup(now = Date.now()): void {
     const policy = readOwnerPolicy(configured.trim());
     if (!policy.credentials.some(record => record.revokedAt === null
       && record.issuedAt <= now && record.expiresAt > now)) throw new Error('Inactive owner authority');
-  } catch { throw new Error(recovery); }
+  } catch {
+    if (isOwnerBootstrapAvailable(now)) return;
+    throw new Error(recovery);
+  }
 }
