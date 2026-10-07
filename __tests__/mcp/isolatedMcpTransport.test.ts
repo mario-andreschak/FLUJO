@@ -6,7 +6,8 @@ import { StdioClientTransport, DEFAULT_INHERITED_ENV_VARS } from '@modelcontextp
 import { StdioClientTransport as BetaStdioClientTransport, DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import { createStdioTransport, createTransport, stdioConfigKey, safelyCloseClient } from '@/backend/services/mcp/connection';
 import { createBetaTransport, createNewBetaClient } from '@/backend/services/mcp/betaClient';
-import { createRootsListHandler } from '@/backend/services/mcp/roots';
+import { createRootsListHandler, unrestrictedHostRoots } from '@/backend/services/mcp/roots';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 import { createIsolatedMcpLaunch, isolatedMcpPolicyDigest, type IsolatedMcpLaunch } from '@/backend/services/security/isolatedMcp';
 import { approvedIsolationDigest, assertMcpIsolationDispatch, getManagedMcpIsolation, assertIsolatedMcpArguments } from '@/backend/services/mcp/isolation';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
@@ -16,6 +17,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import { issueOwnerCredential } from '@/backend/services/security/ownerCredentials';
 import { callTool } from '@/backend/services/mcp/tools';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { getMcpAppRuntimeBrokerSnapshot, revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
 
 jest.mock('@/backend/services/security/isolatedMcp', () => ({
   ...jest.requireActual('@/backend/services/security/isolatedMcp'), createIsolatedMcpLaunch: jest.fn(),
@@ -94,6 +96,24 @@ test('beta client uses documented legacy mode instead of cloning a disposable si
   expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'legacy' });
 });
 
+test.each(['v1', 'beta'])('%s valid isolated factory ignores the broker option without requiring host approval', async era => {
+  const transport = era === 'v1' ? createStdioTransport(config, { enableRuntimeBroker: true }) : createBetaTransport(config, { enableRuntimeBroker: true });
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
+  const parameters = (transport as unknown as { _serverParams: { env: Record<string, string> } })._serverParams;
+  expect(parameters.env.FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN).toBeUndefined();
+  await transport.close();
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
+  revokeMcpAppRuntimeBrokerForServer(config.name);
+});
+
+test.each(['v1', 'beta'])('%s isolated Apps remain unsupported and cannot issue a broker lease', era => {
+  const apps = { ...config, enableMcpApps: true };
+  expect(() => era === 'v1' ? createStdioTransport(apps, { enableRuntimeBroker: true }) : createBetaTransport(apps, { enableRuntimeBroker: true }))
+    .toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  expect(create).not.toHaveBeenCalled();
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
+});
+
 test.each(['v1', 'beta'])('%s start rechecks revocation before SDK spawn', async era => {
   const baseStart = jest.spyOn(era === 'v1' ? StdioClientTransport.prototype : BetaStdioClientTransport.prototype, 'start').mockResolvedValue();
   const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);
@@ -131,13 +151,21 @@ test.each(['missing', 'service error', 'invalid transport', 'disabled', 'thrown 
   expect(resolveGlobalVars).not.toHaveBeenCalled();
 });
 
-test('a current enabled host config retains its normal roots behavior', async () => {
-  delete process.env.FLUJO_MCP_ISOLATION_FILE;
-  const host = { ...config, isolation: undefined };
-  configs.mockResolvedValue([host]);
-  const result = await createRootsListHandler(host)();
-  expect(result.roots.length).toBeGreaterThan(0);
-  expect(result.roots.every(root => root.uri.startsWith('file://'))).toBe(true);
+test('a current explicitly approved host config exposes its declared filesystem roots', async () => {
+  const fixture = installTrustedHostProfile({ name: config.name, roots: unrestrictedHostRoots().map(root => root.uri) });
+  let transport: StdioClientTransport | undefined;
+  try {
+    const host = fixture.config;
+    configs.mockResolvedValue([host]);
+    transport = createStdioTransport(host);
+    const owned = transport;
+    const result = await createRootsListHandler(host, { transport: owned, close: () => owned.close() })();
+    expect(result.roots.length).toBeGreaterThan(0);
+    expect(result.roots.every(root => root.uri.startsWith('file://'))).toBe(true);
+  } finally {
+    await transport?.close();
+    fixture.restore();
+  }
 });
 
 test('a current host config cannot expose roots by omitting its private isolation grant', async () => {
@@ -174,6 +202,29 @@ test('malformed approval/policy and absent configuration fail closed without hos
   expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   delete process.env.FLUJO_MCP_ISOLATION_FILE;
   expect(() => createBetaTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(create).not.toHaveBeenCalled();
+});
+
+test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])('refuses multiply linked %s before either SDK launch', name => {
+  fs.linkSync(process.env[name]!, path.join(directory, `${name}-alias`));
+  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(() => createBetaTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(create).not.toHaveBeenCalled();
+});
+
+test('refuses an approval file that changes during its actual descriptor read', () => {
+  const original = fs.readSync;
+  let changed = false;
+  jest.spyOn(fs, 'readSync').mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    const count = Reflect.apply(original, fs, args) as number;
+    if (!changed && count > 0) {
+      changed = true;
+      fs.appendFileSync(process.env.FLUJO_MCP_ISOLATION_FILE!, ' ');
+    }
+    return count;
+  }) as typeof fs.readSync);
+  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(changed).toBe(true);
   expect(create).not.toHaveBeenCalled();
 });
 
