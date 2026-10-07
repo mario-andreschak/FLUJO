@@ -14,6 +14,7 @@ import {
   Chip,
 } from '@mui/material';
 import { Visibility, VisibilityOff, LockOutlined, LockOpenOutlined } from '@mui/icons-material';
+import CredentialMigrationSettings from './CredentialMigrationSettings';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -360,6 +361,7 @@ export default function EncryptionSettings() {
           )}
         </Alert>
       </Box>
+      {statusReady && isInitialized && <CredentialMigrationSettings />}
     </Box>
   );
 }
