@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import { gzip, gunzip } from 'zlib';
+import { gzip } from 'zlib';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -21,13 +21,13 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { commitFlowDurableMutation, type FlowDurableMutationContext } from './executionAuthority';
 import {
   MODEL_TURN_ARCHIVE_READ_LIMITS,
+  ModelTurnArchiveReadError,
   readBoundedModelTurnFile,
   readBoundedModelTurnJson,
   withModelTurnArchiveRead,
 } from './modelTurnArchiveReadBudget';
 
 const gzipAsync = promisify(gzip);
-const gunzipAsync = promisify(gunzip);
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 let archiveDirOverride: string | undefined;
@@ -445,13 +445,30 @@ async function updateModelDispatchOutcomeWithinMutation(
     await writeAtomic(outcomePath(conversationId, dispatchId), bytes);
     return;
   }
-  // Compatibility path for archives written before v2. New dispatches always
-  // use v2; historical v1 updates retain the old allocation cost.
+  // Historical v1 outcomes require a transcript rewrite. Share the inspection
+  // allowance through replacement so concurrent reads and rewrites cannot each
+  // allocate a separate budget, and reject overload without retaining a queue.
   const file = snapshotPath(conversationId, dispatchId, 1);
-  const compressed = await fs.readFile(file);
-  const snapshot = JSON.parse((await gunzipAsync(compressed)).toString('utf8')) as ModelTurnSnapshot;
-  snapshot.entry.outcome = outcome;
-  await writeAtomic(file, await gzipAsync(Buffer.from(JSON.stringify(snapshot), 'utf8')));
+  await withModelTurnArchiveRead(async () => {
+    const snapshot = await readBoundedModelTurnJson<ModelTurnSnapshot>(file);
+    snapshot.entry.outcome = outcome;
+    const serialized = JSON.stringify(snapshot);
+    const limitError = () => new ModelTurnArchiveReadError(
+      'MODEL_TURN_ARCHIVE_READ_LIMIT',
+      'Legacy model-turn outcome exceeds archive inspection limits. The persisted archive is unchanged.',
+    );
+    if (Buffer.byteLength(serialized, 'utf8') > MODEL_TURN_ARCHIVE_READ_LIMITS.decodedSnapshotBytes) throw limitError();
+    let compressed: Buffer;
+    try {
+      compressed = await gzipAsync(Buffer.from(serialized, 'utf8'), {
+        maxOutputLength: MODEL_TURN_ARCHIVE_READ_LIMITS.compressedSnapshotBytes,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw limitError();
+      throw error;
+    }
+    await writeAtomic(file, compressed);
+  });
 }
 
 export async function readModelTurnSnapshot(

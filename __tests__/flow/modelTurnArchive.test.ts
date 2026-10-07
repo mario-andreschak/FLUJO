@@ -136,11 +136,13 @@ describe('modelTurnArchive', () => {
       modelName: 'Capture model', adapter: 'openai', operation: 'create', attempt: 1,
       canonicalMessages: [], genericWire: [], sdkRequest: { messages: [] },
     });
-    let update!: Promise<void>;
     let settled = false;
+    let startUpdate!: () => void;
+    const requested = new Promise<void>((resolve) => { startUpdate = resolve; });
+    const update = requested.then(() => updateModelDispatchOutcome('capture_conversation', entry.id, 'completed'))
+      .then(() => { settled = true; });
     await withWorkspaceRecoveryCapture(async () => {
-      update = updateModelDispatchOutcome('capture_conversation', entry.id, 'completed')
-        .then(() => { settled = true; });
+      startUpdate();
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(workspaceMutationStatus().blocked).toBe(true);
       expect(settled).toBe(false);
