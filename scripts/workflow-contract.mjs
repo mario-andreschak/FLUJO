@@ -67,7 +67,65 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
   }
 }
 
+function assertInstallerProvenance(workflow) {
+  const paths = workflow?.on?.pull_request?.paths;
+  if (!Array.isArray(paths) || paths.some((file) => file.startsWith('!'))
+      || !['scripts/installer-release.mjs', 'scripts/installer-release.test.mjs'].every((file) => paths.includes(file))) {
+    throw new Error('Installer helper changes must trigger hosted installer validation.');
+  }
+  const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
+  const build = workflow?.jobs?.['installer-build'];
+  const attest = workflow?.jobs?.['installer-attest'];
+  const publish = workflow?.jobs?.['installer-publish'];
+  if (!build || (build.permissions && Object.values(build.permissions).some((value) => value !== 'read' && value !== 'none'))
+      || build.outputs?.artifact_id !== '${{ steps.installer-artifact.outputs.artifact-id }}'
+      || build.outputs?.sha256 !== '${{ steps.installer-digest.outputs.sha256 }}'
+      || attest?.if !== tagOnly || attest.needs !== 'installer-build'
+      || publish?.if !== tagOnly || JSON.stringify(publish.needs) !== JSON.stringify(['installer-build', 'installer-attest'])
+      || attest.permissions?.['id-token'] !== 'write' || attest.permissions?.attestations !== 'write'
+      || attest.permissions?.['artifact-metadata'] !== 'write' || attest.permissions?.contents !== 'read'
+      || publish.permissions?.contents !== 'write' || publish.permissions?.attestations !== 'read'
+      || publish.permissions?.['id-token']) {
+    throw new Error('Installer build/sign/publication authority or original-artifact binding changed.');
+  }
+  const compile = build.steps.findIndex((step) => step.name === 'Compile and validate the installer');
+  const originalDigest = build.steps.findIndex((step) => step.id === 'installer-digest');
+  const upload = build.steps.findIndex((step) => step.id === 'installer-artifact');
+  if (compile < 0 || originalDigest <= compile || upload <= originalDigest
+      || build.steps[originalDigest].run !== 'node scripts/installer-release.mjs digest'
+      || build.steps[originalDigest].if || build.steps[originalDigest]['continue-on-error']) {
+    throw new Error('Installer digest must be emitted from the compiled original before upload.');
+  }
+  for (const job of [attest, publish]) {
+    const download = job.steps.find((step) => step.uses?.startsWith('actions/download-artifact@'));
+    if (job.env?.INSTALLER_RELEASE_DIR !== 'installer/Output'
+        || download?.with?.path !== '${{ env.INSTALLER_RELEASE_DIR }}') {
+      throw new Error('Installer signing/publication must download into the declared workspace artifact directory.');
+    }
+    if (job['continue-on-error'] || download?.with?.['artifact-ids'] !== '${{ needs.installer-build.outputs.artifact_id }}'
+        || job.env?.EXPECTED_INSTALLER_SHA256 !== '${{ needs.installer-build.outputs.sha256 }}'
+        || job.steps.some((step) => /choco install|ISCC\.exe|npm run build/.test(step.run ?? ''))) {
+      throw new Error('Installer signing/publication must reuse the original artifact without rebuilding.');
+    }
+  }
+  const steps = attest.steps;
+  const gate = steps.findIndex((step) => step.run === 'node scripts/require-release-verification.mjs installer');
+  const bytes = steps.findIndex((step) => step.run === 'node scripts/installer-release.mjs validate');
+  const signature = steps.findIndex((step) => step.uses?.startsWith('actions/attest@'));
+  const verify = publish.steps.findIndex((step) => step.run === 'node scripts/installer-release.mjs verify-signatures');
+  const recheck = publish.steps.findIndex((step) => step.run === 'node scripts/require-release-verification.mjs installer');
+  const attach = publish.steps.findIndex((step) => step.uses?.startsWith('softprops/action-gh-release@'));
+  const mandatory = [steps[gate], steps[bytes], steps[signature], publish.steps[verify], publish.steps[recheck], publish.steps[attach]];
+  if (gate < 0 || bytes <= gate || signature <= bytes || verify < 0 || recheck <= verify || attach <= recheck
+      || mandatory.some((step) => !step || step.if || step['continue-on-error'])
+      || steps[signature].with?.['subject-checksums'] !== '${{ env.INSTALLER_RELEASE_DIR }}/installer-SHA256SUMS'
+      || publish.steps[attach].with?.fail_on_unmatched_files !== true) {
+    throw new Error('Installer signing and publication must require fresh main checks, original bytes and official signatures.');
+  }
+}
+
 export function assertWorkflowContract(workflows) {
+  assertInstallerProvenance(workflows['installer.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
   const docsWorkflow = workflows['scorecard-source.yml'];
