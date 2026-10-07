@@ -586,7 +586,7 @@ async function readNativeArchiveFile(file: string, maxBytes: number, signal?: Ab
   signal?.throwIfAborted();
   // Open first with no-follow and validate the authoritative descriptor before
   // reading any body bytes. A pathname check is not permission to open later.
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const stat = await handle.stat({ bigint: true });
     const current = await fs.lstat(file, { bigint: true });

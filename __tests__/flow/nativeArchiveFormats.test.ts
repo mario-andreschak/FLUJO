@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -40,6 +41,15 @@ describe('private native Original archive format composition', () => {
     await updateModelDispatchOutcome(f.entry.conversationId, f.entry.id, 'completed');
     expect((await f.read()).entry.outcome).toBe('completed');
     expect(await fs.readFile(f.current)).toEqual(before);
+  });
+  it('opens the authoritative descriptor with nonblocking and no-follow flags', async () => {
+    const f = await fixture();
+    const opening = jest.spyOn(fs, 'open');
+    try {
+      await f.read();
+      expect(opening).toHaveBeenCalledWith(f.current,
+        constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
+    } finally { opening.mockRestore(); }
   });
   it('accepts historical V1 only when V2 is absent and both format identities agree', async () => {
     const f = await fixture();

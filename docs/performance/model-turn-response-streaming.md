@@ -38,3 +38,8 @@ provider endurance or deployment claim. The HTTP response remains JSON compatibl
 The private native archive reader separately opens before pathname checks, validates
 the authoritative descriptor before body allocation/read, and rechecks descriptor and
 pathname metadata afterward. Its stricter private format and byte limits remain.
+Its descriptor open uses nonblocking flags so a FIFO cannot stall before the regular
+file check. Real POSIX snapshot and outcome FIFO children must refuse without payload
+reads, close their descriptors, and release admission; a deliberately blocking control
+must reach the bounded child deadline. These fixtures run in a network-disabled local
+Linux container separately from the Windows suites.
