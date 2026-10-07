@@ -36,6 +36,7 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
+  serverExternalPackages: ['@openai/codex-sdk'],
   // Runtime workspace data can contain Windows junctions such as the legacy
   // Content.IE5 cache link. It is never a deployable application dependency,
   // so keep it out of Next's output traces.
