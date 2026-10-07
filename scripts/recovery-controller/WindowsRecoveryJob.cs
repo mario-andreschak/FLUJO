@@ -333,6 +333,9 @@ public static class WindowsRecoveryJob {
         return ValidateRoles(receipt,expectedNodeRoles,false);
     }
     static NaturalRoles ValidateRoles(Receipt receipt,int expectedNodeRoles,bool natural) {
+        // Role accounting cannot substitute for observed pipe EOF and owned-job closure after refusal.
+        if(!receipt.StdoutClosed || !receipt.StderrClosed || !receipt.JobClosureVerified)
+            throw new InvalidOperationException("Control role pipe/job cleanup refused");
         if(receipt.ControlImages.Count!=2 || !receipt.RetainedTerminalHandlesClosed || receipt.RetainedTerminalHandleCount!=receipt.Births.Count || receipt.TotalProcesses!=receipt.Births.Count || receipt.ActiveProcesses!=0
             || receipt.Births.Count>expectedNodeRoles*2)
             throw new InvalidOperationException("Natural role full accounting refused");
@@ -441,7 +444,7 @@ public static class WindowsRecoveryJob {
                 try { using(var log=new FileStream(Path.Combine(outputDirectory,file),FileMode.CreateNew,FileAccess.Write,FileShare.Read)) {
                     var bytes=new byte[4096]; int read;
                     while((read=stream.Read(bytes,0,bytes.Length))>0) {
-                        if(Interlocked.Add(ref result.OutputBytes,read)>OutputLimit) { fail("original-output-budget-exceeded"); return; }
+                        if(Interlocked.Add(ref result.OutputBytes,read)>OutputLimit) { fail("original-output-budget-exceeded"); continue; }
                         log.Write(bytes,0,read);
                     } log.Flush(true); if(isOut)result.StdoutClosed=true;else result.StderrClosed=true;
                 } } catch {fail("original-pipe-or-log-failed");}
@@ -478,6 +481,7 @@ public static class WindowsRecoveryJob {
                 if(clock.ElapsedMilliseconds>=deadlineMs)fail("outer-monotonic-deadline");
                 if(result.RootExitObserved) {census=Sample(job);result.TotalProcesses=census.Total;result.ActiveProcesses=census.Active;}
                 if(result.RootExitObserved && census.Active==0 && result.StdoutClosed && result.StderrClosed
+                    && (result.Failure==null || result.ForcedJobTermination)
                     && result.ActiveZeroObserved && AllBirthsTerminal(result,terminalWatches) && result.Births.Count==census.Total) {result.JobClosureVerified=true;break;}
                 if(rootExitAt>=0 && clock.ElapsedMilliseconds-rootExitAt>=5000)fail("original-job-or-pipes-closure-unverified");
                 if(result.Failure!=null && failedAt<0) {failedAt=clock.ElapsedMilliseconds;result.ForcedJobTermination=true;Check(TerminateJobObject(job,1),"terminate only original owned job after failure");}
