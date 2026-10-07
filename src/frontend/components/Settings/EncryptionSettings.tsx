@@ -217,6 +217,7 @@ export default function EncryptionSettings() {
       </Box>
 
       {!statusReady ? null : isOperatorEncryption ? <Alert severity="info">{t('settings.encryption.operatorHelp')}</Alert>
+        : isInitialized && !isUserEncryption ? <Alert severity="warning">{t('settings.encryption.migrationRequired')}</Alert>
         : !isInitialized || !isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3, mb: 4 }}>
           <Typography variant="subtitle1" gutterBottom fontWeight="bold">
