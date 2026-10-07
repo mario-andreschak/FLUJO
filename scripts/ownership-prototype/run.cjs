@@ -126,6 +126,32 @@ async function run() {
       assert.deepEqual(observed.map(message => message.result.workspaceId), ['owner_a_workspace', 'owner_b_workspace']);
       assert.ok(observed.every(message => message.result.status === 'observed'));
     });
+    await check('semantic policy revision fences existing job and stream while fresh access and other owner remain valid', async () => {
+      const job = await (await request(a, `/background/${a.id}`, { method: 'POST' })).json();
+      const response = await request(a, `/stream/${a.id}`);
+      assert.equal(response.status, 200);
+      const reader = response.body.getReader();
+      assert.equal((await reader.read()).done, false);
+      // Whitespace alone is not a semantic policy change.
+      await fs.writeFile(path.join(a.root, 'owner-policy.json'), JSON.stringify(a.policy, null, 2), { mode: 0o600 });
+      assert.equal((await reader.read()).done, false);
+      a.policy.credentials[1].expiresAt -= 1000;
+      const temporary = path.join(a.root, `policy.${randomUUID()}.tmp`);
+      await fs.writeFile(temporary, JSON.stringify(a.policy), { mode: 0o600 });
+      await fs.rename(temporary, path.join(a.root, 'owner-policy.json'));
+      const result = a.wait('job-result');
+      a.child.send({ type: 'release', jobId: job.jobId });
+      assert.equal((await result).result.status, 'revoked');
+      let deadline;
+      try {
+        await Promise.race([
+          (async () => { while (!(await reader.read()).done) { /* Observe actual EOF. */ } })(),
+          new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Changed-policy stream did not close')), 3000); }),
+        ]);
+      } finally { clearTimeout(deadline); await reader.cancel(); }
+      assert.equal((await request(a, '/resources')).status, 200, 'The active credential still admits fresh requests.');
+      assert.equal((await request(b, `/resources/${b.id}`)).status, 200);
+    });
     await check('revocation fences accepted background work and closes its existing stream', async () => {
       const job = await (await request(a, `/background/${a.id}`, { method: 'POST' })).json();
       const response = await request(a, `/stream/${a.id}`);
