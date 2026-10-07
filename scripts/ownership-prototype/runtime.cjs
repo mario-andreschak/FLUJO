@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
-const { authenticateOwnerBearer, ownerHasScopes, ownerPolicySchema } = require('./auth-source.cjs');
+const { authenticateOwnerBearer, ownerHasScopes, ownerPolicySchema, ownerPolicyRevision } = require('./auth-source.cjs');
 const { readBoundedFileSync } = require('../read-bounded-file.cjs');
 
 const root = process.argv[2];
@@ -23,7 +23,7 @@ function resolve(request) {
     if (!principal) return { error: 401 };
     if (!ownerHasScopes(principal, scopes)) return { error: 403 };
     return { principal: Object.freeze({ ...principal, scopes: Object.freeze([...principal.scopes]),
-      tenantId: manifest.tenantId, workspaceId: manifest.workspaceId }) };
+      tenantId: manifest.tenantId, workspaceId: manifest.workspaceId, policyRevision: ownerPolicyRevision(policy) }) };
   } catch { return { error: 503 }; }
 }
 function owned(id) {
@@ -42,7 +42,8 @@ function answer(response, status, value) {
 function current(request, initial) {
   const result = resolve(request);
   return !result.error && result.principal.ownerId === initial.ownerId
-    && result.principal.credentialId === initial.credentialId;
+    && result.principal.credentialId === initial.credentialId
+    && result.principal.policyRevision === initial.policyRevision;
 }
 async function serialized(id, task) {
   const previous = queues.get(id) || Promise.resolve();
