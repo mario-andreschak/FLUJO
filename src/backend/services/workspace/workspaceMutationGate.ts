@@ -74,7 +74,7 @@ async function checkParticipant(workspace: string, participant: MutationParticip
 /** Revalidate an admitted write after awaits and immediately before publication. */
 export async function assertWorkspaceMutationOwned(): Promise<void> {
   const workspace = normalizeWorkspaceName(getCurrentWorkspace());
-  const participant = mutationContext.getStore()?.participants.get(workspace);
+  const participant = mutationContext.getStore()?.participants?.get(workspace);
   if (!participant) throw contextError(false, 'has no admitted participant');
   await checkParticipant(workspace, participant);
 }
@@ -137,17 +137,22 @@ export async function withWorkspaceMutation<T>(
 ): Promise<T> {
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
+  // A hot-reloaded process can retain the predecessor's workspaces-only store.
+  // Its inherited Set is never authority to join a current admission.
+  if (current && !current.participants) throw contextError(false, 'context predates the current admission protocol');
   if (current?.readCaptures?.has(normalizedWorkspace)) throw contextError(false, 'cannot write from a read capture');
-  const inherited = current?.participants.get(normalizedWorkspace);
+  const inherited = current?.participants?.get(normalizedWorkspace);
   if (inherited) {
-    await checkParticipant(normalizedWorkspace, inherited);
-    // Ownership verification can yield. Never create a child from a retired token.
-    if (!inherited.live) throw contextError(!!inherited.admission.recovery, 'context has finished');
-    return participate(normalizedWorkspace, inherited.admission, async participant => {
-      await checkParticipant(normalizedWorkspace, participant);
-      const result = await task();
-      await checkParticipant(normalizedWorkspace, participant);
-      return result;
+    return runWithWorkspace(normalizedWorkspace, async () => {
+      await checkParticipant(normalizedWorkspace, inherited);
+      // Ownership verification can yield. Never create a child from a retired token.
+      if (!inherited.live) throw contextError(!!inherited.admission.recovery, 'context has finished');
+      return participate(normalizedWorkspace, inherited.admission, async participant => {
+        await checkParticipant(normalizedWorkspace, participant);
+        const result = await task();
+        await checkParticipant(normalizedWorkspace, participant);
+        return result;
+      });
     });
   }
 
@@ -260,7 +265,8 @@ export async function beginWorkspaceSnapshotBoundary(
   signal?.throwIfAborted();
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
-  if (current?.participants.has(normalizedWorkspace)) {
+  if (current && !current.participants) throw contextError(false, 'context predates the current admission protocol');
+  if (current?.participants?.has(normalizedWorkspace)) {
     throw new Error('A workspace snapshot cannot begin inside a workspace mutation.');
   }
 
