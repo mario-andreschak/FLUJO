@@ -222,10 +222,66 @@ run so fixed report paths cannot overwrite earlier evidence. Output uses
 `feature-first-use-artifacts/` and `test-results/features-first-use/`; the
 temporary profile and application logs remain available for review.
 
-The current fixture remains version 1.0.0 with its actual definition digest and
-current capabilities. These cases do not qualify Apps/refresh, stdio first use,
+The fixture is version 1.1.0 and advertises the MCP App resource MIME type; its
+definition digest includes these capabilities. These first-use cases do not qualify Apps/refresh, stdio first use,
 seven-language browser retention, the public Firecrawl form, a genuine model or
 agent, external reuse, human/linguistic/screen-reader review, upgrade or A-.
-The separately pending #617/#625/#654 harnesses and #680 real-FIFO control retain
-their own source and execution scope. Historical #693 counts and failures are
+The restored inspector and public-form equipment below retain the distinct
+#617/#625 scopes and #654 startup isolation. The #680 real-FIFO control retains
+its own source and execution scope. Historical #693 counts and failures are
 kept separately in the [audit record](../../docs/audits/scorecard-563/connection-input-labels.md).
+
+## Inspector, App, locale and public-form checks
+
+`playwright.features.config.mjs` runs four browser cases: inspector retention
+and seven rendered locales at desktop 1280x720 and 360x800. Each project starts
+an anonymous profile with the HTTP/SSE fixtures selected after joining backend
+initialization and disabling existing defaults through typed updates. Runtime
+dotenv lookup is also bound to that profile. The final enabled names must still
+match the fixtures; this does not establish native process confinement.
+
+The inspector reaches all 128 tools by keyboard, verifies exact first/last-page
+arguments and two accepted calls, observes real sandboxed App initialization,
+and retains the same draft DOM nodes, result and App mount through delayed,
+failed and cyclic refreshes. Invalid JSON blocks Test. Successful empty discovery
+clears the selector, and switching servers clears the prior draft/result. The
+locale case opens the guide and tool selector in all seven supported languages
+without another tool call; it checks rendered labels rather than translation
+quality or human acceptance.
+
+`playwright.features-online.config.mjs` is separately opt-in. Its two cases
+discover the public keyless Firecrawl schema at `https://mcp.firecrawl.dev/v2/mcp`
+and edit the actual `firecrawl_scrape` form. Nine five-second samples cross the
+former 30-second refresh boundary, then explicit refresh checks the same DOM
+nodes, drafts, focus and selection. No credentials are supplied and Test is
+never pressed. Browser execution POSTs are refused before reaching FLUJO; any
+attempt fails the case. This guard is not a global upstream tool counter and
+the cases do not claim a successful scrape or UI connection/save acceptance.
+
+```powershell
+node --test scripts/feature-surface-acceptance/fixture-server.test.mjs scripts/feature-surface-acceptance/browser-environment.test.mjs
+$env:FEATURE_BROWSER_APP_DIR = 'C:/absolute/current/compiled-or-installed/flujo-ai'
+$env:FEATURE_BROWSER_SOURCE_SHA = 'identified-producer-source'
+$env:FEATURE_BROWSER_CHROMIUM_EXECUTABLE = 'C:/absolute/chromium-headless-shell.exe'
+$env:FEATURE_BROWSER_OUTPUT_DIR = 'C:/absolute/new-unique-inspector-attempt'
+node node_modules/@playwright/test/cli.js test --config=playwright.features.config.mjs
+$env:FEATURE_BROWSER_OUTPUT_DIR = 'C:/absolute/new-unique-public-form-attempt'
+node node_modules/@playwright/test/cli.js test --config=playwright.features-online.config.mjs
+```
+
+Both suites use one worker, zero retries and the original per-case/action limits.
+Use a new output directory and short owned TEMP/TMP directory for every attempt.
+Reports, receipts, screenshots, traces and application logs remain available
+after cleanup. The private IPC ownership handshake precedes API requests; exit
+and output drainage must complete, and a forced stop remains a failure. Recorded
+package/build metadata and a declared producer SHA do not independently attest
+source correspondence or installed-launcher acceptance.
+
+Validation on 2026-10-07: all 25 affected native checks, all four inspector/locale
+cases and both public Firecrawl form cases passed. Browser runs used the selected
+3.46.3 compiled candidate declared at `cc69b5e35f09d5cb49383e3cc0c1e79e676d77e0`,
+BUILD_ID `IhXG4rnNAIRBPnLrQ-XFO`, with Chromium at both widths. The two inspector
+profiles each recorded exactly two dispatched/accepted synthetic calls. The
+public cases recorded zero browser tester-dispatch attempts. All four owned
+application epochs exited 143, drained their output and required no forced stop.
+Earlier failed attempts and reports remain retained separately.

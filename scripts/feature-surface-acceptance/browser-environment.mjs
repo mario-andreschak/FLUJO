@@ -35,7 +35,7 @@ export function fixtureRuntimeEnvironment({ dataDir, baseURL, fixtureUrl, sandbo
   if (!Number.isInteger(sandboxPort) || sandboxPort < 1024 || sandboxPort > 65535) throw new Error('Expected an owned sandbox port.');
   const allowed = new Set(['PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE', 'TEMP', 'TMP']);
   const env = Object.fromEntries(Object.entries(hostEnvironment).filter(([key]) => allowed.has(key.toUpperCase())));
-  return { ...env, FLUJO_DATA_DIR: dataDir, FLUJO_BASE_URL: baseURL,
+  return { ...env, FLUJO_DATA_DIR: dataDir, FLUJO_RUNTIME_ENV_DIR: dataDir, FLUJO_BASE_URL: baseURL,
     FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort), FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1',
     FLUJO_TELEMETRY_URL: `${fixtureUrl}/disabled-telemetry`, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' };
 }

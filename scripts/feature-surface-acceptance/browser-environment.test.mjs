@@ -46,6 +46,7 @@ test('runtime environment carries system paths but no inherited provider, owner,
   assert.equal(env.Path, 'synthetic-path');
   assert.equal(env.SystemRoot, 'synthetic-system');
   assert.equal(env.FLUJO_DATA_DIR, 'synthetic-data');
+  assert.equal(env.FLUJO_RUNTIME_ENV_DIR, 'synthetic-data');
   assert.equal(env.FLUJO_MCP_APP_SANDBOX_PORT, '4318');
   assert.equal(env.FLUJO_MCP_APP_SANDBOX_HOST, '127.0.0.1');
   assert.ok(!('FLUJO_MCP_APP_SANDBOX_ALLOW_ALL' in env));

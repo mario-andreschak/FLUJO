@@ -15,7 +15,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 // Synthetic, read-only echo tools. No model, browser, file, shell or provider calls.
-export const FIXTURE_VERSION = '1.0.0';
+export const FIXTURE_VERSION = '1.1.0';
 export const APP_URI = 'ui://feature-surface/receipt';
 export const RECEIPT_URI = 'fixture://feature-surface/receipt';
 const PAGE_SIZE = 32;
@@ -81,8 +81,11 @@ export const TOOL_DEFINITIONS = Array.from({ length: 128 }, (_, index) => ({
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   _meta: { ui: { resourceUri: APP_URI, visibility: ['model', 'app'] } },
 }));
+const SERVER_CAPABILITIES = { tools: {}, resources: {}, prompts: {}, extensions: {
+  'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] },
+} };
 export const DEFINITION_SHA256 = hash(JSON.stringify({
-  version: FIXTURE_VERSION, tools: TOOL_DEFINITIONS, app: APP_HTML,
+  version: FIXTURE_VERSION, capabilities: SERVER_CAPABILITIES, tools: TOOL_DEFINITIONS, app: APP_HTML,
 }));
 const validator = new AjvJsonSchemaValidator();
 const validators = new Map(TOOL_DEFINITIONS.map(tool => [tool.name, validator.getValidator(tool.inputSchema)]));
@@ -141,7 +144,7 @@ export function createFixtureState() {
 
 export function createFixtureServer(state) {
   const server = new Server({ name: 'feature-surface-fixture', version: FIXTURE_VERSION },
-    { capabilities: { tools: {}, resources: {}, prompts: {} } });
+    { capabilities: SERVER_CAPABILITIES });
   server.setRequestHandler(ListToolsRequestSchema, request => state.list(request.params?.cursor));
   server.setRequestHandler(CallToolRequestSchema, request => state.call(request.params.name, request.params.arguments));
   server.setRequestHandler(ListResourcesRequestSchema, () => ({ resources: [
