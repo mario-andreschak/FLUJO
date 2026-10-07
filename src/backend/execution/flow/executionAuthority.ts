@@ -1,6 +1,6 @@
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { FlowExecutionAuthority } from './types';
-import { inheritNativeOriginalAuthority } from './handlers/nativeOriginalHost';
+import { inheritNativeOriginalAuthority } from './nativeOriginalAuthorityInheritance';
 import { assertExecutionExtensionCurrent, commitExecutionExtensionMutation, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 /**

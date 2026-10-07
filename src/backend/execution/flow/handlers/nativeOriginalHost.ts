@@ -23,10 +23,7 @@ const registryRoot = globalThis as typeof globalThis & { __flujoNativeOriginalAu
 const bindings = registryRoot.__flujoNativeOriginalAuthorities ??= new WeakMap<object, Binding>();
 /** Causal wrappers keep the root's hold. A child is not thereby accepted as a
  * root Original; createPersonaNativeOriginalHost rejects its different tuple. */
-export function inheritNativeOriginalAuthority(parent: FlowExecutionAuthority, child: FlowExecutionAuthority): void {
-  const binding = bindings.get(parent);
-  if (binding) bindings.set(child, binding);
-}
+export { inheritNativeOriginalAuthority } from '../nativeOriginalAuthorityInheritance';
 const held = (): never => { throw new Error('Native Original authority or reservation is held.'); };
 const positive = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
