@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { NextRequest } from 'next/server';
 import { POST as exportRoute } from '@/app/api/credential-transfer/route';
 import { POST as restoreRoute } from '@/app/api/credential-transfer/restore/route';
+import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { issueOwnerCredential } from '@/backend/services/security/ownerCredentials';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,7 +37,7 @@ beforeEach(async () => {
   const records = {
     encryption_key: metadata,
     models: [{ id: 'new', ApiKey: `encrypted:${seal('v2-canary', ring.activeKey, 'flujo:secret:v2')}` }, { id: 'legacy', ApiKey: oldCipher }, { id: 'failed', ApiKey: 'encrypted_failed:plaintext-canary' }],
-    mcp_servers: [{ name: 'server', transport: 'streamable', oauthTokens: { access_token: 'oauth-canary' }, headers: { 'X-Legacy': 'header-canary' }, env: { UNMARKED: { value: 'env-canary', metadata: { isSecret: false } } } }],
+    mcp_servers: { server: { transport: 'streamable', oauthTokens: { access_token: 'oauth-canary' }, headers: { 'X-Legacy': 'header-canary' }, env: { UNMARKED: { value: 'env-canary', metadata: { isSecret: false } } } } },
     global_env_vars: { UNMARKED: 'global-canary', LEGACY_ENCRYPTED: `encrypted:${seal('global-legacy-envelope-canary', ring.activeKey, 'flujo:secret:v2')}`, MARKED: { value: `encrypted:${seal('global-v2-canary', ring.activeKey, 'flujo:secret:v2')}`, metadata: { isSecret: true } } },
     registry_account: { accessToken: 'registry-canary', refreshToken: 'encrypted_failed:refresh-canary' },
   };
@@ -75,8 +76,11 @@ test('mixed v1/v2/plaintext credentials restore under a distinct recipient key w
   const models = await readStore('recipient', 'models');
   const recover = (value: string) => open(value.slice('encrypted:'.length), recipientRing.activeKey, 'flujo:secret:v2');
   expect(models.map((model: { ApiKey: string }) => recover(model.ApiKey))).toEqual(['v2-canary', 'legacy-canary', 'plaintext-canary']);
-  const mcp = (await readStore('recipient', 'mcp_servers'))[0];
+  const mcp = (await readStore('recipient', 'mcp_servers')).server;
   expect(mcp.disabled).toBe(true);
+  const loaded = await runWithWorkspace('recipient', () => loadServerConfigs());
+  expect(Array.isArray(loaded)).toBe(true);
+  expect(loaded).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'server', disabled: true })]));
   expect(recover(mcp.oauthTokens.access_token)).toBe('oauth-canary');
   expect(recover(mcp.headers['X-Legacy'].value)).toBe('header-canary');
   expect(mcp.headers['X-Legacy'].metadata.isSecret).toBe(true);
@@ -166,7 +170,11 @@ test('actual export route requires owner secret authority, loopback, confirmatio
   const response = await exportRoute(exportRequest(headers));
   expect(response.status).toBe(200);
   expect(response.headers.get('cache-control')).toBe('no-store');
-  expect(Buffer.from(await response.arrayBuffer()).toString()).not.toContain('canary');
+  const binary = Buffer.from(await response.arrayBuffer());
+  expect(binary.toString()).not.toContain('canary');
+  const payload = await openRecipientTransfer(binary, recipientPassword);
+  expect(JSON.parse(payload.toString()).records.mcp_servers).toHaveProperty('server');
+  payload.fill(0);
   const insufficient = await operatorHeaders(['control:admin']);
   expect((await exportRoute(exportRequest(insufficient))).status).toBe(403);
   const restored = await operatorHeaders();
@@ -195,4 +203,33 @@ test('actual restore route creates a fresh private workspace while source remain
   expect(response.headers.get('cache-control')).toBe('no-store');
   expect(await response.json()).toEqual({ success: true, workspace: 'http-recipient', encryptionProtection: 'passphrase' });
   expect(await fs.readFile(path.join(getWorkspaceDir('default-workspace'), 'db/encryption_key.json'))).toEqual(sourceBytes.get('encryption_key'));
+});
+
+test('legacy MCP array records normalize to production keyed maps while malformed entries fail closed', async () => {
+  const file = path.join(getWorkspaceDir('default-workspace'), 'db/mcp_servers.json');
+  await fs.writeFile(file, JSON.stringify([{ name: 'legacy-array', oauthTokens: { access_token: 'legacy-array-canary' } }]));
+  await restoreCredentialTransfer(await exported(), recipientPassword, 'legacy-array-recipient', localPassword);
+  const records = await readStore('legacy-array-recipient', 'mcp_servers');
+  expect(Array.isArray(records)).toBe(false);
+  expect(records['legacy-array'].disabled).toBe(true);
+  const loaded = await runWithWorkspace('legacy-array-recipient', () => loadServerConfigs());
+  expect(loaded).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'legacy-array', disabled: true })]));
+  const ring = await unwrapKeyring(await readStore('legacy-array-recipient', 'encryption_key'), localPassword);
+  expect(open(records['legacy-array'].oauthTokens.access_token.slice('encrypted:'.length), ring.activeKey, 'flujo:secret:v2')).toBe('legacy-array-canary');
+  await fs.writeFile(file, '{"invalid":"not-a-config"}');
+  await expect(exported()).rejects.toThrow();
+  expect(await fs.readFile(file, 'utf8')).toBe('{"invalid":"not-a-config"}');
+});
+
+test.each([
+  { records: [{ name: 'duplicate' }, { name: 'duplicate' }] },
+  { records: [{ name: '' }] },
+  { records: [{ name: '   ' }] },
+  { records: [{}] },
+])('legacy arrays with ambiguous or missing names refuse export without source changes: %j', async ({ records }) => {
+  const file = path.join(getWorkspaceDir('default-workspace'), 'db/mcp_servers.json');
+  const bytes = Buffer.from(JSON.stringify(records));
+  await fs.writeFile(file, bytes);
+  await expect(exported()).rejects.toThrow();
+  expect(await fs.readFile(file)).toEqual(bytes);
 });
