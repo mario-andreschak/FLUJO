@@ -3,16 +3,7 @@ jest.mock("@/backend/utils/resolveGlobalVars", () => ({
 }));
 
 jest.mock("@/backend/services/mcp/config", () => ({
-  loadServerConfigs: jest.fn(async () => [
-    {
-      name: "gated-server",
-      transport: "stdio",
-      command: "node",
-      args: ["server.js"],
-      env: {},
-      disabled: false,
-    },
-  ]),
+  loadServerConfigs: jest.fn(),
   saveConfig: jest.fn(async () => ({ success: true })),
 }));
 
@@ -31,6 +22,9 @@ jest.mock("@/backend/services/mcp/connection", () => ({
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { MCPService } from "@/backend/services/mcp";
+import { loadServerConfigs } from "@/backend/services/mcp/config";
+import { attachTrustedHost } from "@/backend/services/mcp/trustedHost";
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 import { callTool as dispatchTool } from "@/backend/services/mcp/tools";
 import { registerExternalAuthorizationClient } from "@/backend/services/mcp/externalAuthorization";
 import {
@@ -39,9 +33,12 @@ import {
 } from "mcp-stdio-oauth/protocol";
 
 const dispatchToolMock = dispatchTool as unknown as jest.Mock;
+let profile: ReturnType<typeof installTrustedHostProfile>;
+let transport: { start(): Promise<void>; close(): Promise<void> };
 
 function connectedClient(state: string): Client {
   const client = {
+    transport,
     getServerCapabilities: () => ({
       extensions: {
         [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY,
@@ -64,9 +61,18 @@ function connectedClient(state: string): Client {
 }
 
 beforeEach(() => {
+  profile = installTrustedHostProfile({ name: 'gated-server' });
+  jest.mocked(loadServerConfigs).mockResolvedValue([profile.config]);
+  transport = { start: async () => undefined, close: async () => undefined };
+  attachTrustedHost(transport, profile.config);
   global.__mcp_clients?.clear();
   global.__mcp_external_authorization_status?.clear();
   dispatchToolMock.mockClear();
+});
+
+afterEach(async () => {
+  await transport.close();
+  profile.restore();
 });
 
 describe("MCPService external authorization dispatch gate", () => {

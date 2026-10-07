@@ -45,6 +45,8 @@ jest.mock('@/backend/services/mcp/connection', () => ({
 }));
 
 import { MCPService } from '@/backend/services/mcp';
+import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 
 const makeClient = () => ({
   connect: jest.fn(async () => undefined),
@@ -55,7 +57,7 @@ const makeClient = () => ({
 beforeEach(() => {
   loadServerConfigsMock.mockReset();
   loadServerConfigsMock.mockResolvedValue([
-    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
+    { name: 'srv', transport: 'streamable', serverUrl: 'https://resilience.example.test/mcp', disabled: false },
   ]);
   createNewClientMock.mockReset();
   callToolMock.mockReset();
@@ -108,16 +110,14 @@ describe('MCPService.callTool', () => {
   });
 
   it('stamps a created ticket only from the verified shipped model invocation', async () => {
-    loadServerConfigsMock.mockResolvedValue([{
-      name: 'renamed-control-plane',
-      transport: 'stdio',
-      command: 'node',
-      args: ['mcp-servers/flujo/dist/index.js'],
-      env: {},
-      disabled: false,
-      source: { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' },
-    }]);
-    createNewClientMock.mockReturnValue(makeClient());
+    const profile = installTrustedHostProfile({ name: 'renamed-control-plane' });
+    profile.config.source = { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' };
+    profile.approve();
+    loadServerConfigsMock.mockResolvedValue([profile.config]);
+    const transport = { start: async () => undefined, close: async () => undefined };
+    attachTrustedHost(transport, profile.config);
+    createNewClientMock.mockReturnValue({ ...makeClient(), transport });
+    try {
     const svc = new MCPService();
     await svc.connectServer('renamed-control-plane');
     callToolMock.mockResolvedValueOnce({
@@ -145,5 +145,9 @@ describe('MCPService.callTool', () => {
       conversation_id: 'conversation-current',
     });
     expect(stampTrustedTicketMock).toHaveBeenCalledWith('ticket-1', 'conversation-current');
+    } finally {
+      await transport.close();
+      profile.restore();
+    }
   });
 });
