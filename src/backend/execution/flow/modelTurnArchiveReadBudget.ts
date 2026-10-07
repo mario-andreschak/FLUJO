@@ -28,12 +28,41 @@ export class ModelTurnArchiveReadError extends Error {
 }
 
 const runtime = globalThis as typeof globalThis & {
-  __flujoModelTurnArchiveReads?: { active: number; rejected: number; allocated?: number };
+  __flujoModelTurnArchiveReads?: { active: number; rejected: number; allocated?: number; cleanupFailures?: number; quarantined?: number };
   __flujoModelTurnArchiveAllocationScope?: AsyncLocalStorage<{ bytes: number }>;
 };
 const admission = runtime.__flujoModelTurnArchiveReads ??= { active: 0, rejected: 0 };
 admission.allocated ??= 0;
 const allocationScope = runtime.__flujoModelTurnArchiveAllocationScope ??= new AsyncLocalStorage<{ bytes: number }>();
+
+export class ModelTurnArchiveCleanupError extends Error {
+  readonly code = 'MODEL_TURN_ARCHIVE_CLEANUP_FAILED';
+  constructor(readonly settled: Promise<void>, cause: unknown) {
+    super('Model-turn response resource cleanup failed.', { cause });
+  }
+}
+
+export function recordModelTurnArchiveCleanupFailure() {
+  admission.cleanupFailures = Math.min(Number.MAX_SAFE_INTEGER, (admission.cleanupFailures ?? 0) + 1);
+}
+
+/** A failed close retains its original admission; no new read may reuse it. */
+export function retryModelTurnArchiveCleanup(close: () => Promise<void>): Promise<void> {
+  admission.quarantined = (admission.quarantined ?? 0) + 1;
+  return new Promise<void>(resolve => {
+    let attempts = 0;
+    const retry = async () => {
+      try { await close(); admission.quarantined!--; resolve(); }
+      catch {
+        recordModelTurnArchiveCleanupFailure();
+        if (++attempts < 8) setTimeout(retry, 500).unref();
+        // At most four original admissions/handles remain quarantined if the
+        // bounded retry cannot close them. Never report their cleanup complete.
+      }
+    };
+    setTimeout(retry, 500).unref();
+  });
+}
 
 function allocationLimit() {
   return new ModelTurnArchiveReadError('MODEL_TURN_ARCHIVE_READ_LIMIT',
@@ -82,10 +111,33 @@ export async function withModelTurnArchiveRead<T>(task: () => Promise<T>, signal
   }
 }
 
+/** Transfer readiness to the route while keeping admission until body cleanup. */
+export function withModelTurnArchiveResponse(
+  prepare: () => Promise<{ body: ReadableStream<Uint8Array>; completed: Promise<void> } | undefined>,
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array> | undefined> {
+  let ready!: (body: ReadableStream<Uint8Array> | undefined) => void;
+  let refused!: (error: unknown) => void;
+  const response = new Promise<ReadableStream<Uint8Array> | undefined>((resolve, reject) => { ready = resolve; refused = reject; });
+  void withModelTurnArchiveRead(async () => {
+    let prepared;
+    try { prepared = await prepare(); }
+    catch (error) {
+      refused(error);
+      if (error instanceof ModelTurnArchiveCleanupError) await error.settled;
+      throw error;
+    }
+    ready(prepared?.body);
+    if (prepared) await prepared.completed;
+  }, signal).catch(refused);
+  return response;
+}
+
 /** Counters and declared limits only; never conversation ids, paths or payloads. */
 export function getModelTurnArchiveReadDiagnostics() {
   return { activeReads: admission.active, rejectedReads: admission.rejected,
-    reservedJsonAllocationBytes: admission.allocated!, ...MODEL_TURN_ARCHIVE_READ_LIMITS };
+    reservedJsonAllocationBytes: admission.allocated!, cleanupFailures: admission.cleanupFailures ?? 0,
+    quarantinedReads: admission.quarantined ?? 0, ...MODEL_TURN_ARCHIVE_READ_LIMITS };
 }
 
 /** One descriptor and one admitted allocation, including a growth sentinel. */

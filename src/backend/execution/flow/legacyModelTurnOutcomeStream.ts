@@ -10,6 +10,7 @@ import { MODEL_TURN_ARCHIVE_READ_LIMITS, ModelTurnArchiveReadError } from './mod
 
 const CHUNK = 64 * 1024;
 type Frame = { object: boolean; root: boolean; entry: boolean; state: string; key?: string; fields: number; outcome: boolean };
+export interface ModelTurnStreamIdentity { version: 1 | 2; conversationId: string; dispatchId: string }
 const whitespace = (byte: number) => byte === 32 || byte === 9 || byte === 10 || byte === 13;
 const digit = (byte: number) => byte >= 48 && byte <= 57;
 const limitError = () => new ModelTurnArchiveReadError('MODEL_TURN_ARCHIVE_READ_LIMIT',
@@ -19,7 +20,10 @@ const limitError = () => new ModelTurnArchiveReadError('MODEL_TURN_ARCHIVE_READ_
 export class LegacyModelTurnOutcomeTransform extends Transform {
   private readonly utf8 = new TextDecoder('utf-8', { fatal: true });
   private readonly frames: Frame[] = [];
-  private readonly replacement: Buffer;
+  private readonly replacement: Buffer | undefined;
+  private metadataBytes: number[] | undefined;
+  private metadataKey: string | undefined;
+  private readonly metadata = new Map<string, unknown>();
   private lex: 'string' | 'number' | 'literal' | undefined;
   private stringKey = false;
   private keyBytes: number[] | undefined;
@@ -34,12 +38,18 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
   private suppressedAt: number | undefined;
   private decodedBytes = 0;
 
-  constructor(outcome: Exclude<ModelDispatchOutcome, 'running'>) {
+  constructor(outcome?: Exclude<ModelDispatchOutcome, 'running'>, private readonly identity?: ModelTurnStreamIdentity) {
     super({ highWaterMark: CHUNK });
-    this.replacement = Buffer.from(JSON.stringify(outcome));
+    this.replacement = outcome === undefined ? undefined : Buffer.from(JSON.stringify(outcome));
   }
 
   private invalid(): never { throw new SyntaxError('Invalid legacy model-turn JSON.'); }
+
+  private appendMetadata(byte: number) {
+    if (!this.metadataBytes) return;
+    if (this.metadataBytes.length >= 2048) this.invalid();
+    this.metadataBytes.push(byte);
+  }
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
     try {
@@ -54,6 +64,12 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
       const finishValue = (offset: number) => {
         const parent = this.frames.at(-1);
         if (!parent || parent.state !== 'value') this.invalid();
+        if (this.metadataKey) {
+          if (!this.metadataBytes) this.invalid();
+          this.metadata.set(this.metadataKey, JSON.parse(Buffer.from(this.metadataBytes).toString('utf8')));
+          this.metadataKey = undefined;
+          this.metadataBytes = undefined;
+        }
         parent.state = 'comma';
         if (this.suppressedAt === this.frames.length) {
           this.push(this.replacement);
@@ -63,7 +79,12 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
       };
       const beginValue = (offset: number) => {
         const parent = this.frames.at(-1);
-        if (parent?.entry && parent.key === 'outcome') {
+        if (this.identity && parent?.key && ((parent.root && parent.key === 'version')
+          || (parent.entry && ['id', 'conversationId', 'archiveVersion', 'outcome'].includes(parent.key)))) {
+          this.metadataKey = parent.root ? 'version' : parent.key;
+          this.metadataBytes = [];
+        }
+        if (this.replacement && parent?.entry && parent.key === 'outcome') {
           emitBefore(offset);
           this.suppressedAt = this.frames.length;
           parent.outcome = true;
@@ -71,6 +92,9 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
       };
       for (let i = 0; i < chunk.length; i++) {
         const byte = chunk[i];
+        if (this.metadataBytes && this.lex !== 'number') {
+          this.appendMetadata(byte);
+        }
         if (this.lex === 'string') {
           if (this.keyBytes) {
             if (this.keyBytes.length < 512) this.keyBytes.push(byte);
@@ -104,13 +128,14 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
         if (this.lex === 'number') {
           const state = this.numberState;
           if ((state === 'sign' || state === 'integer') && digit(byte)) {
+            this.appendMetadata(byte);
             this.numberState = state === 'sign' && byte === 48 ? 'zero' : 'integer'; continue;
           }
-          if ((state === 'integer' || state === 'zero') && byte === 46) { this.numberState = 'dot'; continue; }
-          if ((state === 'dot' || state === 'fraction') && digit(byte)) { this.numberState = 'fraction'; continue; }
-          if (['integer', 'zero', 'fraction'].includes(state) && (byte === 101 || byte === 69)) { this.numberState = 'exponent'; continue; }
-          if (state === 'exponent' && (byte === 43 || byte === 45)) { this.numberState = 'exponentSign'; continue; }
-          if (['exponent', 'exponentSign', 'exponentDigits'].includes(state) && digit(byte)) { this.numberState = 'exponentDigits'; continue; }
+          if ((state === 'integer' || state === 'zero') && byte === 46) { this.appendMetadata(byte); this.numberState = 'dot'; continue; }
+          if ((state === 'dot' || state === 'fraction') && digit(byte)) { this.appendMetadata(byte); this.numberState = 'fraction'; continue; }
+          if (['integer', 'zero', 'fraction'].includes(state) && (byte === 101 || byte === 69)) { this.appendMetadata(byte); this.numberState = 'exponent'; continue; }
+          if (state === 'exponent' && (byte === 43 || byte === 45)) { this.appendMetadata(byte); this.numberState = 'exponentSign'; continue; }
+          if (['exponent', 'exponentSign', 'exponentDigits'].includes(state) && digit(byte)) { this.appendMetadata(byte); this.numberState = 'exponentDigits'; continue; }
           if (!['integer', 'zero', 'fraction', 'exponentDigits'].includes(state)) this.invalid();
           this.lex = undefined;
           finishValue(i);
@@ -131,7 +156,7 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
         if (parent.state === 'colon' && byte === 58) { parent.state = 'value'; continue; }
         const closing = parent.object ? 125 : 93;
         if (byte === closing && ['keyEnd', 'valueEnd', 'comma'].includes(parent.state)) {
-          if (parent.entry && !parent.outcome) {
+          if (this.replacement && parent.entry && !parent.outcome) {
             emitBefore(i);
             this.push(Buffer.concat([Buffer.from(`${parent.fields ? ',' : ''}"outcome":`), this.replacement]));
           }
@@ -146,10 +171,15 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
         if (!['value', 'valueEnd'].includes(parent.state)) this.invalid();
         parent.state = 'value';
         beginValue(i);
+        this.appendMetadata(byte);
         if (byte === 123 || byte === 91) {
+          if (this.metadataKey) this.invalid();
           const entry = parent.root && parent.key === 'entry';
           if (entry && byte !== 123) this.invalid();
           if (entry) this.entrySeen = true;
+          if (entry && this.identity) {
+            for (const key of ['id', 'conversationId', 'archiveVersion', 'outcome']) this.metadata.delete(key);
+          }
           if (this.frames.length >= 65536) throw limitError();
           this.frames.push({ object: byte === 123, root: false, entry,
             state: byte === 123 ? 'keyEnd' : 'valueEnd', fields: 0, outcome: false });
@@ -172,6 +202,14 @@ export class LegacyModelTurnOutcomeTransform extends Transform {
     try {
       this.utf8.decode();
       if (!this.ended || !this.entrySeen || this.lex || this.frames.length || this.suppressedAt !== undefined) this.invalid();
+      if (this.identity && (this.metadata.get('version') !== this.identity.version
+        || this.metadata.get('archiveVersion') !== this.identity.version
+        || this.metadata.get('id') !== this.identity.dispatchId
+        || this.metadata.get('conversationId') !== this.identity.conversationId
+        || !['running', 'completed', 'error', 'cancelled'].includes(String(this.metadata.get('outcome')))
+        || (this.identity.version === 2 && this.metadata.get('outcome') !== 'running'))) {
+        throw new Error('Invalid model-turn snapshot identity.');
+      }
       callback();
     } catch (error) { callback(error as Error); }
   }

@@ -1,6 +1,6 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
-import { readModelTurnSnapshot } from '@/backend/execution/flow/modelTurnArchive';
+import { readModelTurnSnapshotResponse } from '@/backend/execution/flow/modelTurnArchive';
 import { MODEL_TURN_ARCHIVE_READ_LIMITS, ModelTurnArchiveReadError } from '@/backend/execution/flow/modelTurnArchiveReadBudget';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -19,9 +19,9 @@ async function GET_handler(
   if (!(await loadConversationStateReadOnly(conversationId))) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
-  let snapshot: Awaited<ReturnType<typeof readModelTurnSnapshot>>;
+  let body: Awaited<ReturnType<typeof readModelTurnSnapshotResponse>>;
   try {
-    snapshot = await readModelTurnSnapshot(conversationId, dispatchId, request.signal);
+    body = await readModelTurnSnapshotResponse(conversationId, dispatchId, request.signal);
   } catch (error) {
     if (!(error instanceof ModelTurnArchiveReadError)) throw error;
     return NextResponse.json({ error: error.message, code: error.code, limits: MODEL_TURN_ARCHIVE_READ_LIMITS }, {
@@ -29,10 +29,10 @@ async function GET_handler(
       headers: { 'Cache-Control': 'no-store', ...(error.status === 429 ? { 'Retry-After': '1' } : {}) },
     });
   }
-  if (!snapshot || snapshot.entry.conversationId !== conversationId) {
+  if (!body) {
     return NextResponse.json({ error: 'Model turn not found' }, { status: 404 });
   }
-  return NextResponse.json(snapshot, { headers: { 'Cache-Control': 'no-store' } });
+  return new NextResponse(body, { headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' } });
 }
 
 export const GET = withWorkspaceRoute(GET_handler);

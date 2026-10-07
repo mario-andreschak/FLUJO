@@ -83,4 +83,25 @@ describe('private native Original archive format composition', () => {
       }))));
     expect((await f.read()).entry.outcome).toBe('running');
   });
+
+  it('rejects pathname replacement after open before reading descriptor payload', async () => {
+    const f = await fixture();
+    const open = fs.open.bind(fs);
+    let payloadRead: jest.SpyInstance | undefined;
+    const opening = jest.spyOn(fs, 'open').mockImplementation(async (file, ...args) => {
+      const handle = await open(file, ...args);
+      if (file === f.current) {
+        payloadRead = jest.spyOn(handle, 'read');
+        const replacement = `${f.current}.replacement`;
+        await fs.writeFile(replacement, await fs.readFile(f.current));
+        if (process.platform === 'win32') await fs.rename(f.current, `${f.current}.original`);
+        await fs.rename(replacement, f.current);
+      }
+      return handle;
+    });
+    try {
+      await expect(f.read()).rejects.toThrow('Native model-turn archive changed');
+      expect(payloadRead).not.toHaveBeenCalled();
+    } finally { opening.mockRestore(); }
+  });
 });
