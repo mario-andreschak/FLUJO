@@ -70,6 +70,7 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
     before.set(StorageKey.ENCRYPTION_KEY, metadataBytes);
     let metadata: EncryptionMetadata;
     let ring: Keyring;
+    let publiclyWrapped = false;
     try {
       metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadataBytes));
       if (!metadata || ![1, 2].includes(metadata.encryption_version)
@@ -77,13 +78,18 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
       const sourcePassword = metadata.key_protection === 'operator-file' ? readOperatorSecret()
         : metadata.encryption_type === 'user' ? options.sourcePassphrase : DEFAULT_PASSWORD;
       if (!sourcePassword) throw new Error();
+      publiclyWrapped = sourcePassword === DEFAULT_PASSWORD;
       ring = metadata.encryption_version === 2 ? await unwrapKeyring(metadata, sourcePassword)
         : newKeyring(await unwrapLegacyKey(metadata, sourcePassword));
     } catch { throw new CredentialMigrationError('SOURCE_INVALID', StorageKey.ENCRYPTION_KEY); }
     const protection = options.protection ?? 'passphrase';
     const targetPassword = protection === 'operator-file' ? readOperatorSecret() : options.recoveryPassphrase;
     if (!targetPassword) throw new CredentialMigrationError('PROFILE_UNAVAILABLE');
-    const targetMetadata = await wrapKeyring(ring, 'user', targetPassword, protection);
+    // A copied public-default wrapper already exposes its active DEK. Rewrapping
+    // that key cannot protect future ciphertext; retire it for all live writes.
+    // Retain the v1 read key only for the declared legacy compatibility contract.
+    const targetRing = publiclyWrapped ? newKeyring(ring.legacyKey) : ring;
+    const targetMetadata = await wrapKeyring(targetRing, 'user', targetPassword, protection);
     after.set(StorageKey.ENCRYPTION_KEY, Buffer.from(JSON.stringify(targetMetadata)));
     const stores: CredentialMigrationInventory['stores'] = [];
     for (const store of CREDENTIAL_TRANSFER_STORES) {
@@ -108,8 +114,8 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
             if (ciphertext.startsWith('v2:')) { plaintext = open(ciphertext, ring.activeKey, PURPOSE); count.v2++; }
             else { if (!ring.legacyKey) throw new Error(); plaintext = decryptLegacy(ciphertext, ring.legacyKey); count.v1++; }
           } else { plaintext = text; count.plaintext++; }
-          const encrypted = seal(plaintext, ring.activeKey, PURPOSE);
-          if (open(encrypted, ring.activeKey, PURPOSE) !== plaintext) throw new Error();
+          const encrypted = seal(plaintext, targetRing.activeKey, PURPOSE);
+          if (open(encrypted, targetRing.activeKey, PURPOSE) !== plaintext) throw new Error();
           count.credentials++;
           return `encrypted:${encrypted}`;
         };
@@ -125,8 +131,8 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
             if (!ring.legacyKey) throw new Error(); return decryptLegacy(ciphertext, ring.legacyKey);
           });
           const serialized = encodeOAuthValue(kind, sdk, getCurrentWorkspace());
-          const ciphertext = seal(serialized, ring.activeKey, PURPOSE);
-          if (open(ciphertext, ring.activeKey, PURPOSE) !== serialized) throw new Error();
+          const ciphertext = seal(serialized, targetRing.activeKey, PURPOSE);
+          if (open(ciphertext, targetRing.activeKey, PURPOSE) !== serialized) throw new Error();
           count.credentials++;
           return { format: OAUTH_CREDENTIAL_FORMAT, ciphertext };
         } : undefined);

@@ -63,11 +63,12 @@ async function pending(step: 'journal_written' | 'record_written' | 'before_comm
   await expect(migrateCredentials({ ...options, checkpoint: async actual => { if (actual === step) throw new Error('Injected interruption'); } }, inventory.planToken)).rejects.toThrow('Injected interruption');
   expect(await isCredentialMigrationPending()).toBe(true);
 }
-async function assertMigrated() {
+async function assertMigrated(keyChanged = false) {
   expect(await isCredentialMigrationPending()).toBe(false);
   const metadata = await readStore('encryption_key');
   expect(metadata.key_protection).toBe('passphrase');
-  expect(metadata.key_id).toBe(JSON.parse(sourceBytes.get('encryption_key')!.toString()).key_id);
+  const originalId = JSON.parse(sourceBytes.get('encryption_key')!.toString()).key_id;
+  if (keyChanged) expect(metadata.key_id).not.toBe(originalId); else expect(metadata.key_id).toBe(originalId);
   const ring = await unwrapKeyring(metadata, recoveryPassphrase);
   const recover = (text: string) => { expect(text.startsWith('encrypted:v2:')).toBe(true); return open(text.slice('encrypted:'.length), ring.activeKey, 'flujo:secret:v2'); };
   expect((await readStore('models')).map((model: { ApiKey: string }) => recover(model.ApiKey))).toEqual(['v2-canary', 'legacy-canary', 'plaintext-canary', 'failed-canary']);
@@ -328,4 +329,57 @@ test('whole OAuth bundles and private provider extensions survive in-place migra
   expect(await readOAuthClientInformation(restored)).toEqual(client);
   expect(await readOAuthCodeVerifier(restored)).toBe(verifier);
   expect(restored.oauthTokens.ciphertext.startsWith('v2:')).toBe(true);
+});
+
+async function publicDefaultSource() {
+  const ring = await unwrapKeyring(await readStore('encryption_key'), sourcePassphrase);
+  const metadata = await wrapKeyring(ring, 'default', DEFAULT_PASSWORD);
+  await fs.writeFile(fileFor('encryption_key'), JSON.stringify(metadata), { mode: 0o600 });
+  sourceBytes.set('encryption_key', await fs.readFile(fileFor('encryption_key')));
+  return await unwrapKeyring(metadata, DEFAULT_PASSWORD);
+}
+function ciphertexts(value: unknown): string[] {
+  if (typeof value === 'string') return value.startsWith('encrypted:v2:') ? [value.slice('encrypted:'.length)]
+    : value.startsWith('v2:') ? [value] : [];
+  if (value && typeof value === 'object') return Object.values(value).flatMap(ciphertexts);
+  return [];
+}
+test('public-default v2 migration retires the exposed active key for every live store and a cold OS reader decrypts with new private protection', async () => {
+  const oldRing = await publicDefaultSource();
+  const inventory = await preflightCredentialMigration(options);
+  await migrateCredentials(options, inventory.planToken);
+  await assertMigrated(true);
+  const target = await unwrapKeyring(await readStore('encryption_key'), recoveryPassphrase);
+  expect(target.activeKey).not.toBe(oldRing.activeKey);
+  for (const store of ['models', 'mcp_servers', 'global_env_vars', 'registry_account']) {
+    const values = ciphertexts(await readStore(store)); expect(values.length).toBeGreaterThan(0);
+    for (const value of values) {
+      expect(() => open(value, oldRing.activeKey, 'flujo:secret:v2')).toThrow();
+      expect(typeof open(value, target.activeKey, 'flujo:secret:v2')).toBe('string');
+    }
+  }
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'fixtures/credential-migration-child.cjs'), process.cwd(), require.resolve('typescript')],
+    { env: { ...process.env, LOG_LEVEL: 'error' }, windowsHide: true, encoding: 'utf8', timeout: 30_000,
+      input: JSON.stringify({ operation: 'read', recoveryPassphrase, expected: ['v2-canary', 'legacy-canary', 'plaintext-canary', 'failed-canary'] }) });
+  expect(result.error).toBeUndefined(); expect(result.status).toBe(0); expect(result.stderr).toBe('');
+  expect(result.stdout).toContain('MIGRATION_SOURCE_PASS'); expect(result.stdout).not.toContain('canary');
+});
+test('interrupted public-default key retirement rolls back exact original bytes and protection', async () => {
+  const original = await publicDefaultSource();
+  const inventory = await preflightCredentialMigration(options);
+  await expect(migrateCredentials({ ...options, checkpoint: async step => {
+    if (step === 'record_written') throw new Error('Interrupted public-default migration');
+  } }, inventory.planToken)).rejects.toThrow('Interrupted public-default migration');
+  expect(await isCredentialMigrationPending()).toBe(true);
+  await recoverCredentialMigration(options, true);
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+  const restored = await unwrapKeyring(await readStore('encryption_key'), DEFAULT_PASSWORD);
+  expect(restored.activeKey).toBe(original.activeKey);
+  expect(open((await readStore('models'))[0].ApiKey.slice('encrypted:'.length), restored.activeKey, 'flujo:secret:v2')).toBe('v2-canary');
+});
+test('already private v2 migration preserves the active key while changing its protection', async () => {
+  const original = await unwrapKeyring(await readStore('encryption_key'), sourcePassphrase);
+  const inventory = await preflightCredentialMigration(options);
+  await migrateCredentials(options, inventory.planToken);
+  expect((await unwrapKeyring(await readStore('encryption_key'), recoveryPassphrase)).activeKey).toBe(original.activeKey);
 });
