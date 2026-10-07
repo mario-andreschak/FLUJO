@@ -24,7 +24,7 @@ export function installApprovedGoalMcp(fixtureDirectory: string, terminalOnly: b
     fs.writeFileSync(path.join(sourceRoot, filename), bytes, { mode: 0o600 });
   }
   const entryPoint = path.join(sourceRoot, terminalOnly ? 'terminal-server.mjs' : 'server.mjs');
-  const environment = process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : {};
+  const environment: Record<string, string> = process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : {};
   const config: MCPStdioConfig = { name: 'goal-acceptance', transport: 'stdio', command: process.execPath,
     args: [entryPoint, fixtureDirectory], cwd: sourceRoot, env: environment, disabled: false, rootPath: sourceRoot,
     _buildCommand: '', _installCommand: '', source: { type: 'local' },
