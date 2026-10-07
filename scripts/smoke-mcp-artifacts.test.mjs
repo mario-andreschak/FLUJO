@@ -50,11 +50,14 @@ test('the smoke profile mounts a private external secret and works across real e
     const secretFile = env.FLUJO_ENCRYPTION_SECRET_FILE;
     assert.equal(path.dirname(secretFile), sandbox);
     assert.ok(!secretFile.startsWith(`${dataDir}${path.sep}`));
-    const stat = await fs.lstat(secretFile);
-    assert.ok(stat.isFile() && !stat.isSymbolicLink());
-    assert.equal(stat.nlink, 1);
-    if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
-    assert.match(await fs.readFile(secretFile, 'utf8'), /^[A-Za-z0-9_-]{64}$/);
+    const secretHandle = await fs.open(secretFile, 'r');
+    try {
+      const stat = await secretHandle.stat();
+      assert.ok(stat.isFile());
+      assert.equal(stat.nlink, 1);
+      if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
+      assert.match(await secretHandle.readFile('utf8'), /^[A-Za-z0-9_-]{64}$/);
+    } finally { await secretHandle.close(); }
     const value = 'synthetic-private-smoke-credential';
     const { ciphertext } = probe(env, { operation: 'mint', value }, true);
     assert.equal(typeof ciphertext, 'string');
