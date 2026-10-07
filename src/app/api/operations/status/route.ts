@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 
 type Admission = { worker: true } | { worker: false; authorization: OwnerRequestAuthorization };
 
-const wrapped = withWorkspaceRoute(async (request: Request, admission: Admission) => {
+const GET_handler = async (request: Request, admission: Admission) => {
   const workspace = getCurrentWorkspace();
   if (!admission.worker && admission.authorization.principal.workspaceId
       && admission.authorization.principal.workspaceId !== workspace) {
@@ -50,7 +50,9 @@ const wrapped = withWorkspaceRoute(async (request: Request, admission: Admission
     return Response.json({ error: 'Operations observations are unavailable.', code: 'OPERATIONS_UNAVAILABLE' },
       { status: 503, headers: { 'Cache-Control': 'no-store' } });
   }
-});
+};
+
+const wrapped = withWorkspaceRoute(GET_handler);
 
 /** Authentication precedes workspace/storage selection, including direct handler imports. */
 export function GET(request: Request) {
