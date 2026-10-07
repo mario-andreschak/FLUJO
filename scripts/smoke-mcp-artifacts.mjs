@@ -12,6 +12,7 @@
  * `--candidate-dir <directory>` installs the exact validated release tarballs.
  */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -62,19 +63,32 @@ function run(command, args, options = {}) {
   });
 }
 
-async function waitFor(operation, accept, description, limit = timeoutMs) {
+export async function createPrivateSmokeEnv(sandbox, dataDir, extra = {}) {
+  const secretFile = path.join(sandbox, 'operator-secret');
+  await fs.writeFile(secretFile, randomBytes(48).toString('base64url'), { flag: 'wx', mode: 0o600 });
+  const env = cleanEnv({ ...extra, FLUJO_DATA_DIR: dataDir,
+    FLUJO_ENCRYPTION_SECRET_FILE: secretFile, FLUJO_EXPOSURE_MODE: 'localhost' });
+  delete env.FLUJO_OWNER_AUTH_FILE;
+  delete env.FLUJO_PARENT_DATA_DIR;
+  return env;
+}
+
+export async function waitFor(operation, accept, description, limit = timeoutMs) {
   const deadline = Date.now() + limit;
   let lastError;
+  let lastStatus;
   while (Date.now() < deadline) {
     try {
       const value = await operation();
       if (accept(value)) return value;
+      lastError = undefined;
+      if (Number.isInteger(value) && value >= 100 && value <= 599) lastStatus = value;
     } catch (error) {
       lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for ${description}.${lastError instanceof Error ? ` Last error: ${lastError.message}` : ''}`);
+  throw new Error(`Timed out waiting for ${description}.${lastStatus === undefined ? '' : ` Last HTTP status: ${lastStatus}.`}${lastError instanceof Error ? ` Last error: ${lastError.message}` : ''}`);
 }
 
 async function reservePort() {
@@ -425,8 +439,7 @@ async function smokePackedArtifacts(candidateDirectory) {
     const baseUrl = `http://127.0.0.1:${port}`;
     appChild = spawn(process.execPath, [appEntrypoint, '--no-open', '--port', String(port)], {
       cwd: appRoot,
-      env: cleanEnv({
-        FLUJO_DATA_DIR: dataDir,
+      env: await createPrivateSmokeEnv(sandbox, dataDir, {
         FLUJO_LOCAL_INSTANCE_DIR: path.join(sandbox, 'instances'),
         FLUJO_FS_ROOTS: rootsDir,
         FLUJO_BASH_ROOTS: rootsDir,
@@ -457,6 +470,7 @@ async function smokePackedArtifacts(candidateDirectory) {
   });
 }
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const proxyOnlyIndex = process.argv.indexOf('--proxy-only');
 if (proxyOnlyIndex !== -1) {
   const baseUrl = process.argv[proxyOnlyIndex + 1];
@@ -474,4 +488,5 @@ if (proxyOnlyIndex !== -1) {
   if (candidateIndex !== -1 && (!candidateDirectory || !path.isAbsolute(candidateDirectory))) throw new Error('--candidate-dir requires an absolute artifact directory.');
   await smokePackedArtifacts(candidateDirectory);
   console.log('Validated isolated packed MCP binaries and the installed FLUJO proxy.');
+}
 }
