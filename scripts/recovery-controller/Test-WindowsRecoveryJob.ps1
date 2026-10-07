@@ -23,6 +23,7 @@ $cases=@([ordered]@{id='natural-original-and-child';mode='natural';deadlineMs=10
 $passed=0
 foreach ($case in $cases) {
     $folder=Join-Path $OutputDirectory $case.id;New-Item -ItemType Directory -Path $folder | Out-Null
+    if ((Get-FileHash -LiteralPath $Node).Hash.ToLowerInvariant() -cne '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e') { throw 'Node changed immediately before native control entry' }
     $receipt=[WindowsRecoveryJob]::Qualify($Node,@((Join-Path $PSScriptRoot 'native-job-fixture.mjs'),$case.mode),$PSScriptRoot,$block,$folder,$case.deadlineMs)
     $file=[IO.File]::Open((Join-Path $folder 'original-native-receipt.json'),[IO.FileMode]::CreateNew)
     try { $bytes=[Text.Encoding]::UTF8.GetBytes(($receipt|ConvertTo-Json -Depth 12));$file.Write($bytes,0,$bytes.Length);$file.Flush($true) } finally { $file.Dispose() }

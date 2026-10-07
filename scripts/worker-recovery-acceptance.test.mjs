@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,6 +49,10 @@ syncBuiltinESMExports();
   const env = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (/^(path|systemroot|windir|comspec|pathext|systemdrive|programfiles(?:\(x86\))?)$/i.test(name) && value) env[name] = value;
+  }
+  if (createHash('sha256').update(await fs.readFile(process.execPath)).digest('hex')
+      !== '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e') {
+    throw new Error('Node changed immediately before retention fixture child entry');
   }
   const result = spawnSync(process.execPath, ['--import', pathToFileURL(hookPath).href,
     fileURLToPath(new URL('./smoke-cloud-worker.mjs', import.meta.url)), '--production', '--worker-recovery', '--application', application], {

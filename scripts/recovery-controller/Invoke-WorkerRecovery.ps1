@@ -197,6 +197,8 @@ try { $entryBytes=[Text.Encoding]::UTF8.GetBytes($entryJson);$entryStream.Write(
 Add-Type -Path (Join-Path $PSScriptRoot 'WindowsRecoveryJob.cs')
 Check-Window
 $arguments = @((Join-Path $equipmentRoot 'scripts/smoke-cloud-worker.mjs'),'--production','--worker-recovery','--application',$admission.applicationRoot,'--binding',$Binding,'--binding-sha256',$BindingSha256)
+Check-Pin $admission.node
+Check-Window
 $receipt = [WindowsRecoveryJob]::Run($admission.node.path,$arguments,$equipmentRoot,$environmentText,$OutputDirectory)
 $terminal = [ordered]@{bindingSha256=$BindingSha256;producer=$admission.producer.identity;equipmentHead=$admission.equipment.head;originalOwnedJob=$receipt;applicationWitnesses='Separate original driver stage/input/final report verification required';fixtureDeletion=$false;admissionDeletion=$false;completedAtUtc=[DateTime]::UtcNow.ToString('o')}
 $terminalStream = [IO.File]::Open((Join-Path $OutputDirectory 'controller-terminal.json'),[IO.FileMode]::CreateNew)
