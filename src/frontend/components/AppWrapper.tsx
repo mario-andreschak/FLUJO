@@ -12,6 +12,7 @@ import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 import WorkspaceBootstrap from './WorkspaceBootstrap';
+import PhoneHostBoundary from './PhoneHostBoundary';
 import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
 import './AvatarWorld/embed.css';
 
@@ -167,14 +168,16 @@ function AppErrorFallback() {
 
 interface AppWrapperProps {
   children: React.ReactNode;
+  phoneHost?: boolean;
 }
 
-export default function AppWrapper({ children }: AppWrapperProps) {
+export default function AppWrapper({ children, phoneHost = false }: AppWrapperProps) {
   log.debug('Rendering AppWrapper');
   return (
     <I18nProvider>
       <ErrorBoundary>
         <Suspense fallback={<AppLoading />}>
+          <PhoneHostBoundary enabled={phoneHost} fallback={<AppLoading message="shell.loading.workspace" />}>
           <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
             <ThemeProvider>
               <StorageProvider>
@@ -188,6 +191,7 @@ export default function AppWrapper({ children }: AppWrapperProps) {
               </StorageProvider>
             </ThemeProvider>
           </WorkspaceBootstrap>
+          </PhoneHostBoundary>
         </Suspense>
       </ErrorBoundary>
     </I18nProvider>

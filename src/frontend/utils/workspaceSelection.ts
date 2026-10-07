@@ -166,6 +166,20 @@ let repairedCorruptSelection = false;
 let fetchBeforeWorkspaceInterceptor: typeof window.fetch | null = null;
 let workspaceFetchInterceptor: typeof window.fetch | null = null;
 let workspaceStorageListener: ((event: StorageEvent) => void) | null = null;
+interface PhoneHostRequestScope {
+  readonly csrf: string;
+  readonly workspace: string;
+  readonly signal: AbortSignal;
+  readonly onAccessEnded: () => void;
+}
+let phoneHostMode = false;
+let phoneHostScope: PhoneHostRequestScope | undefined;
+
+/** Set only by the opted-in same-origin phone host before providers mount. */
+export function bindPhoneHostRequests(scope?: PhoneHostRequestScope): void {
+  phoneHostMode = true;
+  phoneHostScope = scope ? Object.freeze({ ...scope }) : undefined;
+}
 
 /**
  * Which requests carry the workspace: same-origin `/api/...` and `/v1/...`
@@ -196,8 +210,8 @@ function resolveUrl(input: RequestInfo | URL): URL | null {
 
 /**
  * Install the workspace fetch interceptor. Idempotent, and a no-op on the
- * server. An explicit `?workspace=` supplied by the caller always wins, so a
- * component that deliberately targets another workspace is never overridden.
+ * server. An explicit `?workspace=` normally wins. The opted-in phone host
+ * requires the server-admitted workspace and rejects conflicting callers.
  */
 export function installWorkspaceInterceptor(): void {
   if (installed || typeof window === 'undefined' || typeof window.fetch !== 'function') {
@@ -210,9 +224,34 @@ export function installWorkspaceInterceptor(): void {
   workspaceFetchInterceptor = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const workspace = getSelectedWorkspace();
     const url = resolveUrl(input);
-    if (!url || !shouldAnnotate(url) || url.searchParams.has(WORKSPACE_QUERY_PARAM)) {
+    if (!url || !shouldAnnotate(url)) {
       return originalFetch(input, init);
     }
+
+    if (phoneHostMode) {
+      const scope = phoneHostScope;
+      const requested = url.searchParams.getAll(WORKSPACE_QUERY_PARAM);
+      const source = typeof Request !== 'undefined' && input instanceof Request ? input : null;
+      const headers = new Headers(init?.headers ?? source?.headers);
+      if (!scope || scope.signal.aborted || workspace !== scope.workspace || requested.length > 1
+        || requested.some(value => value !== scope.workspace)
+        || (headers.has('x-flujo-workspace') && headers.get('x-flujo-workspace') !== scope.workspace)) {
+        return Promise.reject(new DOMException('Phone workspace access ended.', 'AbortError'));
+      }
+      url.searchParams.set(WORKSPACE_QUERY_PARAM, scope.workspace);
+      const method = (init?.method ?? source?.method ?? 'GET').toUpperCase();
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) headers.set('x-phone-csrf', scope.csrf);
+      const signal = AbortSignal.any([scope.signal, ...(source?.signal ? [source.signal] : []), ...(init?.signal ? [init.signal] : [])]);
+      const options = { ...init, headers, signal, credentials: 'same-origin' as const, redirect: 'error' as const };
+      const forwarded = source ? new Request(new Request(url.toString(), source), options) : url.toString();
+      return originalFetch(forwarded, source ? undefined : options).then(async response => {
+        if (signal.aborted) { await response.body?.cancel().catch(() => {}); throw signal.reason; }
+        if (response.status === 401 || response.status === 403) scope.onAccessEnded();
+        return response;
+      });
+    }
+
+    if (url.searchParams.has(WORKSPACE_QUERY_PARAM)) return originalFetch(input, init);
 
     url.searchParams.set(WORKSPACE_QUERY_PARAM, workspace);
     if (typeof Request !== 'undefined' && input instanceof Request) {
@@ -300,6 +339,7 @@ export function initializeWorkspaceSelection(): { repaired: boolean } {
 
 /** Test seam for the module-level browsing-context guards. */
 export function __resetWorkspaceSelectionForTests(): void {
+  phoneHostMode = false; phoneHostScope = undefined;
   activeWorkspace = null;
   repairedCorruptSelection = false;
   if (typeof window === 'undefined') return;
