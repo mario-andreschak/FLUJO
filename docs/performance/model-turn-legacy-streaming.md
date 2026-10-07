@@ -29,8 +29,11 @@ strings, containers, properties and scalar values. These are admission estimates
 not a measured whole-process RSS guarantee or an exact V8 object-size formula.
 Structural charges prevent tiny encodings of many objects from bypassing byte
 accounting. A single input or the aggregate of readers that cannot fit returns
-the existing typed `MODEL_TURN_ARCHIVE_READ_LIMIT` / HTTP 413 without changing
-persisted archives. Original JSON/gzip/storage errors and abort reasons remain
+the existing typed `MODEL_TURN_ARCHIVE_READ_LIMIT` / HTTP 413 for an individual
+input that cannot fit, or `MODEL_TURN_ARCHIVE_READ_BUSY` / HTTP 429 for aggregate
+pressure that can be retried after another reader finishes, without changing
+persisted archives. Native decoder closure completes before reservation release.
+Original JSON/gzip/storage errors and abort reasons remain
 available. Reservations remain held through the admitted callback's awaits;
 they are released when that callback returns or fails.
 

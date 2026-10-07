@@ -42,9 +42,14 @@ function allocationLimit() {
 
 function reserveJsonAllocation(scope: { bytes: number }, bytes: number) {
   const { heap_size_limit: heapLimit, used_heap_size: heapUsed } = getHeapStatistics();
-  if (admission.allocated! + bytes > MODEL_TURN_ARCHIVE_READ_LIMITS.jsonAllocationBytes
+  if (scope.bytes + bytes > MODEL_TURN_ARCHIVE_READ_LIMITS.jsonAllocationBytes
     || scope.bytes + bytes > heapLimit - heapUsed - MODEL_TURN_ARCHIVE_READ_LIMITS.jsonHeapHeadroomBytes) {
     throw allocationLimit();
+  }
+  if (admission.allocated! + bytes > MODEL_TURN_ARCHIVE_READ_LIMITS.jsonAllocationBytes) {
+    admission.rejected = Math.min(Number.MAX_SAFE_INTEGER, admission.rejected + 1);
+    throw new ModelTurnArchiveReadError('MODEL_TURN_ARCHIVE_READ_BUSY',
+      'Model-turn JSON allocation is busy. Retry after another archive inspection finishes.');
   }
   admission.allocated! += bytes;
   scope.bytes += bytes;
@@ -195,7 +200,9 @@ export async function parseBoundedModelTurnJson<T>(
     signal?.throwIfAborted();
     throw error;
   } finally {
+    const closed = decoder.closed ? Promise.resolve() : new Promise<void>(resolve => decoder.once('close', resolve));
     decoder.destroy();
+    await closed;
     if (!inherited) releaseJsonAllocation(scope);
   }
 }
