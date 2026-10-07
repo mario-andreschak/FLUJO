@@ -14,6 +14,7 @@ import { promises as fs } from 'fs';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
+import { seedLegacyDefault } from './fixtures/legacyDefault';
 import { makeLocalRequest } from '../utils/localRequest';
 
 // Each test drives the REAL crypto path, i.e. one-or-more PBKDF2(100k-iteration)
@@ -66,6 +67,7 @@ describe('assertUnlocked / isLocked', () => {
 
   it('never gates DEFAULT mode', async () => {
     const { secure, gate } = await load();
+    await seedLegacyDefault();
     await secure.initializeDefaultEncryption();
     expect(await gate.isLocked()).toBe(false);
     expect(await gate.assertUnlocked()).toBeNull();
@@ -108,6 +110,7 @@ describe('a representative gated /api route (env)', () => {
 
   it('is never gated in DEFAULT mode', async () => {
     const { secure } = await load();
+    await seedLegacyDefault();
     await secure.initializeDefaultEncryption();
     const { GET } = await import('@/app/api/env/route');
     const res = await GET(req());
@@ -151,6 +154,9 @@ describe('deny-by-default coverage guard', () => {
   const ALLOWLIST = new Set(
     [
       'src/app/api/encryption/secure/route.ts',
+      // Owner sign-in/logout has independent durable owner authority and must
+      // work before encryption unlock; it returns no stored workspace secrets.
+      'src/app/api/owner/session/route.ts',
       'src/app/api/init/route.ts',
       // Installation-wide namespace discovery contains no workspace content and
       // must remain reachable so the locked shell can validate its active tab.

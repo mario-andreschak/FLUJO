@@ -4,6 +4,7 @@ import path from 'node:path';
 import CryptoJS from 'crypto-js';
 import { StorageKey } from '@/shared/types/storage';
 import type { EncryptionMetadata } from '@/utils/encryption/format';
+import { seedLegacyDefault } from './fixtures/legacyDefault';
 
 jest.setTimeout(60_000);
 let root: string;
@@ -61,6 +62,7 @@ function legacyFixture(password?: string) {
 
 it('keeps the data key stable through default-to-user migration and password changes', async () => {
   const { secure, session, storage, format } = await modules();
+  await seedLegacyDefault();
   expect(await secure.initializeDefaultEncryption()).toBe(true);
   const before = (await storage.loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null))!;
   const ring = await format.unwrapKeyring(before, 'FLUJO~');
@@ -157,9 +159,12 @@ it('does not rotate an initialized USER key when initialization is called again'
 
 it('serializes competing first writes so all ciphertext uses the committed key', async () => {
   const { secure } = await modules();
+  await secure.initializeEncryption('concurrent-write-password');
+  await secure.authenticate('concurrent-write-password');
   const values = ['first', 'second', 'third'];
   const ciphertexts = await Promise.all(values.map(value => secure.encryptWithPassword(value)));
   restart();
+  await secure.authenticate('concurrent-write-password');
   for (let index = 0; index < values.length; index++) {
     expect(await secure.decryptWithPassword(ciphertexts[index]!)).toBe(values[index]);
   }

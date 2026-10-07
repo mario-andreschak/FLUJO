@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/EncryptionAuthDialog');
@@ -24,16 +24,18 @@ import {
   installEncryptionLockInterceptor,
   ENCRYPTION_LOCKED_EVENT,
   ENCRYPTION_UNLOCKED_EVENT,
-  encryptionSessionStorageKey,
 } from '@/frontend/utils/encryptionLock';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 
 export default function EncryptionAuthDialog() {
-  const { verifyKey, isEncryptionInitialized, isUserEncryptionEnabled } = useStorage();
+  const { verifyKey } = useStorage();
   const { t } = useI18n();
   
   const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [isSetup, setIsSetup] = useState(false);
+  const [operatorUnavailable, setOperatorUnavailable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<TranslationKey | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,42 +44,44 @@ export default function EncryptionAuthDialog() {
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
 
   // Check if user encryption is enabled on component mount
-  useEffect(() => {
-    const checkEncryptionStatus = async () => {
+  const checkEncryptionStatus = useCallback(async () => {
       log.debug('Checking encryption status');
       try {
         setIsCheckingStatus(true);
         
-        // Check if encryption is initialized
-        const initialized = await isEncryptionInitialized();
+        const response = await fetch('/api/encryption/secure', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'status' }) });
+        if (!response.ok) throw new Error('Encryption status unavailable');
+        const status = await response.json();
+        if (typeof status.initialized !== 'boolean' || typeof status.locked !== 'boolean'
+            || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file'].includes(status.protection)) {
+          throw new Error('Encryption status unavailable');
+        }
+        const initialized = status.initialized;
+        setIsSetup(!initialized && status.protection !== 'operator-file');
+        setOperatorUnavailable(false);
         log.debug(`Encryption initialized: ${initialized}`);
-        if (!initialized) {
-          // No encryption, no need for auth
-          log.info('No encryption initialized, skipping authentication');
-          setIsAuthenticated(true);
-          setIsOpen(false);
+        if (!initialized && status.protection !== 'operator-file') {
+          setIsSetup(true);
+          setIsAuthenticated(false);
+          setIsOpen(true);
           setIsCheckingStatus(false);
           return;
         }
         
         // Check if user encryption is enabled
-        const userEncryption = await isUserEncryptionEnabled();
+        const userEncryption = status.protection === 'passphrase';
         log.debug(`User encryption enabled: ${userEncryption}`);
         if (!userEncryption) {
-          // Default encryption, no need for auth
-          log.info('Default encryption in use, skipping authentication');
-          setIsAuthenticated(true);
-          setIsOpen(false);
+          setOperatorUnavailable(status.protection === 'operator-file' && status.locked);
+          setIsAuthenticated(!status.locked);
+          setIsOpen(status.locked);
           setIsCheckingStatus(false);
           return;
         }
         
         // Check if already authenticated in this session
-        const sessionAuth = sessionStorage.getItem(
-          encryptionSessionStorageKey('encryption_authenticated'),
-        );
-        log.debug(`Session authentication status: ${sessionAuth}`);
-        if (sessionAuth === 'true') {
+        if (!status.locked) {
           log.info('Already authenticated in this session');
           setIsAuthenticated(true);
           setIsOpen(false);
@@ -90,15 +94,16 @@ export default function EncryptionAuthDialog() {
         setIsOpen(true);
         setIsCheckingStatus(false);
       } catch (error) {
-        log.error('Failed to check encryption status:', error);
+        log.error('Failed to check encryption status');
         setIsCheckingStatus(false);
-        // Default to authenticated to avoid blocking the app
-        setIsAuthenticated(true);
+        setError('encryption.unlock.error');
+        setIsAuthenticated(false);
+        setIsOpen(true);
       }
-    };
-    
-    checkEncryptionStatus();
-  }, [isEncryptionInitialized, isUserEncryptionEnabled]);
+    }, []);
+  useEffect(() => {
+    void checkEncryptionStatus();
+  }, [checkEncryptionStatus]);
 
   // Global lockdown handling (issue #77): install the 423 interceptor once and
   // re-open the lock screen whenever any request reports the server is locked
@@ -110,10 +115,11 @@ export default function EncryptionAuthDialog() {
       setIsAuthenticated(false);
       setIsCheckingStatus(false);
       setIsOpen(true);
+      void checkEncryptionStatus();
     };
     window.addEventListener(ENCRYPTION_LOCKED_EVENT, onLocked);
     return () => window.removeEventListener(ENCRYPTION_LOCKED_EVENT, onLocked);
-  }, []);
+  }, [checkEncryptionStatus]);
 
   const handleVerify = async () => {
     if (!password.trim()) {
@@ -121,12 +127,21 @@ export default function EncryptionAuthDialog() {
       setError('encryption.unlock.required');
       return;
     }
+    if (isSetup && password.length < 12) { setError('settings.encryption.minLength'); return; }
+    if (isSetup && password !== confirmation) { setError('settings.encryption.mismatch'); return; }
     
     log.debug('Verifying encryption password');
     setIsLoading(true);
     setError(null);
     
     try {
+      if (isSetup) {
+        const response = await fetch('/api/encryption/secure', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'initialize', password }) });
+        if (!response.ok || (await response.json()).success !== true) throw new Error('Private encryption setup failed');
+        setIsSetup(false);
+      }
       const isValid = await verifyKey(password);
       log.debug(`Password verification result: ${isValid}`);
       
@@ -147,9 +162,11 @@ export default function EncryptionAuthDialog() {
         setError('encryption.unlock.invalid');
       }
     } catch (error) {
-      log.error('Failed to verify password:', error);
+      log.error('Failed to verify password');
       setError('encryption.unlock.error');
     } finally {
+      setPassword('');
+      setConfirmation('');
       setIsLoading(false);
     }
   };
@@ -176,7 +193,7 @@ export default function EncryptionAuthDialog() {
       <DialogTitle component="div">
         <Box display="flex" alignItems="center">
           <LockOutlined sx={{ mr: 1 }} />
-          <Typography variant="h6">{t('encryption.unlock.title')}</Typography>
+          <Typography variant="h6">{t(isSetup ? 'settings.encryption.setTitle' : 'encryption.unlock.title')}</Typography>
         </Box>
       </DialogTitle>
       <DialogContent>
@@ -186,14 +203,16 @@ export default function EncryptionAuthDialog() {
           </Alert>
         )}
         
+        {operatorUnavailable && <Alert severity="error">{t('encryption.operator.unavailable')}</Alert>}
         <Typography variant="body1" paragraph>
-          {t('encryption.unlock.description')}
+          {t(isSetup ? 'settings.encryption.newHelp' : 'encryption.unlock.description')}
         </Typography>
         
         <TextField
           autoFocus
+          disabled={operatorUnavailable}
           fullWidth
-          label={t('encryption.unlock.password')}
+          label={t(isSetup ? 'settings.encryption.newPassword' : 'encryption.unlock.password')}
           variant="outlined"
           type={showPassword ? 'text' : 'password'}
           value={password}
@@ -214,16 +233,18 @@ export default function EncryptionAuthDialog() {
           }}
           sx={{ mt: 2 }}
         />
+        {isSetup && <TextField fullWidth type="password" label={t('settings.encryption.confirmPassword')}
+          value={confirmation} onChange={event => setConfirmation(event.target.value)} onKeyDown={handleKeyDown} sx={{ mt: 2 }} />}
       </DialogContent>
       <DialogActions>
         <Button
           variant="contained"
           color="primary"
           onClick={handleVerify}
-          disabled={isLoading}
+          disabled={isLoading || operatorUnavailable}
           startIcon={isLoading ? <CircularProgress size={20} /> : null}
         >
-          {isLoading ? t('encryption.unlock.verifying') : t('encryption.unlock.action')}
+          {isLoading ? t('encryption.unlock.verifying') : t(isSetup ? 'settings.encryption.setAction' : 'encryption.unlock.action')}
         </Button>
       </DialogActions>
     </Dialog>

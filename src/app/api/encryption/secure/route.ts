@@ -10,8 +10,10 @@ import {
   isEncryptionInitialized,
   isUserEncryptionEnabled,
   getEncryptionType,
+  getEncryptionStatus,
   authenticate,
-  logout
+  logout,
+  EncryptionLockedError
 } from '@/utils/encryption/secure';
 import { onUnlocked } from '@/backend/init';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -32,10 +34,6 @@ async function POST_handler(req: NextRequest) {
   if (notLocal) return notLocal;
 
   try {
-    // Module-load initialization has no request context and therefore always
-    // targets default-workspace. Await it only after the route wrapper has
-    // selected the request's workspace.
-    await initializeDefaultEncryption();
     const { action, password, oldPassword, newPassword, data, token } = await req.json();
 
     if (!action) {
@@ -45,6 +43,8 @@ async function POST_handler(req: NextRequest) {
 
       // Handle different actions
     switch (action) {
+      case 'status':
+        return NextResponse.json(await getEncryptionStatus(), { headers: { 'Cache-Control': 'no-store' } });
       case 'initialize':
         log.info(`Processing initialize action`, { requestId }); // Keep as info
         if (!password) {
@@ -191,13 +191,17 @@ async function POST_handler(req: NextRequest) {
         return NextResponse.json({ type: encryptionType });
         
       default:
-        log.error(`Invalid action`, { requestId, action });
+        log.error(`Invalid action`, { requestId });
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
   } catch (error) {
-    log.error(`Error processing request`, { requestId, error });
+    if (error instanceof EncryptionLockedError) return NextResponse.json({
+      error: 'Private encryption must be initialized or unlocked before accessing credentials.',
+      code: 'encryption_locked',
+    }, { status: 423 });
+    log.error(`Error processing request`, { requestId });
     return NextResponse.json({ 
-      error: `Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}` 
+      error: 'Encryption operation failed.'
     }, { status: 500 });
   }
 }
