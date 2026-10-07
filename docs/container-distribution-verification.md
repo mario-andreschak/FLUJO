@@ -22,6 +22,13 @@ OS and installed application packages, including Debian and npm components. It
 excludes packages installed later for optional MCP servers. Inventory generation
 does not establish that those components have no vulnerabilities.
 
+Both image inspection and retained JSON validation require every compatibility
+label, including the exact string `io.flujo.worker.snapshot-source="1"`. Missing,
+wrong or numeric capability markers refuse before evidence can be signed. The
+promotion readback repeats these checks on the immutable same-digest image before
+any version, short-source or latest alias advances. A same-version legacy image
+cannot acquire this capability through a configuration override.
+
 A separate job receives the original evidence artifact ID, rechecks main CI and
 source/metadata identity, and signs registry provenance, the container SBOM and
 both retained JSON files. Build and application lifecycle commands have no
