@@ -1,6 +1,7 @@
 "use client";
 
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import LivingWorldGate from './AmbientWorld/LivingWorldGate';
@@ -11,6 +12,9 @@ import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 import WorkspaceBootstrap from './WorkspaceBootstrap';
+import PhoneHostBoundary from './PhoneHostBoundary';
+import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
+import './AvatarWorld/embed.css';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -164,14 +168,16 @@ function AppErrorFallback() {
 
 interface AppWrapperProps {
   children: React.ReactNode;
+  phoneHost?: boolean;
 }
 
-export default function AppWrapper({ children }: AppWrapperProps) {
+export default function AppWrapper({ children, phoneHost = false }: AppWrapperProps) {
   log.debug('Rendering AppWrapper');
   return (
     <I18nProvider>
       <ErrorBoundary>
         <Suspense fallback={<AppLoading />}>
+          <PhoneHostBoundary enabled={phoneHost} fallback={<AppLoading message="shell.loading.workspace" />}>
           <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
             <ThemeProvider>
               <StorageProvider>
@@ -185,6 +191,7 @@ export default function AppWrapper({ children }: AppWrapperProps) {
               </StorageProvider>
             </ThemeProvider>
           </WorkspaceBootstrap>
+          </PhoneHostBoundary>
         </Suspense>
       </ErrorBoundary>
     </I18nProvider>
@@ -193,10 +200,16 @@ export default function AppWrapper({ children }: AppWrapperProps) {
 
 function LocalizedAppShell({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
+  const pathname = usePathname();
+  const [embedded, setEmbedded] = useState(false);
+  const world = pathname === '/world';
+  useEffect(() => {
+    setEmbedded(window.frameElement?.getAttribute('data-flujo-avatar-panel') === 'true');
+  }, []);
   useCompactAppChrome();
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${world ? 'avatar-world-shell' : ''} ${embedded ? 'avatar-panel-shell' : ''}`}>
       <Link
         className="skip-link"
         href="#main-content"
@@ -205,21 +218,22 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
       >
         {t('shell.skipToContent')}
       </Link>
-      <LivingWorldGate />
+      {!world && !embedded && <LivingWorldGate />}
       <Suspense fallback={<AppLoading message="shell.loading.navigation" compact />}>
-        <Navigation />
+        {!world && !embedded && <Navigation />}
         <EncryptionAuthDialog />
-        <TelemetryNotice />
-        <AskFlujoDock />
+        {!world && !embedded && <TelemetryNotice />}
+        {!world && !embedded && <AskFlujoDock />}
       </Suspense>
+      {embedded && <AvatarPanelBridge />}
       <main id="main-content" className="app-main" tabIndex={-1}>
         <RouteStage>{children}</RouteStage>
       </main>
       {/* Persistent owner for Quick Actions MCP Apps. It remains mounted across
           route changes, so a live iframe/bridge is never reparented or lost. */}
       <GlobalMcpAppsHost />
-      <TourOverlay />
-      <BigTutorialOverlay />
+      {!world && !embedded && <TourOverlay />}
+      {!world && !embedded && <BigTutorialOverlay />}
     </div>
   );
 }

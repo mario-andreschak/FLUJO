@@ -4,6 +4,7 @@ import "./globals.css";
 import "./living-watershed.css";
 import { createLogger } from '@/utils/logger';
 import AppWrapper from "@/frontend/components/AppWrapper";
+import { connection } from 'next/server';
 
 const log = createLogger('app/layout');
 
@@ -35,11 +36,12 @@ export const viewport: Viewport = {
 };
 
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  await connection();
   log.debug('Rendering RootLayout');
   return ( 
     <html
@@ -52,7 +54,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AppWrapper>
+        <AppWrapper phoneHost={process.env.FLUJO_AVATAR_PHONE_HOST === '1'}>
           {children}
         </AppWrapper>
       </body>
