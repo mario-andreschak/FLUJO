@@ -244,15 +244,9 @@ export function createBetaTransport(
       streamableConfig.oauthClientId ||
       streamableConfig.oauthClientInformation
     ) {
-      // FLUJO's provider implements the v1 OAuthClientProvider interface; the v2
-      // interface matches it member-for-member on everything the SDK calls
-      // (clientMetadata/state/clientInformation/saveClientInformation/tokens/
-      // saveTokens/redirectToAuthorization/saveCodeVerifier/codeVerifier/
-      // invalidateCredentials), with near-identical structural types — an
-      // acceptable cast for the experimental path.
-      options.authProvider = createOAuthClientProvider(
-        streamableConfig,
-      ) as unknown as BetaOAuthClientProvider;
+      // Both patched SDKs carry issuer on saved credentials; keep one bound set.
+      const provider: BetaOAuthClientProvider = createOAuthClientProvider(streamableConfig);
+      options.authProvider = provider;
     }
     const transport = new BetaStreamableHTTPClientTransport(
       new URL(streamableConfig.serverUrl),

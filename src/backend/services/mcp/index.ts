@@ -145,6 +145,7 @@ import {
 } from "@/shared/types/mcp";
 import { TestConnectionEvent } from "@/shared/types/streaming";
 import { loadServerConfigs, saveConfig } from "./config";
+import { hasOAuthIssuer } from "./oauth";
 import {
   beginConnect,
   beginTeardown,
@@ -3273,6 +3274,7 @@ export class MCPService {
         // This server requires OAuth authentication
         if (
           !streamableConfig.oauthTokens ||
+          !hasOAuthIssuer(streamableConfig.oauthTokens) ||
           !streamableConfig.oauthTokens.access_token
         ) {
           log.info(
