@@ -7,6 +7,19 @@ import { newKeyring, wrapKeyring, type EncryptionMetadata } from '@/utils/encryp
 const passphrase = 'explicit-test-private-profile-passphrase';
 let profile: Promise<EncryptionMetadata> | undefined;
 
+/** For existing disposable workspace fixtures, preserve their data-root selection. */
+export async function unlockPrivateFixtureInCurrentWorkspace(persist?: (metadata: EncryptionMetadata) => Promise<void> | void) {
+  profile ??= wrapKeyring(newKeyring(), 'user', passphrase, 'passphrase');
+  const metadata = structuredClone(await profile);
+  if (persist) await persist(metadata);
+  else {
+    const { saveItem } = await import('@/utils/storage/backend');
+    await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
+  }
+  const secure = await import('@/utils/encryption/secure');
+  if (!await secure.authenticate(passphrase) || await secure.isEncryptionLocked()) throw new Error('Private test profile did not unlock.');
+}
+
 /** Real private wrapping and authentication for fixtures testing unlocked behavior. */
 export async function installPrivateProfileFixture(persist?: (metadata: EncryptionMetadata) => Promise<void> | void) {
   const saved = Object.fromEntries(['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE']
@@ -20,15 +33,7 @@ export async function installPrivateProfileFixture(persist?: (metadata: Encrypti
   delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
   global.__flujo_server_dek = undefined;
   global.__flujo_encryption_sessions = undefined;
-  profile ??= wrapKeyring(newKeyring(), 'user', passphrase, 'passphrase');
-  const metadata = structuredClone(await profile);
-  if (persist) await persist(metadata);
-  else {
-    const { saveItem } = await import('@/utils/storage/backend');
-    await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
-  }
-  const secure = await import('@/utils/encryption/secure');
-  if (!await secure.authenticate(passphrase) || await secure.isEncryptionLocked()) throw new Error('Private test profile did not unlock.');
+  await unlockPrivateFixtureInCurrentWorkspace(persist);
   return {
     root,
     async restore() {
