@@ -434,7 +434,7 @@ async function startWorker(port, archivePath, archiveHash, harness) {
   if (workerRecovery) {
     producerEquipmentBinding = await verifyRecoveryBinding({ bindingPath: selectedBinding,
       bindingSha256: selectedBindingDigest, application, equipmentRoot: harnessApplication, signal: budget.signal });
-    assert.equal(process.env.FLUJO_BUILD_REVISION, producerEquipmentBinding.producer.head, 'Build revision must name actualEA592 producer, not equipment ancestry.');
+    assert.equal(process.env.FLUJO_BUILD_REVISION, producerEquipmentBinding.producer.head, 'Build revision must name the explicitly admitted producer, not equipment ancestry.');
     assert.equal(process.env.FLUJO_RECOVERY_JOB_BOUND, selectedBindingDigest, 'Recovery requires its binding-matched owned foreground job controller.');
   }
   childLog = '';

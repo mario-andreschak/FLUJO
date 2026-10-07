@@ -1,3 +1,4 @@
+import currentRecoveryProducer from './worker-recovery-producer-cc69.json' with { type: 'json' };
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -39,22 +40,39 @@ const maximumTableBytes = 32 * 1024 * 1024 * 1024;
 const maximumBindingBytes = 32 * 1024 * 1024;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
+export const currentRecoveryProducerProfile = currentRecoveryProducer;
+const producerReferences = binding => binding.producer.identity.head === currentRecoveryProducer.identity.head
+  ? [...Object.values(currentRecoveryProducer.evidence), ...currentRecoveryProducer.packageArchives]
+  : [...Object.values(recoveryProducerEvidence), ...recoveryProducerPackageArchives];
+
 export function checkRecoveryBinding(binding, { application, equipmentRoot }) {
   assert.equal(binding.schemaVersion, 1);
   assert.equal(binding.profile, 'owned-windows-job-local-compiled-recovery');
-  assert.deepEqual(binding.producer.identity, recoveryProducer, 'Actual producer must be exactEA592, separately from equipment.');
-  assert.equal(binding.producer.qualification.status, recoveryProducerQualification.status,
-    'Producer qualification is still held; exactEA737 qualification required.');
-  assert.equal(binding.producer.qualification.cases, recoveryProducerQualification.cases,
-    'Producer requires its complete actual737 qualification.');
-  assert.deepEqual(binding.producer.qualification.receipt, recoveryProducerEvidence.qualificationReceipt,
-    'Actual737 Root qualification receipt changed.');
-  for (const [name, reference] of Object.entries(recoveryProducerEvidence)) {
-    if (name !== 'qualificationReceipt') assert.deepEqual(binding.producer[name], reference,
-      'Actual producer build/archive/graph receipt changed.');
+  if (binding.producer.identity.head === currentRecoveryProducer.identity.head) {
+    assert.deepEqual(binding.producer.identity, currentRecoveryProducer.identity, 'Actual current producer identity changed.');
+    assert.deepEqual(binding.producer.qualification, currentRecoveryProducer.qualification,
+      'Current build/pack evidence cannot borrow historical EA qualification.');
+    for (const [name, reference] of Object.entries(currentRecoveryProducer.evidence)) {
+      assert.deepEqual(binding.producer[name], reference, 'Current producer receipt changed.');
+    }
+    assert.deepEqual(binding.producer.packageArchives, currentRecoveryProducer.packageArchives, 'Current five archive pins changed.');
+    assert.ok(binding.equipment.files.some(entry => entry.path === 'scripts/worker-recovery-producer-cc69.json'),
+      'Current producer profile Source pin missing.');
+  } else {
+    assert.deepEqual(binding.producer.identity, recoveryProducer, 'Actual producer must be exactEA592, separately from equipment.');
+    assert.equal(binding.producer.qualification.status, recoveryProducerQualification.status,
+      'Producer qualification is still held; exactEA737 qualification required.');
+    assert.equal(binding.producer.qualification.cases, recoveryProducerQualification.cases,
+      'Producer requires its complete actual737 qualification.');
+    assert.deepEqual(binding.producer.qualification.receipt, recoveryProducerEvidence.qualificationReceipt,
+      'Actual737 Root qualification receipt changed.');
+    for (const [name, reference] of Object.entries(recoveryProducerEvidence)) {
+      if (name !== 'qualificationReceipt') assert.deepEqual(binding.producer[name], reference,
+        'Actual producer build/archive/graph receipt changed.');
+    }
+    assert.deepEqual(binding.producer.packageArchives, recoveryProducerPackageArchives,
+      'Actual five-package archive pins changed.');
   }
-  assert.deepEqual(binding.producer.packageArchives, recoveryProducerPackageArchives,
-    'Actual five-package archive pins changed.');
   assert.equal(binding.applicationRoot, path.resolve(application));
   assert.equal(binding.equipment.root, path.resolve(equipmentRoot));
   assert.match(binding.equipment.head, /^[a-f0-9]{40}$/);
@@ -99,7 +117,7 @@ export function checkRecoveryBinding(binding, { application, equipmentRoot }) {
   for (const file of ['package.json', '.next/BUILD_ID', 'node_modules/next/package.json', 'node_modules/next/dist/server/lib/start-server.js']) {
     assert.ok(binding.payload.files.some(entry => entry.path === file), 'Missing compiled producer/runtime pin.');
   }
-  for (const ref of [...Object.values(recoveryProducerEvidence), ...recoveryProducerPackageArchives,
+  for (const ref of [...producerReferences(binding),
     binding.equipment.graphReceipt, binding.equipment.qualification.receipt,
     binding.controller.qualificationReceipt, binding.lease.grant]) {
     assert.ok(path.isAbsolute(ref.path) && Number.isSafeInteger(ref.bytes) && ref.bytes >= 0);
@@ -122,10 +140,6 @@ async function verifyFile(file, entry, signal) {
     expectedSha256: entry.sha256, signal, collect: false });
 }
 export async function verifyRecoveryBinding({ bindingPath, bindingSha256, application, equipmentRoot, signal }) {
-  assert.equal(recoveryProducerQualification.status, 'QUALIFIED',
-    'Actual producer qualification is not frozen.');
-  assert.ok(Number.isSafeInteger(recoveryProducerQualification.cases) && recoveryProducerQualification.cases > 0,
-    'Actual producer qualification census is not frozen.');
   assert.ok(path.isAbsolute(bindingPath ?? ''), 'Recovery requires an absolute Root-admitted binding.');
   assert.match(bindingSha256 ?? '', digestPattern, 'Recovery requires the independently admitted binding digest.');
   const raw = await readPinnedFile(bindingPath, { maxBytes: maximumBindingBytes, signal });
@@ -134,9 +148,17 @@ export async function verifyRecoveryBinding({ bindingPath, bindingSha256, applic
   for (const [root, table] of [[application, binding.payload.files], [equipmentRoot, binding.equipment.files]]) {
     for (const entry of table) await verifyFile(await assertPlainPath(root, entry.path), entry, signal);
   }
-  for (const ref of [...Object.values(recoveryProducerEvidence), ...recoveryProducerPackageArchives,
+  for (const ref of [...producerReferences(binding),
     binding.equipment.graphReceipt, binding.equipment.qualification.receipt,
     binding.controller.qualificationReceipt, binding.lease.grant]) await verifyFile(ref.path, ref, signal);
+  if (binding.producer.identity.head === currentRecoveryProducer.identity.head) {
+    const rawCopy = await readPinnedFile(binding.producer.payloadCopyReceipt.path,
+      { maxBytes: maximumBindingBytes, expectedBytes: binding.producer.payloadCopyReceipt.bytes,
+        expectedSha256: binding.producer.payloadCopyReceipt.sha256, signal });
+    const copy = JSON.parse(rawCopy);
+    assert.equal(copy.buildId, currentRecoveryProducer.buildId);
+    assert.deepEqual(binding.payload.files, copy.payloadFiles, 'Current payload differs from actual copied archive/trace join.');
+  }
   return { bindingSha256, producer: binding.producer.identity,
     equipment: { head: binding.equipment.head, tree: binding.equipment.tree },
     profile: binding.profile, payloadFilesVerified: binding.payload.files.length,

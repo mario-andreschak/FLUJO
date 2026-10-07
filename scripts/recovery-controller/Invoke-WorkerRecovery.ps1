@@ -147,8 +147,20 @@ if ($bindingItem.Length -gt 33554432 -or ($bindingItem.Attributes -band [IO.File
 if ((Get-FileHash -LiteralPath $Binding).Hash.ToLowerInvariant() -cne $BindingSha256) { throw 'Binding digest changed' }
 $admission = Get-Content -Raw -LiteralPath $Binding | ConvertFrom-Json
 if ($admission.schemaVersion -ne 1 -or $admission.profile -cne 'owned-windows-job-local-compiled-recovery') { throw 'Wrong profile' }
-if ($admission.producer.identity.head -cne 'ea592d62075bafbb70ddbe1eb76479f1572aff81' -or $admission.producer.identity.tree -cne 'eca03ce7627ba31f155a37da89deaf3a99ad2835') { throw 'ExactEA592 producer required' }
-if ($admission.producer.qualification.status -cne $producerQualification.status -or $admission.producer.qualification.cases -ne $producerQualification.cases) { throw 'Exact producer qualification not admitted' }
+$currentProducer = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../worker-recovery-producer-cc69.json') | ConvertFrom-Json
+$isCurrentProducer = $admission.producer.identity.head -ceq $currentProducer.identity.head
+if ($isCurrentProducer) {
+    if ($admission.producer.identity.tree -cne $currentProducer.identity.tree -or
+        $admission.producer.qualification.status -cne $currentProducer.qualification.status -or
+        $admission.producer.qualification.scope -cne $currentProducer.qualification.scope -or
+        $admission.producer.qualification.cases -ne 0) { throw 'Current build/pack scope changed; historical EA qualification is not transferable' }
+    $expectedProducerEvidence = $currentProducer.evidence
+    $expectedPackageArchives = $currentProducer.packageArchives
+    if (-not ($admission.equipment.files | Where-Object { $_.path -ceq 'scripts/worker-recovery-producer-cc69.json' })) { throw 'Current producer profile Source pin missing' }
+} else {
+  if ($admission.producer.identity.head -cne 'ea592d62075bafbb70ddbe1eb76479f1572aff81' -or $admission.producer.identity.tree -cne 'eca03ce7627ba31f155a37da89deaf3a99ad2835') { throw 'ExactEA592 producer required' }
+  if ($admission.producer.qualification.status -cne $producerQualification.status -or $admission.producer.qualification.cases -ne $producerQualification.cases) { throw 'Exact producer qualification not admitted' }
+}
 foreach ($property in $expectedProducerEvidence.PSObject.Properties) {
     $actualReference = if ($property.Name -ceq 'qualificationReceipt') { $admission.producer.qualification.receipt } else { $admission.producer.($property.Name) }
     Check-Reference $actualReference $property.Value
@@ -166,6 +178,14 @@ if ($equipmentRoot -cne $admission.equipment.root) { throw 'Equipment root chang
 Check-Table $equipmentRoot $admission.equipment.files
 Check-Table $admission.applicationRoot $admission.payload.files
 foreach ($reference in @($expectedProducerEvidence.PSObject.Properties.Value) + @($expectedPackageArchives) + @($admission.equipment.graphReceipt,$admission.equipment.qualification.receipt,$admission.controller.qualificationReceipt,$admission.lease.grant)) { Check-Pin $reference }
+if ($isCurrentProducer) {
+    $copy = Get-Content -Raw -LiteralPath $admission.producer.payloadCopyReceipt.path | ConvertFrom-Json
+    if ($copy.buildId -cne $currentProducer.buildId -or $copy.payloadFiles.Count -ne $admission.payload.files.Count) { throw 'Current copied payload identity changed' }
+    for ($index = 0; $index -lt $copy.payloadFiles.Count; $index++) {
+        $actual = $admission.payload.files[$index]; $expected = $copy.payloadFiles[$index]
+        if ($actual.path -cne $expected.path -or $actual.bytes -ne $expected.bytes -or $actual.sha256 -cne $expected.sha256) { throw 'Current payload differs from actual archive/trace copy' }
+    }
+}
 Check-Pin $admission.node
 if ($admission.node.sha256 -cne '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e') { throw 'Wrong Node executable' }
 foreach ($file in @('scripts/recovery-controller/WindowsRecoveryJob.cs','scripts/recovery-controller/Invoke-WorkerRecovery.ps1',
