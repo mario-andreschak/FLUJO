@@ -102,3 +102,18 @@ it.each(['cached', 'malformed'] as const)('closes the descriptor on the %s path'
   expect(closes).toHaveLength(1);
   expect(closes[0]).toHaveBeenCalledTimes(1);
 });
+
+it('omits a snapshot replaced with a directory before opening', async () => {
+  const originalOpen = fs.open.bind(fs);
+  let swapped = false;
+  jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]) === snapshotPath && !swapped) {
+      swapped = true;
+      await fs.unlink(snapshotPath);
+      await fs.mkdir(snapshotPath);
+    }
+    return originalOpen(...args);
+  });
+  expect(await listConversationSummaries()).toEqual([]);
+  expect(swapped).toBe(true);
+});

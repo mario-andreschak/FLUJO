@@ -91,6 +91,24 @@ describe('modelTurnArchive', () => {
     expect(await fs.readdir(path.join(tempDir, 'legacy'))).toEqual([`${entry.id}.json.gz`]);
   });
 
+  it('rejects a nonregular outcome descriptor before reading its bytes', async () => {
+    const entry = await archiveModelDispatch({ ...input('nonregular_outcome'), canonicalMessages: [], genericWire: [], sdkRequest: {} });
+    const file = path.join(tempDir, 'nonregular_outcome', `${entry.id}.outcome.json`);
+    await fs.writeFile(file, '{}');
+    const originalOpen = fs.open.bind(fs);
+    let swapped = false;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === file && !swapped) {
+        swapped = true;
+        await fs.unlink(file);
+        await fs.mkdir(file);
+      }
+      return originalOpen(...args);
+    });
+    await expect(readModelTurnSnapshot('nonregular_outcome', entry.id)).rejects.toThrow();
+    expect(swapped).toBe(true);
+  });
+
   it('rejects oversized, foreign, malformed and nonterminal outcome records without changing dispatch bytes', async () => {
     const entry = await archiveModelDispatch({ ...input('invalid_outcome'), canonicalMessages: [], genericWire: [], sdkRequest: {} });
     const file = path.join(tempDir, 'invalid_outcome', `${entry.id}.outcome.json`);
