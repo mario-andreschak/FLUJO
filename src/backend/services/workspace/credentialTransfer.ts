@@ -17,9 +17,21 @@ const secretFields = new Set(['apikey', 'password', 'passphrase', 'secret', 'tok
 type Transform = (value: string, credential: boolean) => Promise<unknown>;
 
 function validateRecord(key: string, value: unknown) {
-  const arrayStore = key === StorageKey.MODELS || key === StorageKey.MCP_SERVERS;
-  if (!value || typeof value !== 'object' || (arrayStore ? !Array.isArray(value) : Array.isArray(value))) throw new RecipientTransferError();
-  if (arrayStore && (value as unknown[]).some(entry => !entry || typeof entry !== 'object' || Array.isArray(entry))) throw new RecipientTransferError();
+  if (!value || typeof value !== 'object') throw new RecipientTransferError();
+  if (key === StorageKey.MODELS && !Array.isArray(value)) throw new RecipientTransferError();
+  if (![StorageKey.MODELS, StorageKey.MCP_SERVERS].includes(key as StorageKey) && Array.isArray(value)) throw new RecipientTransferError();
+  if (key === StorageKey.MODELS || key === StorageKey.MCP_SERVERS) {
+    // MCP's durable format is keyed by server name; arrays remain readable for
+    // existing transfer/legacy configuration fixtures.
+    const entries = Array.isArray(value) ? value : Object.values(value);
+    if (entries.some(entry => !entry || typeof entry !== 'object' || Array.isArray(entry))) throw new RecipientTransferError();
+  }
+  if (key === StorageKey.MCP_SERVERS && Array.isArray(value)) {
+    const names = value.map(entry => entry.name);
+    if (names.some(name => typeof name !== 'string' || !name.trim()) || new Set(names).size !== names.length) throw new RecipientTransferError();
+    return Object.fromEntries(value.map(entry => [entry.name, entry]));
+  }
+  return value;
 }
 
 /** Inventory: model keys, registry tokens, MCP/OAuth fields, all env/header values, all envelopes. */
@@ -75,8 +87,7 @@ export async function exportCredentialTransfer(passphrase: string): Promise<Buff
         throw new RecipientTransferError();
       }
       try {
-        const record = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-        validateRecord(key, record);
+        const record = validateRecord(key, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
         records[key] = await transform(record, sourceValue);
       }
       finally { bytes.fill(0); }
@@ -106,24 +117,27 @@ export async function restoreCredentialTransfer(envelope: Uint8Array, transferPa
   const metadata = await wrapKeyring(ring, 'user', localPassphrase, 'passphrase');
   const prepared = new Map<string, Buffer>();
   for (const [key, record] of Object.entries(payload.records)) {
-    validateRecord(key, record);
+    const normalizedRecord = validateRecord(key, record);
     const encrypt = async (value: string, credential: boolean) => {
       if (!credential || !value || /^\$\{global:[^}]+\}$/.test(value)) return value;
       const ciphertext = seal(value, ring.activeKey, PURPOSE);
       if (open(ciphertext, ring.activeKey, PURPOSE) !== value) throw new RecipientTransferError();
       return `encrypted:${ciphertext}`;
     };
-    const data = key === StorageKey.GLOBAL_ENV_VARS && record && typeof record === 'object' && !Array.isArray(record)
-      ? Object.fromEntries(await Promise.all(Object.entries(record).map(async ([variable, value]) => {
+    const data = key === StorageKey.GLOBAL_ENV_VARS && normalizedRecord && typeof normalizedRecord === 'object' && !Array.isArray(normalizedRecord)
+      ? Object.fromEntries(await Promise.all(Object.entries(normalizedRecord).map(async ([variable, value]) => {
         const mapped = await transform(value, encrypt, true, 0, true);
         if (typeof mapped === 'string') return [variable, { value: mapped, metadata: { isSecret: true } }];
         if (!mapped || typeof mapped !== 'object' || typeof (mapped as Record<string, unknown>).value !== 'string') throw new RecipientTransferError();
         return [variable, { ...(mapped as Record<string, unknown>), metadata: { isSecret: true } }];
       })))
-      : await transform(record, encrypt, false, 0, true);
+      : await transform(normalizedRecord, encrypt, false, 0, true);
     // Transferred MCP configuration is dormant until recipient review.
-    if (key === StorageKey.MCP_SERVERS && Array.isArray(data)) {
-      for (const server of data) server.disabled = true;
+    if (key === StorageKey.MCP_SERVERS && data && typeof data === 'object') {
+      for (const server of Object.values(data)) {
+        if (!server || typeof server !== 'object' || Array.isArray(server)) throw new RecipientTransferError();
+        (server as Record<string, unknown>).disabled = true;
+      }
     }
     prepared.set(`${key}.json`, Buffer.from(JSON.stringify(data)));
   }
