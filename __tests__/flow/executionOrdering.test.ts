@@ -86,7 +86,7 @@ import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterAppro
 
 jest.setTimeout(30_000);
 
-type Observation = { conversationId: string; operation: string };
+type Observation = { conversationId: string; operation: string; elapsedMs: number };
 type Dispatch = { conversationId: string; nodeId: string; id: string };
 const observations: Observation[] = [];
 let dispatch: Dispatch | undefined;
@@ -96,13 +96,14 @@ let respond: (response: ServerResponse, body: Record<string, unknown>) => void;
 let toolConversationId = '';
 let actualToolCalls = 0;
 let profile = '';
+let observationStart = 0;
 const httpBodies: Record<string, unknown>[] = [];
 const toolChildren: ChildProcess[] = [];
 let toolProfile: ReturnType<typeof installTrustedHostProfile> | undefined;
 const realStep = FlowExecutor.executeStep;
 
 function record(conversationId: string, operation: string) {
-  observations.push({ conversationId, operation });
+  observations.push({ conversationId, operation, elapsedMs: Math.round(performance.now() - observationStart) });
 }
 
 function eventOperation(event: ExecutionEvent): string {
@@ -149,6 +150,7 @@ function answer(response: ServerResponse, body: Record<string, unknown>, content
 }
 
 async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
+  record(id, 'fixture:stage:start');
   const source = fs.readFileSync(path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs'), 'utf8')
     .replace(/from '(@modelcontextprotocol\/[^']+)'/g, (_match, moduleName: string) =>
       `from ${JSON.stringify(pathToFileURL(require.resolve(moduleName)).href)}`);
@@ -164,6 +166,7 @@ async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
     sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot),
     executableDigest: fingerprintTrustedHostExecutable(process.execPath) });
   toolProfile.approve();
+  record(id, 'fixture:stage:done');
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });
   const definition = flow(id, { maxTurns });
   definition.nodes.push(node('mcp-fixture', 'mcp', { boundServer: config.name, enabledTools: ['identity'] }));
@@ -218,6 +221,7 @@ function expectOrdered(conversationId: string, expected: string[]) {
 }
 
 beforeEach(async () => {
+  observationStart = performance.now();
   observations.length = 0;
   httpBodies.length = 0;
   toolChildren.length = 0;
