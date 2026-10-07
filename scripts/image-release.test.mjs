@@ -168,6 +168,8 @@ test('promotion verifies every signature before mutation and every alias retains
     assert.equal(args[args.indexOf('--signer-digest') + 1], sha);
     assert.equal(args[args.indexOf('--source-ref') + 1], 'refs/heads/main');
     assert.equal(args[args.indexOf('--signer-workflow') + 1], 'mario-andreschak/FLUJO/.github/workflows/publish-image.yml');
+    assert.equal(args[args.indexOf('--cert-identity') + 1], 'https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-image.yml@refs/heads/main');
+    assert.equal(args[args.indexOf('--cert-oidc-issuer') + 1], 'https://token.actions.githubusercontent.com');
     assert.ok(args.includes('--deny-self-hosted-runners'));
   }
   const firstTag = f.calls.findIndex(({ args }) => args[0] === 'tag');

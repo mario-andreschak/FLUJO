@@ -68,6 +68,8 @@ export function verifyInstallerAttestations({ run, ...options }) {
   for (const file of [INSTALLER_FILE, INSTALLER_EVIDENCE_FILE]) {
     run('gh', ['attestation', 'verify', path.join(options.directory, file), '--repo', REPOSITORY,
       '--predicate-type', 'https://slsa.dev/provenance/v1', '--signer-workflow', WORKFLOW,
+      '--cert-identity', `https://github.com/${WORKFLOW}@refs/tags/v${options.version}`,
+      '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com',
       '--source-digest', options.revision, '--source-ref', `refs/tags/v${options.version}`,
       '--signer-digest', options.revision, '--deny-self-hosted-runners'], { stdio: 'inherit' });
   }
