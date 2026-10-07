@@ -58,6 +58,7 @@ test('only validated provenance permits a mountless worker, and generic unlock/l
     process.env.FLUJO_WORKER_MODE = '1'; delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
     unlockServer(serialized);
     expect(await isEncryptionLocked()).toBe(true);
+    await expect(getOperatorWorkerBootstrapKey(metadata)).rejects.toThrow();
     await expect(decryptWithPassword(ciphertext)).rejects.toThrow();
     await activate();
     expect(await isEncryptionLocked()).toBe(false);
@@ -101,6 +102,7 @@ test.each(['mode', 'root', 'workspace', 'revision', 'key', 'pending'])('revalida
       expect(await isEncryptionLocked()).toBe(true);
       await expect(decryptWithPassword(ciphertext)).rejects.toThrow();
       await expect(encryptWithPassword('must-deny')).rejects.toThrow();
+      await expect(getOperatorWorkerBootstrapKey(metadata)).rejects.toThrow();
     };
     if (variant === 'workspace') await runWithWorkspace('other', check); else await check();
   });
@@ -113,10 +115,12 @@ test.each(['missing', 'changed'])('a configured %s operator mount cannot be bypa
     else await fs.writeFile(secretFile, randomBytes(32).toString('base64url'));
     expect(await isEncryptionLocked()).toBe(true);
     await expect(decryptWithPassword(ciphertext)).resolves.toBeNull();
+    await expect(getOperatorWorkerBootstrapKey(metadata)).rejects.toThrow();
     await activate();
     process.env.FLUJO_ENCRYPTION_SECRET_FILE = secretFile;
     expect(await isEncryptionLocked()).toBe(true);
     await expect(decryptWithPassword(ciphertext)).resolves.toBeNull();
+    await expect(getOperatorWorkerBootstrapKey(metadata)).rejects.toThrow();
   });
 });
 
@@ -137,7 +141,7 @@ test('a cold OS worker restores an authenticated operator snapshot and uses real
         env: { ...process.env, FLUJO_DATA_DIR: path.join(root, 'worker'), FLUJO_ENCRYPTION_SECRET_FILE: undefined,
           FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archive.archivePath, FLUJO_WORKER_SNAPSHOT_KEY: key.toString('base64'),
           FLUJO_WORKER_SNAPSHOT_SHA256: archive.plaintextSha256 } });
-      expect(result.status).toBe(0);
+      expect({ status: result.status, diagnostic: result.stderr }).toEqual({ status: 0, diagnostic: '' });
       expect(result.stdout).toContain('WORKER_TRANSFER_SOURCE_PASS');
     } catch (error) { failed = true; throw error; } finally {
       const cleanup = await Promise.allSettled([

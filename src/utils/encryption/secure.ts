@@ -314,8 +314,8 @@ export async function isEncryptionInitialized(): Promise<boolean> {
   return (await readMetadata()) !== null;
 }
 
-/** Deliberate worker transfer only: authenticate the independently mounted profile
- * against the exact captured metadata, without creating an interactive session. */
+/** Deliberate worker transfer only: authenticate the independent mount or exact
+ * validated worker provenance against captured metadata, without a UI session. */
 export async function getOperatorWorkerBootstrapKey(capturedMetadata: EncryptionMetadata): Promise<string> {
   return withMetadataLock(async () => {
     await assertCredentialMigrationReady();
@@ -324,6 +324,8 @@ export async function getOperatorWorkerBootstrapKey(capturedMetadata: Encryption
         || metadataRevision(metadata) !== metadataRevision(capturedMetadata)) {
       throw new EncryptionLockedError('Worker snapshot encryption metadata changed');
     }
+    const transferred = await transferredWorkerKeys(metadata);
+    if (transferred) return serializeKeyring(transferred, metadataRevision(metadata));
     const secret = readOperatorSecret();
     if (!secret) throw new EncryptionLockedError('Private encryption operator secret is unavailable');
     const ring = await unwrapKeyring(metadata, secret);
