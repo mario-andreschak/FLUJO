@@ -1,6 +1,6 @@
 import { promises as fs, type Stats, type BigIntStats } from 'node:fs';
 import { readPlainFile, PlainFileReadError } from '@/utils/readPlainFile';
-import { createHash } from 'node:crypto';
+import { createCipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
@@ -12,6 +12,9 @@ import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorks
 import { isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
 import { getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
 import type { EncryptionMetadata } from '@/utils/encryption/format';
+import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
+import { CREDENTIAL_TRANSFER_STORES, transformCredentialValues } from './credentialTransfer';
+import { StorageKey } from '@/shared/types/storage';
 import { getServerDek } from '@/utils/encryption/session';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Model } from '@/shared/types/model';
@@ -61,6 +64,8 @@ export interface WorkspaceArchiveResult {
   archivePath: string;
   stagingDir: string;
   sha256: string;
+  plaintextSha256: string;
+  encrypted: boolean;
   size: number;
   files: number;
   bytes: number;
@@ -73,6 +78,44 @@ export class SnapshotArchiveError extends Error {
   ) {
     super(message);
     this.name = 'SnapshotArchiveError';
+  }
+}
+
+const captureKeys = new WeakMap<CapturedWorkspaceSnapshot, Buffer | null>();
+function snapshotKey(): Buffer | null {
+  const value = process.env.FLUJO_WORKER_SNAPSHOT_KEY;
+  if (value === undefined) return null;
+  const key = Buffer.from(value, 'base64');
+  if (key.length !== 32 || key.toString('base64') !== value) {
+    key.fill(0);
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Configure a canonical base64 32-byte worker snapshot encryption key.');
+  }
+  return key;
+}
+
+async function hasStoredCredentials(zip: JSZip): Promise<boolean> {
+  let found = false;
+  const inspect = async (value: string, credential: boolean) => {
+    if (value && !/^\$\{global:[^}]+\}$/.test(value)
+        && (credential || /^(?:encrypted:|encrypted_failed:|v2:)/.test(value))) found = true;
+    return value;
+  };
+  try {
+    for (const store of CREDENTIAL_TRANSFER_STORES) {
+      const file = zip.file(`db/${store}.json`);
+      if (!file) continue;
+      const record: unknown = JSON.parse(await file.async('string'));
+      if (store === StorageKey.GLOBAL_ENV_VARS && record && typeof record === 'object') {
+        for (const value of Object.values(record)) await transformCredentialValues(value, inspect, true);
+      } else await transformCredentialValues(record, inspect, false, 0, false,
+        store === StorageKey.MCP_SERVERS ? async (_kind, value) => {
+          if (value && (typeof value !== 'object' || Object.keys(value).length)) found = true;
+          return value;
+        } : undefined);
+    }
+    return found;
+  } catch {
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Credential inventory cannot be verified for plaintext export.');
   }
 }
 
@@ -156,6 +199,7 @@ export async function captureWorkspaceSnapshot(
   if (await isCredentialMigrationPending(workspace)) {
     throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
   }
+  const encryptionKey = snapshotKey();
   const root = getWorkspaceDataDir(workspace);
   let rootStats: Stats;
   try {
@@ -317,15 +361,25 @@ export async function captureWorkspaceSnapshot(
     signal?.throwIfAborted();
     throw new SnapshotArchiveError('MCP_UNSUPPORTED', error instanceof Error ? error.message : 'MCP runtime cannot be reconstructed.');
   }
-  const codexAuth = 'none' as const;
+  if (!encryptionKey && await hasStoredCredentials(zip)) throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Credential-bearing snapshots require encryption.');
+  let codexAuth: 'chatgpt' | 'none' = 'none';
   if (requiresCodexAuth) {
-    // This exporter writes a plaintext ZIP. The worker's restore key does not
-    // encrypt it; auth transfer requires a separate encrypted export contract.
-    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'ChatGPT authentication cannot be exported in a plaintext workspace snapshot. Use an encrypted credential transfer.');
+    if (!encryptionKey) throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'ChatGPT authentication requires an encrypted workspace snapshot.');
+    try {
+      const auth = await readCodexAuthForTransfer(workspace);
+      signal?.throwIfAborted();
+      putPrivateFile('db/codex-runtime/auth.json', auth);
+      putPrivateFile(`db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`, Buffer.from(JSON.stringify(WORKSPACE_CODEX_AUTH_SOURCE)));
+      codexAuth = 'chatgpt';
+    } catch {
+      signal?.throwIfAborted();
+      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Codex authentication is unavailable for encrypted transfer.');
+    }
   }
   const encryptionMetadata = await readCapturedJson<EncryptionMetadata>('db/encryption_key.json', {} as EncryptionMetadata);
   const encryption = encryptionMetadata.encryption_type === 'user' ? 'user' : 'default';
   if (encryption === 'user') {
+    if (!encryptionKey) throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Private workspace bootstrap requires an encrypted snapshot.');
     let workspaceDek: string | null;
     try {
       workspaceDek = encryptionMetadata.key_protection === 'operator-file'
@@ -355,12 +409,9 @@ export async function captureWorkspaceSnapshot(
   };
   zip.file('snapshot-manifest.json', JSON.stringify(manifest, null, 2));
 
-  return {
-    zip,
-    manifest,
-    files: files.length,
-    bytes: totalBytes,
-  };
+  const captured = { zip, manifest, files: files.length, bytes: totalBytes };
+  captureKeys.set(captured, encryptionKey);
+  return captured;
 }
 
 export async function writeWorkspaceSnapshotArchive(
@@ -369,9 +420,21 @@ export async function writeWorkspaceSnapshotArchive(
 ): Promise<WorkspaceArchiveResult> {
   const { signal } = options;
   signal?.throwIfAborted();
-  if (captured.manifest.runtime.codexAuth === 'chatgpt'
-      || Object.keys(captured.zip.files).some(name => /^db\/codex-(?:runtime|private-[^/]*)(?:\/|$)/i.test(name))) {
-    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Codex authentication cannot be written in a plaintext workspace snapshot.');
+  const key = snapshotKey();
+  if (captureKeys.has(captured)) {
+    const original = captureKeys.get(captured);
+    if (Boolean(original) !== Boolean(key) || (original && key && !timingSafeEqual(original, key))) {
+      key?.fill(0);
+      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Snapshot encryption key changed. Start a new capture.');
+    }
+  }
+  const paths = Object.keys(captured.zip.files);
+  const allowedRuntime = new Set(['db/codex-runtime/', 'db/codex-runtime/auth.json', `db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`]);
+  if (paths.some(name => /^db\/codex-private-/i.test(name))
+      || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name) && !allowedRuntime.has(name))
+      || (!key && (captured.manifest.runtime.codexAuth === 'chatgpt' || captured.manifest.runtime.encryption === 'user' || paths.includes('db/worker-bootstrap-secrets.json') || await hasStoredCredentials(captured.zip) || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name))))) {
+    key?.fill(0);
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Credential-bearing snapshots require encryption; runtime homes cannot be exported.');
   }
   if (await isCredentialMigrationPending(captured.manifest.workspace)) {
     throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
@@ -381,13 +444,22 @@ export async function writeWorkspaceSnapshotArchive(
   const archivePath = path.join(stagingDir, 'workspace.snapshot.zip');
 
   try {
-    const archive = await captured.zip.generateAsync({
+    const plaintext = await captured.zip.generateAsync({
       type: 'nodebuffer',
       compression: 'DEFLATE',
       compressionOptions: { level: 6 },
       platform: 'UNIX',
     }, () => signal?.throwIfAborted());
     signal?.throwIfAborted();
+    const plaintextSha256 = createHash('sha256').update(plaintext).digest('hex');
+    let archive = plaintext;
+    if (key) {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', key, iv);
+      const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      archive = Buffer.from(JSON.stringify({ format: 'flujo-workspace-encrypted', version: 1,
+        iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') }));
+    }
     await fs.writeFile(archivePath, archive, { mode: 0o600 });
     await fs.chmod(archivePath, 0o600).catch(() => undefined);
     signal?.throwIfAborted();
@@ -396,6 +468,8 @@ export async function writeWorkspaceSnapshotArchive(
       archivePath,
       stagingDir,
       sha256: createHash('sha256').update(archive).digest('hex'),
+      plaintextSha256,
+      encrypted: Boolean(key),
       size: archive.byteLength,
       files: captured.files,
       bytes: captured.bytes,
@@ -403,5 +477,7 @@ export async function writeWorkspaceSnapshotArchive(
   } catch (error) {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    key?.fill(0);
   }
 }

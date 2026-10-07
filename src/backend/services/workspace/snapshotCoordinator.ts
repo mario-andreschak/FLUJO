@@ -44,6 +44,8 @@ export interface SnapshotInfo {
   filesStaged: number;
   archiveBytes?: number;
   sha256?: string;
+  plaintextSha256?: string;
+  encrypted?: boolean;
   errorCode?: string;
   error?: string;
 }
@@ -59,6 +61,8 @@ interface SnapshotSessionRecord {
   filesStaged: number;
   archiveBytes?: number;
   sha256?: string;
+  plaintextSha256?: string;
+  encrypted?: boolean;
   archivePath?: string;
   stagingDir?: string;
   errorCode?: string;
@@ -118,6 +122,8 @@ function publicInfo(session: SnapshotSessionRecord): SnapshotInfo {
     filesStaged: session.filesStaged,
     archiveBytes: session.archiveBytes,
     sha256: session.sha256,
+    plaintextSha256: session.plaintextSha256,
+    encrypted: session.encrypted,
     errorCode: session.errorCode,
     error: session.error,
   };
@@ -224,6 +230,8 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
     session.stagingDir = archive.stagingDir;
     session.archiveBytes = archive.size;
     session.sha256 = archive.sha256;
+    session.plaintextSha256 = archive.plaintextSha256;
+    session.encrypted = archive.encrypted;
 
     if (session.abortRequested) {
       if (session.errorCode !== 'SNAPSHOT_TIMEOUT') session.state = 'aborted';
@@ -343,7 +351,7 @@ export const snapshotCoordinator = {
   async readDownload(
     sessionId: string,
     workspace = getCurrentWorkspace(),
-  ): Promise<{ content: Buffer; sha256: string; size: number }> {
+  ): Promise<{ content: Buffer; sha256: string; plaintextSha256: string; encrypted: boolean; size: number }> {
     const normalizedWorkspace = normalizeWorkspaceName(workspace);
     const session = requireSession(normalizedWorkspace, sessionId);
     await expireIfNeeded(session);
@@ -379,7 +387,7 @@ export const snapshotCoordinator = {
         'Snapshot archive failed its integrity check.',
       );
     }
-    return { content, sha256, size: content.byteLength };
+    return { content, sha256, plaintextSha256: session.plaintextSha256 ?? sha256, encrypted: session.encrypted ?? false, size: content.byteLength };
   },
 
   async finalize(

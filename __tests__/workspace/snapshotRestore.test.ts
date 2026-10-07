@@ -5,6 +5,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import JSZip from 'jszip';
 import { version } from '../../package.json';
+import { writeWorkspaceSnapshotArchive } from '@/backend/services/workspace/snapshotArchive';
 import { restoreConfiguredWorkerSnapshot, unlockWorkerSnapshot } from '@/backend/services/workspace/snapshotRestore';
 import { WORKSPACE_LAYOUT_VERSION } from '@/backend/services/workspace/layoutVersion';
 import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
@@ -148,6 +149,40 @@ describe('worker snapshot restore', () => {
     await archive();
     process.env.FLUJO_SNAPSHOT_MAX_FILE_BYTES = '4';
     await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow('size limit');
+  });
+
+  it.each(['valid', 'wrong-key', 'tamper', 'wrong-digest'])('restores the production encrypted writer with %s integrity', async (scenario) => {
+    const plaintext = await archive();
+    const zip = await JSZip.loadAsync(plaintext);
+    const manifest = JSON.parse(await zip.file('snapshot-manifest.json')!.async('string'));
+    const key = randomBytes(32).toString('base64');
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = key;
+    const exported = await writeWorkspaceSnapshotArchive({ zip, manifest, files: manifest.files.length, bytes: plaintext.length });
+    try {
+      const wire = await fs.readFile(exported.archivePath);
+      expect(exported.encrypted).toBe(true);
+      expect(digest(wire)).toBe(exported.sha256);
+      expect(exported.plaintextSha256).not.toBe(exported.sha256);
+      process.env.FLUJO_WORKER_SNAPSHOT = exported.archivePath;
+      process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = exported.plaintextSha256;
+      if (scenario === 'wrong-key') process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+      if (scenario === 'wrong-digest') process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = exported.sha256;
+      if (scenario === 'tamper') {
+        const envelope = JSON.parse(wire.toString());
+        const data = Buffer.from(envelope.data, 'base64'); data[0] ^= 1;
+        envelope.data = data.toString('base64');
+        await fs.writeFile(exported.archivePath, JSON.stringify(envelope));
+      }
+      if (scenario === 'valid') {
+        await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: exported.plaintextSha256 });
+        global.__flujo_worker_snapshot_restore = undefined;
+        await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: exported.plaintextSha256 });
+        expect(await fs.readFile(path.join(destination, 'db/flows/flow-one.json'), 'utf8')).toBe('{"id":"flow-one"}');
+      } else {
+        await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow(scenario === 'wrong-digest' ? 'SHA-256' : 'decryption failed');
+        await expect(fs.stat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    } finally { await fs.rm(exported.stagingDir, { recursive: true, force: true }); }
   });
 
   it('authenticates the encrypted envelope before checking the plaintext ZIP digest', async () => {
