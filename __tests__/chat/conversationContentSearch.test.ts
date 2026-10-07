@@ -16,6 +16,7 @@ import os from 'os';
 import path from 'path';
 import { NextRequest } from 'next/server';
 import { makeLocalRequest } from '../utils/localRequest';
+import { installOwnerFixture } from '../utils/ownerFixture';
 
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: jest.fn(async () => undefined),
@@ -27,6 +28,7 @@ jest.mock('@/frontend/components/Chat', () => ({}));
 type Route = typeof import('@/app/v1/chat/conversations/route');
 
 let tmpDir: string;
+let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>> | undefined;
 let convDir: string;
 let GET: Route['GET'];
 let DELETE: Route['DELETE'];
@@ -60,6 +62,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  ownerFixture?.restore();
+  ownerFixture = undefined;
   delete process.env.FLUJO_DATA_DIR;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
@@ -211,7 +215,8 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect((await getJson('?paged=1&search=archived%20persona')).body.items.map((item: any) => item.id)).toEqual(['archive']);
 
     process.env.FLUJO_EXPOSURE_MODE = 'public';
-    const remote = await GET(new NextRequest('https://flujo.example.com/v1/chat/conversations?paged=1&search=renamed%20teammate', { headers: { host: 'flujo.example.com' } }));
+    ownerFixture = await installOwnerFixture(tmpDir);
+    const remote = await GET(new NextRequest('https://flujo.example.com/v1/chat/conversations?paged=1&search=renamed%20teammate', { headers: { host: 'flujo.example.com', ...ownerFixture.headers } }));
     expect(remote.status).toBe(200);
     expect((await remote.json()).items).toEqual([]);
   });
@@ -346,10 +351,11 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
       },
     });
     process.env.FLUJO_EXPOSURE_MODE = 'public';
+    ownerFixture = await installOwnerFixture(tmpDir);
     const remote = async (query = '') => {
       const response = await GET(new NextRequest(
         `https://flujo.example.com/v1/chat/conversations${query}`,
-        { headers: { host: 'flujo.example.com' } },
+        { headers: { host: 'flujo.example.com', ...ownerFixture.headers } },
       ));
       return response.json();
     };
