@@ -83,13 +83,30 @@ describe('streamed Response.text UTF-8 prefix', () => {
     { name: 'BOM alone', chunks: [[0xef], [0xbb, 0xbf]], limit: 10 },
     { name: 'empty chunks', chunks: [[], [0x41], [], [0x42]], limit: 10 },
     { name: 'second BOM preserved', chunks: [[0xef, 0xbb, 0xbf], [0xef], [0xbb, 0xbf, 0x41]], limit: 10 },
-  ])('preserves decoding across chunks: $name', async ({ chunks, limit }) => {
+  ])('preserves decoding across chunks: $name', async ({ name, chunks, limit }) => {
     const bytes = chunks.map(chunk => Uint8Array.from(chunk));
     const expected = (await new Response(concat(bytes)).text()).slice(0, limit);
     const fixture = bodyFixture(bytes);
     expect(await readUtf8TextPrefix(fixture.response, limit)).toBe(expected);
     expect(fixture.stream.locked).toBe(false);
     expect(fixture.text).not.toHaveBeenCalled();
+    if (name === 'second BOM preserved') {
+      // Retain this original case identity and its original failing input.
+      // Additional reference vectors prevent stripping every leading or
+      // interior BOM while matching Node Response.text()'s two-BOM behavior.
+      const additionalChunks = [
+        [Uint8Array.from([0xef]), Uint8Array.from([0xbb, 0xbf]), Uint8Array.from([0xef, 0xbb, 0xbf]), Uint8Array.from([0xef, 0xbb, 0xbf, 0x41])],
+        [encode('A'), Uint8Array.from([0xef]), Uint8Array.from([0xbb, 0xbf, 0x42])],
+        [Uint8Array.from([0xef, 0xbb, 0xbf, 0xff]), Uint8Array.from([0xef, 0xbb, 0xbf, 0x41])],
+      ];
+      for (const segments of additionalChunks) {
+        const reference = (await new Response(concat(segments)).text()).slice(0, limit);
+        const guarded = bodyFixture(segments);
+        expect(await readUtf8TextPrefix(guarded.response, limit)).toBe(reference);
+        expect(guarded.stream.locked).toBe(false);
+        expect(guarded.text).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it('stops at an exact limit without a read to discover tail EOF', async () => {
@@ -265,7 +282,7 @@ const RAW_LISTS = [
 const ALPHA_LINE = 'calendar [Alpha Bridge](https://example.test/alpha) <b>calendar connector</b>';
 const BETA_LINE = 'calendar [Beta Bridge](https://example.test/beta) calendar connector';
 const makeServer = (slug: string): RegistryServer => ({
-  name: `io.example/${slug}`, title: `${slug === 'alpha' ? 'Alpha' : 'Beta'} Bridge`, description: 'calendar connector',
+  name: `io.example/${slug}`, title: slug === 'alpha' ? 'Alpha' : 'Beta', description: 'calendar connector',
   version: '1.0.0', packages: [{ registryType: 'npm', identifier: `@example/${slug}`, version: '1.0.0', transport: { type: 'stdio' } }],
 });
 

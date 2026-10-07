@@ -12,7 +12,14 @@ export async function readUtf8TextPrefix(response: Response, maxCodeUnits: numbe
   const parts: string[] = [];
   let remaining = maxCodeUnits;
   let reachedEof = false;
+  let firstDecodedCodeUnit = true;
   const append = (text: string) => {
+    if (firstDecodedCodeUnit && text.length > 0) {
+      firstDecodedCodeUnit = false;
+      // Node Response.text() removes an additional leading BOM beyond the
+      // default TextDecoder's own BOM handling. Preserve later/interior BOMs.
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    }
     const prefix = text.slice(0, remaining);
     if (prefix) parts.push(prefix);
     remaining -= prefix.length;
