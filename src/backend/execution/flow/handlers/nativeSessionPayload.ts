@@ -4,6 +4,7 @@ import path from 'node:path';
 import { assertSafeCollectionId } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import type { NativeInvocationSessionPayload, NativeInvocationSessionPayloadRef } from './nativeInvocationSession';
+import { readNativeHeldFile } from './nativeHeldFile';
 
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 let rootOverride: string | undefined;
@@ -46,31 +47,11 @@ export async function readNativeSessionPayload(ref: NativeInvocationSessionPaylo
   if (ref.kind !== 'private-native-session-payload' || !Number.isSafeInteger(ref.byteLength)
     || ref.byteLength < 1 || ref.byteLength > MAX_PAYLOAD_BYTES) throw new Error('Invalid native session payload reference.');
   const file = fileFor(ref.invocationId, ref.sha256, workspace);
-  for (const directory of [root(workspace), path.dirname(file)]) {
-    const stat = await fs.lstat(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Native session payload directory changed.');
-  }
-  const entry = await fs.lstat(file);
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1
-    || entry.size !== ref.byteLength) throw new Error('Native session payload reference changed.');
-  const handle = await fs.open(file, 'r');
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size !== ref.byteLength) {
-      throw new Error('Native session payload changed.');
-    }
-    const bytes = Buffer.alloc(ref.byteLength + 1);
-    let read = 0;
-    while (read < bytes.length) {
-      const result = await handle.read(bytes, read, bytes.length - read, read);
-      if (!result.bytesRead) break;
-      read += result.bytesRead;
-    }
-    if (read !== ref.byteLength || hash(bytes.subarray(0, read)) !== ref.sha256) {
+    const bytes = await readNativeHeldFile(file, ref.byteLength);
+    if (bytes.length !== ref.byteLength || hash(bytes) !== ref.sha256) {
       throw new Error('Native session payload digest changed.');
     }
-    const payload = JSON.parse(bytes.subarray(0, read).toString('utf8')) as NativeInvocationSessionPayload;
+    const payload = JSON.parse(bytes.toString('utf8')) as NativeInvocationSessionPayload;
     if (payload.invocationId !== ref.invocationId) throw new Error('Native session payload owner changed.');
     return payload;
-  } finally { await handle.close(); }
 }

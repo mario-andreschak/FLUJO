@@ -15,6 +15,7 @@ import { createNativeLineageRootBinding } from './nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from './nativeInvocationSession';
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
+import { readNativeHeldFile } from './nativeHeldFile';
 
 type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
@@ -58,38 +59,20 @@ async function assertDirectories(binding: Binding): Promise<void> {
 // identities or budget holds enter generic snapshot/restore or provider input.
 async function readLedger(binding: Binding): Promise<Ledger> {
   const file = ledgerFile(binding);
-  let entry;
-  try { entry = await fs.lstat(file, { bigint: true }); }
+  let bytes;
+  try { bytes = await readNativeHeldFile(file, 256 * 1024, { privateOwner: true }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1,
       goalId: binding.goalId, personaId: binding.personaId, reservations: [] };
     throw error;
   }
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
-    || entry.size <= BigInt(0) || entry.size > BigInt(256 * 1024)) return held();
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-  try {
     await assertDirectories(binding);
-    const stat = await handle.stat({ bigint: true });
-    if (stat.dev !== entry.dev || stat.ino !== entry.ino || stat.size !== entry.size || !privateOwner(stat)) return held();
-    const bytes = Buffer.alloc(Number(entry.size) + 1);
-    let read = 0;
-    while (read < bytes.length) {
-      const chunk = await handle.read(bytes, read, bytes.length - read, read);
-      if (!chunk.bytesRead) break;
-      read += chunk.bytesRead;
-    }
-    const final = await handle.stat({ bigint: true });
-    const after = await fs.lstat(file, { bigint: true });
-    if (read !== Number(entry.size) || after.dev !== entry.dev || after.ino !== entry.ino
-      || after.size !== entry.size || after.isSymbolicLink() || final.mtimeNs !== stat.mtimeNs || final.ctimeNs !== stat.ctimeNs) return held();
-    const value = JSON.parse(bytes.subarray(0, read).toString('utf8')) as Ledger;
+    const value = JSON.parse(bytes.toString('utf8')) as Ledger;
     if (value.version !== 1 || value.goalId !== binding.goalId || value.personaId !== binding.personaId
       || !Array.isArray(value.reservations) || value.reservations.length > 256
       || value.reservations.some(item => !item.invocationId || !item.acceptanceDigest
         || !['accepted', 'registered', 'exited', 'released'].includes(item.state))) return held();
     return value;
-  } finally { await handle.close(); }
 }
 
 type CommitCapability = { assertCurrent: () => Promise<void>; assertActive: () => void };
@@ -168,8 +151,12 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
       await fs.rename(temporary, ledgerFile(binding));
       committed = true;
       if (process.platform !== 'win32') {
-        const parent = await fs.open(directory, 'r');
-        try { await parent.sync(); } finally { await parent.close(); }
+        const parent = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        try {
+          const owned = await parent.stat({ bigint: true });
+          if (!owned.isDirectory() || owned.dev !== directoryIdentity.dev || owned.ino !== directoryIdentity.ino) return held();
+          await parent.sync();
+        } finally { await parent.close(); }
       }
       return result;
     } finally {

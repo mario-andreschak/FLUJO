@@ -10,6 +10,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import type { NativeInvocationReceipt } from './nativeToolJournal';
 import { nativeInvocationStatus } from './nativeToolJournal';
+import { readNativeHeldFile } from './nativeHeldFile';
 import { assertNativeBrokerAuthority, nativeDigest, type NativeBrokerAuthority } from './nativeToolBroker';
 
 /** A Controller-resolved root is installed by trusted runtime code, never by a model tool. */
@@ -139,25 +140,10 @@ const taskDir = () => path.join(getWorkspaceDataDir(), 'db', 'subflow-tasks');
 
 async function readTaskBounded(id: string): Promise<{ task: SubflowTaskRecord; bytes: number }> {
   const file = path.join(taskDir(), `${requireId(id)}.json`);
-  const entry = await fs.lstat(file);
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1
-    || entry.size < 1 || entry.size > MAX_TASK_ITEM_BYTES) return held();
-  const handle = await fs.open(file, 'r');
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size < 1 || stat.size > MAX_TASK_ITEM_BYTES) return held();
-    const buffer = Buffer.alloc(stat.size + 1);
-    let bytes = 0;
-    while (bytes < buffer.length) {
-      const read = await handle.read(buffer, bytes, buffer.length - bytes, bytes);
-      if (!read.bytesRead) break;
-      bytes += read.bytesRead;
-    }
-    if (bytes !== stat.size) return held();
-    const task = JSON.parse(buffer.subarray(0, bytes).toString('utf8')) as SubflowTaskRecord;
+    const buffer = await readNativeHeldFile(file, MAX_TASK_ITEM_BYTES);
+    const task = JSON.parse(buffer.toString('utf8')) as SubflowTaskRecord;
     if (!task || typeof task !== 'object' || Array.isArray(task)) return held();
-    return { task, bytes };
-  } finally { await handle.close(); }
+    return { task, bytes: buffer.length };
 }
 
 async function detachedTaskCandidates(parent: StateSnapshot, childId: string): Promise<SubflowTaskRecord[]> {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { constants, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readNativeModelTurnSnapshot } from '../modelTurnArchive';
@@ -12,6 +12,7 @@ import { nativeInvocationStatus, readNativeInvocationTerminalEvidence,
 import { readNativeSessionPayload } from './nativeSessionPayload';
 import type { NativeInvocationSession, NativeInvocationSessionDescriptor } from './nativeInvocationSession';
 import type { ModelTurnSnapshot } from '@/shared/types/modelTurn';
+import { readNativeHeldFile } from './nativeHeldFile';
 
 const MAX_ORIGIN_BYTES = 32 * 1024;
 const processGeneration = randomUUID();
@@ -40,34 +41,13 @@ export function assertNativeArchiveFormat(snapshot: ModelTurnSnapshot,
 }
 
 async function readSaved(id: string, workspace: string): Promise<SavedOrigin> {
-  const directory = await fs.lstat(root(workspace));
-  if (!directory.isDirectory() || directory.isSymbolicLink()) return held();
   const file = fileFor(id, workspace);
-  const entry = await fs.lstat(file, { bigint: true });
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
-    || entry.size < BigInt(1) || entry.size > BigInt(MAX_ORIGIN_BYTES)) return held();
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-  try {
-    const stat = await handle.stat({ bigint: true });
-    const current = await fs.lstat(file, { bigint: true });
-    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
-      || stat.dev !== entry.dev || stat.ino !== entry.ino
-      || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
-      || current.dev !== entry.dev || current.ino !== entry.ino) return held();
-    const bytes = Buffer.alloc(Number(stat.size) + 1);
-    let read = 0;
-    while (read < bytes.length) {
-      const result = await handle.read(bytes, read, bytes.length - read, read);
-      if (!result.bytesRead) break;
-      read += result.bytesRead;
-    }
-    if (BigInt(read) !== stat.size) return held();
-    const record = JSON.parse(bytes.subarray(0, read).toString('utf8')) as SavedOrigin;
+    const bytes = await readNativeHeldFile(file, MAX_ORIGIN_BYTES);
+    const record = JSON.parse(bytes.toString('utf8')) as SavedOrigin;
     if (record?.version !== 1 || record.invocationId !== id
       || typeof record.processGeneration !== 'string' || !record.processGeneration
       || record.descriptor?.receipt?.invocationId !== id) return held();
     return record;
-  } finally { await handle.close(); }
 }
 
 /** Exclusive, durable, private origin publication. An interrupted write leaves

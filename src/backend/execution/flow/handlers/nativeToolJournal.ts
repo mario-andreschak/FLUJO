@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import { readNativeHeldFile } from './nativeHeldFile';
 import path from 'node:path';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
@@ -74,34 +75,13 @@ async function readJson<T>(file: string): Promise<T | undefined> {
 }
 
 async function readTerminalJson<T>(file: string): Promise<T | undefined> {
-  let entry;
-  try { entry = await fs.lstat(file, { bigint: true }); }
+  let bytes;
+  try { bytes = await readNativeHeldFile(file, 64 * 1024); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
-    || entry.size < BigInt(1) || entry.size > BigInt(64 * 1024)) throw new Error('Native terminal source file is unsafe.');
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-  try {
-    const stat = await handle.stat({ bigint: true });
-    const current = await fs.lstat(file, { bigint: true });
-    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
-      || stat.dev !== entry.dev || stat.ino !== entry.ino
-      || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
-      || current.dev !== entry.dev || current.ino !== entry.ino) {
-      throw new Error('Native terminal source file changed.');
-    }
-    const bytes = Buffer.alloc(Number(stat.size) + 1);
-    let read = 0;
-    while (read < bytes.length) {
-      const result = await handle.read(bytes, read, bytes.length - read, read);
-      if (!result.bytesRead) break;
-      read += result.bytesRead;
-    }
-    if (BigInt(read) !== stat.size) throw new Error('Native terminal source file changed.');
-    return JSON.parse(bytes.subarray(0, read).toString('utf8')) as T;
-  } finally { await handle.close(); }
+    return JSON.parse(bytes.toString('utf8')) as T;
 }
 
 async function assertTerminalDirectory(directory: string, optional = false): Promise<boolean> {
