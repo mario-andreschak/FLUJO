@@ -183,6 +183,8 @@ export type MCPManagerConfig = {
   toolParameterPresets?: MCPToolParameterPresets;
   /** Runtime-home policy for stdio servers. Missing means `inherit`. */
   runtimeHomeMode?: MCPRuntimeHomeMode;
+  /** Strict Linux container policy; approval lives in a separate private operator file. */
+  isolation?: unknown;
 }
 
 export type MCPElicitationPolicy = {

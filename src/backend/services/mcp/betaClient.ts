@@ -27,6 +27,8 @@ import {
   type TransportCreationOptions,
 } from "./connection";
 import { createOAuthClientProvider } from "./oauth";
+import { McpIsolationError } from '../security/isolatedMcp';
+import { attachMcpIsolation } from './isolation';
 import { createRootsListHandler } from "./roots";
 import { samplingEnabled, createSamplingHandler } from "./sampling";
 import { elicitationEnabled, createElicitationHandler } from "./elicitation";
@@ -113,7 +115,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
-  const serverHasStdioOAuth = config.transport === "stdio";
+  const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
@@ -147,7 +149,9 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
       // 'auto': probe for a 2026-07-28 server, fall back to the classic
       // initialize handshake on anything else. Never 'pin' — FLUJO must keep
       // working against every existing server.
-      versionNegotiation: { mode: "auto" },
+      // An isolated v1 image uses the classic handshake. The SDK's auto mode
+      // clones stdio spawn parameters for a sibling; that cannot share one CID.
+      versionNegotiation: { mode: config.isolation === undefined ? "auto" : "legacy" },
     },
   );
 
@@ -219,6 +223,7 @@ export function createBetaTransport(
   | BetaStreamableHTTPClientTransport
   | BetaSSEClientTransport {
   assertMcpTransport(config);
+  if (config.isolation !== undefined && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (config.transport === "websocket") {
     throw new Error(
       "The v2-beta MCP SDK has no websocket transport; use the v1 path",
@@ -285,7 +290,7 @@ export function createBetaTransport(
   }
 
   // Admission above leaves only explicit stdio after the remote branches.
-  const { command, args, env, cwd } = resolveStdioLaunch(config, options);
+  const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
   const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
     ? issueMcpAppRuntimeBrokerEnvironment(config.name)
     : undefined;
@@ -296,10 +301,13 @@ export function createBetaTransport(
       args,
       env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
       cwd,
-      stderr: "pipe",
+      stderr: isolation ? 'ignore' : 'pipe',
+      ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
     });
-    attachShippedWorkspaceReadiness(transport, config, cwd);
+    if (isolation) attachMcpIsolation(transport, config, isolation);
+    else attachShippedWorkspaceReadiness(transport, config, cwd);
   } catch (error) {
+    isolation?.close();
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
     throw error;
   }
