@@ -35,6 +35,7 @@
     "scripts/local-instance.mjs",
     "scripts/healthcheck.mjs",
     "scripts/operations-inspect.mjs",
+    "scripts/owner-bootstrap.mjs",
     "scripts/exclude-workspaces-from-next-glob.cjs",
     "scripts/exposure-mode.mjs",
     "scripts/migration-landscape-demo.mjs",
