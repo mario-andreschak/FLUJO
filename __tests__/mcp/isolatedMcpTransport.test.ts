@@ -95,15 +95,22 @@ test('beta client uses documented legacy mode instead of cloning a disposable si
   expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'legacy' });
 });
 
-test.each(['v1', 'beta'])('%s isolated broker-enabled factory needs no host approval and retires its actual broker lease', async era => {
-  const apps = { ...config, enableMcpApps: true };
-  const transport = era === 'v1' ? createStdioTransport(apps, { enableRuntimeBroker: true }) : createBetaTransport(apps, { enableRuntimeBroker: true });
-  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(1);
+test.each(['v1', 'beta'])('%s valid isolated factory ignores the broker option without requiring host approval', async era => {
+  const transport = era === 'v1' ? createStdioTransport(config, { enableRuntimeBroker: true }) : createBetaTransport(config, { enableRuntimeBroker: true });
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
   const parameters = (transport as unknown as { _serverParams: { env: Record<string, string> } })._serverParams;
-  expect(parameters.env.FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN).toEqual(expect.any(String));
+  expect(parameters.env.FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN).toBeUndefined();
   await transport.close();
   expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
   revokeMcpAppRuntimeBrokerForServer(config.name);
+});
+
+test.each(['v1', 'beta'])('%s isolated Apps remain unsupported and cannot issue a broker lease', era => {
+  const apps = { ...config, enableMcpApps: true };
+  expect(() => era === 'v1' ? createStdioTransport(apps, { enableRuntimeBroker: true }) : createBetaTransport(apps, { enableRuntimeBroker: true }))
+    .toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  expect(create).not.toHaveBeenCalled();
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
 });
 
 test.each(['v1', 'beta'])('%s start rechecks revocation before SDK spawn', async era => {
