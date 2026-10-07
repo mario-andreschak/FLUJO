@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
+import { resolveTrustedHostLaunch } from '@/backend/services/mcp/trustedHost';
 import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import {
   assertTrustedHostMcpAllowed, fingerprintTrustedHostExecutable,
-  fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, verifyTrustedHostMcp,
+  fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp,
 } from '@/backend/services/security/trustedHostMcp';
 
 let root: string;
@@ -53,6 +54,27 @@ it('requires a separate grant and accepts the matching explicit package revision
   delete process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
   expect(() => assertTrustedHostMcpAllowed({ ...config, trustedHost: undefined })).toThrow('explicit owner consent');
+});
+
+it.each(['inherited', 'field-accessor', 'map-accessor'])('refuses %s environment values without invoking getters', kind => {
+  const getter = jest.fn(() => 'secret');
+  const raw = kind === 'inherited' ? Object.create({ get value() { return getter(); } })
+    : Object.defineProperty({}, 'value', { get: getter, enumerable: true });
+  const env = kind === 'map-accessor' ? Object.defineProperty({}, 'SAFE', { get: getter, enumerable: true }) : { SAFE: raw };
+  config.env = env;
+  config.trustedHost = { ...trustedHostMcpPolicySchema.parse(config.trustedHost), environmentNames: ['SAFE'] };
+  expect(() => trustedHostMcpPolicyDigest(config)).toThrow();
+  expect(getter).not.toHaveBeenCalled();
+});
+
+it('preserves an explicitly approved own prototype-named environment value', () => {
+  config.env = Object.fromEntries([['__proto__', 'literal'], ...(process.platform === 'win32' ? [['SystemRoot', process.env.SystemRoot!]] : [])]);
+  config.trustedHost = { ...trustedHostMcpPolicySchema.parse(config.trustedHost), environmentNames: Object.keys(config.env) };
+  approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(config);
+  persist();
+  const environment = resolveTrustedHostLaunch(config).env;
+  expect(Object.getPrototypeOf(environment)).toBeNull();
+  expect(Object.getOwnPropertyDescriptor(environment, '__proto__')?.value).toBe('literal');
 });
 
 it.each(['owner', 'server', 'workspace', 'expiry', 'revocation'])('refuses a %s mismatch', mismatch => {

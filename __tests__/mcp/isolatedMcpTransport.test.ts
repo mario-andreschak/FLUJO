@@ -6,7 +6,8 @@ import { StdioClientTransport, DEFAULT_INHERITED_ENV_VARS } from '@modelcontextp
 import { StdioClientTransport as BetaStdioClientTransport, DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import { createStdioTransport, createTransport, stdioConfigKey, safelyCloseClient } from '@/backend/services/mcp/connection';
 import { createBetaTransport, createNewBetaClient } from '@/backend/services/mcp/betaClient';
-import { createRootsListHandler } from '@/backend/services/mcp/roots';
+import { createRootsListHandler, unrestrictedHostRoots } from '@/backend/services/mcp/roots';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 import { createIsolatedMcpLaunch, isolatedMcpPolicyDigest, type IsolatedMcpLaunch } from '@/backend/services/security/isolatedMcp';
 import { approvedIsolationDigest, assertMcpIsolationDispatch, getManagedMcpIsolation, assertIsolatedMcpArguments } from '@/backend/services/mcp/isolation';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
@@ -150,13 +151,21 @@ test.each(['missing', 'service error', 'invalid transport', 'disabled', 'thrown 
   expect(resolveGlobalVars).not.toHaveBeenCalled();
 });
 
-test('a current enabled host config retains its normal roots behavior', async () => {
-  delete process.env.FLUJO_MCP_ISOLATION_FILE;
-  const host = { ...config, isolation: undefined };
-  configs.mockResolvedValue([host]);
-  const result = await createRootsListHandler(host)();
-  expect(result.roots.length).toBeGreaterThan(0);
-  expect(result.roots.every(root => root.uri.startsWith('file://'))).toBe(true);
+test('a current explicitly approved host config exposes its declared filesystem roots', async () => {
+  const fixture = installTrustedHostProfile({ name: config.name, roots: unrestrictedHostRoots().map(root => root.uri) });
+  let transport: StdioClientTransport | undefined;
+  try {
+    const host = fixture.config;
+    configs.mockResolvedValue([host]);
+    transport = createStdioTransport(host);
+    const owned = transport;
+    const result = await createRootsListHandler(host, { transport: owned, close: () => owned.close() })();
+    expect(result.roots.length).toBeGreaterThan(0);
+    expect(result.roots.every(root => root.uri.startsWith('file://'))).toBe(true);
+  } finally {
+    await transport?.close();
+    fixture.restore();
+  }
 });
 
 test('a current host config cannot expose roots by omitting its private isolation grant', async () => {

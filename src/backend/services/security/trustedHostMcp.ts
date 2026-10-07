@@ -7,6 +7,22 @@ import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '
 import { getDataDir } from '@/utils/paths';
 import { ownerPolicySchema } from './ownerCredentials';
 
+/** Admit only own data properties; configuration accessors never run during consent. */
+export function trustedHostEnvironment(config: MCPStdioConfig): Map<string, string> {
+  const environment = new Map<string, string>();
+  const descriptors = Object.getOwnPropertyDescriptors(config.env ?? {});
+  for (const [name, descriptor] of Object.entries(descriptors)) {
+    if (!descriptor.enumerable) continue;
+    if (!('value' in descriptor)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    const raw: unknown = descriptor.value;
+    const field = raw && typeof raw === 'object' ? Object.getOwnPropertyDescriptor(raw, 'value') : undefined;
+    const value: unknown = typeof raw === 'string' ? raw : field && 'value' in field ? field.value : undefined;
+    if (typeof value !== 'string' || Buffer.byteLength(value) > 16 * 1024 || value.includes('\0')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    environment.set(name, value);
+  }
+  return environment;
+}
+
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const absolutePath = z.string().min(1).max(2048).refine(value => path.isAbsolute(value) && !value.includes('\0'));
 const MAX_SOURCE_BYTES = 256 * 1024 * 1024;
@@ -178,10 +194,8 @@ export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
       if (executableName !== 'node' || args[0] !== policy.entryPoint || !/\.(?:mjs|cjs|js)$/.test(policy.entryPoint)) throw new Error();
     } else if (canonical(command) !== canonical(policy.entryPoint)
         || ['node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack', 'uv', 'uvx', 'pip', 'pip3', 'python', 'python3', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'ruby', 'perl', 'deno', 'bun', 'go', 'cargo'].includes(executableName)) throw new Error();
-    const requestedEnvironment = Object.entries(config.env ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, item]) => {
+    const requestedEnvironment = [...trustedHostEnvironment(config)].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, value]) => {
       if (!policy.environmentNames.includes(name)) throw new Error();
-      const value = typeof item === 'string' ? item : item?.value;
-      if (typeof value !== 'string' || Buffer.byteLength(value) > 16 * 1024 || value.includes('\0')) throw new Error();
       return [name, value];
     });
     const rootEntry = z.string().max(2048).refine(value => !value.includes('${global:') && !/[\x00-\x1f\x7f]/.test(value));

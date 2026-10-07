@@ -3,7 +3,8 @@ import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/std
 import { DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { TrustedHostMcpError, trustedHostMcpApproval, trustedHostMcpPolicyDigest, verifyTrustedHostMcp } from '../security/trustedHostMcp';
+import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpPolicyDigest, verifyTrustedHostMcp } from '../security/trustedHostMcp';
+import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
 const managedHosts = new WeakMap<object, ManagedTrustedHost>();
@@ -26,24 +27,23 @@ export interface ManagedTrustedHost {
 /** Fixed absolute launch parameters bypass legacy runner/wrapper transformations. */
 export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
   const authority = trustedHostMcpApproval(config);
-  const environment: Record<string, string> = {};
+  const environment = new Map<string, string>();
   const names = new Set<string>();
   // Override the defaults of BOTH SDK generations, including inherited loaders.
   for (const name of [...DEFAULT_INHERITED_ENV_VARS, ...BETA_INHERITED_ENV_VARS,
-    'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH']) environment[name] = '';
-  for (const [name, item] of Object.entries(config.env ?? {})) {
+    'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH']) environment.set(name, '');
+  for (const [name, value] of trustedHostEnvironment(config)) {
     const key = name.toUpperCase();
     if (names.has(key) || BROKER_NAMES.includes(key)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     names.add(key);
-    const value = typeof item === 'string' ? item : item.value;
     if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (process.platform === 'win32') {
-      for (const existing of Object.keys(environment)) if (existing.toUpperCase() === key) delete environment[existing];
+      for (const existing of environment.keys()) if (existing.toUpperCase() === key) environment.delete(existing);
     }
-    environment[name] = value;
+    environment.set(name, value);
   }
   if (process.platform === 'win32' && !names.has('SYSTEMROOT')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
-  return { command: config.command, args: [...(config.args ?? [])], cwd: config.cwd!, env: environment };
+  return { command: config.command, args: [...(config.args ?? [])], cwd: config.cwd!, env: mcpStringDataRecord(environment) };
 }
 
 /** Only runner-issued scoped broker values can supplement the declared environment. */
