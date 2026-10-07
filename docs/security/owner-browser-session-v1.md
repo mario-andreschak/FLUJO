@@ -45,6 +45,17 @@ continues to require its existing bearer and workspace-bound capability.
 is permitted to clear an expired cookie without active authentication; it remains
 guarded by the configured Host/URL/Origin and existing worker/exposure boundary.
 
+Node startup refuses Network/Public exposure without a readable private policy
+containing an active credential. Explicitly broken owner configuration also
+refuses localhost startup. The diagnostic gives a loopback recovery path without
+printing policy paths, credentials or parse failures. Worker startup instead
+requires its dedicated bearer, independently of the general owner policy.
+The guard runs before workspace initialization. The proxy independently refuses
+nonlocal exposure with no owner policy, including protocol/OpenAI routes.
+In a source Next 16.3.8 dev probe, Next briefly printed Ready while compiling
+instrumentation, then exited 1 at this guard; this is not a claim that no TCP
+listener briefly existed or that an installed package passed acceptance.
+
 The shared workspace route wrapper retains the original owner authorization for
 SSE responses. It rechecks before and after reading each chunk and every second
 while idle or backpressured. Revocation discards queued output, errors the response

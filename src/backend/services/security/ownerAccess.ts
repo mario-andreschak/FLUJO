@@ -3,6 +3,7 @@ import {
 } from './ownerCredentials';
 import { ownerPolicyRevision as revision, readOwnerPolicy } from './ownerPolicy';
 import { ownerBrowserRequestAllowed, resolveOwnerSession, type OwnerSessionPrincipal } from './ownerSession';
+import { getExposureMode } from '../../../utils/http/exposureMode';
 
 export { MAX_OWNER_POLICY_BYTES } from './ownerPolicy';
 
@@ -153,7 +154,7 @@ export function resolveOwnerRequest(request: Request, scopes: readonly OwnerScop
 export function assertOwnerRequest(request: Request): Response | null {
   const configured = process.env.FLUJO_OWNER_AUTH_FILE;
   // Explicitly configured-but-empty is an error, not anonymous fallback.
-  if (configured === undefined) return null;
+  if (configured === undefined) return getExposureMode() === 'localhost' ? null : unavailable();
   let policy;
   try {
     policy = readOwnerPolicy(configured.trim());
