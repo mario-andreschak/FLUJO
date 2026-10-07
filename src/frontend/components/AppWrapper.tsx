@@ -170,6 +170,9 @@ interface AppWrapperProps {
 }
 
 export default function AppWrapper({ children }: AppWrapperProps) {
+  const pathname = usePathname();
+  // Sign-in must render before workspace/storage providers make protected requests.
+  if (pathname === '/owner/login') return <>{children}</>;
   log.debug('Rendering AppWrapper');
   return (
     <I18nProvider>
