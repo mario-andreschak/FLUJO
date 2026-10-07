@@ -115,12 +115,12 @@ without denying the user's development/deployment authorization.
 
 ## Historical 46af3225 publication review
 
-The later [publication-source inventory](evidence/publication-source-46af3225.json)
+The later [publication-source inventory](https://github.com/mario-andreschak/FLUJO/blob/d8784c5d61ae84fec755f59bcb7e815ca143d83f/docs/audits/scorecard-563/evidence/publication-source-46af3225.json)
 records `SECURITY.md` and the owner-access/isolation documents present at
 `46af3225`. It supplements this immutable baseline; source policy presence does
-not establish accepted release security. The [CI receipt](evidence/ci-verification-46af3225.json)
+not establish accepted release security. The [CI receipt](https://github.com/mario-andreschak/FLUJO/blob/d8784c5d61ae84fec755f59bcb7e815ca143d83f/docs/audits/scorecard-563/evidence/ci-verification-46af3225.json)
 retains the failed publication-tree verification separately from source proposals
-and older passing runs. The selected flow's [assessment and triage](evidence/docs-review-triage-46af3225.json)
+and older passing runs. The selected flow's [assessment and triage](https://github.com/mario-andreschak/FLUJO/blob/d8784c5d61ae84fec755f59bcb7e815ca143d83f/docs/audits/scorecard-563/evidence/docs-review-triage-46af3225.json)
 retain its provisional grade, confirmed gaps and rejected findings without
 promoting a release claim.
 
