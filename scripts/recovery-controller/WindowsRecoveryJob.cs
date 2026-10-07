@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 
-// Control uses original handles; known-job identity observations open query-only handles, never PID control.
+// Control uses original handles; known-job identity observations open query-and-wait-only handles, never PID control.
 public static class WindowsRecoveryJob {
     const uint Suspended=4, NoWindow=0x08000000, UnicodeEnv=0x400, Extended=0x80000;
     const uint KillOnClose=0x2000, ActiveLimit=8, ProcessMemory=0x100, JobMemory=0x200;
@@ -18,6 +18,8 @@ public static class WindowsRecoveryJob {
     public sealed class Birth {
         public int Ordinal; public long CorrelationPid; public long BornMs;
         public long? TerminalMs; public uint? TerminalMessage;
+        public long? HandleTerminalMs; public uint? HandleExitCode;
+        public long HandleCreationFiletimeUtc,HandleExitFiletimeUtc;
     }
     public sealed class Receipt {
         public string Outcome="failed-or-unknown"; public volatile string Failure;
@@ -26,6 +28,7 @@ public static class WindowsRecoveryJob {
         public bool ForcedJobTermination, JobClosureVerified;
         public uint RootExitCode, TotalProcesses, ActiveProcesses;
         public uint OriginalCorrelationPid;
+        public int RetainedTerminalHandleCount; public bool RetainedTerminalHandlesClosed;
         public long ElapsedMs, OutputBytes; public List<Birth> Births=new List<Birth>();
         public List<Identity> Identities=new List<Identity>();
         public List<ImagePin> ControlImages=new List<ImagePin>();
@@ -95,7 +98,8 @@ public static class WindowsRecoveryJob {
         public string CreationUtc, ImagePath, SnapshotName, Status, SnapshotStatus;
         public uint? ParentCorrelationPid;
         public string ParentSnapshotName;
-        public uint QueryAccess = 0x1000;
+        public uint QueryAccess = 0x101000;
+        public bool TerminalHandleRetained;
         public string ImageCanonicalPath, ImageSha256; public long ImageBytes;
         public bool ImagePinnedThroughoutControl;
         public bool MembershipBefore, MembershipAfter;
@@ -123,7 +127,7 @@ public static class WindowsRecoveryJob {
     static extern bool Process32NextW(IntPtr snapshot,ref ProcessEntry entry);
 
     static void ObserveKnownJobIdentities(IntPtr job,Receipt result,Stopwatch clock,
-        HashSet<string> completed,Action<string> fail,ControlFiles controlFiles) {
+        HashSet<string> completed,Action<string> fail,ControlFiles controlFiles,Dictionary<long,TerminalWatch> watches) {
         IntPtr list=IntPtr.Zero,snapshot=IntPtr.Zero;
         try {
             // The existing active cap is16. Never grow this buffer or widen the job.
@@ -151,11 +155,12 @@ public static class WindowsRecoveryJob {
                 }
             }
             foreach(uint pid in ids) {
+                if(watches.ContainsKey(pid))continue; // Its retained process object prevents PID reuse.
                 IntPtr query=IntPtr.Zero;
                 var observation=new Identity {ObservedMs=clock.ElapsedMilliseconds,CorrelationPid=pid,SnapshotStatus=snapshotStatus};
                 try {
-                    // Query-only handle: no TERMINATE, VM, DUP, suspend or write access.
-                    query=OpenProcess(0x1000,false,pid);
+                    // QUERY_LIMITED_INFORMATION + SYNCHRONIZE only; no TERMINATE, VM, DUP, suspend or write.
+                    query=OpenProcess(0x101000,false,pid);
                     if(query==IntPtr.Zero) {observation.Status="query-unavailable-"+Marshal.GetLastWin32Error();}
                     else {
                         bool inJob;
@@ -182,7 +187,17 @@ public static class WindowsRecoveryJob {
                                 ProcessEntry parent;
                                 if(parents.TryGetValue(entry.ParentPid,out parent))observation.ParentSnapshotName=parent.Name;
                             }
-                            if(inJob) {AttributeControlImage(observation,controlFiles);completed.Add(key);}
+                            if(inJob) {
+                                AttributeControlImage(observation,controlFiles);
+                                if(observation.Status=="known-owned-member-identity" && observation.SnapshotStatus=="read"
+                                    && observation.ParentCorrelationPid.HasValue
+                                    && String.Equals(observation.SnapshotName,Path.GetFileName(observation.ImagePath),StringComparison.OrdinalIgnoreCase)) {
+                                    if(watches.Count>=16 || watches.ContainsKey(pid))throw new InvalidOperationException("Retained member budget/instance refused");
+                                    watches.Add(pid,new TerminalWatch {Process=query,Identity=observation});
+                                    observation.TerminalHandleRetained=true;query=IntPtr.Zero;
+                                    result.RetainedTerminalHandleCount=watches.Count;completed.Add(key);
+                                }
+                            }
                         }
                     }
                 } catch(Exception error) {observation.Status="identity-unavailable-"+error.GetType().Name;}
@@ -192,6 +207,54 @@ public static class WindowsRecoveryJob {
             }
         } catch(Exception error) {fail("diagnostic-identity-observer-"+error.GetType().Name);}
         finally {if(snapshot!=IntPtr.Zero)CloseHandle(snapshot);if(list!=IntPtr.Zero)Marshal.FreeHGlobal(list);}
+    }
+
+    sealed class TerminalWatch {
+        public IntPtr Process;
+        public Identity Identity;
+    }
+    static bool HasPortTerminal(Birth birth) {
+        return birth.TerminalMs.HasValue && (birth.TerminalMessage==7 || birth.TerminalMessage==8);
+    }
+    static bool HasRetainedTerminal(Birth birth,Identity identity) {
+        return identity.TerminalHandleRetained && identity.QueryAccess==0x101000
+            && birth.HandleTerminalMs.HasValue && birth.HandleExitCode.HasValue
+            && birth.HandleCreationFiletimeUtc==identity.CreationFiletimeUtc
+            && birth.HandleCreationFiletimeUtc>0
+            && birth.HandleExitFiletimeUtc>=birth.HandleCreationFiletimeUtc;
+    }
+    static void ObserveRetainedTerminals(Receipt result,Stopwatch clock,
+        Dictionary<long,TerminalWatch> watches,Action<string> fail) {
+        try {
+            foreach(Birth birth in result.Births) {
+                TerminalWatch watch;
+                if(birth.HandleTerminalMs.HasValue || !watches.TryGetValue(birth.CorrelationPid,out watch))continue;
+                // Wait/read only the already-retained exact process object; never reopen a PID.
+                uint state=WaitForSingleObject(watch.Process,0);
+                if(state==258)continue;
+                Check(state==0,"observe retained member terminal signal");
+                uint exitCode;Check(GetExitCodeProcess(watch.Process,out exitCode),"read retained member terminal exit code");
+                long created,exited,kernel,user;
+                Check(GetProcessTimes(watch.Process,out created,out exited,out kernel,out user),"recheck retained terminal instance");
+                if(created!=watch.Identity.CreationFiletimeUtc || created<=0 || exited<created)
+                    throw new InvalidOperationException("Retained terminal instance/exit time refused");
+                birth.HandleCreationFiletimeUtc=created;birth.HandleExitFiletimeUtc=exited;
+                birth.HandleExitCode=exitCode;birth.HandleTerminalMs=clock.ElapsedMilliseconds;
+                // TerminalMs/TerminalMessage remain literal completion-port observations, including nulls.
+            }
+        } catch(Exception error) {fail("retained-terminal-observation-"+error.GetType().Name);}
+    }
+    static bool AllBirthsTerminal(Receipt result,Dictionary<long,TerminalWatch> watches) {
+        if(result.Births.Count==0 || watches.Count!=result.Births.Count)return false;
+        foreach(Birth birth in result.Births) {
+            TerminalWatch watch;
+            if(!watches.TryGetValue(birth.CorrelationPid,out watch)
+                || !watch.Identity.TerminalHandleRetained
+                || watch.Identity.Status!="known-owned-member-identity"
+                || !watch.Identity.MembershipBefore || !watch.Identity.MembershipAfter
+                || !HasRetainedTerminal(birth,watch.Identity))return false;
+        }
+        return true;
     }
 
     public sealed class ImagePin {
@@ -253,7 +316,7 @@ public static class WindowsRecoveryJob {
         using(var files=OpenControlFiles(node))return new[]{files.Node,files.Console};
     }
     static void AttributeControlImage(Identity identity,ControlFiles files) {
-        if(files==null)return; // Ordinary Run retains generic query-only observations.
+        if(files==null)return; // Ordinary Run retains generic query-and-wait observations.
         string image=System.IO.Path.GetFullPath(identity.ImagePath);
         ImagePin pin=String.Equals(image,files.Node.CanonicalPath,StringComparison.OrdinalIgnoreCase)?files.Node:
             String.Equals(image,files.Console.CanonicalPath,StringComparison.OrdinalIgnoreCase)?files.Console:null;
@@ -270,26 +333,29 @@ public static class WindowsRecoveryJob {
         return ValidateRoles(receipt,expectedNodeRoles,false);
     }
     static NaturalRoles ValidateRoles(Receipt receipt,int expectedNodeRoles,bool natural) {
-        if(receipt.ControlImages.Count!=2 || receipt.TotalProcesses!=receipt.Births.Count || receipt.ActiveProcesses!=0
+        if(receipt.ControlImages.Count!=2 || !receipt.RetainedTerminalHandlesClosed || receipt.RetainedTerminalHandleCount!=receipt.Births.Count || receipt.TotalProcesses!=receipt.Births.Count || receipt.ActiveProcesses!=0
             || receipt.Births.Count>expectedNodeRoles*2)
             throw new InvalidOperationException("Natural role full accounting refused");
         ImagePin node=receipt.ControlImages[0],console=receipt.ControlImages[1];
         var roles=new NaturalRoles();var birthPids=new HashSet<long>();
         var nodes=new Dictionary<long,Identity>();var helpers=new List<Identity>();
         foreach(Birth birth in receipt.Births) {
-            if(!birthPids.Add(birth.CorrelationPid) || !birth.TerminalMs.HasValue
-                || (birth.TerminalMessage!=7 && birth.TerminalMessage!=8) || (natural && birth.TerminalMessage!=7))
-                throw new InvalidOperationException("Natural role birth/terminal identity refused");
+            if(!birthPids.Add(birth.CorrelationPid))
+                throw new InvalidOperationException("Natural role birth instance refused");
             Identity positive=null;
             foreach(Identity item in receipt.Identities) {
                 if(item.CorrelationPid!=birth.CorrelationPid || item.Status!="known-owned-member-identity"
-                    || !item.MembershipBefore || !item.MembershipAfter || item.QueryAccess!=0x1000
+                    || !item.MembershipBefore || !item.MembershipAfter || item.QueryAccess!=0x101000 || !item.TerminalHandleRetained
                     || item.CreationFiletimeUtc<=0 || !item.ImagePinnedThroughoutControl || item.SnapshotStatus!="read")continue;
                 if(positive!=null)throw new InvalidOperationException("Ambiguous natural birth identity");
                 positive=item;
             }
             // A missing or race-only observation never qualifies a process role.
             if(positive==null)throw new InvalidOperationException("Natural birth identity missing or unrecognized");
+            bool portTerminal=HasPortTerminal(birth),heldTerminal=HasRetainedTerminal(birth,positive);
+            if(!heldTerminal
+                || (natural && ((portTerminal && birth.TerminalMessage!=7) || (heldTerminal && birth.HandleExitCode!=0))))
+                throw new InvalidOperationException("Natural role terminal evidence refused");
             ImagePin pin=null;
             if(String.Equals(positive.ImageCanonicalPath,node.CanonicalPath,StringComparison.OrdinalIgnoreCase))pin=node;
             else if(String.Equals(positive.ImageCanonicalPath,console.CanonicalPath,StringComparison.OrdinalIgnoreCase))pin=console;
@@ -336,6 +402,7 @@ public static class WindowsRecoveryJob {
     static Receipt RunBounded(string exe,string[] args,string cwd,string environment,string outputDirectory,int deadlineMs,ControlFiles controlFiles=null) {
         var result=new Receipt(); var clock=Stopwatch.StartNew(); object gate=new object();
         var identityCompleted=new HashSet<string>();
+        var terminalWatches=new Dictionary<long,TerminalWatch>();
         if(controlFiles!=null)result.ControlImages.AddRange(new[]{controlFiles.Node,controlFiles.Console});
         Action<string> fail=reason=>{lock(gate){if(result.Failure==null)result.Failure=reason;}};
         IntPtr job=IntPtr.Zero,port=IntPtr.Zero,outRead=IntPtr.Zero,outWrite=IntPtr.Zero;
@@ -380,8 +447,8 @@ public static class WindowsRecoveryJob {
                 } } catch {fail("original-pipe-or-log-failed");}
             });
             outTask=capture(stdout,"driver.stdout.log",true);errTask=capture(stderr,"driver.stderr.log",false);
-            ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles);
-            ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles);
+            ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles,terminalWatches);
+            ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles,terminalWatches);
             if(result.Failure!=null)throw new InvalidOperationException("Pre-resume identity observer refused");
             Check(ResumeThread(original.Thread)!=0xffffffff,"resume admitted runner"); resumed=true;
             long failedAt=-1,rootExitAt=-1;
@@ -401,7 +468,8 @@ public static class WindowsRecoveryJob {
                     } else if(message==4) result.ActiveZeroObserved=true;
                     else fail("unexpected-job-policy-notification-"+message);
                 } else if(Marshal.GetLastWin32Error()!=258)fail("completion-port-read-failed");
-                ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles);
+                ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles,terminalWatches);
+                ObserveRetainedTerminals(result,clock,terminalWatches,fail);
                 Accounting census=Sample(job);result.TotalProcesses=census.Total;result.ActiveProcesses=census.Active;
                 if(census.Total>16)fail("total-birth-budget-exceeded");
                 uint wait=WaitForSingleObject(original.Process,0);
@@ -410,7 +478,7 @@ public static class WindowsRecoveryJob {
                 if(clock.ElapsedMilliseconds>=deadlineMs)fail("outer-monotonic-deadline");
                 if(result.RootExitObserved) {census=Sample(job);result.TotalProcesses=census.Total;result.ActiveProcesses=census.Active;}
                 if(result.RootExitObserved && census.Active==0 && result.StdoutClosed && result.StderrClosed
-                    && result.ActiveZeroObserved && live.Count==0 && result.Births.Count==census.Total) {result.JobClosureVerified=true;break;}
+                    && result.ActiveZeroObserved && AllBirthsTerminal(result,terminalWatches) && result.Births.Count==census.Total) {result.JobClosureVerified=true;break;}
                 if(rootExitAt>=0 && clock.ElapsedMilliseconds-rootExitAt>=5000)fail("original-job-or-pipes-closure-unverified");
                 if(result.Failure!=null && failedAt<0) {failedAt=clock.ElapsedMilliseconds;result.ForcedJobTermination=true;Check(TerminateJobObject(job,1),"terminate only original owned job after failure");}
                 if(failedAt>=0 && clock.ElapsedMilliseconds-failedAt>=10000)break;
@@ -434,9 +502,15 @@ public static class WindowsRecoveryJob {
                 if(handle!=IntPtr.Zero && handle!=new IntPtr(-1))CloseHandle(handle);
             if(attributes!=IntPtr.Zero){DeleteProcThreadAttributeList(attributes);Marshal.FreeHGlobal(attributes);}
             if(handles!=IntPtr.Zero)Marshal.FreeHGlobal(handles);if(jobList!=IntPtr.Zero)Marshal.FreeHGlobal(jobList);if(env!=IntPtr.Zero)Marshal.FreeHGlobal(env);
+            bool retainedClosed=true;
+            foreach(TerminalWatch watch in terminalWatches.Values) {
+                if(!CloseHandle(watch.Process)) {retainedClosed=false;fail("retained-terminal-handle-close-failed");}
+                watch.Process=IntPtr.Zero;
+            }
+            result.RetainedTerminalHandlesClosed=retainedClosed;
             result.ElapsedMs=clock.ElapsedMilliseconds;
             if(result.Failure==null && result.AssignedBeforeResume && result.RootExitObserved && result.RootExitCode==0
-                && result.StdoutClosed && result.StderrClosed && result.JobClosureVerified && !result.ForcedJobTermination)result.Outcome="original-job-and-pipes-closed";
+                && result.StdoutClosed && result.StderrClosed && result.JobClosureVerified && result.RetainedTerminalHandlesClosed && !result.ForcedJobTermination)result.Outcome="original-job-and-pipes-closed";
         }
         return result;
     }
