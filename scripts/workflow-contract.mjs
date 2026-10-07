@@ -125,6 +125,16 @@ function assertInstallerProvenance(workflow) {
 }
 
 export function assertWorkflowContract(workflows) {
+  const goalWorkflow = workflows['persona-goal-acceptance.yml'];
+  const goalPullRequest = goalWorkflow?.on?.pull_request;
+  const goalPaths = goalPullRequest?.paths;
+  const goalAcceptance = goalWorkflow?.jobs?.['offline-integration']?.steps
+    ?.find(step => step.run === 'node scripts/run-persona-goal-acceptance.mjs --mode=offline --timeout-seconds=600');
+  if (!goalWorkflow?.on || !Object.hasOwn(goalWorkflow.on, 'pull_request') || goalPullRequest?.['paths-ignore']
+      || (goalPaths && (!goalPaths.includes('src/backend/services/workspace/**') || !goalPaths.includes('__tests__/enduringAgents/**')))
+      || !goalAcceptance || goalAcceptance.if !== undefined || goalAcceptance['continue-on-error']) {
+    throw new Error('Offline goal acceptance must cover workspace admission and enduring-agent tests with the unchanged mandatory 600-second command.');
+  }
   const candidateBuild = workflows['verify-cloud-worker-image.yml']?.jobs?.['worker-snapshot-image']?.steps
     ?.find(step => step.uses?.startsWith('docker/build-push-action@'));
   const publisherBuild = workflows['publish-cloud-worker.yml']?.jobs?.publish?.steps

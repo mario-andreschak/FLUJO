@@ -4,9 +4,10 @@ on:
   pull_request:
     paths:
       - 'src/backend/services/enduringAgents/**'
+      - 'src/backend/services/workspace/**'
       - 'src/backend/execution/flow/**'
       - 'src/shared/types/enduringAgent/**'
-      - '__tests__/enduringAgents/goalAcceptance.test.ts'
+      - '__tests__/enduringAgents/**'
       - 'scripts/persona-goal-acceptance/**'
       - 'scripts/run-persona-goal-acceptance.mjs'
       - 'scripts/validate-persona-goal-acceptance.mjs'

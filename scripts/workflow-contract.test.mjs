@@ -16,6 +16,9 @@ test('repository workflows retain mandatory verification and immutable direct ac
 });
 
 for (const [label, change] of [
+  ['omitted workspace goal acceptance trigger', files => { files['persona-goal-acceptance.yml'].on.pull_request.paths = files['persona-goal-acceptance.yml'].on.pull_request.paths.filter(value => value !== 'src/backend/services/workspace/**'); }],
+  ['omitted goal runtime test acceptance trigger', files => { files['persona-goal-acceptance.yml'].on.pull_request.paths = files['persona-goal-acceptance.yml'].on.pull_request.paths.filter(value => value !== '__tests__/enduringAgents/**'); }],
+  ['changed offline goal acceptance limit', files => { files['persona-goal-acceptance.yml'].jobs['offline-integration'].steps.find(step => step.run?.startsWith('node scripts/run-persona-goal-acceptance.mjs')).run = 'node scripts/run-persona-goal-acceptance.mjs --mode=offline --timeout-seconds=900'; }],
   ['cold worker candidate cache', files => { files['verify-cloud-worker-image.yml'].jobs['worker-snapshot-image'].steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-from'] = 'type=gha,scope=cloud-worker'; }],
   ['candidate writing the release cache', files => { files['verify-cloud-worker-image.yml'].jobs['worker-snapshot-image'].steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-to'] = 'type=gha,scope=cloud-worker,mode=max'; }],
   ['publisher reading a candidate cache', files => { files['publish-cloud-worker.yml'].jobs.publish.steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with['cache-from'] += '\ntype=gha,scope=worker-image-candidate'; }],
