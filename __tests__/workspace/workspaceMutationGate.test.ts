@@ -1,11 +1,19 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { runInWriteChain, writeFileAtomic } from '@/utils/storage/backend';
+
 // These deterministic tests exercise the in-process admission race. Separate
 // workspaceProcessGate tests run the real filesystem protocol in two processes.
+const mockProcessMutation = jest.fn((task: () => Promise<unknown>) => task());
+const mockProcessSnapshot = jest.fn((task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>) => task({ assertOwned: async () => undefined }));
+
 jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
-  withWorkspaceProcessMutation: (task: () => Promise<unknown>) => task(),
-  withWorkspaceProcessSnapshot: (task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>) => task({ assertOwned: async () => undefined }),
+  withWorkspaceProcessMutation: (task: () => Promise<unknown>) => mockProcessMutation(task),
+  withWorkspaceProcessSnapshot: (task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>) => mockProcessSnapshot(task),
 }));
 
-import * as runtimeLock from '@/backend/services/enduringAgents/runtimeLock';
 import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 
 import {
@@ -230,7 +238,7 @@ it('rechecks cancellation after awaited physical ownership before invoking recov
     const release = deferred<void>();
     const controller = new AbortController();
     const assertOwned = async () => { checking.resolve(); await release.promise; };
-    const snapshot = jest.spyOn(runtimeLock, 'withWorkspaceProcessSnapshot').mockImplementationOnce(async task => task({ assertOwned }));
+    mockProcessSnapshot.mockImplementationOnce(async task => task({ assertOwned }));
     const effect = jest.fn(async () => undefined);
     const root = withWorkspaceRecoveryMutation(effect, { signal: controller.signal });
     const outcome = root.catch(error => error as Error);
@@ -243,7 +251,7 @@ it('rechecks cancellation after awaited physical ownership before invoking recov
     expect((error as Error).message).not.toContain('PRIVATE');
     expect(effect).not.toHaveBeenCalled();
     expect(workspaceMutationStatus().blocked).toBe(false);
-    snapshot.mockRestore();
+
   });
 });
 
@@ -272,4 +280,209 @@ it('refuses predecessor hot-reload contexts without treating their Set as author
   expect(effect).not.toHaveBeenCalled();
   await withWorkspaceMutation(effect, 'legacy-context');
   expect(effect).toHaveBeenCalledTimes(1);
+});
+
+
+it('drains a preexisting ordinary writer before exclusive recovery effects', async () => {
+  await runWithWorkspace('recovery-existing-writer', async () => {
+    const finish = deferred<void>();
+    const writer = withWorkspaceMutation(() => finish.promise);
+    let entered = false;
+    const recovery = withWorkspaceRecoveryMutation(async () => { entered = true; });
+    await flushMicrotasks();
+    expect(entered).toBe(false);
+    expect(workspaceMutationStatus()).toMatchObject({ blocked: true, activeMutations: 1 });
+    finish.resolve();
+    await writer;
+    await recovery;
+    expect(entered).toBe(true);
+  });
+});
+
+it.each([false, true])('retains modeled physical recovery admission through started child drain (root failure=%s)', async fail => {
+  await runWithWorkspace(`recovery-physical-drain-${fail}`, async () => {
+    let held = false;
+    mockProcessSnapshot.mockImplementationOnce(async task => {
+      held = true;
+      try { return await task({ assertOwned: async () => undefined }); }
+      finally { held = false; }
+    });
+    const ready = deferred<void>();
+    const finish = deferred<void>();
+    let child!: Promise<void>;
+    const root = withWorkspaceRecoveryMutation(async () => {
+      child = withWorkspaceMutation(async () => { ready.resolve(); await finish.promise; });
+      await ready.promise;
+      if (fail) throw new Error('recovery root failure');
+    });
+    const outcome = root.then(() => 'success', () => 'failure');
+    await ready.promise;
+    await flushMicrotasks();
+    expect(held).toBe(true);
+    expect(workspaceMutationStatus().blocked).toBe(true);
+    let outsider = false;
+    const queued = withWorkspaceMutation(async () => { outsider = true; });
+    await flushMicrotasks();
+    expect(outsider).toBe(false);
+    finish.resolve();
+    await child;
+    expect(await outcome).toBe(fail ? 'failure' : 'success');
+    await queued;
+    expect(held).toBe(false);
+    expect(outsider).toBe(true);
+  });
+});
+
+it('redacts physical ownership failure before recovery effects and reopens ordinary admission', async () => {
+  await runWithWorkspace('recovery-owner-failure', async () => {
+    mockProcessSnapshot.mockImplementationOnce(async task => task({ assertOwned: async () => { throw new Error('PRIVATE physical owner detail'); } }));
+    const effect = jest.fn(async () => undefined);
+    await expect(withWorkspaceRecoveryMutation(effect)).rejects.toThrow('ownership was lost');
+    expect(effect).not.toHaveBeenCalled();
+    expect(workspaceMutationStatus().blocked).toBe(false);
+    await withWorkspaceMutation(async () => undefined);
+  });
+});
+
+it('denies final acknowledgement when physical ownership is lost after child effects and drain', async () => {
+  await runWithWorkspace('recovery-final-owner-failure', async () => {
+    let lost = false;
+    mockProcessSnapshot.mockImplementationOnce(async task => task({ assertOwned: async () => { if (lost) throw new Error('PRIVATE final owner detail'); } }));
+    const ready = deferred<void>();
+    const finish = deferred<void>();
+    let child!: Promise<void>;
+    const root = withWorkspaceRecoveryMutation(async () => {
+      child = withWorkspaceMutation(async () => { ready.resolve(); await finish.promise; lost = true; });
+      void child.catch(() => undefined);
+      await ready.promise;
+      return 'must not acknowledge success';
+    });
+    const rejected = expect(root).rejects.toThrow('ownership was lost');
+    await ready.promise;
+    await flushMicrotasks();
+    finish.resolve();
+    await expect(child).rejects.toThrow('ownership was lost');
+    await rejected;
+    expect(workspaceMutationStatus().blocked).toBe(false);
+  });
+});
+
+it.each([false, true])('redacts cancellation before recovery effects (preexisting writer=%s)', async draining => {
+  await runWithWorkspace(`recovery-early-cancel-${draining}`, async () => {
+    const controller = new AbortController();
+    const finish = deferred<void>();
+    const writer = draining ? withWorkspaceMutation(() => finish.promise) : undefined;
+    if (!draining) controller.abort(new Error('PRIVATE early abort reason'));
+    const effect = jest.fn(async () => undefined);
+    const root = withWorkspaceRecoveryMutation(effect, { signal: controller.signal });
+    const outcome = root.catch(error => error as Error);
+    if (draining) controller.abort(new Error('PRIVATE drain abort reason'));
+    const error = await outcome;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('cancelled');
+    expect((error as Error).message).not.toContain('PRIVATE');
+    expect(effect).not.toHaveBeenCalled();
+    expect(workspaceMutationStatus().blocked).toBe(false);
+    finish.resolve();
+    await writer;
+    await withWorkspaceMutation(async () => undefined);
+  });
+});
+
+it('keeps public recovery authority workspace-bound while an explicit inherited write rebinds', async () => {
+  await withWorkspaceRecoveryMutation(async operation => {
+    await runWithWorkspace('recovery-foreign-b', async () => {
+      await expect(operation.assertOwned()).rejects.toThrow('workspace changed');
+      await withWorkspaceMutation(async () => { expect(getCurrentWorkspace()).toBe('recovery-selected-a'); }, 'recovery-selected-a');
+      expect(getCurrentWorkspace()).toBe('recovery-foreign-b');
+    });
+  }, { workspace: 'recovery-selected-a' });
+});
+
+it('denies a public ownership check that finishes after its root participant retires', async () => {
+  await runWithWorkspace('recovery-deferred-public-check', async () => {
+    const checking = deferred<void>();
+    const finishCheck = deferred<void>();
+    const childReady = deferred<void>();
+    const finishChild = deferred<void>();
+    let holdNext = false;
+    let child!: Promise<void>;
+    let pending!: Promise<void>;
+    mockProcessSnapshot.mockImplementationOnce(async task => task({ assertOwned: async () => {
+      if (holdNext) { holdNext = false; checking.resolve(); await finishCheck.promise; }
+    } }));
+    const root = withWorkspaceRecoveryMutation(async operation => {
+      child = withWorkspaceMutation(async () => { childReady.resolve(); await finishChild.promise; });
+      await childReady.promise;
+      holdNext = true;
+      pending = operation.assertOwned();
+      await checking.promise;
+    });
+    await checking.promise;
+    await flushMicrotasks();
+    const rejected = expect(pending).rejects.toThrow('finished');
+    finishCheck.resolve();
+    await rejected;
+    expect(workspaceMutationStatus().blocked).toBe(true);
+    finishChild.resolve();
+    await child;
+    await root;
+  });
+});
+
+it('refuses exclusive recovery inside a live ordinary mutation before physical capture', async () => {
+  await runWithWorkspace('recovery-inside-writer', async () => {
+    const calls = mockProcessSnapshot.mock.calls.length;
+    await withWorkspaceMutation(async () => {
+      await expect(withWorkspaceRecoveryMutation(async () => undefined)).rejects.toThrow('cannot begin inside a workspace mutation');
+    });
+    expect(mockProcessSnapshot.mock.calls.length).toBe(calls);
+  });
+});
+
+
+it('composes the native per-key queue and atomic writer under recovery without admitting outsiders', async () => {
+  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-recovery-queue-'));
+  const savedData = process.env.FLUJO_DATA_DIR;
+  const savedParent = process.env.FLUJO_PARENT_DATA_DIR;
+  process.env.FLUJO_DATA_DIR = fixture;
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  const finish = deferred<void>();
+  let root: Promise<unknown> | undefined;
+  let child: Promise<void> | undefined;
+  let outsider: Promise<void> | undefined;
+  try {
+    await runWithWorkspace('native-recovery-queue', async () => {
+      const destination = path.join(getWorkspaceDataDir(), 'db', 'queue-marker.txt');
+      const ready = deferred<void>();
+      root = withWorkspaceRecoveryMutation(async () => {
+        child = runInWriteChain('native-recovery-marker', async () => {
+          await writeFileAtomic(destination, 'recovery child bytes');
+          ready.resolve();
+          await finish.promise;
+        });
+        await ready.promise;
+      });
+      await ready.promise;
+      await flushMicrotasks();
+      outsider = runInWriteChain('native-recovery-marker', async () => writeFileAtomic(destination, 'queued outsider bytes'));
+      await flushMicrotasks();
+      expect(await fs.readFile(destination, 'utf8')).toBe('recovery child bytes');
+      expect(workspaceMutationStatus().blocked).toBe(true);
+      finish.resolve();
+      await child;
+      await root;
+      await outsider;
+      expect(await fs.readFile(destination, 'utf8')).toBe('queued outsider bytes');
+      expect((await fs.readdir(path.dirname(destination))).filter(name => name.includes('.tmp.'))).toEqual([]);
+    });
+  } finally {
+    finish.resolve();
+    await Promise.allSettled([root, child, outsider].filter((value): value is Promise<unknown> => value !== undefined));
+    if (savedData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = savedData;
+    if (savedParent === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = savedParent;
+    const relative = path.relative(path.resolve(os.tmpdir()), fixture);
+    if (!/^flujo-recovery-queue-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe owned recovery fixture cleanup');
+    await fs.rm(fixture, { recursive: true, force: true });
+  }
 });
