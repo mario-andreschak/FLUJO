@@ -18,6 +18,10 @@ import {
   PersonaCoreResolutionError,
   resolvePersonaCoreRevision,
 } from '@/backend/services/enduringAgents/personaCoreResolver';
+import {
+  PersonaCorePreparationConflictError,
+  reconcileDisabledPersonaCore,
+} from '@/backend/services/enduringAgents/personaCorePreparation';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   activateBehaviorBindingRevision,
@@ -211,6 +215,26 @@ async function installOverride(
 }
 
 describe('Persona Core provenance resolution', () => {
+  it('reconciles a reviewed Core only while the Persona is disabled', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const { flowRef } = await requireAuthoredFlow(setup.bundle.persona);
+      const input = { personaId: setup.bundle.persona.id, expectedCoreFlowRef: flowRef,
+        expectedActiveRevisionId: setup.binding.activeRevisionId };
+      await expect(reconcileDisabledPersonaCore(input))
+        .rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+      const current = await getPersona(setup.bundle.persona.id);
+      if (!current) throw new Error('Expected Persona.');
+      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, current.id,
+        PersonaSchema.parse({ ...current, lifecycleState: 'disabled', updatedAt: Math.max(Date.now(), current.updatedAt + 1) }));
+      const prepared = await reconcileDisabledPersonaCore(input);
+      expect(prepared.personaId).toBe(current.id);
+      expect(prepared.revisionId).toBe((await getBehaviorBinding(setup.binding.id))?.activeRevisionId);
+      await expect(reconcileDisabledPersonaCore({ ...input, expectedActiveRevisionId: 'stale-revision' }))
+        .rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+    });
+  });
+
   it('publishes a new pinned closure after a child edit without changing the parent and preserves the previous round', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();
