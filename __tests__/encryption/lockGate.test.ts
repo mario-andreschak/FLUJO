@@ -160,6 +160,9 @@ describe('deny-by-default coverage guard', () => {
       // Owner-authorized transfer restore writes only a fresh namespace under a
       // fresh recipient key; it cannot read or overwrite the locked source.
       'src/app/api/credential-transfer/restore/route.ts',
+      // Owner + strict-loopback migration authenticates the explicit source
+      // password or recovery journal while normal credential access is denied.
+      'src/app/api/credential-migration/route.ts',
       'src/app/api/init/route.ts',
       // Installation-wide namespace discovery contains no workspace content and
       // must remain reachable so the locked shell can validate its active tab.

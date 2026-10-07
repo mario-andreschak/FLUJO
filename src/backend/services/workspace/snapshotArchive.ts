@@ -10,6 +10,7 @@ import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { addFolderToZipLinkSafe, assertLinkFreeFileParent } from './backupRestoreFs';
 import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorkspaceFlowDependencies, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
+import { isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
 import { getServerDek } from '@/utils/encryption/session';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Model } from '@/shared/types/model';
@@ -151,6 +152,9 @@ export async function captureWorkspaceSnapshot(
 ): Promise<CapturedWorkspaceSnapshot> {
   const { signal } = options;
   signal?.throwIfAborted();
+  if (await isCredentialMigrationPending(workspace)) {
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
+  }
   const root = getWorkspaceDataDir(workspace);
   let rootStats: Stats;
   try {
@@ -363,6 +367,9 @@ export async function writeWorkspaceSnapshotArchive(
 ): Promise<WorkspaceArchiveResult> {
   const { signal } = options;
   signal?.throwIfAborted();
+  if (await isCredentialMigrationPending(captured.manifest.workspace)) {
+    throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Resume or roll back credential migration before creating a worker snapshot.');
+  }
   const stagingDir = await fs.mkdtemp(path.join(tmpdir(), 'flujo-hot-clone-'));
   await fs.chmod(stagingDir, 0o700).catch(() => undefined);
   const archivePath = path.join(stagingDir, 'workspace.snapshot.zip');
