@@ -2,7 +2,6 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { SharedState } from '../types';
 import { MAX_SUBFLOW_DEPTH } from '../constants';
-import { loadConversationStateReadOnly } from '../loadConversationState';
 import { assertFlowExecutionCurrent } from '../executionAuthority';
 import { getDetachedTaskLaunchOwner } from '@/backend/services/subflowTasks/ownership';
 import type { SubflowTaskRecord } from '@/shared/types/subflowTasks';
@@ -98,6 +97,7 @@ type StateSnapshot = Pick<SharedState,
 
 async function readState(id: string): Promise<StateSnapshot> {
   const safeId = requireId(id);
+  const { loadConversationStateReadOnly } = await import('../loadConversationState');
   const live = await loadConversationStateReadOnly(safeId);
   const state = await loadItemBackend<SharedState | undefined>(`conversations/${safeId}` as StorageKey, undefined);
   if (!live || !state || state.conversationId !== id || live.conversationId !== id

@@ -173,6 +173,7 @@ async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
     record(toolConversationId, `tool-dispatch:${args[1]}`);
     const result = await realCall(...args);
     actualToolCalls += 1;
+    if (!result.success) record(toolConversationId, `tool-error:${result.error}`);
     const identity = (result.data as { structuredContent?: { pid?: number; parentPid?: number; token?: string } })?.structuredContent;
     expect(result.success).toBe(true);
     expect(identity?.pid).toBeGreaterThan(0);
