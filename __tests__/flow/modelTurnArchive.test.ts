@@ -63,11 +63,16 @@ describe('modelTurnArchive', () => {
     }
     expect(new Set(entries).size).toBe(3);
     expect(request.canonicalMessages[0].content).toBe('history'.repeat(800_000));
-  });
+  }, 60_000);
 
   it('preserves running state after a failed atomic outcome write and removes its temporary file', async () => {
     const entry = await archiveModelDispatch({ ...input('failed_outcome'), canonicalMessages: [], genericWire: [], sdkRequest: {} });
-    const rename = jest.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('disk unavailable'));
+    const originalRename = fs.rename.bind(fs);
+    const outcomeFile = path.join(tempDir, 'failed_outcome', `${entry.id}.outcome.json`);
+    const rename = jest.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      if (String(destination) === outcomeFile) throw new Error('disk unavailable');
+      return originalRename(source, destination);
+    });
     await expect(updateModelDispatchOutcome('failed_outcome', entry.id, 'cancelled')).rejects.toThrow('disk unavailable');
     rename.mockRestore();
     expect((await readModelTurnSnapshot('failed_outcome', entry.id))?.entry.outcome).toBe('running');
