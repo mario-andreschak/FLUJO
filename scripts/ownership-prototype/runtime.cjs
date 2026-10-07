@@ -13,6 +13,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'u
 const context = new AsyncLocalStorage();
 const queues = new Map();
 const jobs = new Map();
+const streams = new Set();
 const scopes = ['control:admin', 'secrets:read']; // Security's current coarse owner profile.
 function resolve(request) {
   const filename = path.join(root, 'owner-policy.json');
@@ -111,20 +112,42 @@ const server = http.createServer((incoming, response) => {
       }
       if (kind === 'stream' && incoming.method === 'GET') {
         response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
-        const emit = () => {
-          if (!current(request, principal)) { clearInterval(timer); response.end(); return; }
+        let timer;
+        const stream = {
+          pause() { clearInterval(timer); },
+          resume() {
+            clearInterval(timer);
+            if (!emit()) return false;
+            timer = setInterval(emit, 25);
+            return true;
+          },
+        };
+        const emit = AsyncLocalStorage.bind(() => {
+          if (!current(request, principal)) { stream.pause(); streams.delete(stream); response.end(); return false; }
           response.write(`data: ${JSON.stringify({ actor: context.getStore().ownerId,
             tenantId: context.getStore().tenantId, workspaceId: context.getStore().workspaceId })}\n\n`);
-        };
-        const timer = setInterval(emit, 25);
-        response.on('close', () => clearInterval(timer));
-        emit(); return;
+          return true;
+        });
+        streams.add(stream);
+        response.on('close', () => { stream.pause(); streams.delete(stream); });
+        stream.resume(); return;
       }
       return answer(response, 405, { error: 'unsupported prototype operation' });
     } catch { answer(response, 503, { error: 'prototype unavailable' }); }
   });
 });
 process.on('message', message => {
+  // Parent-only fixture barriers pause emissions, never authority checks.
+  // Resumption rechecks the real policy before emitting or acknowledging.
+  if (message?.type === 'pause-streams') {
+    for (const stream of streams) stream.pause();
+    process.send({ type: 'streams-paused', count: streams.size });
+  }
+  if (message?.type === 'resume-streams') {
+    let count = 0;
+    for (const stream of streams) if (stream.resume()) count++;
+    process.send({ type: 'streams-resumed', count });
+  }
   if (message?.type === 'release') {
     const task = jobs.get(message.jobId);
     jobs.delete(message.jobId);
