@@ -5,7 +5,7 @@ import { createCipheriv, createHash, pbkdf2Sync, randomBytes } from 'node:crypto
 import { preflightCredentialMigration, migrateCredentials, recoverCredentialMigration } from '@/backend/services/workspace/credentialMigration';
 import { DEFAULT_PASSWORD, newKeyring, open, seal, unwrapKeyring, wrapKeyring } from '@/utils/encryption/format';
 import { credentialMigrationPath, isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
-import { openRecipientTransfer } from '@/utils/encryption/recipientTransfer';
+import { openRecipientTransfer, sealRecipientTransfer } from '@/utils/encryption/recipientTransfer';
 import { authenticate, decryptWithPassword, encryptWithPassword, initializeEncryption, changeEncryptionPassword,
   CredentialMigrationRequiredError, getEncryptionStatus, isEncryptionLocked } from '@/utils/encryption/secure';
 import { clearItem, loadItem, saveItem, writeFileAtomic } from '@/utils/storage/backend';
@@ -55,6 +55,7 @@ beforeEach(async () => {
   }
 });
 afterEach(async () => {
+  jest.restoreAllMocks();
   global.__flujo_server_dek = undefined; global.__flujo_server_deks_by_workspace = undefined;
   global.__flujo_encryption_sessions = undefined;
   for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -147,6 +148,99 @@ test('unexpected current-file changes refuse both resume and rollback before any
   for (const rollback of [false, true]) await expect(recoverCredentialMigration(options, rollback)).rejects.toMatchObject({ code: 'SOURCE_CHANGED', store: 'models' });
   expect(await fs.readFile(fileFor('mcp_servers'))).toEqual(other);
   expect(await isCredentialMigrationPending()).toBe(true);
+});
+
+test.each([[1, false], [1, true], [2, false], [2, true]] as const)(
+  'closed inventory preserves absent stores and authentic v%s recovery (rollback=%s)', async (version, rollback) => {
+    await fs.unlink(fileFor('registry_account'));
+    sourceBytes.delete('registry_account');
+    await pending('record_written');
+    const plaintext = await openRecipientTransfer(await fs.readFile(credentialMigrationPath()), recoveryPassphrase);
+    let journal;
+    try { journal = JSON.parse(plaintext.toString()); } finally { plaintext.fill(0); }
+    expect(journal.version).toBe(2);
+    expect(journal.inventory).toEqual(['models', 'mcp_servers', 'global_env_vars', 'registry_account', 'encryption_key']
+      .map(store => ({ store, present: store !== 'registry_account' })));
+    if (version === 1) {
+      journal.version = 1;
+      delete journal.inventory;
+      const legacyPlaintext = Buffer.from(JSON.stringify(journal));
+      try { await fs.writeFile(credentialMigrationPath(), await sealRecipientTransfer(legacyPlaintext, recoveryPassphrase)); }
+      finally { legacyPlaintext.fill(0); }
+    }
+    const pendingBytes = await fs.readFile(credentialMigrationPath());
+    const partial = new Map(await Promise.all([...sourceBytes.keys()].map(async store => [store, await fs.readFile(fileFor(store))] as const)));
+    const unexpected = Buffer.from('{"accessToken":"untracked-store-canary"}');
+    await fs.writeFile(fileFor('registry_account'), unexpected, { mode: 0o600 });
+    await expect(recoverCredentialMigration(options, rollback)).rejects.toMatchObject({ code: 'SOURCE_CHANGED', store: 'registry_account' });
+    expect(await fs.readFile(fileFor('registry_account'))).toEqual(unexpected);
+    expect(await fs.readFile(credentialMigrationPath())).toEqual(pendingBytes);
+    for (const [store, bytes] of partial) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+    await fs.unlink(fileFor('registry_account'));
+    expect(await recoverCredentialMigration(options, rollback)).toMatchObject({ status: rollback ? 'rolled-back' : 'committed', stores: 4 });
+    await expect(fs.lstat(fileFor('registry_account'))).rejects.toMatchObject({ code: 'ENOENT' });
+    if (rollback) for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
+    else expect(await authenticate(recoveryPassphrase)).not.toBeNull();
+  });
+
+test('an absent store appearing at the atomic publication seam refuses before replacing another store', async () => {
+  await fs.unlink(fileFor('registry_account'));
+  await pending('journal_written');
+  const modelBytes = await fs.readFile(fileFor('models'));
+  const pendingBytes = await fs.readFile(credentialMigrationPath());
+  const unexpected = Buffer.from('{"accessToken":"late-publication-canary"}');
+  const actualLstat = fs.lstat.bind(fs);
+  let injected = false;
+  jest.spyOn(fs, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
+    const result = await actualLstat(...args);
+    if (!injected && path.basename(String(args[0])).startsWith('.flujo-restore-')) {
+      injected = true;
+      await fs.writeFile(fileFor('registry_account'), unexpected, { mode: 0o600 });
+    }
+    return result;
+  }) as typeof fs.lstat);
+  await expect(recoverCredentialMigration(options)).rejects.toMatchObject({ code: 'SOURCE_CHANGED', store: 'registry_account' });
+  expect(injected).toBe(true);
+  expect(await fs.readFile(fileFor('models'))).toEqual(modelBytes);
+  expect(await fs.readFile(fileFor('registry_account'))).toEqual(unexpected);
+  expect(await fs.readFile(credentialMigrationPath())).toEqual(pendingBytes);
+  expect((await fs.readdir(path.dirname(fileFor('models')))).filter(name => name.startsWith('.flujo-restore-'))).toEqual([]);
+});
+
+test('an absent store appearing at final commit leaves the verified journal pending', async () => {
+  await fs.unlink(fileFor('registry_account'));
+  const inventory = await preflightCredentialMigration(options);
+  const unexpected = Buffer.from('{"accessToken":"late-commit-canary"}');
+  await expect(migrateCredentials({ ...options, checkpoint: async step => {
+    if (step === 'before_commit') await fs.writeFile(fileFor('registry_account'), unexpected, { mode: 0o600 });
+  } }, inventory.planToken)).rejects.toMatchObject({ code: 'SOURCE_CHANGED', store: 'registry_account' });
+  expect(await fs.readFile(fileFor('registry_account'))).toEqual(unexpected);
+  expect(await isCredentialMigrationPending()).toBe(true);
+  expect((await fs.readdir(path.dirname(fileFor('models')))).some(name => name.endsWith('.committed'))).toBe(false);
+});
+
+test('authenticated v2 journals refuse incomplete, duplicate and contradictory inventories without effects', async () => {
+  await pending('journal_written');
+  const original = await fs.readFile(credentialMigrationPath());
+  const plaintext = await openRecipientTransfer(original, recoveryPassphrase);
+  let journal;
+  try { journal = JSON.parse(plaintext.toString()); } finally { plaintext.fill(0); }
+  const malformed = [
+    { ...journal, inventory: journal.inventory.slice(0, -1) },
+    { ...journal, inventory: journal.inventory.map((item: { store: string; present: boolean }, index: number) => index === 1 ? journal.inventory[0] : item) },
+    { ...journal, inventory: journal.inventory.map((item: { store: string; present: boolean }) => item.store === 'models' ? { ...item, present: false } : item) },
+  ];
+  for (const candidate of malformed) {
+    const bytes = Buffer.from(JSON.stringify(candidate));
+    try { await fs.writeFile(credentialMigrationPath(), await sealRecipientTransfer(bytes, recoveryPassphrase)); }
+    finally { bytes.fill(0); }
+    const refused = await fs.readFile(credentialMigrationPath());
+    await expect(recoverCredentialMigration(options)).rejects.toMatchObject({ code: 'RECOVERY_INVALID' });
+    expect(await fs.readFile(credentialMigrationPath())).toEqual(refused);
+    for (const [store, source] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(source);
+  }
+  await fs.writeFile(credentialMigrationPath(), original);
+  expect(await recoverCredentialMigration(options, true)).toMatchObject({ status: 'rolled-back' });
 });
 
 test('corrupt credentials and corrupt metadata fail preflight without rewriting anything', async () => {
