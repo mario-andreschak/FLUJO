@@ -87,3 +87,30 @@ test('candidate dotenv presence is refused without importing a candidate module'
   await fs.writeFile(path.join(fixture.applicationRoot, '.env.local'), 'SYNTHETIC_ONLY=1');
   await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, await fixture.seal()), /contains a dotenv file/);
 });
+
+async function externalMetadataFixture(t) {
+  const fixture = await metadataFixture(t);
+  const inventoryFile = path.join(path.dirname(fixture.root), 'runtime-inventory.json');
+  const bytes = Buffer.from(JSON.stringify({ schemaVersion: 1, runtimeRoot: fixture.root,
+    runtimeFiles: fixture.receipt.runtimeFiles }));
+  await fs.writeFile(inventoryFile, bytes);
+  delete fixture.receipt.runtimeFiles;
+  fixture.receipt.runtimeInventory = { file: inventoryFile, bytes: bytes.length, sha256: sha(bytes) };
+  return fixture;
+}
+
+test('a wrong external runtime inventory digest is refused before any candidate is admitted', async t => {
+  const fixture = await externalMetadataFixture(t);
+  fixture.receipt.runtimeInventory.sha256 = '0'.repeat(64);
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, await fixture.seal()),
+    /external runtime inventory byte\/digest mismatch/);
+});
+
+test('an added runtime file cannot hide outside a pinned external inventory', async t => {
+  const fixture = await externalMetadataFixture(t); const options = await fixture.seal();
+  const result = await admitFeatureBrowserArtifact(fixture.applicationRoot, options);
+  assert.equal(result.runtimeFileCount, 5);
+  assert.deepEqual(result.runtimeInventory, fixture.receipt.runtimeInventory);
+  await fs.writeFile(path.join(fixture.root, 'node_modules/unrecorded.js'), '// Unrecorded synthetic bytes');
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /unrecorded entry/);
+});

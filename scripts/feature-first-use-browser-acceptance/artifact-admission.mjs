@@ -34,9 +34,59 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
   if (!['original-current-hosted-production-package', 'owned-exact-source-package'].includes(receipt.origin)) {
     fail('unsupported candidate origin');
   }
-  if (!path.isAbsolute(receipt.runtimeRoot ?? '') || !Array.isArray(receipt.runtimeFiles)
-    || receipt.runtimeFiles.length < 5 || receipt.runtimeFiles.length > 200000) fail('invalid runtime root/inventory');
+  const deadline = performance.now() + 90000;
+  const checkDeadline = () => { if (performance.now() > deadline) fail('metadata verification deadline exceeded'); };
+  if (!path.isAbsolute(receipt.runtimeRoot ?? '')) fail('invalid runtime root/inventory');
   const root = await fs.realpath(receipt.runtimeRoot);
+  const inline = Object.hasOwn(receipt, 'runtimeFiles');
+  const external = Object.hasOwn(receipt, 'runtimeInventory');
+  if (inline === external) fail('exactly one inline or external runtime inventory is required');
+  let runtimeFiles = receipt.runtimeFiles;
+  if (external) {
+    const reference = receipt.runtimeInventory;
+    if (!record(reference) || !path.isAbsolute(reference.file ?? '') || !hashValue(reference.sha256)
+      || !Number.isSafeInteger(reference.bytes) || reference.bytes < 1 || reference.bytes > 32 * 1024 * 1024) {
+      fail('invalid external runtime inventory pin');
+    }
+    checkDeadline();
+    const inventoryStat = await fs.lstat(reference.file);
+    if (!inventoryStat.isFile() || inventoryStat.isSymbolicLink()
+      || !samePath(await fs.realpath(reference.file), path.resolve(reference.file))) {
+      fail('external runtime inventory is not a regular nonlinked file');
+    }
+    if (inventoryStat.size !== reference.bytes) fail('external runtime inventory byte/digest mismatch');
+    const handle = await fs.open(reference.file, 'r');
+    let inventory;
+    try {
+      const openedStat = await handle.stat();
+      if (!openedStat.isFile() || openedStat.size !== reference.bytes) fail('external runtime inventory byte/digest mismatch');
+      // One extra byte detects growth without an unbounded read.
+      const buffer = Buffer.alloc(reference.bytes + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        checkDeadline();
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+        if (!bytesRead) break;
+        length += bytesRead;
+      }
+      const inventoryBytes = buffer.subarray(0, length);
+      if (length !== reference.bytes || digest(inventoryBytes) !== reference.sha256) {
+        fail('external runtime inventory byte/digest mismatch');
+      }
+      checkDeadline();
+      inventory = JSON.parse(inventoryBytes.toString('utf8'));
+      checkDeadline();
+    } finally {
+      await handle.close();
+    }
+    if (!record(inventory) || inventory.schemaVersion !== 1 || !path.isAbsolute(inventory.runtimeRoot ?? '')
+      || !samePath(await fs.realpath(inventory.runtimeRoot), root)) fail('external runtime inventory shape/root mismatch');
+    runtimeFiles = inventory.runtimeFiles;
+  }
+  checkDeadline();
+  if (!Array.isArray(runtimeFiles) || runtimeFiles.length < 5 || runtimeFiles.length > 200000) {
+    fail('invalid runtime root/inventory');
+  }
   const app = await fs.realpath(applicationRoot);
   if (!samePath(app, await fs.realpath(receipt.applicationRoot)) || !contains(root, app)) fail('application root mismatch');
   for (const dotenv of ['.env', '.env.local', '.env.production', '.env.production.local']) {
@@ -47,11 +97,9 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
   const appRelative = path.relative(root, app).split(path.sep).join('/');
   const ignored = file => file === `${appRelative}/.next/trace`
     || file === `${appRelative}/.next/cache` || file.startsWith(`${appRelative}/.next/cache/`);
-  const deadline = performance.now() + 90000;
-  const checkDeadline = () => { if (performance.now() > deadline) fail('metadata verification deadline exceeded'); };
   const seen = new Set();
   let totalBytes = 0;
-  for (const entry of receipt.runtimeFiles) {
+  for (const entry of runtimeFiles) {
     if (!record(entry) || typeof entry.path !== 'string' || entry.path.length > 2048 || entry.path.includes('\\')
       || entry.path.includes('\0') || entry.path.includes(':') || path.isAbsolute(entry.path)
       || entry.path.split('/').some(part => !part || part === '.' || part === '..') || ignored(entry.path)
@@ -111,5 +159,6 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
   return { receiptFile, receiptSha256, applicationRoot: app, runtimeRoot: root, buildId,
     source: expectedSource, runtimeFileCount: seen.size, runtimeBytes: totalBytes,
     node: { ...runtime }, chromium: { ...browser },
+    ...(external ? { runtimeInventory: { ...receipt.runtimeInventory } } : {}),
     scope: 'byte identity against a Root-reviewed build record; no independent source, installed-launcher, provider or human attestation' };
 }
