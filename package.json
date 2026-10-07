@@ -92,7 +92,7 @@
     "@mario.andreschak/mcp-browser": "3.46.2",
     "@mario.andreschak/mcp-filesystem": "3.46.2",
     "@mario.andreschak/mcp-flujo": "3.46.2",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@mui/icons-material": "^6.5.0",
