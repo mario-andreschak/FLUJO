@@ -198,6 +198,6 @@ export async function internalReadResource(uri: string): Promise<MCPServiceRespo
     return { success: true, data: read.contents };
   } catch (error) {
     log.error(`internalReadResource failed for ${uri}`, error);
-    return { success: false, error: error instanceof Error ? error.message : String(error), statusCode: 500 };
+    return { success: false, error: 'Failed to read run resource.', statusCode: 500 };
   }
 }

@@ -234,3 +234,38 @@ describe('internalReadResource', () => {
     expect(listPersonaFlowDispatchesMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MCP resource unexpected-error response contract', () => {
+  it.each<[string, unknown]>([
+    ['Error', new Error('EACCES C:/private/workspace/db/index.json Bearer synthetic_private_credential')],
+    ['string', 'C:/private/workspace/db/index.json sk-synthetic_private_key'],
+  ])('bounds a cold index read %s failure without exposing internal details or emitting a read event', async (_label, failure) => {
+    const readSpy = jest.spyOn(fs, 'readFile').mockRejectedValueOnce(failure);
+    const events: ExecutionEvent[] = [];
+    const unsubscribe = executionEventBus.subscribe('conv-index-error', event => events.push(event));
+    try {
+      const result = await internalReadResource('flujo://run/conv-index-error/resource-1');
+      expect(readSpy).toHaveBeenCalledTimes(1);
+      expect(readSpy).toHaveBeenCalledWith(path.join(tmpDir, 'conv-index-error', 'index.json'), 'utf-8');
+      expect(result).toEqual({ success: false, error: 'Failed to read run resource.', statusCode: 500 });
+      expect(events.filter(event => event.type === 'resource:read')).toEqual([]);
+    } finally {
+      readSpy.mockRestore();
+      unsubscribe();
+    }
+  });
+
+  it('fails closed on an ownership-check fault before reading the resource store', async () => {
+    const failure = new Error('Private ownership state C:/private/persona/state.json sk-synthetic_private_key');
+    loadConversationStateMock.mockRejectedValueOnce(failure);
+    const readSpy = jest.spyOn(fs, 'readFile');
+    try {
+      const result = await internalReadResource(entry.uri);
+      expect(result).toEqual({ success: false, error: 'Failed to read run resource.', statusCode: 500 });
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(listPersonaFlowDispatchesMock).not.toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+});
