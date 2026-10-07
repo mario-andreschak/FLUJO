@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { EventStreamHandlers } from '@/frontend/services/chat';
 
 const mockLoadFlows = jest.fn();
 const mockListConversations = jest.fn();
@@ -7,6 +8,8 @@ const mockCreateConversation = jest.fn();
 const mockUpdateConversationPersonaTarget = jest.fn();
 const mockGetModelTurns = jest.fn();
 const mockGetModelTurn = jest.fn();
+const mockSubscribeToEvents = jest.fn();
+const mockSubscribeToSidebarEvents = jest.fn();
 let mockInitialConversationId: string | null = 'conversation-current';
 
 jest.mock('next/navigation', () => ({
@@ -61,8 +64,8 @@ jest.mock('@/frontend/services/chat', () => {
       getConversation: (...args: unknown[]) => mockGetConversation(...args),
       getModelTurns: (...args: unknown[]) => mockGetModelTurns(...args),
       getModelTurn: (...args: unknown[]) => mockGetModelTurn(...args),
-      subscribeToSidebarEvents: jest.fn(() => ({ close: jest.fn() })),
-      subscribeToEvents: jest.fn(() => ({ close: jest.fn() })),
+      subscribeToSidebarEvents: (...args: unknown[]) => mockSubscribeToSidebarEvents(...args),
+      subscribeToEvents: (...args: unknown[]) => mockSubscribeToEvents(...args),
       updateConversationFlow: jest.fn(),
       updateConversationApproval: jest.fn(),
       updateConversationTitle: jest.fn(),
@@ -219,8 +222,36 @@ describe('Talk conversation Agent switch terminology', () => {
     mockUpdateConversationPersonaTarget.mockReset();
     mockGetModelTurns.mockReset().mockResolvedValue({ turns: [] });
     mockGetModelTurn.mockReset();
+    mockSubscribeToEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
+    mockSubscribeToSidebarEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
   });
 
+  it('recovers the viewed snapshot before reconnecting and cancels recovery on unmount', async () => {
+    const running = { ...detailedConversation, status: 'running' };
+    mockListConversations.mockResolvedValue([running]);
+    mockGetConversation.mockResolvedValue(running);
+    const { unmount } = render(<Chat />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1));
+    jest.useFakeTimers();
+    try {
+      const handlers = mockSubscribeToEvents.mock.calls[0][1] as EventStreamHandlers;
+      let complete!: (value: typeof running) => void;
+      mockGetConversation.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+      act(() => handlers.onReset?.({ version: 1, reason: 'replay-gap', recovery: 'reload-snapshot', nextSeq: 42 }));
+      act(() => jest.advanceTimersByTime(3000));
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+      await act(async () => complete(running));
+      act(() => jest.advanceTimersByTime(3000));
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(2);
+      expect(mockSubscribeToEvents).toHaveBeenLastCalledWith('conversation-current', expect.objectContaining({ onReset: expect.any(Function) }), 42, { activityOnly: true });
+      const current = mockSubscribeToEvents.mock.calls[1][1] as EventStreamHandlers;
+      await act(async () => current.onReset?.({ version: 1, reason: 'slow-consumer', recovery: 'reload-snapshot', nextSeq: 50 }));
+      unmount();
+      act(() => jest.advanceTimersByTime(3000));
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(2);
+      expect(mockCreateConversation).not.toHaveBeenCalled();
+    } finally { unmount(); jest.useRealTimers(); }
+  });
   it('keeps loading visible and preserves the composer while the Persona conversation opens', async () => {
     mockInitialConversationId = null;
     const personaConversation = {

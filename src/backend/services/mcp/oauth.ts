@@ -1,5 +1,5 @@
 import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
-import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationMixed } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
@@ -11,6 +11,11 @@ const log = createLogger('backend/services/mcp/oauth');
 
 /** Authorization callbacks older than this must start a fresh flow. */
 export const MCP_OAUTH_STATE_TTL_MS = 20 * 60 * 1000;
+
+/** Legacy credentials must complete a fresh authorization before they can be reused. */
+export function hasOAuthIssuer(credential: { issuer?: unknown } | undefined): boolean {
+  return typeof credential?.issuer === 'string' && credential.issuer.trim().length > 0;
+}
 
 /** Constant-time validation of the persisted, workspace-bound OAuth nonce. */
 export function matchesOAuthState(
@@ -79,7 +84,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
-    if (this.config.oauthClientInformation) {
+    if (hasOAuthIssuer(this.config.oauthClientInformation)) {
       log.debug(`Returning stored client information for ${this.config.name}`);
       return this.config.oauthClientInformation;
     }
@@ -88,6 +93,21 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     // The stored secret may be encrypted ("encrypted:...") or a "${global:VAR}" binding, so
     // resolve+decrypt it here — the plaintext only ever exists in the backend, at use time.
     if (this.config.oauthClientId) {
+      // This is operator configuration, never a value taken from MCP discovery or
+      // the v2 SDK's optional credential context. Validate without normalizing it.
+      const issuer = this.config.oauthIssuer;
+      let trustedIssuer = false;
+      try {
+        const url = new URL(issuer ?? '');
+        trustedIssuer = Boolean(issuer && issuer === issuer.trim()
+          && (url.protocol === 'https:' || url.protocol === 'http:')
+          && !url.username && !url.password && !url.search && !url.hash);
+      } catch { /* Missing or malformed trusted configuration cannot release a secret. */ }
+      if (!trustedIssuer) {
+        const error = new Error('OAuth authentication required. Set oauthIssuer in this server\'s JSON configuration to the trusted authorization issuer for the pre-registered client, then authenticate again.');
+        error.name = 'OAuthIssuerRequired';
+        throw error;
+      }
       const clientSecret = this.config.oauthClientSecret
         ? (await resolveAndDecryptApiKey(this.config.oauthClientSecret)) ?? undefined
         : undefined;
@@ -95,6 +115,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       return {
         client_id: this.config.oauthClientId,
         client_secret: clientSecret,
+        issuer,
       };
     }
 
@@ -159,7 +180,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     await this.persist(update);
   }
 
-  async saveClientInformation(clientInformation: OAuthClientInformationFull): Promise<void> {
+  async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
     log.info(`Saving client information for ${this.config.name}`);
     log.verbose('Client information to save', { hasClientSecret: Boolean(clientInformation.client_secret) });
     
@@ -169,10 +190,13 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       client_secret: clientInformation.client_secret,
       client_id_issued_at: clientInformation.client_id_issued_at,
       client_secret_expires_at: clientInformation.client_secret_expires_at,
+      issuer: clientInformation.issuer,
     };
     
     // Also store the full metadata
-    const oauthClientMetadata = {
+    // The patched SDK may save only client information (for example a CIMD
+    // client). A narrower save must not erase existing registration metadata.
+    const oauthClientMetadata = 'redirect_uris' in clientInformation ? {
       redirect_uris: clientInformation.redirect_uris,
       client_name: clientInformation.client_name,
       client_uri: clientInformation.client_uri,
@@ -187,14 +211,16 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       jwks: clientInformation.jwks,
       software_id: clientInformation.software_id,
       software_version: clientInformation.software_version,
-    };
+    } : undefined;
 
-    await this.persist({ oauthClientInformation, oauthClientMetadata });
+    await this.persist({ oauthClientInformation,
+      ...(oauthClientMetadata ? { oauthClientMetadata } : {}),
+    });
     log.info(`Client information saved for ${this.config.name}`);
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    if (this.config.oauthTokens) {
+    if (this.config.oauthTokens && hasOAuthIssuer(this.config.oauthTokens)) {
       log.debug(`Returning stored tokens for ${this.config.name}`);
 
       // An expired access token must still be returned WITH its refresh_token intact:

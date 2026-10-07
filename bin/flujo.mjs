@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import nextEnv from '@next/env';
+import { launcherPort } from './launcher-port.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +55,12 @@ function readPort() {
   }
   return process.env.FLUJO_PORT || '4200';
 }
-const port = readPort();
+let port;
+try { port = launcherPort(readPort()); }
+catch {
+  console.error('[FLUJO] Invalid port. Use an integer from 1 to 65535.');
+  process.exit(1);
+}
 
 // --- data dir --------------------------------------------------------------
 // Default writable data location for a packaged install. A git checkout keeps

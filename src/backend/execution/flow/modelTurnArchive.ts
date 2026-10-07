@@ -19,6 +19,12 @@ import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { commitFlowDurableMutation, type FlowDurableMutationContext } from './executionAuthority';
+import {
+  MODEL_TURN_ARCHIVE_READ_LIMITS,
+  readBoundedModelTurnFile,
+  readBoundedModelTurnJson,
+  withModelTurnArchiveRead,
+} from './modelTurnArchiveReadBudget';
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -54,20 +60,24 @@ function outcomePath(conversationId: string, dispatchId: string): string {
   return path.join(conversationDir(conversationId), `${dispatchId}.outcome.json`);
 }
 
-async function readOutcome(conversationId: string, dispatchId: string) {
+async function readOutcome(conversationId: string, dispatchId: string, signal?: AbortSignal) {
   let handle;
   try {
+    signal?.throwIfAborted();
     handle = await fs.open(outcomePath(conversationId, dispatchId), 'r');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
   try {
+    signal?.throwIfAborted();
     // Read at most the limit plus one byte, even if the file grows after open.
     const bytes = Buffer.alloc(MODEL_TURN_OUTCOME_MAX_BYTES + 1);
     let bytesRead = 0;
     while (bytesRead < bytes.length) {
+      signal?.throwIfAborted();
       const chunk = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+      signal?.throwIfAborted();
       if (!chunk.bytesRead) break;
       bytesRead += chunk.bytesRead;
     }
@@ -446,25 +456,32 @@ async function updateModelDispatchOutcomeWithinMutation(
 export async function readModelTurnSnapshot(
   conversationId: string,
   dispatchId: string,
+  signal?: AbortSignal,
 ): Promise<ModelTurnSnapshot | undefined> {
-  let compressed: Buffer;
+  return withModelTurnArchiveRead(() => readModelTurnSnapshotWithinAdmission(conversationId, dispatchId, signal), signal);
+}
+
+async function readModelTurnSnapshotWithinAdmission(
+  conversationId: string,
+  dispatchId: string,
+  signal?: AbortSignal,
+): Promise<ModelTurnSnapshot | undefined> {
+  let snapshot: ModelTurnSnapshot;
   try {
-    compressed = await fs.readFile(snapshotPath(conversationId, dispatchId));
+    snapshot = await readBoundedModelTurnJson<ModelTurnSnapshot>(snapshotPath(conversationId, dispatchId), undefined, signal);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     try {
-      const legacy = await fs.readFile(snapshotPath(conversationId, dispatchId, 1));
-      return JSON.parse((await gunzipAsync(legacy)).toString('utf8')) as ModelTurnSnapshot;
+      return await readBoundedModelTurnJson<ModelTurnSnapshot>(snapshotPath(conversationId, dispatchId, 1), undefined, signal);
     } catch (legacyError) {
       if ((legacyError as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw legacyError;
     }
   }
-  const snapshot = JSON.parse((await gunzipAsync(compressed)).toString('utf8')) as ModelTurnSnapshot;
   if (snapshot.version !== 2 || snapshot.entry.archiveVersion !== 2
     || snapshot.entry.id !== dispatchId || snapshot.entry.conversationId !== conversationId
     || snapshot.entry.outcome !== 'running') throw new Error('Invalid v2 model-turn snapshot');
-  const record = await readOutcome(conversationId, dispatchId);
+  const record = await readOutcome(conversationId, dispatchId, signal);
   if (record) snapshot.entry.outcome = record.outcome;
   return snapshot;
 }
@@ -473,12 +490,27 @@ export async function readModelTurnMedia(
   conversationId: string,
   dispatchId: string,
   mediaId: string,
+  signal?: AbortSignal,
 ): Promise<{ descriptor: ModelTurnMediaDescriptor; bytes: Buffer } | undefined> {
-  const snapshot = await readModelTurnSnapshot(conversationId, dispatchId);
+  return withModelTurnArchiveRead(() => readModelTurnMediaWithinAdmission(conversationId, dispatchId, mediaId, signal), signal);
+}
+
+async function readModelTurnMediaWithinAdmission(
+  conversationId: string,
+  dispatchId: string,
+  mediaId: string,
+  signal?: AbortSignal,
+): Promise<{ descriptor: ModelTurnMediaDescriptor; bytes: Buffer } | undefined> {
+  // Snapshot + media share one slot; nested admission could reject the last
+  // admitted media operation or count one pipeline twice.
+  const snapshot = await readModelTurnSnapshotWithinAdmission(conversationId, dispatchId, signal);
   const descriptor = snapshot?.media.find(item => item.id === mediaId);
   if (!descriptor) return undefined;
   try {
-    return { descriptor, bytes: await fs.readFile(mediaPath(conversationId, descriptor.sha256)) };
+    return {
+      descriptor,
+      bytes: await readBoundedModelTurnFile(mediaPath(conversationId, descriptor.sha256), MODEL_TURN_ARCHIVE_READ_LIMITS.mediaBytes, signal),
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;

@@ -219,4 +219,5 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /persona-browser-artifacts/
+/feature-first-use-artifacts/
 /ci-node-runtime/

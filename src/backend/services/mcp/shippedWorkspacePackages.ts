@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import * as nodeModule from 'node:module';
 import { SHIPPED_MCP_SERVERS, shippedMcpAppRoot } from './shippedServers';
 
@@ -41,26 +41,60 @@ async function copyAsset(source: string, destination: string): Promise<void> {
   }
 }
 
-async function packageDigest(root: string, runtimeOnly = false): Promise<string> {
+function samePackageFile(first: BigIntStats, second: BigIntStats): boolean {
+  return first.dev === second.dev && first.ino === second.ino && first.size === second.size
+    && first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs;
+}
+
+async function readPackageAsset(file: string, expected: BigIntStats): Promise<Buffer> {
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !samePackageFile(expected, opened)) {
+      throw new Error('A copied package asset changed before it could be read.');
+    }
+    // Read the admitted object, even if the pathname changes after admission.
+    // Hard links remain supported; parent-directory containment is unchanged.
+    const bytes = await handle.readFile();
+    const named = await fs.lstat(file, { bigint: true });
+    if (named.isSymbolicLink()) throw new Error('A copied package contains an unsupported linked asset.');
+    if (!named.isFile() || BigInt(bytes.length) !== opened.size
+      || !samePackageFile(opened, await handle.stat({ bigint: true })) || !samePackageFile(opened, named)) {
+      throw new Error('A copied package asset changed while it was being read.');
+    }
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function packageDigests(root: string): Promise<{ assetSha256: string; runtimeSha256: string }> {
   const hash = createHash('sha256');
-  const walk = async (directory: string, prefix: string) => {
+  const runtimeHash = createHash('sha256');
+  const update = (entry: string, runtime: boolean) => {
+    hash.update(entry);
+    if (runtime) runtimeHash.update(entry);
+  };
+  const walk = async (directory: string, prefix: string, parentRuntime: boolean) => {
     for (const name of (await fs.readdir(directory)).sort()) {
-      if (!prefix && (['node_modules', '.git', TEMPLATE_MARKER].includes(name)
-        || (runtimeOnly && !['package.json', 'dist', 'scripts'].includes(name)))) continue;
+      if (!prefix && ['node_modules', '.git', TEMPLATE_MARKER].includes(name)) continue;
+      const runtime = prefix ? parentRuntime : ['package.json', 'dist', 'scripts'].includes(name);
       const relative = prefix ? `${prefix}/${name}` : name;
       const file = path.join(directory, name);
-      const stat = await fs.lstat(file);
+      const stat = await fs.lstat(file, { bigint: true });
       if (stat.isSymbolicLink()) throw new Error('A copied package contains an unsupported linked asset.');
       if (stat.isDirectory()) {
-        hash.update(`directory:${relative}\0`);
-        await walk(file, relative);
+        update(`directory:${relative}\0`, runtime);
+        await walk(file, relative, runtime);
       } else if (stat.isFile()) {
-        hash.update(`file:${relative}\0${createHash('sha256').update(await fs.readFile(file)).digest('hex')}\0`);
+        // Both digests must describe these same bytes. A second runtime walk
+        // could hash edits that were never checked against template provenance.
+        update(`file:${relative}\0${createHash('sha256').update(await readPackageAsset(file, stat)).digest('hex')}\0`, runtime);
       } else throw new Error('A copied package contains an unsupported asset.');
     }
   };
-  await walk(root, '');
-  return hash.digest('hex');
+  await walk(root, '', false);
+  return { assetSha256: hash.digest('hex'), runtimeSha256: runtimeHash.digest('hex') };
 }
 
 async function validatePackage(root: string, name: string): Promise<{ name: string; version?: string }> {
@@ -174,10 +208,11 @@ export async function shippedWorkspacePackageRuntimeDigest(root: string): Promis
   let marker: { version?: number; assetSha256?: string };
   try { marker = JSON.parse(await fs.readFile(markerPath, 'utf8')); }
   catch { throw new Error('The copied MCP package template provenance is invalid.'); }
-  if (marker.version !== 1 || marker.assetSha256 !== await packageDigest(root)) {
+  const digests = marker.version === 1 ? await packageDigests(root) : undefined;
+  if (!digests || marker.assetSha256 !== digests.assetSha256) {
     throw new Error('This copied MCP package has local changes. Export it as a pinned GitHub package; a workspace snapshot will not discard those edits.');
   }
-  return packageDigest(root, true);
+  return digests.runtimeSha256;
 }
 
 async function clonePackage(root: string, appRoot: string, name: string): Promise<void> {
@@ -213,7 +248,7 @@ async function clonePackage(root: string, appRoot: string, name: string): Promis
       copiedAt: new Date().toISOString(),
       sourcePackageVersion: manifest.version,
       sourceManifestSha256: createHash('sha256').update(await fs.readFile(path.join(source, 'package.json'))).digest('hex'),
-      assetSha256: await packageDigest(stage),
+      assetSha256: (await packageDigests(stage)).assetSha256,
       dependencyPolicy: 'installation-resolution',
     }), { flag: 'wx' });
     try {

@@ -1,6 +1,7 @@
 {
   "name": "@mario.andreschak/mcp-flujo",
   "version": "3.46.3",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mario-andreschak/FLUJO.git",
@@ -14,6 +15,7 @@
     "flujo-mcp-flujo": "dist/index.js"
   },
   "files": [
+    "LICENSE",
     "dist/**/*"
   ],
   "scripts": {
@@ -25,7 +27,7 @@
     "node": "^22.17.0 || ^24.2.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

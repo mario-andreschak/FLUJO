@@ -21,9 +21,11 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
   const tokens = {
     access_token: 'synthetic-new-access-secret', refresh_token: 'synthetic-new-refresh-secret',
     id_token: 'synthetic-extension-secret', token_type: 'bearer', expires_in: 60,
+    issuer: 'https://authorization.invalid/tenant/',
   } as OAuthTokens;
   const client: OAuthClientInformationFull = {
     client_id: 'synthetic-client', client_secret: 'synthetic-client-secret',
+    issuer: 'https://authorization.invalid/tenant/',
     redirect_uris: ['http://127.0.0.1:4200/api/oauth/callback'],
   };
 

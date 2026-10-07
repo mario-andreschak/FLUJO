@@ -20,6 +20,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { createHash } from "crypto";
+import { RuntimeDirectoryAdmission } from './runtimeDirectoryAdmission';
 import { createLogger } from "@/utils/logger";
 import { assertMcpTransport, McpTransportError } from './transportAdmission';
 import {
@@ -59,7 +60,13 @@ import {
   elicitationConfigKey,
 } from "./elicitation";
 import { resolveAndDecryptApiKey } from "@/backend/utils/resolveGlobalVars";
-import { normalizeHeaderValue, isMaskedHeaderValue } from "@/utils/mcp/headers";
+import { isMaskedHeaderValue } from "@/utils/mcp/headers";
+import {
+  isMcpEnvironmentName,
+  isMcpHeaderName,
+  mcpStringDataRecord,
+  ownMcpStringValue,
+} from '@/utils/mcp/connectionData';
 import { MCPHeaderValue } from "@/shared/types/mcp/mcp";
 import {
   MCP_APPS_EXTENSION_ID,
@@ -161,18 +168,15 @@ export async function resolveConfigHeaders(
   // the saved config, so rotating the global had no effect and package re-export
   // could no longer see the binding.
   if (config.env && typeof config.env === "object") {
-    const resolvedEnv: Record<string, string> = Object.create(null);
+    const resolvedEnv = new Map<string, string>();
     for (const [key, raw] of Object.entries(config.env)) {
-      if (!key) continue;
-      const value =
-        raw && typeof raw === "object" && "value" in raw
-          ? ((raw as { value?: string }).value ?? "")
-          : ((raw as string) ?? "");
+      if (!isMcpEnvironmentName(key)) continue;
+      const value = ownMcpStringValue(raw);
       if (!value || isMaskedHeaderValue(value)) continue;
       const out = await resolveAndDecryptApiKey(value);
-      if (out) resolvedEnv[key] = out;
+      if (out) resolvedEnv.set(key, out);
     }
-    resolvedConfig = { ...resolvedConfig, env: resolvedEnv } as MCPServerConfig;
+    resolvedConfig = { ...resolvedConfig, env: mcpStringDataRecord(resolvedEnv) } as MCPServerConfig;
   }
 
   if (config.transport !== "streamable" && config.transport !== "sse") {
@@ -182,10 +186,10 @@ export async function resolveConfigHeaders(
   if (!c.headers || typeof c.headers !== "object") {
     return resolvedConfig;
   }
-  const resolved: Record<string, string> = Object.create(null);
+  const resolved = new Map<string, string>();
   for (const [key, raw] of Object.entries(c.headers)) {
-    if (!key) continue;
-    const { value } = normalizeHeaderValue(raw, key);
+    if (!isMcpHeaderName(key)) continue;
+    const value = ownMcpStringValue(raw);
     if (!value) continue;
     // Defence-in-depth (#137): never forward the mask placeholder ("********") as a literal
     // header. testConnection hydrates masked SECRET headers from the stored config before this
@@ -194,10 +198,10 @@ export async function resolveConfigHeaders(
     if (isMaskedHeaderValue(value)) continue;
     const out = await resolveAndDecryptApiKey(value);
     if (out) {
-      resolved[key] = out;
+      resolved.set(key, out);
     }
   }
-  return { ...resolvedConfig, headers: resolved } as MCPServerConfig;
+  return { ...resolvedConfig, headers: mcpStringDataRecord(resolved) } as MCPServerConfig;
 }
 
 /**
@@ -213,29 +217,27 @@ export async function resolveConfigHeaders(
 export function flattenCustomHeaders(
   headers: Record<string, MCPHeaderValue>,
 ): Record<string, string> {
-  const out: Record<string, string> = Object.create(null);
+  const out = new Map<string, string>();
   for (const [key, raw] of Object.entries(headers)) {
-    if (!key) continue;
-    const { value } = normalizeHeaderValue(raw, key);
+    if (!isMcpHeaderName(key)) continue;
+    const value = ownMcpStringValue(raw);
     if (typeof value === "string" && value.length > 0) {
-      out[key] = value;
+      out.set(key, value);
     }
   }
-  return out;
+  return mcpStringDataRecord(out);
 }
 
 function transformEnv(env?: Record<string, unknown>): Record<string, string> {
-  const transformed: Record<string, string> = Object.create(null);
+  const transformed = new Map<string, string>();
   if (env) {
     for (const [key, envVar] of Object.entries(env)) {
-      if (envVar && typeof envVar === "object" && "value" in envVar) {
-        transformed[key] = (envVar as { value: string }).value;
-      } else {
-        transformed[key] = envVar as string;
-      }
+      if (!isMcpEnvironmentName(key)) continue;
+      const value = ownMcpStringValue(envVar);
+      if (value !== undefined) transformed.set(key, value);
     }
   }
-  return transformed;
+  return mcpStringDataRecord(transformed);
 }
 
 /**
@@ -337,6 +339,7 @@ export function httpConfigKey(config: MCPServerConfig): string {
     reconnectionOptions?: unknown;
     sessionId?: string;
     oauthClientId?: string;
+    oauthIssuer?: string;
     oauthClientInformation?: unknown;
     oauthClientSecret?: string;
     oauthTokens?: unknown;
@@ -350,6 +353,7 @@ export function httpConfigKey(config: MCPServerConfig): string {
     reconnectionOptions: c.reconnectionOptions ?? {},
     sessionId: c.sessionId ?? "",
     oauthClientId: c.oauthClientId ?? "",
+    oauthIssuer: c.oauthIssuer ?? "",
     oauthClientInformation: c.oauthClientInformation ?? {},
     oauthClientSecret: c.oauthClientSecret ?? "",
     oauthTokens: c.oauthTokens ?? {},
@@ -651,39 +655,20 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
   const workspaceRoot = getWorkspaceDataDir();
   const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
 
-  const assertOrCreateRealDirectory = (candidate: string, label: string): void => {
-    try {
-      const stat = fs.lstatSync(candidate);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error(`${label} must be a real directory: ${candidate}`);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      fs.mkdirSync(candidate, { mode: 0o700 });
-      const stat = fs.lstatSync(candidate);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error(`${label} must be a real directory: ${candidate}`);
-      }
-    }
-  };
-
   // Never create a workspace as a side effect of launching a child. The HTTP
   // boundary/startup migration has already validated and created this root.
-  const workspaceStat = fs.lstatSync(workspaceRoot);
-  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
-    throw new Error(`Workspace root must be a real directory: ${workspaceRoot}`);
-  }
+  const admission = new RuntimeDirectoryAdmission(workspaceRoot);
 
   let current = workspaceRoot;
   for (const segment of ['userdata', 'mcp-runtime', serverKey]) {
     current = path.join(current, segment);
-    assertOrCreateRealDirectory(current, 'MCP runtime directory');
+    admission.admit(current, segment === serverKey);
   }
   const runtimeRoot = current;
   const home = path.join(runtimeRoot, 'home');
   const cwd = path.join(runtimeRoot, 'cwd');
-  assertOrCreateRealDirectory(home, 'MCP runtime home');
-  assertOrCreateRealDirectory(cwd, 'MCP runtime cwd');
+  admission.admit(home);
+  admission.admit(cwd);
 
   const directories = {
     appData: path.join(home, 'AppData', 'Roaming'),
@@ -703,7 +688,7 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     let cursor = home;
     for (const segment of relative.split(path.sep).filter(Boolean)) {
       cursor = path.join(cursor, segment);
-      assertOrCreateRealDirectory(cursor, 'MCP runtime directory');
+      admission.admit(cursor);
     }
   }
 
@@ -729,6 +714,7 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
     result.HOMEPATH = home.slice(parsed.root.length - 1);
   }
+  admission.verify();
   return { cwd, env: result };
 }
 

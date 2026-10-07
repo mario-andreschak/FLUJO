@@ -100,16 +100,28 @@ the human, installed-artifact and elapsed-observation gates as pending.
 ## Consumer-installed baseline probe
 
 This optional networked command installs a pinned published npm artifact into a
-fresh consumer directory and exercises the real loopback HTTP flow/backup/restore
+fresh consumer directory and exercises real loopback HTTP storage/backup/restore
 routes. It requires the clean committed source checkout and local dependencies
 above. It performs no build, publication or provider call. Coordinate its install
 and server with the epic's resource owner; Windows x64 is the exercised profile.
 Other platforms require their own retained run before claiming acceptance.
 
 Obtain version, npm SHA-512 integrity and source revision independently from the
-reviewed release metadata/provenance. The command verifies the tarball bytes and
-installed manifest. The source revision is an operator-supplied declaration;
-provenance signature verification remains with Engineering's release gate.
+reviewed release metadata/provenance. The command verifies the tarball bytes,
+then fetches the exact public npm version metadata and Sigstore provenance bundles
+from fixed registry endpoints. Before installation it requires `gh attestation
+verify` to verify the SHA-512 artifact with the official publish workflow on
+`main`, the pinned source and signer revision, and a GitHub hosted runner. It also
+checks the verifier's certificate identity, witnessed timestamp and npm package
+subject. Install GitHub CLI with attestation support before running this command.
+Missing or invalid provenance stops the probe before npm or the application runs;
+there is no skip option. Raw metadata, bundles and verifier stdout/stderr are
+retained with hashes, including failures. The installed manifest is checked too.
+
+This verifies the single npm package's provenance. Npm ECDSA registry signatures,
+full release distribution/main qualification and independent human acceptance
+remain separate requirements. Earlier receipts with unverified provenance remain
+historical evidence; use a new run to obtain the mandatory verification result.
 
 For the published 3.46.2 baseline (source `320347356891aa1c24e0f2f9ce12719317e58bde`):
 
@@ -127,9 +139,38 @@ application tarball is pinned; transitive dependencies resolve at install time.
 Retain `consumer/package-lock.json` to identify the graph actually exercised.
 
 The probe confirms the responding install/data root before any mutation. It
-creates a synthetic empty flow, checks its backup contains the expected record,
-changes the flow, rejects an archive missing required metadata without changing
-the record, restores the valid archive, and compares id/name/nodes/edges. Response
+creates an empty flow, a conversation with two prescribed inert text messages,
+a theme preference and one non-secret environment label. The conversation starts
+through its create route; the two messages are imported through the restore route.
+They are synthetic records, not output from a provider or a workflow execution.
+The probe selects `flows`, `chatHistory`, `settings` and `globalEnvVars`, retains
+the complete API export and uses those same ZIP bytes for restore. Before creating
+the fixture it records the actual fresh-root flow inventory; afterwards it records
+the complete seeded and created inventory in `original-flows.json`. FLUJO's public
+`default-agent-flujo`, when present, stays in the archive and comparison, including
+its graph and every stable field. Only top-level `createdAt` and `updatedAt` are
+excluded from semantic comparison; their raw values are retained. Nested timestamps,
+node data, edges, favorites and other fields remain compared. Unknown or duplicate
+flows and Persona ownership markers are refused. The seeded agent is never executed.
+The probe checks every synthetic record, changes
+the flow/title/theme/label, and rejects both
+a missing-metadata archive and a conversation with a forbidden ownership marker.
+Every selected record must remain unchanged after rejection. Conversation evidence
+retains the complete GET response and the complete stored conversation from an
+independent `chatHistory` export in `original-state.json`. All fields in both
+observations, including unknown fields, tracking data, `updatedAt`, parent/root
+links and both full message arrays, must match their original observations after
+restore and restart. No conversation timestamp or metadata field is ignored.
+The explicit cross-view ID alias, null defaults and derived transcript window
+checks are documented in [the conversation acceptance contract](./maintainer-conversation-acceptance.md).
+The valid archive must restore the entire flow inventory, theme, label and full
+stored conversation; API readback checks the complete exposed response separately.
+A re-export must contain the same full flow inventory and stored conversation too.
+Synthetic-state receipt schema 2 binds this comparison profile and both raw JSON
+observations. Historical schema 1 receipts remain narrower evidence and are refused
+by this gate. This source correction still needs assigned validation and an actual
+installed run; the earlier native checks do not establish its behavior.
+Fixed fixture timestamps never count as elapsed human activity. Response
 bytes, archives, logs, lockfile and SHA-256 receipts remain in the printed
 `flujo-maintainer-installed-*` directory, including on failure. The receipt binds
 the tool's clean Git SHA separately from the declared artifact source SHA.
@@ -162,9 +203,18 @@ already exist. The baseline must pass with the same clean tool revision; backup
 and original-record bytes must match its receipt before any recovery process starts.
 Readiness checks the responding install and new data root before mutation.
 
-The fresh root must return 404 for the synthetic flow. A missing-metadata archive
-must return 400 and leave it absent. The valid backup must restore the expected
-id/name/nodes/edges, and a second backup must contain those same stable fields.
+The fresh root must return 404 for the flow and conversation and have no stored
+theme or synthetic environment label. Both invalid archives must return 400 and
+leave all four kinds of state absent. The valid backup must restore every expected
+record, including the baseline's seeded agent; a second raw API backup is retained
+and must contain the same complete stable flow content. Before restore, the fresh
+root's seed inventory must match the independently recorded candidate baseline,
+and both invalid restores must leave that inventory unchanged. Successful broader
+receipts bind hashed initial and original flow snapshots; earlier receipts lacking
+this profile cannot qualify complete inventory recovery. No archive projection or
+default-flow deletion is used. Expected JSON ZIP
+members are read with a 1 MiB limit on emitted bytes, and unrelated/private entries
+or aliased paths are refused. The whole compressed archive is capped at 16 MiB.
 The command stops its owned launcher, records closed loopback port, restarts with
 that recovery root, and verifies the record remains readable and unchanged.
 
@@ -176,9 +226,10 @@ changes, recovery mismatch or cleanup failure. Preserve the complete parent bund
 
 `passed-fresh-recovery` establishes this automated synthetic baseline recovery
 and restart scope. The same artifact is used at both stages: **no version upgrade
-is claimed**. Qualified integrated-candidate upgrade, broader workflow/conversation/
-configuration/Persona recovery, schedules/effects, human operation, signature and
-access evidence remain separate gates. Do not substitute this result for them.
+is claimed**. Provider/model configuration, identity/secrets, Persona recovery,
+schedules/effects, qualified integrated-candidate upgrade, human operation and
+access evidence remain separate gates. These four synthetic state kinds do not
+establish full application recovery. Do not substitute this result for them.
 
 ## Human operator / observer exercise
 
@@ -246,3 +297,81 @@ measurements. Supported releases, response targets and actual private channel ar
 defined by Security #565. Human access verification needs the consenting owner;
 90-day continuity needs actual elapsed observations; external reassessment stays
 with the independent reviewer. These pending gates are listed in every receipt.
+
+## Upgrade and recover between pinned versions
+
+`scripts/maintainer-installed-upgrade.mjs` adds the two-version path. It requires
+a greater candidate version, both public npm package pins, and an absolute path
+to the candidate's complete official release distribution (manifest, tarballs,
+release evidence, CycloneDX source inventory and checksums). Keep this directory
+private and controlled throughout the run, as required by the release verifier.
+
+Before any registry download, npm install or application launch, the command
+checks distribution consistency and the candidate pin, exact-source official
+`main` verification including every required current-attempt job, completed
+JavaScript/Actions analyses and absence of open main CodeQL findings. For each
+language it fetches the selected analysis's SARIF report, binds its source and
+category to the official main revision, and requires the configured
+`security-extended` suite with matching rule/result counts. The JavaScript report
+must include `js/http-to-file-access`. Reports containing a PR diff-range model
+pack or `diff-informed` mode cannot qualify a whole-source candidate. Raw SARIF
+bytes are retained with their hashes. It verifies
+all distribution attestations with the existing signer workflow, source/ref and
+self-hosted-runner restrictions. After signatures, it reads verification, the
+latest source analyses, both complete SARIF reports and open alerts again. Each
+pair of report reads is followed by another analysis/alert read; a changed
+analysis or new open finding requires fresh admission. It repeats admission before
+declaring the whole drill passed. A live, missing,
+failed or partial gate stops the operation; a local mock or source fixture does
+not qualify a candidate. Existing reviewed/dismissed findings may still be present
+in analysis results; the receipt reports those counts separately from open alerts.
+
+GitHub's [diff-informed PR analysis](https://docs.github.com/en/enterprise-cloud%40latest/code-security/how-tos/find-and-fix-code-vulnerabilities/scan-from-the-command-line/incremental-analysis)
+reports findings within changed code. A zero-result PR report does not resolve an
+inherited finding or establish whole-source main acceptance. Never substitute it
+for the main reports required above.
+
+Use values obtained from the pinned baseline and qualified published candidate;
+the variables below are placeholders, not an assertion that a candidate exists:
+
+```powershell
+node scripts/maintainer-installed-upgrade.mjs `
+  "--baseline-version=$BaselineVersion" "--baseline-integrity=$BaselineIntegrity" `
+  "--baseline-source-revision=$BaselineSourceRevision" `
+  "--candidate-version=$CandidateVersion" "--candidate-integrity=$CandidateIntegrity" `
+  "--candidate-source-revision=$CandidateSourceRevision" `
+  "--candidate-evidence=$CandidateEvidenceDirectory"
+```
+
+Supply `--npm-cli=ABSOLUTE_NPM_CLI_JS` when npm is not adjacent to Node. The CLI
+validates all pins and uses separate disposable consumers, stripped child
+environments and explicit empty npm configuration, as in the baseline probe.
+
+After both consumer probes pass and stop, the candidate first opens the baseline's
+existing disposable data root. It must read the old flow, conversation (including
+both messages), theme, environment label and complete baseline flow inventory
+before any successful restore, reject
+both invalid backups without changing any of them, export the preserved data and
+retain it through restart. It then restores the original
+baseline backup into a different, empty candidate data root and checks re-export
+and restart persistence. The in-place probe never successfully restores the old
+backup, so restoration cannot mask data lost during upgrade.
+
+The [complete inventory acceptance plan](maintainer-inventory-acceptance.md) describes
+the pending controls and signed rehearsal for this correction. Source preparation
+does not establish a passing run.
+
+The top receipt hashes every completed operation receipt and qualification log,
+including failed operations. Retain all referenced roots together. These probes
+cover the observed public seed inventory, an empty created flow, a synthetic
+conversation with inert messages, a theme and one non-secret environment label.
+Both consumer probes require verified npm
+provenance before installation, and the top receipt removes each signature gate
+from pending only after that consumer reports verification. The version transition
+requires the broader state and complete inventory results from both consumers and
+both recovery operations; legacy flow-only or projected-inventory receipts cannot
+satisfy it. Provider/model configuration,
+identity/secrets, Persona and schedule continuity, every-descendant cleanup,
+independent human operation, access and the 90-day observation remain separate
+gates. Neither a source fixture nor a passed automated version transition is an
+independent maintainer assignment or an A- assessment.

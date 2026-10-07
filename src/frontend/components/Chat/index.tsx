@@ -865,6 +865,7 @@ const Chat: React.FC = () => {
   const modelDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushModelDeltasRef = useRef<() => void>(() => undefined);
   const eventStreamGenerationRef = useRef(0);
+  const eventStreamRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingToolProgressRef = useRef<Extract<ExecutionEvent, { type: 'tool:progress' }> | null>(null);
   const toolProgressFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The debugger toggle is defined before handleDebugClose (it is handed to the
@@ -1189,6 +1190,16 @@ const Chat: React.FC = () => {
       if (sidebarEvents || disposed || document.visibilityState !== 'visible') return;
       sidebarEvents = chatService.subscribeToSidebarEvents({
         onEvent: refreshFromEvent,
+        onReset: () => {
+          if (disposed) return;
+          clearTimers();
+          disconnect();
+          lastRefreshStartedAt = Date.now();
+          void fetchConversations(undefined, { silent: true }).finally(() => {
+            if (disposed || document.visibilityState !== 'visible' || sidebarEvents) return;
+            eventTimer = setTimeout(() => { eventTimer = null; connect(); scheduleFallback(); }, 3000);
+          });
+        },
       });
     };
     const disconnect = () => {
@@ -2017,6 +2028,8 @@ const Chat: React.FC = () => {
 
   const closeEventStream = useCallback(() => {
     eventStreamGenerationRef.current++;
+    if (eventStreamRetryTimerRef.current !== null) clearTimeout(eventStreamRetryTimerRef.current);
+    eventStreamRetryTimerRef.current = null;
     // Preserve any final delta-only burst even when navigation/unmount closes
     // the stream before a terminal non-delta event arrives.
     flushModelDeltasRef.current();
@@ -2521,7 +2534,7 @@ const Chat: React.FC = () => {
   // so the subscription exists before the server emits any events — otherwise a
   // fast run can finish before the stream attaches and the live view sees
   // nothing. The browser auto-reconnects using Last-Event-ID to replay misses.
-  const openEventStream = useCallback((
+  const openEventStream: (conversationId: string, fromSeq?: number, replayOptions?: { activityOnly?: boolean }) => Promise<void> = useCallback((
     conversationId: string,
     fromSeq?: number,
     replayOptions?: { activityOnly?: boolean },
@@ -2549,6 +2562,20 @@ const Chat: React.FC = () => {
               if (eventStreamGenerationRef.current === streamGeneration) applyExecutionEvent(event);
             },
             onOpen: settle,
+            onReset: (control) => {
+              settle();
+              if (eventStreamGenerationRef.current !== streamGeneration) return;
+              closeEventStream();
+              const recoveryGeneration = eventStreamGenerationRef.current;
+              void fetchDetailedConversation(conversationId).then(() => {
+                if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
+                eventStreamRetryTimerRef.current = setTimeout(() => {
+                  eventStreamRetryTimerRef.current = null;
+                  if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
+                  void openEventStream(conversationId, control.nextSeq, { activityOnly: true });
+                }, 3000);
+              }).catch(err => log.warn('Failed to recover execution snapshot', { conversationId, err }));
+            },
           },
           fromSeq,
           replayOptions,
@@ -2560,7 +2587,7 @@ const Chat: React.FC = () => {
         settle();
       }
     });
-  }, [applyExecutionEvent, closeEventStream]);
+  }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation]);
 
   // Re-attach to a run that is still in progress on the backend — e.g. after
   // navigating to another page (which unmounts Chat and tears down the stream)

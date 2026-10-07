@@ -16,7 +16,7 @@ jest.mock('@/utils/storage/backend', () => ({
 
 jest.mock('simple-git', () => ({
   __esModule: true,
-  default: jest.fn(() => ({ getRemotes: jest.fn(async () => []) })),
+  simpleGit: jest.fn(() => ({ getRemotes: jest.fn(async () => []) })),
 }));
 
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';

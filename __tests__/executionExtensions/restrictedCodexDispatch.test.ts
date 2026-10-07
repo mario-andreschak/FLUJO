@@ -31,7 +31,7 @@ jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({ startCod
   mockBridgeTools = tools; return { url: 'http://127.0.0.1:1234/fixture-only', close: mockBridgeClose };
 } }));
 jest.mock('@/backend/services/model/adapters/codexRuntimeHome', () => ({ prepareCodexRuntimeEnvironment: jest.fn(async () => { throw new Error('ordinary home forbidden'); }) }));
-jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({ resolveCodexModelCatalogPath: jest.fn(async () => { throw new Error('ordinary catalogue forbidden'); }) }));
+jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({ prepareCodexModelCatalogSnapshot: jest.fn(async () => { throw new Error('ordinary catalogue forbidden'); }) }));
 jest.mock('@/backend/services/model/adapters/codexContextUsage', () => ({ readCodexTokenSnapshot: jest.fn() }));
 jest.mock('@/backend/services/mcp', () => ({ mcpService: {
   callTool: (...args: unknown[]) => mockCallTool(...args), loadServerConfigs: jest.fn(async () => []),

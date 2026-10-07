@@ -58,6 +58,22 @@ test('duplicate archive results for one call remain ambiguous even with a matchi
   const value = sample(); value.modelInputs[0].wireToolResults.push({ toolCallId: 'call', contentBinding: producerBinding('wrong') });
   assert.equal(evaluateLiveJourney(value).componentPassed, false);
 });
+for (const binding of ['omitted', 'matching']) test(`failed tool results cannot qualify with ${binding} full binding`, () => {
+  const value = sample();
+  const resultEvent = value.events.find(row => row.type === 'tool:result');
+  resultEvent.isError = true;
+  if (binding === 'omitted') delete resultEvent.resultContentBinding;
+  // Everything else is the healthy control: matching call/receipt/archive,
+  // later completed dispatch and final assistant answer. Error status alone
+  // must prevent the successful-result consumption check from passing.
+  const result = evaluateLiveJourney(value);
+  assert.equal(result.checks.allExpectedCallsCorrelated, true);
+  assert.equal(result.checks.intendedModelDispatchCompleted, true);
+  assert.equal(result.checks.toolResultInLaterModelInput, false);
+  assert.equal(result.componentPassed, false);
+  assert.equal(result.fullFeatureAcceptance, false);
+  assert.equal(result.gradeAwarded, false);
+});
 test('duplicate runtime results for one call remain ambiguous', () => {
   const value = sample(); value.events.splice(7, 0, { ...value.events[6] });
   value.events.forEach((row, index) => { row.seq = index; });

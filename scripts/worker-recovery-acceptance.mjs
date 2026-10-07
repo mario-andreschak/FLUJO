@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { performance } from 'node:perf_hooks';
 
 const identifier = /^[A-Za-z0-9_-]{1,128}$/;
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -49,7 +50,7 @@ export async function captureWorkerRecoveryAttempt(options, { run = exerciseWork
   }
 }
 
-async function boundedJson(response) {
+export async function boundedJson(response) {
   assert.ok(response.body, 'Acceptance response body missing.');
   const reader = response.body.getReader(); const chunks = []; let length = 0;
   try {
@@ -67,7 +68,7 @@ async function boundedJson(response) {
 /** Reuses the actual worker startup/engine/provider from smoke-cloud-worker; no second recovery implementation. */
 export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken, flowId, restart, providerCount,
   setProviderMode, readPrivateRecord, observationRoute = 'scheduler',
-  observeMs = 11_000, offlineMs = 11_000, timeoutMs = 45_000, pause = delay, onObservation = () => {} }) {
+  observeMs = 11_000, offlineMs = 11_000, timeoutMs = 45_000, pause = delay, onObservation = () => {}, signal }) {
   const url = new URL(baseUrl);
   assert.equal(url.protocol, 'http:', 'Acceptance fixture must use loopback HTTP.');
   assert.ok(['127.0.0.1', '[::1]'].includes(url.hostname), 'Acceptance fixture must use literal loopback.');
@@ -76,9 +77,12 @@ export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken,
   assert.ok(['operations', 'scheduler'].includes(observationRoute), 'Unknown acceptance observation contract.');
   const observations = [];
   const observe = observation => { observations.push(observation); onObservation(structuredClone(observation)); };
+  const pauseFor = milliseconds => pause(milliseconds, undefined, signal ? { signal } : undefined);
   async function request(endpoint, { method = 'GET', body, expected = 200 } = {}) {
+    signal?.throwIfAborted();
     const target = new URL(endpoint, url); target.searchParams.set('workspace', workspace);
-    const response = await fetch(target, { method, redirect: 'error', signal: AbortSignal.timeout(10_000),
+    const response = await fetch(target, { method, redirect: 'error',
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(10_000), signal]) : AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${controlToken}`, ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}) });
     assert.equal(response.status, expected, `Acceptance ${method} ${target.pathname} returned an unexpected status.`);
@@ -103,8 +107,9 @@ export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken,
     return plan;
   };
   async function waitFor(check, message) {
-    const deadline = Date.now() + timeoutMs;
-    do { const result = await check(); if (result) return result; await pause(250); } while (Date.now() < deadline);
+    const deadline = performance.now() + timeoutMs;
+    do { signal?.throwIfAborted(); const result = await check(); if (result) return result; await pauseFor(250); }
+    while (performance.now() < deadline);
     throw new Error(message);
   }
   async function listEntry(id) {
@@ -136,7 +141,7 @@ export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken,
   assert.equal(find(sample, copyId).recovery?.reason, 'no-local-provenance');
   const completedPlan = await create('Completed local fixture');
   assert.equal(find(await snapshot(), completedPlan.id).recovery?.reason, 'not-opted-in');
-  await pause(observeMs);
+  await pauseFor(observeMs);
   assert.equal(providerCount(), initialCalls, 'Copied/unopted-in schedules dispatched the provider.');
   observe({ check: 'copied-and-unenrolled-suppression', providerDispatches: 0, observedMs: observeMs });
 
@@ -189,7 +194,7 @@ export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken,
   setProviderMode('success');
   const callsAfterCrash = providerCount();
   assert.equal(callsAfterCrash, beforeInterrupted + enteredDispatches, 'Worker startup replayed the interrupted dispatch.');
-  await pause(observeMs);
+  await pauseFor(observeMs);
   sample = await snapshot();
   assert.equal(find(sample, pendingPlan.id).armed, false);
   assert.equal(find(sample, pendingPlan.id).recovery?.reason, 'unresolved-admission');
@@ -198,7 +203,7 @@ export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken,
   assert.equal(digest(await readPrivateRecord(pendingPlan.id)), digest(privateBefore), 'Diagnostic/restart changed retained admission.');
   await enrollment(pendingPlan.id, true, 'stale-generation');
   for (let attempt = 0; attempt < 2; attempt++) await request('/api/planned-executions/reconcile', { method: 'POST' });
-  await pause(observeMs);
+  await pauseFor(observeMs);
   assert.equal(providerCount(), callsAfterCrash, 'Repeated reconciliation/stale enrollment bypassed unresolved work.');
   assert.equal(find(await snapshot(), copyId).armed, false);
   observe({ check: 'interrupted-dispatch-retained-without-replay', generationId: pendingPlan.generationId,
@@ -207,7 +212,7 @@ export async function exerciseWorkerRecovery({ baseUrl, workspace, controlToken,
     outcome: 'uncertain-provider-dispatch; no successful-effect or process-exit claim' });
 
   await restart({ crash: true, epoch: 2 });
-  await pause(observeMs);
+  await pauseFor(observeMs);
   sample = await snapshot();
   assert.equal(find(sample, pendingPlan.id).recovery?.reason, 'worker-authority-changed');
   assert.equal(find(sample, pendingPlan.id).armed, false);

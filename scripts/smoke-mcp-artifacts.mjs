@@ -24,6 +24,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { validateCandidate } from './npm-release.mjs';
+import { cleanupSmokeSandbox, observeSmokeChild, stopSmokeChild, withSmokeCleanup, withTimeout } from './mcp-smoke-cleanup.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -93,34 +94,6 @@ function waitForExit(child) {
     return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
   }
   return new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
-}
-
-async function withTimeout(promise, limit, description) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${description}.`)), limit);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function stopChild(child, description) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = waitForExit(child);
-  child.kill('SIGTERM');
-  try {
-    await withTimeout(exited, 10_000, `${description} to honor SIGTERM`);
-  } catch (error) {
-    child.kill('SIGKILL');
-    await withTimeout(exited, 5_000, `${description} to be killed`);
-    throw error;
-  }
 }
 
 async function connectStdio(entrypoint, env = {}, roots = []) {
@@ -351,8 +324,9 @@ async function smokePackedArtifacts(candidateDirectory) {
   ]);
 
   let appChild;
+  let appObservation;
   const appLogs = [];
-  try {
+  await withSmokeCleanup(async () => {
     let tarballs;
     if (candidateDirectory) {
       const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -461,6 +435,7 @@ async function smokePackedArtifacts(candidateDirectory) {
       }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    appObservation = observeSmokeChild(appChild);
     appChild.stdout.on('data', (chunk) => appLogs.push(String(chunk)));
     appChild.stderr.on('data', (chunk) => appLogs.push(String(chunk)));
     appChild.once('error', (error) => appLogs.push(`Installed FLUJO spawn error: ${error.stack ?? error.message}\n`));
@@ -470,15 +445,16 @@ async function smokePackedArtifacts(candidateDirectory) {
       `installed FLUJO readiness at ${baseUrl}`,
     );
     await probeProxy(baseUrl, rootsDir);
-    await stopChild(appChild, 'installed flujo CLI');
-    appChild = undefined;
-  } catch (error) {
+  }, () => cleanupSmokeSandbox({
+    stop: async () => {
+      if (appObservation) await stopSmokeChild(appObservation, 'installed flujo CLI');
+    },
+    remove: fs.rm,
+    sandbox,
+  })).catch((error) => {
     const logs = appLogs.join('');
-    throw new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${logs ? `\nInstalled FLUJO logs:\n${logs}` : ''}`);
-  } finally {
-    if (appChild) await stopChild(appChild, 'installed flujo CLI cleanup').catch(() => undefined);
-    await fs.rm(sandbox, { recursive: true, force: true });
-  }
+    throw new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${logs ? `\nInstalled FLUJO logs:\n${logs}` : ''}`, { cause: error });
+  });
 }
 
 const proxyOnlyIndex = process.argv.indexOf('--proxy-only');

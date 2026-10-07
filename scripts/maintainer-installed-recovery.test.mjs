@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { validateRecoveryInput } from './maintainer-installed-recovery.mjs';
+import { validateRecoveryInput, validateRecoveryTarget, upgradeExistingRoot } from './maintainer-installed-recovery.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const tool = 'a'.repeat(40);
@@ -32,5 +32,23 @@ test('even recomputed checksums cannot replace the prescribed fixture with runna
     const altered = Buffer.from(JSON.stringify(fixture)); const evidence = receipt();
     evidence.evidence[0] = { path: 'original-flow.json', sha256: digest(altered), bytes: altered.length };
     assert.throws(() => validateRecoveryInput(evidence, archive, altered, tool), /prescribed empty synthetic flow/);
+  }
+});
+
+test('candidate recovery requires a stopped successful consumer with exact source and installed identity', () => {
+  const pin = `sha512-${Buffer.alloc(64).toString('base64')}`;
+  const value = { ...receipt(), integrity: pin, tarball: { observedIntegrity: pin }, declaredArtifactSourceRevision: 'c'.repeat(40), shutdown: { launcherExit: { code: 1 }, loopbackPortClosed: true } };
+  assert.equal(validateRecoveryTarget(value, tool), value);
+  for (const change of [{ shutdown: {} }, { shutdown: { launcherExit: { code: 0 }, loopbackPortClosed: false } },
+    { declaredArtifactSourceRevision: 'unknown' }, { toolRevision: 'different' }, { sourceCleanAfter: false },
+    { installedManifest: { name: 'flujo-ai', version: '3.46.3' } }, { tarball: { observedIntegrity: 'different' } },
+    { schemaVersion: 2 }, { integrity: 'invalid', tarball: { observedIntegrity: 'invalid' } }]) {
+    assert.throws(() => validateRecoveryTarget({ ...value, ...change }, tool), /Candidate consumer/);
+  }
+});
+
+test('existing-root upgrade rejects equal, downgraded and malformed versions before any launch', () => {
+  for (const version of ['3.46.2', '3.46.1', '03.47.0', '9007199254740992.0.0']) {
+    assert.throws(() => upgradeExistingRoot({ receipt: { version: '3.46.2' } }, { receipt: { version } }), /greater candidate/);
   }
 });

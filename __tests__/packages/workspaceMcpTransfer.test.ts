@@ -16,7 +16,7 @@ const connect = jest.fn();
 const prepareGithub = jest.fn();
 const prepareRegistry = jest.fn();
 const gitRaw = jest.fn();
-jest.mock('simple-git', () => ({ __esModule: true, default: () => ({ raw: (...args: unknown[]) => gitRaw(...args) }) }));
+jest.mock('simple-git', () => ({ __esModule: true, simpleGit: () => ({ raw: (...args: unknown[]) => gitRaw(...args) }) }));
 jest.mock('@/utils/workspace', () => ({
   getWorkspaceDataDir: () => mockWorkspace,
   getCurrentWorkspace: () => 'worker',

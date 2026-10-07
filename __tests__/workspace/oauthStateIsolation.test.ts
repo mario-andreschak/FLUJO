@@ -1,6 +1,10 @@
 import { runWithWorkspace } from '@/utils/workspace';
 import { MCPOAuthClientProvider, matchesOAuthState } from '@/backend/services/mcp/oauth';
 
+jest.mock('@/backend/utils/packageRegistryClient', () => ({
+  resolveRegistryBaseUrl: async () => 'https://registry.test',
+}));
+
 jest.mock('@/backend/services/registry/oauth-adapter', () => ({
   buildAuthorizeUrl: jest.fn(async ({ state }: { state: string }) => `https://registry.test/auth?state=${state}`),
   exchangeAuthorizationCode: jest.fn(async () => ({ status: 500, body: {} })),

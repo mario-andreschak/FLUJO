@@ -50,6 +50,8 @@ export interface StoredRegistryAccount {
   accessToken: string;
   /** Encrypted refresh token (`encrypted:...`) or empty. */
   refreshToken: string;
+  /** Actual issuing registry base address. Absent legacy sessions require sign-in. */
+  registryBaseUrl?: string;
   /** How the session was established (#207). Absent on legacy password records. */
   authMethod?: 'password' | 'oauth';
   /** OAuth providers linked to this account, for display/telemetry only (#207). */

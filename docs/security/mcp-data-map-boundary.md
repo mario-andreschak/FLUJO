@@ -30,3 +30,23 @@ The fixtures now construct own data properties and assert serialization and
 boundary behavior directly. No assertions or scanner rules were disabled.
 This is source evidence; installed-release, human and external Security
 reassessment boundaries remain open.
+
+## Follow-up on the original #813 findings
+
+The original #813 scan still reports high findings 194–198 in connection map
+assembly. Its existing null-prototype dictionaries are retained as the baseline
+protection; the scan count alone does not establish an exploit or a closure.
+The follow-up assembles values in `Map` and defines own data properties with
+`Object.fromEntries`, retaining a null prototype and valid special-name data.
+Header names must be HTTP field-name tokens (RFC 9110 section 5.6.2); environment
+names cannot be empty or contain `=` or NUL. Invalid names are dropped before
+credential resolution. Values must be strings or own string-valued `value`
+fields, so inherited values and malformed record shapes cannot reach resolution
+or launch construction. The stored config stays unchanged.
+
+`connectionDataBoundary.test.ts` supplies regressions for these admission rules,
+credential-resolver non-entry, own special names, temporary binding resolution,
+header flattening and stdio launch construction. The source freeze precedes
+target execution; test outcomes and a later native scan's disposition must be
+recorded separately. Saved-header destination guard #770 remains present. Package
+public-identity proposal #678 is separate and is not imported by this change.

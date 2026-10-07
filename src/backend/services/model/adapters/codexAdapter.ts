@@ -22,7 +22,7 @@ import { steeringSource, watchSteering } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { paceToolCallArguments } from './toolArgumentPacing';
-import { resolveCodexModelCatalogPath } from './codexModelCatalog';
+import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { mapCodexUsage, subtractCodexUsage, type CodexUsageLike } from './codexUsage';
 import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
@@ -741,13 +741,17 @@ export class CodexAdapter implements CompletionAdapter {
     let baselineSnapshot: CodexTokenSnapshot | undefined;
     let contextUsage: CompletionResult['contextUsage'] = null;
     let privateRuntimeCleanup: (() => Promise<void>) | undefined;
+    let modelCatalogCleanup: (() => Promise<void>) | undefined;
 
     try {
       if (bridgeTools.length > 0) {
         bridge = await startCodexToolBridge(bridgeTools, CODEX_FLUJO_INSTRUCTIONS);
       }
 
-      const ordinaryModelCatalogPath = executionExtensionContext ? undefined : await resolveCodexModelCatalogPath();
+      const ordinaryModelCatalog = executionExtensionContext
+        ? undefined
+        : await prepareCodexModelCatalogSnapshot(abortController.signal);
+      modelCatalogCleanup = ordinaryModelCatalog?.cleanup;
       const restrictedRuntime = executionExtensionContext
         ? await prepareRestrictedCodexRuntimeEnvironment(privateCodexProfile!)
         : undefined;
@@ -756,7 +760,7 @@ export class CodexAdapter implements CompletionAdapter {
       runtimeHome = runtime.home;
       const modelCatalogPath = executionExtensionContext
         ? restrictedRuntime?.modelCatalogPath
-        : ordinaryModelCatalogPath;
+        : ordinaryModelCatalog?.path;
       if (executionExtensionContext && !modelCatalogPath) {
         throw new ExecutionExtensionError('execution_model_catalog_required');
       }
@@ -792,6 +796,7 @@ export class CodexAdapter implements CompletionAdapter {
             }
           : {}),
       };
+      if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
       const codex = new Codex({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
         ...(privateCodexPath ? { codexPathOverride: privateCodexPath } : {}),
@@ -896,6 +901,7 @@ export class CodexAdapter implements CompletionAdapter {
           if (executionExtensionContext) {
             await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
           }
+          if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
           const { events } = await thread.runStreamed(nextTurnInput, {
             signal: turnAbortController.signal,
           });
@@ -1143,7 +1149,11 @@ export class CodexAdapter implements CompletionAdapter {
         }
         if (scratchDir) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
       } finally {
-        await privateRuntimeCleanup?.();
+        try {
+          await privateRuntimeCleanup?.();
+        } finally {
+          await modelCatalogCleanup?.().catch(() => log.warn('Failed to remove Codex model catalog snapshot'));
+        }
       }
     }
 

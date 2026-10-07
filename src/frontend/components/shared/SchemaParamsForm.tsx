@@ -22,12 +22,31 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     : undefined
 );
 
-const jsonDraftsValid = (properties: Record<string, unknown>, drafts: Record<string, string>): boolean => (
-  Object.entries(drafts).every(([key, text]) => {
-    const type = Object.hasOwn(properties, key) ? asRecord(properties[key])?.type : undefined;
-    if ((type !== 'object' && type !== 'array') || !text.trim()) return true;
-    try { JSON.parse(text); return true; }
-    catch { return false; }
+type JsonDraftError = 'schema.invalidJson' | 'schema.expectedObject' | 'schema.expectedArray';
+
+const jsonDraftError = (type: unknown, text: string): JsonDraftError | null => {
+  if ((type !== 'object' && type !== 'array') || !text.trim()) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (type === 'object' && !asRecord(parsed)) return 'schema.expectedObject';
+    if (type === 'array' && !Array.isArray(parsed)) return 'schema.expectedArray';
+    return null;
+  } catch {
+    return 'schema.invalidJson';
+  }
+};
+
+const jsonDraftText = (key: string, values: Record<string, unknown>, drafts: Record<string, string>): string => {
+  if (Object.hasOwn(drafts, key)) return drafts[key];
+  const currentValue = Object.hasOwn(values, key) ? values[key] : undefined;
+  return currentValue !== undefined ? JSON.stringify(currentValue, null, 2) : '';
+};
+
+const jsonDraftsValid = (properties: Record<string, unknown>, values: Record<string, unknown>, drafts: Record<string, string>): boolean => (
+  Object.entries(properties).every(([key, property]) => {
+    const type = asRecord(property)?.type;
+    if (type !== 'object' && type !== 'array') return true;
+    return jsonDraftError(type, jsonDraftText(key, values, drafts)) === null;
   })
 );
 
@@ -46,7 +65,7 @@ export interface SchemaParamsFormProps {
   schema: Record<string, unknown> | undefined;
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
-  /** Whether every visible JSON draft parses; typed values may lag unfinished drafts. */
+  /** Whether visible JSON drafts parse and match their object/array type; typed values may lag drafts. */
   onValidityChange?: (valid: boolean) => void;
   size?: 'small' | 'medium';
 }
@@ -67,7 +86,7 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
     ? schema.required.filter((key): key is string => typeof key === 'string')
     : [];
   const keys = Object.keys(properties);
-  const validJson = jsonDraftsValid(properties, drafts);
+  const validJson = jsonDraftsValid(properties, values, drafts);
   useEffect(() => { onValidityChange?.(validJson); }, [onValidityChange, validJson]);
 
   if (keys.length === 0) {
@@ -176,17 +195,9 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
         }
 
         if (prop.type === 'object' || prop.type === 'array') {
-          const draft = Object.hasOwn(drafts, key)
-            ? drafts[key]
-            : (currentValue !== undefined ? JSON.stringify(currentValue, null, 2) : '');
-          let parseError: string | null = null;
-          if (draft.trim()) {
-            try {
-              JSON.parse(draft);
-            } catch {
-              parseError = t('schema.invalidJson');
-            }
-          }
+          const draft = jsonDraftText(key, values, drafts);
+          const errorKey = jsonDraftError(prop.type, draft);
+          const parseError = errorKey ? t(errorKey) : null;
           return (
             <TextField
               key={key}
@@ -202,15 +213,16 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
                 const text = e.target.value;
                 const nextDrafts = { ...drafts, [key]: text };
                 setDrafts(nextDrafts);
-                onValidityChange?.(jsonDraftsValid(properties, nextDrafts));
+                onValidityChange?.(jsonDraftsValid(properties, values, nextDrafts));
                 if (!text.trim()) {
                   setValue(key, undefined);
                   return;
                 }
+                if (jsonDraftError(prop.type, text)) return;
                 try {
                   setValue(key, JSON.parse(text));
                 } catch {
-                  /* keep the previous parsed value until the draft parses */
+                  /* keep the previous typed value until the draft is valid */
                 }
               }}
               slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}

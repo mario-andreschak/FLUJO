@@ -188,7 +188,7 @@ jobs:
       - run: node --test scripts/run-local-jest.test.mjs
       - run: node --test scripts/release-evidence.test.mjs
       - name: Verify maintainer evidence boundaries
-        run: node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs scripts/maintainer-installed-baseline.test.mjs scripts/maintainer-installed-recovery.test.mjs
+        run: node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs scripts/maintainer-installed-baseline.test.mjs scripts/maintainer-installed-recovery.test.mjs scripts/maintainer-installed-upgrade.test.mjs scripts/maintainer-npm-provenance.test.mjs scripts/maintainer-synthetic-state.test.mjs
       - name: Exercise disposable ownership prototype
         timeout-minutes: 3
         run: node scripts/ownership-prototype/run.cjs "${{ runner.temp }}/ownership-prototype.json"
@@ -242,7 +242,7 @@ jobs:
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
-      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs
 
   dependency-security:
     name: dependency-security

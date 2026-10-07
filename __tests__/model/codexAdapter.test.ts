@@ -88,8 +88,10 @@ const boundToolResultMock = jest.fn(async ({ content }: { content: string }) => 
 jest.mock('@/backend/services/runResources/boundToolResult', () => ({
   boundToolResult: (...args: unknown[]) => boundToolResultMock(...(args as [{ content: string }])),
 }));
+const modelCatalogCleanupMock = jest.fn();
+const prepareModelCatalogMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({
-  resolveCodexModelCatalogPath: jest.fn(async () => 'C:\\Users\\test\\.codex\\models_cache.json'),
+  prepareCodexModelCatalogSnapshot: (...args: unknown[]) => prepareModelCatalogMock(...args),
 }));
 jest.mock('@/backend/services/model/adapters/codexRuntimeHome', () => ({
   prepareCodexRuntimeEnvironment: jest.fn(async () => ({
@@ -104,6 +106,7 @@ import {
   CODEX_FLUJO_INSTRUCTIONS,
 } from '@/backend/services/model/adapters/codexAdapter';
 import { _clearCodexSessionsForTests } from '@/backend/services/model/adapters/codexSessionStore';
+import { prepareCodexRuntimeEnvironment } from '@/backend/services/model/adapters/codexRuntimeHome';
 
 type AnyEvent = Record<string, unknown>;
 
@@ -134,6 +137,10 @@ beforeEach(() => {
   resumeThreadMock.mockReset();
   runStreamedMock.mockReset();
   readTokenSnapshotMock.mockReset().mockResolvedValue(undefined);
+  modelCatalogCleanupMock.mockReset().mockResolvedValue(undefined);
+  prepareModelCatalogMock.mockReset().mockResolvedValue({
+    path: 'C:\\flujo\\db\\codex-model-catalog-fixture\\models_cache.json', cleanup: modelCatalogCleanupMock,
+  });
   callToolMock.mockReset();
   loadServerConfigsMock.mockReset();
   listServerToolsMock.mockReset();
@@ -158,6 +165,80 @@ beforeEach(() => {
       }),
     ])(),
   }));
+});
+
+describe('CodexAdapter — catalog snapshot lifetime', () => {
+  it('keeps the snapshot through lazy SDK iteration and cleans up only after termination', async () => {
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      expect(modelCatalogCleanupMock).not.toHaveBeenCalled();
+      yield agentMessage('snapshot is still owned');
+      expect(modelCatalogCleanupMock).not.toHaveBeenCalled();
+      yield turnCompleted({ input_tokens: 1, output_tokens: 1 });
+    })() }));
+    await new CodexAdapter().createCompletion(baseInput());
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+    expect(prepareModelCatalogMock).toHaveBeenCalledWith(expect.any(AbortSignal));
+  });
+
+  it('cleans up a snapshot when runtime preparation refuses the run', async () => {
+    const error = new Error('runtime unavailable');
+    (prepareCodexRuntimeEnvironment as jest.Mock).mockRejectedValueOnce(error);
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toBe(error);
+    expect(codexCtorMock).not.toHaveBeenCalled();
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up a snapshot when SDK construction refuses the run', async () => {
+    const error = new Error('constructor unavailable');
+    codexCtorMock.mockImplementationOnce(() => { throw error; });
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toBe(error);
+    expect(runStreamedMock).not.toHaveBeenCalled();
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up a snapshot when lazy SDK spawn or iteration refuses the run', async () => {
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      expect(modelCatalogCleanupMock).not.toHaveBeenCalled();
+      throw new Error('spawn refused');
+    })() }));
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow('spawn refused');
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the SDK failure when snapshot cleanup also fails', async () => {
+    runStreamedMock.mockRejectedValueOnce(new Error('original SDK failure'));
+    modelCatalogCleanupMock.mockRejectedValueOnce(new Error('cleanup failure'));
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow('original SDK failure');
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up a successful run even if snapshot cleanup cannot complete', async () => {
+    modelCatalogCleanupMock.mockRejectedValueOnce(new Error('cleanup failure'));
+    const result = await new CodexAdapter().createCompletion(baseInput());
+    expect(result.completion.choices[0].message.content).toBe('hello from codex');
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses SDK construction after cancellation during snapshot preparation', async () => {
+    const controller = new AbortController();
+    prepareModelCatalogMock.mockImplementationOnce(async () => {
+      controller.abort();
+      return { path: 'private-snapshot.json', cleanup: modelCatalogCleanupMock };
+    });
+    await expect(new CodexAdapter().createCompletion(baseInput({ signal: controller.signal })))
+      .rejects.toThrow('Codex run cancelled by user.');
+    expect(codexCtorMock).not.toHaveBeenCalled();
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses SDK spawn and cleans up after cancellation while archiving its request', async () => {
+    const controller = new AbortController();
+    await expect(new CodexAdapter().createCompletion(baseInput({ signal: controller.signal,
+      onSdkRequest: async () => { controller.abort(); return 'cancelled-dispatch'; },
+    }))).rejects.toThrow('Codex run cancelled by user.');
+    expect(runStreamedMock).not.toHaveBeenCalled();
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('CodexAdapter — thread setup', () => {
@@ -213,7 +294,7 @@ describe('CodexAdapter — thread setup', () => {
       service_tier: 'default',
       developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
       features: { shell_tool: false },
-      model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
+      model_catalog_json: 'C:\\flujo\\db\\codex-model-catalog-fixture\\models_cache.json',
     });
     expect(capturedBridgeTools).toEqual([]);
   });
@@ -463,7 +544,8 @@ describe('CodexAdapter — transcript & usage', () => {
     await expect(new CodexAdapter().createCompletion(baseInput({ signal: controller.signal }))).rejects.toThrow(
       'Codex run cancelled by user.',
     );
-    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+    expect(runStreamedMock).not.toHaveBeenCalled();
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
   });
 
   it('throws on turn.failed', async () => {
@@ -574,7 +656,7 @@ describe('CodexAdapter — tool bridging', () => {
       service_tier: 'default',
       developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
       features: { shell_tool: false },
-      model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
+      model_catalog_json: 'C:\\flujo\\db\\codex-model-catalog-fixture\\models_cache.json',
       mcp_servers: {
         flujo: {
           url: 'http://127.0.0.1:1234/mcp/testtoken',

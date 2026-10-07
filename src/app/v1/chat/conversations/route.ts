@@ -4,6 +4,7 @@ import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server'; // Import NextRequest
 import { promises as fs } from 'fs';
 import path from 'path';
+import { readPlainFile } from '@/utils/readPlainFile';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
@@ -58,14 +59,13 @@ type ConversationListItem = FrontendConversationListItem;
 // polls this endpoint every few seconds, and conversation files carry the FULL
 // message history — re-reading and JSON.parsing every file on every poll is
 // O(total bytes on disk). The summary only needs six small fields, so cache it
-// per file and invalidate on mtime/size change (every write is an atomic
-// replace, so a content change always moves the mtime). Conversation ids/file
+// per file and invalidate on the admitted file identity and exact nanosecond
+// timestamps, including equal-size/equal-mtime replacements. Conversation ids/file
 // names are only unique within a workspace; a process-wide filename-only cache
 // can otherwise return one workspace's title/status/flow metadata in another.
 type CachedConversationListItem = ConversationListItem & { personaOwned?: true };
 const listSummaryCache = new Map<string, {
-  mtimeMs: number;
-  size: number;
+  snapshotIdentity: string;
   item: CachedConversationListItem;
 }>();
 
@@ -370,26 +370,32 @@ async function GET_handler(request: NextRequest) {
       const conversationIdFromFile = file.replace('.json', ''); // Extract ID from filename
 
       try {
-        // Summary from disk, via the mtime/size cache (see listSummaryCache).
-        const stats = await fs.stat(filePath);
+        // Bind both a cache entry and a body read to this inspected file identity.
+        const stats = await fs.lstat(filePath, { bigint: true });
+        const snapshotIdentity = [
+          stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs,
+          stats.mode, stats.uid, stats.gid, stats.nlink,
+        ].join(':');
         const summaryCacheKey = listSummaryCacheKey(file);
         const cached = listSummaryCache.get(summaryCacheKey);
         let base: CachedConversationListItem;
         // Content search always needs the parsed body, so it bypasses the
         // summary-only cache-hit fast path (it still repopulates the cache).
         let parsedState: SharedState | undefined;
-        const cacheHit = !!cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size;
+        const cacheHit = !!cached && cached.snapshotIdentity === snapshotIdentity;
         if (cacheHit && !contentSearch) {
           base = cached!.item;
         } else {
           // Skip pathologically large files under content search — they can't be
           // scanned cheaply and would blow the per-request cost budget.
-          if (contentSearch && stats.size > MAX_CONTENT_SCAN_BYTES) {
+          if (contentSearch && stats.size > BigInt(MAX_CONTENT_SCAN_BYTES)) {
             return null;
           }
-          const fileContent = contentSearch
-            ? await fs.readFile(filePath, { encoding: 'utf-8', signal: request.signal })
-            : await fs.readFile(filePath, 'utf-8');
+          const fileContent = (await readPlainFile(filePath, {
+            expected: stats,
+            maxBytes: contentSearch ? MAX_CONTENT_SCAN_BYTES : undefined,
+            signal: request.signal,
+          })).toString('utf-8');
           const state = JSON.parse(fileContent) as SharedState;
           if (isExecutionProtectedState(state)) return null;
           parsedState = state;
@@ -451,7 +457,7 @@ async function GET_handler(request: NextRequest) {
               ? { behaviorRevisionId: state.personaAttribution.behaviorRevisionId }
               : {}),
           };
-          listSummaryCache.set(summaryCacheKey, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
+          listSummaryCache.set(summaryCacheKey, { snapshotIdentity, item: base });
         }
 
         // Content search (issue #182): exclude conversations whose message

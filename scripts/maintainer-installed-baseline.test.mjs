@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions } from './maintainer-installed-baseline.mjs';
+import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline,
+  readInitializedFlowInventory } from './maintainer-installed-baseline.mjs';
+import { assertFlowInventory } from './maintainer-synthetic-state.mjs';
 
 const pin = ['--version=3.46.2', `--integrity=sha512-${Buffer.alloc(64, 7).toString('base64')}`,
   `--source-revision=${'a'.repeat(40)}`];
@@ -31,5 +38,131 @@ test('compares all stable synthetic flow fields and rejects partial recovery', (
   assertRestoredFlow({ ...expected, updatedAt: 'later' }, expected);
   for (const field of ['id', 'name', 'nodes', 'edges']) {
     assert.throws(() => assertRestoredFlow({ ...expected, [field]: null }, expected), new RegExp(`Restored ${field}`));
+  }
+});
+
+const seededAgent = () => ({ id: 'default-agent-flujo', name: 'FLUJO', favorite: true,
+  nodes: [{ id: 'start', type: 'start', data: { label: 'Start Node' } },
+    { id: 'finish', type: 'finish', data: { label: 'Finish Node' } }],
+  edges: [{ id: 'start-finish', source: 'start', target: 'finish' }] });
+
+test('waits for empty-to-seeded initialization before observing the baseline inventory', async () => {
+  const requests = []; let flows = []; let completeInitialization;
+  const pendingInitialization = new Promise(resolve => { completeInitialization = resolve; });
+  const request = async route => {
+    requests.push(route);
+    if (route === '/api/init') {
+      await pendingInitialization;
+      flows = [seededAgent()];
+      return { status: 200, bytes: Buffer.from('{"success":true}') };
+    }
+    assert.equal(route, '/api/flow');
+    return { status: 200, bytes: Buffer.from(JSON.stringify(flows)) };
+  };
+  const pending = readInitializedFlowInventory(request);
+  assert.deepEqual(requests, ['/api/init']);
+  assert.deepEqual(flows, []);
+  completeInitialization();
+  const observed = await pending;
+  assert.deepEqual(requests, ['/api/init', '/api/flow']);
+  assert.deepEqual(observed.flows, [seededAgent()]);
+  assert.equal(observed.initialization.requiredSeedId, 'default-agent-flujo');
+  // Later corruption must still fail against the independently captured seed.
+  for (const change of [seed => { seed.favorite = false; },
+    seed => { seed.nodes[0].data.label = 'Changed seeded node'; },
+    seed => { seed.edges[0].target = 'start'; }]) {
+    const changed = seededAgent(); change(changed);
+    assert.throws(() => assertFlowInventory([changed], observed.flows, false), /complete observed baseline/);
+  }
+});
+
+test('refuses missing or corrupt seeded inventory after successful initialization', async () => {
+  const corrupt = mutation => { const seed = seededAgent(); mutation(seed); return [seed]; };
+  for (const flows of [[], corrupt(seed => { seed.nodes = []; }),
+    corrupt(seed => { seed.edges = []; }), corrupt(seed => { seed.nodes[1].id = 'start'; }),
+    corrupt(seed => { seed.edges[0].target = 'missing-node'; }),
+    corrupt(seed => { seed.edges.push({ ...seed.edges[0] }); }),
+    corrupt(seed => { seed.nodes[0].id = null; })]) {
+    const requests = [];
+    await assert.rejects(readInitializedFlowInventory(async route => {
+      requests.push(route);
+      assert.ok(['/api/init', '/api/flow'].includes(route));
+      return { status: 200, bytes: Buffer.from(JSON.stringify(route === '/api/init' ? { success: true } : flows)) };
+    }), /seeded agent graph.*no mutation allowed/);
+    assert.deepEqual(requests, ['/api/init', '/api/flow']);
+  }
+});
+
+test('refuses unsuccessful or malformed initialization before reading any flow inventory', async () => {
+  for (const response of [{ status: 500, bytes: Buffer.from('{"success":true}') },
+    { status: 200, bytes: Buffer.from('{"success":false}') },
+    { status: 200, bytes: Buffer.from('{"success":"true"}') },
+    { status: 200, bytes: Buffer.from('{}') }, { status: 200, bytes: Buffer.from('invalid') }]) {
+    const requests = [];
+    await assert.rejects(readInitializedFlowInventory(async route => {
+      requests.push(route); return response;
+    }), /initialization.*no mutation allowed/);
+    assert.deepEqual(requests, ['/api/init']);
+  }
+});
+
+test('the actual baseline orchestration refuses failed or wrong-policy provenance before consumer creation or launch', async context => {
+  const privateDirectory = mkdtempSync(path.join(os.tmpdir(), 'flujo-provenance-orchestration-test-'));
+  const npmCli = path.join(privateDirectory, 'npm-cli.js'); writeFileSync(npmCli, '// Never executed by this refusal fixture.\n');
+  const tarball = Buffer.from('synthetic package bytes; not an installable artifact');
+  const options = { version: '3.46.2', integrity: `sha512-${createHash('sha512').update(tarball).digest('base64')}`,
+    artifactSourceRevision: 'a'.repeat(40), npmCli };
+  const directories = [];
+  try {
+    for (const mode of ['verifier-failure', 'wrong-certificate']) {
+      let launches = 0; let verifications = 0; const fetches = [];
+      context.mock.method(childProcess, 'spawn', () => { launches++; throw new Error('Unexpected consumer launch'); });
+      context.mock.method(childProcess, 'execFileSync', (command, args) => {
+        assert.equal(command, 'git'); return args.includes('rev-parse') ? options.artifactSourceRevision : '';
+      });
+      context.mock.method(childProcess, 'spawnSync', (command) => {
+        assert.equal(command, 'gh'); verifications++;
+        if (mode === 'verifier-failure') {
+          return { status: 1, signal: null, stdout: '', stderr: 'Fixture cryptographic failure; no actual signature claim' };
+        }
+        return { status: 0, signal: null, stderr: 'Fixture diagnostic retained even on successful command exit',
+          stdout: JSON.stringify([{ verificationResult: { signature: { certificate: { issuer: 'wrong' } } } }]) };
+      });
+      syncBuiltinESMExports();
+      context.mock.method(globalThis, 'fetch', async url => {
+        fetches.push(url);
+        if (String(url).endsWith('.tgz')) return new Response(tarball);
+        if (String(url).includes('/-/npm/v1/attestations/')) return new Response(JSON.stringify({ attestations: [{
+          predicateType: 'https://slsa.dev/provenance/v1', bundle: { dsseEnvelope: {}, verificationMaterial: {} },
+        }] }));
+        return new Response(JSON.stringify({ name: 'flujo-ai', version: options.version, dist: {
+          integrity: options.integrity, tarball: 'https://registry.npmjs.org/flujo-ai/-/flujo-ai-3.46.2.tgz',
+          attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations/flujo-ai@3.46.2',
+            provenance: { predicateType: 'https://slsa.dev/provenance/v1' } },
+        } }));
+      });
+      try {
+        const result = await runInstalledBaseline(options); directories.push(result.directory);
+        assert.equal(result.receipt.result, 'failed'); assert.equal(result.receipt.provenanceSignatureVerified, false);
+        assert.match(result.receipt.failure, mode === 'verifier-failure' ? /verifier exited 1/ : /certificate.*policy/);
+        assert.equal(launches, 0); assert.equal(verifications, 1); assert.equal(fetches.length, 3);
+        assert.deepEqual(result.receipt.commands, []); assert.deepEqual(result.receipt.observations, []);
+        assert.equal(existsSync(path.join(result.directory, 'consumer', 'package.json')), false);
+        assert.equal(result.receipt.provenanceCommands[0].code, mode === 'verifier-failure' ? 1 : 0);
+        assert.match(readFileSync(path.join(result.directory, 'provenance-1.stderr.txt'), 'utf8'),
+          mode === 'verifier-failure' ? /cryptographic failure/ : /diagnostic retained/);
+        for (const name of ['npm-version.json', 'npm-attestations.json', 'npm-provenance-bundles.jsonl', 'provenance-1.stdout.json', 'provenance-1.stderr.txt']) {
+          const witness = result.receipt.evidence.find(item => item.path === name);
+          assert.equal(witness.sha256, createHash('sha256').update(readFileSync(path.join(result.directory, name))).digest('hex'));
+        }
+      } finally { context.mock.restoreAll(); syncBuiltinESMExports(); }
+    }
+  } finally {
+    context.mock.restoreAll(); syncBuiltinESMExports();
+    for (const target of [...directories, privateDirectory]) {
+      assert.equal(path.dirname(path.resolve(target)), path.resolve(os.tmpdir()));
+      assert.match(path.basename(target), /^flujo-(maintainer-installed|provenance-orchestration-test)-/);
+      rmSync(target, { recursive: true, force: true });
+    }
   }
 });
