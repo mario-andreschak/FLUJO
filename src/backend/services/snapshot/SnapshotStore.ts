@@ -82,7 +82,9 @@ function parseCountObjects(output: string, fallback: number): number {
 }
 
 function gitForSnapshot(gitDir: string): SimpleGit {
-  return simpleGit(path.dirname(gitDir)).env('GIT_DIR', gitDir);
+  // Only the computed shadow repository may supply this blocked environment key.
+  return simpleGit({ baseDir: path.dirname(gitDir), allowEnvironment: ['GIT_DIR'] })
+    .env('GIT_DIR', gitDir);
 }
 
 async function usageFor(root: string, id: string): Promise<SnapshotRepositoryUsage> {
