@@ -11,6 +11,7 @@ import { nativeInvocationStatus, readNativeInvocationTerminalEvidence,
   type NativeInvocationOwner } from './nativeToolJournal';
 import { readNativeSessionPayload } from './nativeSessionPayload';
 import type { NativeInvocationSession, NativeInvocationSessionDescriptor } from './nativeInvocationSession';
+import type { ModelTurnSnapshot } from '@/shared/types/modelTurn';
 
 const MAX_ORIGIN_BYTES = 32 * 1024;
 const processGeneration = randomUUID();
@@ -25,6 +26,18 @@ type SavedOrigin = { version: 1; invocationId: string; processGeneration: string
   descriptor: NativeInvocationSessionDescriptor };
 const held = (): never => { throw new Error('Saved native original is unavailable or changed.'); };
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+/** Bind both archive formats explicitly. A historical descriptor can prove
+ * only V1; a V2 archive requires an explicit V2 commitment in the saved origin.
+ * The archive reader must validate the immutable V2 running snapshot and its
+ * exact companion outcome before returning an overlaid terminal view. */
+export function assertNativeArchiveFormat(snapshot: ModelTurnSnapshot,
+  expectedVersion?: 1 | 2): void {
+  const version: number = snapshot.version;
+  const entryVersion: number = snapshot.entry.archiveVersion;
+  if ((version !== 1 && version !== 2) || entryVersion !== version
+    || version !== (expectedVersion ?? 1)) return held();
+}
 
 async function readSaved(id: string, workspace: string): Promise<SavedOrigin> {
   const directory = await fs.lstat(root(workspace));
@@ -96,7 +109,8 @@ export async function readSavedNativeOrigin(input: { invocationId: string;
     root: input.root, signal: input.signal });
   if (!same(lineage, descriptor.lineage)) return held();
   const archived = await readNativeModelTurnSnapshot(receipt.owner.conversationId, input.invocationId, input.root.workspace);
-  if (!archived || archived.version !== 1 || archived.entry.id !== input.invocationId
+  assertNativeArchiveFormat(archived, descriptor.archive.archiveVersion);
+  if (!archived || archived.entry.outcome !== 'running' || archived.entry.id !== input.invocationId
     || archived.entry.conversationId !== receipt.owner.conversationId
     || archived.entry.runId !== receipt.owner.runId
     || archived.entry.node.nodeId !== receipt.owner.nodeId
@@ -168,7 +182,8 @@ export async function readSavedNativeTerminal(input: { invocationId: string;
     input.expectedWorkspace, async () => {
       const archived = await readNativeModelTurnSnapshot(input.expectedOwner.conversationId,
         input.invocationId, input.expectedWorkspace);
-      if (!archived || archived.version !== 1 || archived.entry.id !== input.invocationId
+      assertNativeArchiveFormat(archived, descriptor.archive.archiveVersion);
+      if (!archived || archived.entry.id !== input.invocationId
         || archived.entry.conversationId !== input.expectedOwner.conversationId
         || archived.entry.runId !== input.expectedOwner.runId
         || archived.entry.node.nodeId !== input.expectedOwner.nodeId

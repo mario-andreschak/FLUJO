@@ -21,6 +21,8 @@ export interface NativeInvocationSessionDescriptor {
   lineage: NativeOriginLineageEvidence;
   archive: {
     dispatchId: string;
+    /** Missing only on historical V1 descriptors; never inferred for V2. */
+    archiveVersion?: 1 | 2;
     adapter: string;
     operation: string;
     /** Hashes of the saved sanitized archive fields. Neither is a commitment

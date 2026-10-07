@@ -21,7 +21,7 @@ import { readNativeOriginLineage } from './nativeOriginLineage';
 import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
-import { readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
+import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
 import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
@@ -127,7 +127,7 @@ import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import {
   archiveModelDispatch,
-  readModelTurnSnapshot,
+  readNativeModelTurnSnapshot,
   updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
@@ -2812,8 +2812,10 @@ export class ModelHandler {
                         await opts!.nativeBrokerAuthority!.assertCurrent();
                         abortController.signal.throwIfAborted();
                         if (opts?.nativeInvocationSessionHook) {
-                          const archived = await readModelTurnSnapshot(nativeReceipt.owner.conversationId, entry.id);
-                          if (!archived || archived.version !== 1 || archived.entry.id !== nativeReceipt.invocationId
+                          const archived = await readNativeModelTurnSnapshot(nativeReceipt.owner.conversationId,
+                            entry.id, opts.nativeInvocationSessionHook.root.workspace);
+                          if (archived) assertNativeArchiveFormat(archived, entry.archiveVersion);
+                          if (!archived || archived.entry.outcome !== 'running' || archived.entry.id !== nativeReceipt.invocationId
                             || archived.entry.conversationId !== nativeReceipt.owner.conversationId
                             || archived.entry.runId !== nativeReceipt.owner.runId
                             || archived.entry.node.nodeId !== nativeReceipt.owner.nodeId
@@ -2849,6 +2851,7 @@ export class ModelHandler {
                             receipt: nativeReceipt, lineage,
                             archive: {
                               dispatchId: entry.id, adapter: archived.entry.adapter,
+                                archiveVersion: archived.version,
                               operation: archived.entry.operation,
                               sanitizedSdkRequestDigest: nativeDigest(archived.sdkRequest),
                               sanitizedGenericWireDigest: nativeDigest(archived.genericWire),
