@@ -124,6 +124,17 @@ and older passing runs. The selected flow's [assessment and triage](https://gith
 retain its provisional grade, confirmed gaps and rejected findings without
 promoting a release claim.
 
+## Historical source review records
+
+Earlier Docs branches retain [the 61d212c4 re-review command receipts](https://github.com/mario-andreschak/FLUJO/blob/8de1d7e28002e30e92732f216ec2cd7895f97fb6/docs/audits/scorecard-563/evidence/docs-rereview-command-receipts-61d212c4.json),
+[review triage](https://github.com/mario-andreschak/FLUJO/blob/8de1d7e28002e30e92732f216ec2cd7895f97fb6/docs/audits/scorecard-563/evidence/docs-rereview-triage-61d212c4.json)
+and [failed CI receipt](https://github.com/mario-andreschak/FLUJO/blob/8de1d7e28002e30e92732f216ec2cd7895f97fb6/docs/audits/scorecard-563/evidence/ci-verification-61d212c4.json).
+The separate [filesystem-race scan observation](https://github.com/mario-andreschak/FLUJO/blob/90814d6a29cbfec1ec6174e3e8aa5490cd4caa4f/docs/audits/scorecard-563/evidence/scorecard-race-codeql-f0cd4c10.json)
+retains its original source and PR-diff reporting scope. These links preserve access
+to historical observations; they do not qualify the current candidate, establish
+full-release scanner coverage or assign a grade. Original records stay in their
+original source trees rather than being relabeled as current evidence.
+
 ## October 5 source outcomes
 
 The [checksummed v25 observation](evidence/source-outcomes-2026-10-05-v25.json)
