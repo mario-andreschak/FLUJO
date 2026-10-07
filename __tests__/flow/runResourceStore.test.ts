@@ -348,7 +348,7 @@ describe('listAllRunResources + delete', () => {
 it('refuses a ranged payload substituted with a directory before any descriptor read', async () => {
   const entry = await writeRunResource({ conversationId: 'nonregular_range', mimeType: 'text/plain', kind: 'text',
     data: { text: 'retained resource' }, producedBy }) as RunResourceEntry;
-  const file = (await getRunResourceLocalPath(entry.uri))!;
+  const file = path.join(tmpDir, 'nonregular_range', `${entry.id}.dat`);
   const originalOpen = fs.open.bind(fs);
   const reads: jest.Mock[] = [];
   let swapped = false;
