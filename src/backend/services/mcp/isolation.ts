@@ -8,6 +8,8 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { ownerPolicySchema } from '../security/ownerCredentials';
+import { trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
+import { getManagedTrustedHost } from './trustedHost';
 import {
   createIsolatedMcpLaunch, isolatedMcpPolicyDigest, isolatedMcpPolicySchema, McpIsolationError,
   type IsolatedMcpLaunch,
@@ -66,14 +68,18 @@ export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getC
 
 /** A private isolation grant cannot be bypassed by omitting it from an imported config. */
 export function assertHostMcpLaunchAllowed(config: MCPStdioConfig): void {
-  if (process.env.FLUJO_MCP_ISOLATION_FILE === undefined) return;
+  if (process.env.FLUJO_MCP_ISOLATION_FILE === undefined) {
+    trustedHostMcpApproval(config);
+    return;
+  }
   try {
     const approvals = approvalSchema.parse(readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
     if (approvals.approvals.some(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name)) {
       throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
     }
+    trustedHostMcpApproval(config);
   } catch (error) {
-    if (error instanceof McpIsolationError) throw error;
+    if (error instanceof McpIsolationError || error instanceof TrustedHostMcpError) throw error;
     throw new McpIsolationError('ISOLATION_UNAVAILABLE');
   }
 }
@@ -167,11 +173,11 @@ export function assertIsolatedMcpArguments(value: unknown): void {
   visit(value, 0);
 }
 
-export function attachMcpIsolation(transport: IsolationTransport, config: MCPStdioConfig, managed: ManagedMcpIsolation): void {
+export function attachMcpIsolation(transport: IsolationTransport, config: MCPStdioConfig, managed: ManagedMcpIsolation, onRetire?: () => void): void {
   transport.__flujoMcpIsolation = managed;
   const start = transport.start.bind(transport);
   const close = transport.close.bind(transport);
-  const wrapClose = (callback: (() => void) | undefined) => () => { managed.close(); callback?.(); };
+  const wrapClose = (callback: (() => void) | undefined) => () => { onRetire?.(); managed.close(); callback?.(); };
   let onclose = wrapClose(transport.onclose);
   Object.defineProperty(transport, 'onclose', { configurable: true,
     get: () => onclose,
@@ -183,11 +189,12 @@ export function attachMcpIsolation(transport: IsolationTransport, config: MCPStd
         throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
       }
       await start();
-    } catch (error) { managed.close(); throw error; }
+    } catch (error) { onRetire?.(); managed.close(); throw error; }
   };
   transport.close = async () => {
     // Remove the server before closing the attach client. An attach client's
     // exit is not a container exit witness, and a hanging SDK close cannot skip it.
+    onRetire?.();
     managed.close();
     await close();
   };
@@ -201,21 +208,56 @@ async function currentServerConfig(serverName: string): Promise<MCPServerConfig 
 }
 
 export async function assertMcpIsolationDispatch(client: Client, serverName: string, config?: MCPServerConfig | null): Promise<void> {
+  const host = getManagedTrustedHost(client.transport);
+  if (host) {
+    try {
+      // Always read the authoritative stored configuration. A caller snapshot,
+      // new same-name grant, or missing policy environment cannot reuse a client.
+      const current = await currentServerConfig(serverName);
+      if (!current || current.disabled || current.transport !== 'stdio' || serverName !== host.serverName) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      await host.assertCurrent(current);
+    } catch (error) {
+      host.retire();
+      try { await client.close(); } catch { /* lifecycle receipts retain unknown cleanup */ }
+      if (error instanceof TrustedHostMcpError) throw error;
+      throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    }
+    return;
+  }
   const managed = getManagedMcpIsolation(client.transport);
   if (!managed) {
     try {
-      const current = config ?? (process.env.FLUJO_MCP_ISOLATION_FILE === undefined ? undefined
-        : await currentServerConfig(serverName));
+      const current = await currentServerConfig(serverName);
+      if (!current || current.disabled) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
       if (current?.isolation !== undefined) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
-      if (current?.transport === 'stdio') assertHostMcpLaunchAllowed(current);
+      const seen = new Set<object>();
+      let transport: unknown = client.transport;
+      let local = current.transport === 'stdio' || config?.transport === 'stdio';
+      while (transport && typeof transport === 'object' && !seen.has(transport)) {
+        seen.add(transport);
+        const candidate = transport as { __flujoKind?: unknown; __flujoStdioKey?: unknown;
+          __flujoInnerTransport?: unknown; constructor?: { name?: string } };
+        local ||= candidate.__flujoKind === 'stdio' || candidate.__flujoStdioKey !== undefined
+          || candidate.constructor?.name === 'StdioClientTransport';
+        transport = candidate.__flujoInnerTransport;
+      }
+      if (local) {
+        // A newly approved same-name config cannot retrospectively authorize
+        // the unknown command/revision of an older untracked host process.
+        throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      }
     } catch (error) {
+      try { await client.close(); } catch { /* retain cleanup uncertainty */ }
+      if (error instanceof TrustedHostMcpError) {
+        throw error;
+      }
       if (error instanceof McpIsolationError) throw error;
       throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     }
     return;
   }
   try {
-    const current = config ?? await currentServerConfig(serverName);
+    const current = await currentServerConfig(serverName);
     if (!current || current.disabled || current.transport !== 'stdio' || current.isolation === undefined
         || getCurrentWorkspace() !== managed.workspace || serverName !== managed.serverName
         || approvedIsolationDigest(current, managed.workspace) !== managed.policyDigest) {

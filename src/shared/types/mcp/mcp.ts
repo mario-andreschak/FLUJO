@@ -185,6 +185,8 @@ export type MCPManagerConfig = {
   runtimeHomeMode?: MCPRuntimeHomeMode;
   /** Strict Linux container policy; approval lives in a separate private operator file. */
   isolation?: unknown;
+  /** Explicit host trust request; authority lives in a separate private owner grant. */
+  trustedHost?: unknown;
 }
 
 export type MCPElicitationPolicy = {

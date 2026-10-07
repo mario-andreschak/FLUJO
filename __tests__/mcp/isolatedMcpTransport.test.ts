@@ -16,6 +16,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import { issueOwnerCredential } from '@/backend/services/security/ownerCredentials';
 import { callTool } from '@/backend/services/mcp/tools';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { getMcpAppRuntimeBrokerSnapshot, revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
 
 jest.mock('@/backend/services/security/isolatedMcp', () => ({
   ...jest.requireActual('@/backend/services/security/isolatedMcp'), createIsolatedMcpLaunch: jest.fn(),
@@ -92,6 +93,17 @@ test.each(['v1', 'beta'])('%s factory selects only the isolated attach command a
 test('beta client uses documented legacy mode instead of cloning a disposable sibling for the same CID', () => {
   const client = createNewBetaClient(config);
   expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'legacy' });
+});
+
+test.each(['v1', 'beta'])('%s isolated broker-enabled factory needs no host approval and retires its actual broker lease', async era => {
+  const apps = { ...config, enableMcpApps: true };
+  const transport = era === 'v1' ? createStdioTransport(apps, { enableRuntimeBroker: true }) : createBetaTransport(apps, { enableRuntimeBroker: true });
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(1);
+  const parameters = (transport as unknown as { _serverParams: { env: Record<string, string> } })._serverParams;
+  expect(parameters.env.FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN).toEqual(expect.any(String));
+  await transport.close();
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
+  revokeMcpAppRuntimeBrokerForServer(config.name);
 });
 
 test.each(['v1', 'beta'])('%s start rechecks revocation before SDK spawn', async era => {
