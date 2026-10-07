@@ -42,6 +42,7 @@ describe('workspace route coverage', () => {
 
   it('classifies every application route and keeps the installation-wide allowlist exact', () => {
     const marked: string[] = [];
+    const ownerSessionRoutes: string[] = [];
     for (const file of routes) {
       const source = fs.readFileSync(file, 'utf8');
       const pathname = pathnameOf(file);
@@ -55,6 +56,19 @@ describe('workspace route coverage', () => {
       }
 
       expect(INSTALLATION_WIDE.has(pathname)).toBe(false);
+      if (pathname === '/api/owner/session') {
+        ownerSessionRoutes.push(pathname);
+        expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
+        expect(source).toContain("from '@/backend/services/security/ownerAccess'");
+        expect(source).toContain("from '@/backend/services/security/ownerSession'");
+        expect(source).toContain('resolveOwnerRequest(request,');
+        expect(source).toContain('requireBearer: true');
+        expect(source).toContain('admitted.authorization.recheck()');
+        expect(source).toContain('createOwnerSession(request,');
+        expect(source).toContain('revokeOwnerSession(request)');
+        expect(source).toContain('ownerBrowserRequestAllowed(request, true)');
+        continue;
+      }
       if (AUTHENTICATED_AVATAR.has(pathname)) {
         expect(source).toContain("from '@/backend/services/avatar/remoteVoice'");
         for (const method of methods) {
@@ -74,5 +88,6 @@ describe('workspace route coverage', () => {
     }
 
     expect(marked.sort()).toEqual([...INSTALLATION_WIDE].sort());
+    expect(ownerSessionRoutes).toEqual(['/api/owner/session']);
   });
 });
