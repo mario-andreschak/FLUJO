@@ -84,6 +84,7 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
   const verifiedMetadata = new Map();
   const metadataPaths = new Set([`${appRelative}/package.json`, `${appRelative}/.next/BUILD_ID`,
     'node_modules/next/package.json']);
+  const files = [];
   let totalBytes = 0;
   for (const entry of runtimeFiles) {
     if (!record(entry) || typeof entry.path !== 'string' || entry.path.length > 2048 || entry.path.includes('\\')
@@ -97,17 +98,32 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
     checkDeadline();
     const file = path.resolve(root, entry.path);
     if (!contains(root, file)) fail('runtime entry escapes candidate root');
-    try {
-      const bytes = await readPinnedFile(file, { maxBytes: 512 * 1024 * 1024,
-        expectedBytes: entry.bytes, expectedSha256: entry.sha256, root, check: checkDeadline,
-        collect: metadataPaths.has(entry.path) });
-      if (metadataPaths.has(entry.path)) verifiedMetadata.set(entry.path, bytes);
-    } catch {
-      fail('runtime file byte/digest mismatch');
-    }
     totalBytes += entry.bytes;
     if (totalBytes > 8 * 1024 * 1024 * 1024) fail('runtime inventory byte budget exceeded');
+    files.push({ entry, file });
   }
+  // Validate the complete table before issuing any runtime reads. Keep only
+  // eight readers outstanding; a failure stops allocation and every reader
+  // completes its finally/close before the failure is returned to the caller.
+  let cursor = 0;
+  let failure;
+  const checkRead = () => { checkDeadline(); if (failure) throw failure; };
+  const worker = async () => {
+    while (!failure && cursor < files.length) {
+      const { entry, file } = files[cursor++];
+      try {
+        const bytes = await readPinnedFile(file, { maxBytes: 512 * 1024 * 1024,
+          expectedBytes: entry.bytes, expectedSha256: entry.sha256, root, check: checkRead,
+          collect: metadataPaths.has(entry.path) });
+        if (metadataPaths.has(entry.path)) verifiedMetadata.set(entry.path, bytes);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker));
+  if (failure) fail('runtime file byte/digest mismatch');
+  checkDeadline();
   const pending = [''];
   let actualCount = 0;
   while (pending.length) {

@@ -77,6 +77,53 @@ test('an inventory traversal is refused before reading the referenced path', asy
   fixture.receipt.runtimeFiles[0] = { ...fixture.receipt.runtimeFiles[0], path: '../outside' };
   await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, await fixture.seal()), /unsafe, duplicate or malformed/);
 });
+test('all runtime rows are validated before any runtime file is opened', async t => {
+  const fixture = await metadataFixture(t);
+  fixture.receipt.runtimeFiles.push({ path: '../outside', bytes: 1, sha256: '0'.repeat(64) });
+  const options = await fixture.seal();
+  const open = fs.open.bind(fs);
+  let reads = 0;
+  t.mock.method(fs, 'open', async (file, ...args) => {
+    if (String(file).startsWith(fixture.root + path.sep)) reads++;
+    return open(file, ...args);
+  });
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /unsafe, duplicate or malformed/);
+  assert.equal(reads, 0);
+});
+
+test('runtime failure stops new work and joins every bounded reader before rejecting', async t => {
+  const fixture = await metadataFixture(t);
+  for (let i = 0; i < 12; i++) {
+    const relative = `node_modules/extra-${i}.js`;
+    await fs.writeFile(path.join(fixture.root, relative), 'trusted');
+    fixture.receipt.runtimeFiles.push({ path: relative, bytes: 7, sha256: sha('trusted') });
+  }
+  fixture.receipt.runtimeFiles[0].sha256 = '0'.repeat(64);
+  const options = await fixture.seal();
+  const open = fs.open.bind(fs);
+  let live = 0;
+  let opened = 0;
+  let peak = 0;
+  t.mock.method(fs, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (!String(file).startsWith(fixture.root + path.sep)) return handle;
+    opened++; live++; peak = Math.max(peak, live);
+    const close = handle.close.bind(handle);
+    handle.close = async () => { try { await close(); } finally { live--; } };
+    if (String(file) !== path.join(fixture.applicationRoot, 'package.json')) {
+      const read = handle.read.bind(handle);
+      handle.read = async (...readArgs) => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        return read(...readArgs);
+      };
+    }
+    return handle;
+  });
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /runtime file byte\/digest mismatch/);
+  assert.ok(peak <= 8);
+  assert.ok(opened <= 8);
+  assert.equal(live, 0);
+});
 test('an added runtime file cannot hide outside the sealed inventory', async t => {
   const fixture = await metadataFixture(t); const options = await fixture.seal();
   await fs.writeFile(path.join(fixture.root, 'node_modules/unrecorded.js'), '// Unrecorded synthetic bytes');
