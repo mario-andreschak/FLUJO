@@ -29,6 +29,25 @@ describe('MCP backup/restore link safety', () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  it('refuses publication when ownership retires during the final target inspection', async () => {
+    const destination = path.join(mcpRoot, 'owned.json');
+    await fs.writeFile(destination, 'original');
+    const lstat = fs.lstat.bind(fs);
+    let inspections = 0;
+    let retired = false;
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const result = await lstat(...args);
+      if (String(args[0]) === destination && ++inspections === 2) retired = true;
+      return result;
+    });
+    await expect(atomicWriteWithoutLinks(workspaceRoot, destination, Buffer.from('replacement'), {
+      assertOwned: async () => { if (retired) throw new Error('Recovery owner retired'); },
+    })).rejects.toThrow('Recovery owner retired');
+    expect(retired).toBe(true);
+    expect(await fs.readFile(destination, 'utf8')).toBe('original');
+    expect((await fs.readdir(mcpRoot)).filter(name => name.startsWith('.flujo-restore-'))).toEqual([]);
+  });
+
   it('backs up regular files but skips junctions and hard links to outside data', async () => {
     await fs.writeFile(path.join(mcpRoot, 'server.json'), 'inside');
     const outsideSecret = path.join(outsideRoot, 'secret.txt');

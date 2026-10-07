@@ -14,7 +14,7 @@ import { readOperatorSecret } from '@/utils/encryption/operatorSecret';
 import { lockServer } from '@/utils/encryption/session';
 import { CREDENTIAL_TRANSFER_STORES, transformCredentialValues, validateCredentialRecord } from './credentialTransfer';
 import { assertLinkFreeFileParent, atomicWriteWithoutLinks } from './backupRestoreFs';
-import { withWorkspaceRecoveryCapture } from './workspaceMutationGate';
+import { withWorkspaceRecoveryCapture, withWorkspaceRecoveryMutation, type WorkspaceRecoveryOperation } from './workspaceMutationGate';
 import { isWorkerMode } from './workerMode';
 
 const PURPOSE = 'flujo:secret:v2';
@@ -218,8 +218,10 @@ async function readJournal(passphrase: string): Promise<Journal> {
   } catch { throw new CredentialMigrationError('RECOVERY_INVALID'); }
   finally { bytes?.fill(0); plaintext?.fill(0); }
 }
-async function applyJournal(journal: Journal, rollback: boolean, options: CredentialMigrationOptions) {
-  await validateCurrent(journal); // Check the entire inventory before replacing any file.
+async function applyJournal(journal: Journal, rollback: boolean, options: CredentialMigrationOptions, operation: WorkspaceRecoveryOperation) {
+  await operation.assertOwned();
+  await validateCurrent(journal);
+  await operation.assertOwned(); // Check the entire inventory before replacing any file.
   if (!rollback) {
     const target = Buffer.from(journal.entries[StorageKey.ENCRYPTION_KEY].after, 'base64');
     try {
@@ -233,35 +235,46 @@ async function applyJournal(journal: Journal, rollback: boolean, options: Creden
   const stores = Object.keys(journal.entries).filter(store => store !== StorageKey.ENCRYPTION_KEY);
   stores.push(StorageKey.ENCRYPTION_KEY); // Metadata changes only after all record replacements.
   for (const store of stores) {
-    options.signal?.throwIfAborted();
+    await operation.assertOwned();
     const bytes = Buffer.from(journal.entries[store][side], 'base64');
     try {
-      await atomicWriteWithoutLinks(getDataDir(), fileFor(store), bytes, { mode: 0o600 });
+      await atomicWriteWithoutLinks(getDataDir(), fileFor(store), bytes, { mode: 0o600, assertOwned: operation.assertOwned });
+      await operation.assertOwned();
       const actual = await readFile(fileFor(store), MAX_TRANSFER_BYTES);
       try { if (!actual.equals(bytes)) throw new CredentialMigrationError('SOURCE_CHANGED', store); }
       finally { actual.fill(0); }
     } finally { bytes.fill(0); }
+    await operation.assertOwned();
     await options.checkpoint?.('record_written', store);
+    await operation.assertOwned();
   }
   await options.checkpoint?.('before_commit');
-  options.signal?.throwIfAborted();
+  await operation.assertOwned();
   await validateCurrent(journal, side);
+  await operation.assertOwned();
   if (JSON.stringify(await readJournal(options.recoveryPassphrase)) !== JSON.stringify(journal)) throw new CredentialMigrationError('RECOVERY_INVALID');
+  await operation.assertOwned();
   const pending = credentialMigrationPath();
   await assertLinkFreeFileParent(getDataDir(), pending);
   // This single rename publishes the logical transaction; pending readers and
   // writers remain denied until every record and metadata byte is verified.
+  await operation.assertOwned();
   await fs.rename(pending, path.join(path.dirname(pending), `.credential-migration.${journal.id}.${rollback ? 'rolled-back' : 'committed'}`));
+  await operation.assertOwned();
   await syncParent();
+  await operation.assertOwned();
   lockServer();
   const prior = JSON.parse(Buffer.from(journal.entries[StorageKey.ENCRYPTION_KEY].before, 'base64').toString('utf8')) as EncryptionMetadata;
   return { status: rollback ? 'rolled-back' : 'committed', protection: rollback
     ? prior.key_protection ?? (prior.encryption_type === 'user' ? 'passphrase' : 'legacy-default') : journal.protection, stores: stores.length } as const;
 }
 export async function migrateCredentials(options: CredentialMigrationOptions, expectedPlanToken: string) {
-  return withWorkspaceRecoveryCapture(async () => {
+  const capturedOptions = { ...options };
+  return withWorkspaceRecoveryMutation(async operation => {
+    options = capturedOptions;
     if (typeof expectedPlanToken !== 'string' || !/^[a-f0-9]{64}$/.test(expectedPlanToken)) throw new CredentialMigrationError('SOURCE_CHANGED');
     const { journal, inventory } = await prepare(options, Buffer.from(expectedPlanToken.slice(0, 32), 'hex'));
+    await operation.assertOwned();
     if (!timingSafeEqual(Buffer.from(inventory.planToken, 'hex'), Buffer.from(expectedPlanToken, 'hex'))) throw new CredentialMigrationError('SOURCE_CHANGED');
     const plaintext = Buffer.from(JSON.stringify(journal));
     let envelope: Buffer;
@@ -271,17 +284,27 @@ export async function migrateCredentials(options: CredentialMigrationOptions, ex
     try {
       // Coherent capture serializes registered writers across OS processes.
       if (await isCredentialMigrationPending()) throw new CredentialMigrationError('MIGRATION_PENDING');
-      await atomicWriteWithoutLinks(getDataDir(), pending, envelope, { mode: 0o600 });
+      await atomicWriteWithoutLinks(getDataDir(), pending, envelope, { mode: 0o600, assertOwned: operation.assertOwned });
+      await operation.assertOwned();
       await syncParent();
+      await operation.assertOwned();
       const written = await readJournal(options.recoveryPassphrase);
+      await operation.assertOwned();
       if (written.id !== journal.id) throw new CredentialMigrationError('RECOVERY_INVALID');
     } finally { envelope.fill(0); }
     lockServer();
+    await operation.assertOwned();
     await options.checkpoint?.('journal_written');
-    return applyJournal(journal, false, options);
+    await operation.assertOwned();
+    return applyJournal(journal, false, options, operation);
   }, { signal: options.signal });
 }
 export async function recoverCredentialMigration(options: CredentialMigrationOptions, rollback = false) {
   validateOptions(options);
-  return withWorkspaceRecoveryCapture(async () => applyJournal(await readJournal(options.recoveryPassphrase), rollback, options), { signal: options.signal });
+  const capturedOptions = { ...options };
+  return withWorkspaceRecoveryMutation(async operation => {
+    const journal = await readJournal(capturedOptions.recoveryPassphrase);
+    await operation.assertOwned();
+    return applyJournal(journal, rollback, capturedOptions, operation);
+  }, { signal: capturedOptions.signal });
 }

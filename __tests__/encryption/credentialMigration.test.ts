@@ -17,6 +17,7 @@ import { POST as migrationRoute } from '@/app/api/credential-migration/route';
 import { POST as secureRoute } from '@/app/api/encryption/secure/route';
 import { issueOwnerCredential } from '@/backend/services/security/ownerCredentials';
 import { readOAuthTokens, readOAuthClientInformation, readOAuthCodeVerifier, sealOAuthCredential } from '@/backend/services/mcp/oauthCredentialStorage';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { captureWorkspaceSnapshot } from '@/backend/services/workspace/snapshotArchive';
 
 jest.setTimeout(60_000);
@@ -471,4 +472,39 @@ test.each([false, true])('interrupted explicit retirement recovers the authentic
     await assertMigrated(true);
     expect((await unwrapKeyring(await readStore('encryption_key'), recoveryPassphrase)).activeKey).not.toBe(original.activeKey);
   }
+});
+
+
+test('migration failure drains a borrowed child before releasing exclusive recovery admission', async () => {
+  const inventory = await preflightCredentialMigration(options);
+  let start!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { start = resolve; });
+  const finish = new Promise<void>(resolve => { release = resolve; });
+  let child!: Promise<void>;
+  const migration = migrateCredentials({ ...options, checkpoint: async step => {
+    if (step !== 'journal_written') return;
+    child = withWorkspaceMutation(async () => {
+      start();
+      await finish;
+      await writeFileAtomic(path.join(path.dirname(fileFor('models')), 'borrowed-marker.txt'), 'credential-free marker');
+    });
+    await started;
+    throw new Error('Injected root failure with child in flight');
+  } }, inventory.planToken);
+  const outcome = migration.catch(error => error as Error);
+  await started;
+  let captured = false;
+  const capture = withWorkspaceMutation(async () => { captured = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(captured).toBe(false);
+  release();
+  await child;
+  const error = await outcome;
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toBe('Injected root failure with child in flight');
+  await capture;
+  expect(await isCredentialMigrationPending()).toBe(true);
+  await recoverCredentialMigration(options, true);
+  for (const [store, bytes] of sourceBytes) expect(await fs.readFile(fileFor(store))).toEqual(bytes);
 });

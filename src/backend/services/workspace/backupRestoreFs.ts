@@ -284,10 +284,13 @@ export async function atomicWriteWithoutLinks(
   boundaryPath: string,
   destination: string,
   content: Buffer,
-  options: { mode?: number } = {},
+  options: { mode?: number; assertOwned?: () => Promise<void> } = {},
 ): Promise<void> {
+  const assertOwned = options.assertOwned;
+  await assertOwned?.();
   const parent = path.dirname(destination);
   await ensureLinkFreeDirectory(boundaryPath, parent, true);
+  await assertOwned?.();
   const existing = await lstatOptional(destination);
   if (existing?.isSymbolicLink()) {
     throw new Error(`Refusing to replace symbolic link or junction: ${destination}`);
@@ -302,12 +305,16 @@ export async function atomicWriteWithoutLinks(
   try {
     // Only owner permissions are restored; never import setuid or broad secret access.
     const mode = 0o600 | ((options.mode ?? 0) & 0o100);
+    await assertOwned?.();
     const handle = await fs.open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, mode);
     created = true;
     try {
       owned = await handle.stat({ bigint: true });
+      await assertOwned?.();
       await handle.writeFile(content);
+      await assertOwned?.();
       await handle.sync();
+      await assertOwned?.();
       owned = await handle.stat({ bigint: true });
     } finally {
       await handle.close();
@@ -324,8 +331,10 @@ export async function atomicWriteWithoutLinks(
     if (currentTarget?.isSymbolicLink() || (currentTarget && !currentTarget.isFile())) {
       throw new Error(`Restore target became unsafe: ${destination}`);
     }
+    await assertOwned?.();
     await fs.rename(temporary, destination);
     created = false;
+    await assertOwned?.();
   } finally {
     if (created) {
       try {

@@ -8,7 +8,7 @@ import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
-import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { withWorkspaceMutation, assertWorkspaceMutationOwned } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('utils/storage/backend');
 
@@ -146,6 +146,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     await assertCredentialStoreReady(filePath);
+    await assertWorkspaceMutationOwned();
     const dirPath = path.dirname(filePath);
     await fs.mkdir(dirPath, { recursive: true });
     const directory = await fs.lstat(dirPath, { bigint: true });
@@ -156,12 +157,16 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
     let created = false;
     let owned: BigIntStats | undefined;
     try {
+      await assertWorkspaceMutationOwned();
       const handle = await fs.open(tmpPath, 'wx', 0o600);
       created = true;
       try {
         owned = await handle.stat({ bigint: true });
+        await assertWorkspaceMutationOwned();
         await handle.writeFile(data);
+        await assertWorkspaceMutationOwned();
         await handle.sync();
+        await assertWorkspaceMutationOwned();
         owned = await handle.stat({ bigint: true });
       } finally { await handle.close(); }
       await renameWithRetry(tmpPath, filePath, async () => {
@@ -175,8 +180,10 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
             || parent.gid !== directory.gid || canonicalParent !== canonicalDirectory) {
           throw new Error('Atomic write file or parent changed');
         }
+        await assertWorkspaceMutationOwned();
       });
       created = false;
+      await assertWorkspaceMutationOwned();
     } catch (error) {
       // Best-effort cleanup so a failed write doesn't leave temp files behind.
       if (created) {
