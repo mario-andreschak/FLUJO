@@ -23,6 +23,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 import PersonaRecoverySettings from './PersonaRecoverySettings';
+import CredentialTransferSettings from './CredentialTransferSettings';
 
 const log = createLogger('frontend/components/Settings/BackupSettings');
 
@@ -258,6 +259,7 @@ export default function BackupSettings() {
   return (
     <Box sx={{ width: '100%' }}>
       <PersonaRecoverySettings />
+      <CredentialTransferSettings />
 
       <Alert severity="info" sx={{ mb: 2 }}>
         {t('settings.backup.personaScope')}

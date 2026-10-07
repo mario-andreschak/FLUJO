@@ -2,6 +2,10 @@
 
 Ordinary backups omit credentials. This separate, deliberate transfer exports model configuration, MCP configuration (including OAuth credentials and all environment/header values), global environment variables, and registry credentials. It excludes the source encryption key, owner credentials/browser sessions, snapshots, host files, flows, and chats. Authored configuration strings may contain manually embedded secrets; treat the whole transfer as sensitive.
 
+## Settings workflow
+
+Settings → Backup includes a separate encrypted credential transfer panel. Enter a transfer passphrase and explicitly acknowledge that the file contains credentials before exporting. For restore, select the encrypted file, supply an unused destination name and a different local passphrase. Both passphrase fields clear after success or failure and when the selected workspace changes. Workspace changes cancel active requests and discard late download responses. Passphrases are transient form state, never browser storage or URL parameters.
+
 ## Export
 
 `POST /api/credential-transfer?workspace=SOURCE` accepts JSON:
