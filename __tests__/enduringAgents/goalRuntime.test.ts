@@ -1,4 +1,17 @@
 const submitMock = jest.fn();
+const mockGoalWarnings: unknown[][] = [];
+let mockGoalWarningObserved: (() => void) | undefined;
+jest.mock('@/utils/logger', () => {
+  const actual = jest.requireActual('@/utils/logger');
+  return { ...actual, createLogger: (...args: unknown[]) => {
+    const logger = actual.createLogger(...args);
+    return { ...logger, warn: (...warning: unknown[]) => {
+      mockGoalWarnings.push(warning);
+      if (String(warning[0]).startsWith('Could not advance ongoing goals')) mockGoalWarningObserved?.();
+      logger.warn(...warning);
+    } };
+  } };
+});
 const dispatches = new Map<string, import('@/backend/services/enduringAgents/personaDispatcher').PersonaFlowDispatchRecord>();
 const dispatchIdentity = (_personaId: string, key: string) => `dispatch_${key.slice(-40)}`;
 
@@ -39,7 +52,7 @@ import {
   type PersonaActivityClaim,
 } from '@/backend/services/enduringAgents/activityRuntime';
 import { _setPersonaRuntimeLockProcessBirthProbeForTests } from '@/backend/services/enduringAgents/runtimeLock';
-import { beginWorkspaceSnapshotBoundary } from '@/backend/services/workspace/workspaceMutationGate';
+import { beginWorkspaceSnapshotBoundary, withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import {
   getPersona,
   getPersonaActivity,
@@ -134,6 +147,45 @@ function useRealActivityAdmission(): PersonaActivityClaim[] {
 }
 
 describe('ongoing Persona goal runtime', () => {
+  it('continues a goal from a real timer after its notifying ordinary mutation retires', async () => {
+    await inWorkspace(async () => {
+      const { persona, task } = await goal();
+      let resolveTick!: () => void;
+      const tick = new Promise<void>(resolve => { resolveTick = resolve; });
+      let releaseTimer!: () => void;
+      const timerBarrier = new Promise<void>(resolve => { releaseTimer = resolve; });
+      let resolveReconciliation!: () => void;
+      const reconciled = new Promise<void>(resolve => { resolveReconciliation = resolve; });
+      mockGoalWarnings.length = 0;
+      mockGoalWarningObserved = resolveReconciliation;
+      _setPersonaRuntimeClockForTests({ now: () => now, monotonicNow: () => now,
+        setTimer: (fn, ms) => {
+          let cancelled = false;
+          const timer = setTimeout(() => { void timerBarrier.then(() => {
+            if (!cancelled) { fn(); resolveTick(); }
+          }); }, ms);
+          return { clear: () => { cancelled = true; clearTimeout(timer); }, unref: () => timer.unref() };
+        }, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) });
+      await startPersonaGoalRuntime();
+      const submit = submitMock.getMockImplementation()!;
+      submitMock.mockImplementation(async (...args: unknown[]) => {
+        const result = await submit(...args);
+        resolveReconciliation();
+        return result;
+      });
+      await finish(task);
+      now = (await current(task)).goal!.nextRunAt!;
+      await withWorkspaceMutation(async () => { notifyPersonaGoalChanged(persona.id); });
+      releaseTimer();
+      await tick;
+      await reconciled;
+      // Drain the actual reconciliation before the fixture restores its profile.
+      await reconcilePersonaGoals();
+      mockGoalWarningObserved = undefined;
+      expect(mockGoalWarnings.filter(warning => String(warning[0]).startsWith('Could not advance ongoing goals'))).toEqual([]);
+      expect(submitMock).toHaveBeenCalledTimes(2);
+    });
+  });
   beforeEach(() => {
     now = Date.now();
     dispatches.clear();
@@ -157,6 +209,8 @@ describe('ongoing Persona goal runtime', () => {
     });
   });
   afterEach(() => {
+    mockGoalWarningObserved = undefined;
+    mockGoalWarnings.length = 0;
     _setPersonaRuntimeClockForTests(undefined);
     _setPersonaRuntimeLockProcessBirthProbeForTests();
   });
