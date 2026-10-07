@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readCodexAuthForTransfer } from './codexAuth';
+import { admitCodexDirectory, writeCodexRuntimeFile } from './codexRuntimeFiles';
 import { readStableFile } from '@/utils/readStableFile';
 
 /** Evidence supplied by the trusted integration after exercising this exact binary. */
@@ -233,15 +234,20 @@ export async function prepareRestrictedCodexRuntimeEnvironment(
   // receives this immutable per-invocation file, preventing remote refresh drift.
   const catalog = profile ? await readVerifiedModelCatalog(profile) : undefined;
   const parent = path.resolve(getWorkspaceDataDir(), 'db');
-  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  const parentGuard = await admitCodexDirectory(parent, true);
+  await parentGuard();
   const home = await fs.mkdtemp(path.join(parent, 'codex-private-'));
-  const cleanup = async () => {
+  const guard = await admitCodexDirectory(home, true);
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => cleanupPromise ??= (async () => {
+    await parentGuard();
+    await guard();
     const target = path.resolve(home);
     if (path.dirname(target) !== parent || !path.basename(target).startsWith('codex-private-')) {
       throw new Error('Restricted Codex cleanup target is outside its runtime directory.');
     }
     await fs.rm(target, { recursive: true, force: true });
-  };
+  })();
   try {
     const workingDirectory = path.join(home, 'workspace');
     const paths = { APPDATA: path.join(home, 'AppData', 'Roaming'),
@@ -250,13 +256,12 @@ export async function prepareRestrictedCodexRuntimeEnvironment(
       XDG_STATE_HOME: path.join(home, '.local', 'state'), XDG_RUNTIME_DIR: path.join(home, '.runtime'),
       TMPDIR: path.join(home, 'tmp'), TMP: path.join(home, 'tmp'), TEMP: path.join(home, 'tmp') };
     await Promise.all([workingDirectory, ...new Set(Object.values(paths))]
-      .map(directory => fs.mkdir(directory, { recursive: true, mode: 0o700 })));
+      .map(directory => admitCodexDirectory(directory, true)));
     const modelCatalogPath = catalog ? path.join(home, 'model-catalog.json') : undefined;
-    if (modelCatalogPath) await fs.writeFile(modelCatalogPath, catalog!, { flag: 'wx', mode: 0o600 });
+    if (modelCatalogPath) await writeCodexRuntimeFile(home, modelCatalogPath, catalog!, guard);
     const auth = await readCodexAuthForTransfer();
-    await fs.writeFile(path.join(home, 'auth.json'), auth, { flag: 'wx', mode: 0o600 });
-    await fs.writeFile(path.join(home, 'config.toml'), 'cli_auth_credentials_store = "file"\n',
-      { flag: 'wx', mode: 0o600 });
+    await writeCodexRuntimeFile(home, path.join(home, 'auth.json'), auth, guard);
+    await writeCodexRuntimeFile(home, path.join(home, 'config.toml'), 'cli_auth_credentials_store = "file"\n', guard);
     const env = { ...baseEnvironment(), ...paths, HOME: home, USERPROFILE: home, CODEX_HOME: home };
     if (process.platform === 'win32') {
       const root = path.parse(home).root;

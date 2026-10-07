@@ -57,6 +57,16 @@ describe('restricted Codex credential/runtime isolation', () => {
       verifiedCliSha256: createHash('sha256').update(contents).digest('hex') };
   }
 
+  test('rejects an aliased db parent before reading credentials or creating a private home', async () => {
+    const external = path.join(directory, 'external');
+    await fs.mkdir(external);
+    await fs.writeFile(path.join(external, 'sentinel'), 'unchanged');
+    await fs.symlink(external, path.join(directory, 'db'), 'junction');
+    await expect(prepareRestrictedCodexRuntimeEnvironment()).rejects.toThrow('unsafe');
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+    expect(await fs.readdir(external)).toEqual(['sentinel']);
+  });
+
   test('catalog descriptor drift fails before CLI verification or credential access', async () => {
     const profile = await executableProfile();
     const open = fs.open.bind(fs);

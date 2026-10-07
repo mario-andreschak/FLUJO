@@ -66,8 +66,8 @@ describe('portable Codex authentication', () => {
 
   it('retains an imported workspace login without a host login, including refreshed worker tokens', async () => {
     await fs.mkdir(home, { recursive: true });
-    await fs.writeFile(path.join(home, 'auth.json'), auth('worker'));
-    await fs.writeFile(path.join(home, CODEX_AUTH_SOURCE_FILE), JSON.stringify(WORKSPACE_CODEX_AUTH_SOURCE));
+    await fs.writeFile(path.join(home, 'auth.json'), auth('worker'), { mode: 0o600 });
+    await fs.writeFile(path.join(home, CODEX_AUTH_SOURCE_FILE), JSON.stringify(WORKSPACE_CODEX_AUTH_SOURCE), { mode: 0o600 });
     await prepareCodexRuntimeEnvironment(true);
     await fs.writeFile(path.join(home, 'auth.json'), auth('worker-refreshed'));
     await fs.writeFile(path.join(host, 'auth.json'), auth('unrelated'));
@@ -78,7 +78,7 @@ describe('portable Codex authentication', () => {
 
   it('fails clearly if an imported login disappears instead of adopting another account', async () => {
     await fs.mkdir(home, { recursive: true });
-    await fs.writeFile(path.join(home, CODEX_AUTH_SOURCE_FILE), JSON.stringify(WORKSPACE_CODEX_AUTH_SOURCE));
+    await fs.writeFile(path.join(home, CODEX_AUTH_SOURCE_FILE), JSON.stringify(WORKSPACE_CODEX_AUTH_SOURCE), { mode: 0o600 });
     await fs.writeFile(path.join(host, 'auth.json'), auth('unrelated'));
     await expect(prepareCodexRuntimeEnvironment(true)).rejects.toThrow('worker Codex login is missing');
   });

@@ -1,10 +1,11 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readStableFile } from '@/utils/readStableFile';
+import { admitCodexDirectory, readCodexRuntimeFile, writeCodexRuntimeFile } from './codexRuntimeFiles';
 
 export const CODEX_AUTH_SOURCE_FILE = 'flujo-auth-source.json';
 export const WORKSPACE_CODEX_AUTH_SOURCE = { version: 1, source: 'workspace' } as const;
@@ -52,9 +53,10 @@ async function assertFileBackedHostAuth(home: string): Promise<void> {
   }
 }
 
-async function authSource(home: string): Promise<AuthSource | undefined> {
+async function authSource(home: string, existingGuard?: () => Promise<void>): Promise<AuthSource | undefined> {
   try {
-    const value = JSON.parse((await readStableFile(path.join(home, CODEX_AUTH_SOURCE_FILE), 4096)).toString('utf8'));
+    const guard = existingGuard ?? await admitCodexDirectory(home);
+    const value = JSON.parse((await readCodexRuntimeFile(home, path.join(home, CODEX_AUTH_SOURCE_FILE), 4096, guard)).toString('utf8'));
     if (value?.version !== 1 || !['host', 'workspace'].includes(value.source)) {
       throw new Error('Invalid FLUJO Codex authentication source.');
     }
@@ -66,24 +68,14 @@ async function authSource(home: string): Promise<AuthSource | undefined> {
   }
 }
 
-async function writePrivateFile(file: string, content: Buffer | string): Promise<void> {
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
-    await fs.rename(temporary, file);
-    await fs.chmod(file, 0o600);
-  } finally {
-    await fs.rm(temporary, { force: true });
-  }
-}
-
 /** Keep child refreshes unless the operator actually changes the host login. */
 export async function synchronizeCodexAuth(home: string): Promise<void> {
-  const state = await authSource(home);
+  const guard = await admitCodexDirectory(home);
+  const state = await authSource(home, guard);
   const destination = path.join(home, 'auth.json');
   if (state?.source === 'workspace') {
     // A restored worker owns this credential. A missing host login is expected.
-    await fs.access(destination).catch(() => {
+    await readCodexRuntimeFile(home, destination, 1024 * 1024, guard).catch(() => {
       throw new Error('The worker Codex login is missing. Sign in using its CODEX_HOME.');
     });
     return;
@@ -100,17 +92,21 @@ export async function synchronizeCodexAuth(home: string): Promise<void> {
       throw new Error('Could not read the host Codex login.');
     }
     // Preserve the existing explicit logout behavior for host-backed workspaces.
+    await guard();
     await fs.rm(destination, { force: true });
     await fs.rm(path.join(home, CODEX_AUTH_SOURCE_FILE), { force: true });
     return;
   }
   const sourceHash = createHash('sha256').update(content).digest('hex');
-  const destinationExists = await fs.access(destination).then(() => true, () => false);
+  const destinationExists = await readCodexRuntimeFile(home, destination, 1024 * 1024, guard).then(() => true, error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  });
   if (state?.sourceHash === sourceHash && destinationExists) return;
-  await writePrivateFile(destination, content);
-  await writePrivateFile(path.join(home, CODEX_AUTH_SOURCE_FILE), JSON.stringify({
+  await writeCodexRuntimeFile(home, destination, content, guard);
+  await writeCodexRuntimeFile(home, path.join(home, CODEX_AUTH_SOURCE_FILE), JSON.stringify({
     version: 1, source: 'host', sourceHash,
-  } satisfies AuthSource));
+  } satisfies AuthSource), guard);
 }
 
 export function isChatGptAuthCache(content: Buffer): boolean {
@@ -130,7 +126,12 @@ export function isChatGptAuthCache(content: Buffer): boolean {
 /** Read the current authoritative login, without changing the live workspace. */
 export async function readCodexAuthForTransfer(workspace?: string): Promise<Buffer> {
   const home = path.join(getWorkspaceDataDir(workspace), 'db', 'codex-runtime');
-  const state = await authSource(home);
+  let guard: (() => Promise<void>) | undefined;
+  try { guard = await admitCodexDirectory(home); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new CodexAuthInspectionError('auth-source-unreadable', 'Could not read FLUJO Codex authentication source.');
+  }
+  const state = await authSource(home, guard);
   const sourceHome = state?.source === 'workspace' ? home : userCodexHome();
   if (state?.source !== 'workspace') await assertFileBackedHostAuth(sourceHome);
   let source = path.join(sourceHome, 'auth.json');
@@ -140,12 +141,20 @@ export async function readCodexAuthForTransfer(workspace?: string): Promise<Buff
     const host = await readStableFile(source, 1024 * 1024).catch(() => undefined);
     if (host && createHash('sha256').update(host).digest('hex') === state.sourceHash) {
       const child = path.join(home, 'auth.json');
-      if (await fs.access(child).then(() => true, () => false)) source = child;
+      try {
+        if (!guard) throw new Error('Managed Codex home is unavailable.');
+        await readCodexRuntimeFile(home, child, 1024 * 1024, guard);
+        source = child;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new CodexAuthInspectionError('auth-source-unreadable', 'Could not read FLUJO Codex authentication source.');
+      }
     }
   }
   let content: Buffer;
   try {
-    content = await readStableFile(source, 1024 * 1024);
+    content = source === path.join(home, 'auth.json')
+      ? await readCodexRuntimeFile(home, source, 1024 * 1024, guard ?? await admitCodexDirectory(home))
+      : await readStableFile(source, 1024 * 1024);
   } catch {
     throw new CodexAuthInspectionError('login-missing', 'A file-backed Codex ChatGPT login is required. Sign in with Codex using file credential storage before cloning.');
   }
