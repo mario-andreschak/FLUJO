@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 
-// Source only until separately compiled/admitted. Own handles, never reopen a PID.
+// Control uses original handles; known-job identity observations open query-only handles, never PID control.
 public static class WindowsRecoveryJob {
     const uint Suspended=4, NoWindow=0x08000000, UnicodeEnv=0x400, Extended=0x80000;
     const uint KillOnClose=0x2000, ActiveLimit=8, ProcessMemory=0x100, JobMemory=0x200;
@@ -27,6 +27,8 @@ public static class WindowsRecoveryJob {
         public uint RootExitCode, TotalProcesses, ActiveProcesses;
         public uint OriginalCorrelationPid;
         public long ElapsedMs, OutputBytes; public List<Birth> Births=new List<Birth>();
+        public List<Identity> Identities=new List<Identity>();
+        public List<ImagePin> ControlImages=new List<ImagePin>();
     }
     [StructLayout(LayoutKind.Sequential)] struct Security {
         public int Length; public IntPtr Descriptor; public int Inherit;
@@ -87,15 +89,254 @@ public static class WindowsRecoveryJob {
             text.Append('\\',c=='\"'?slashes*2+1:slashes); text.Append(c); slashes=0; }
         text.Append('\\',slashes*2); return text.Append('"').ToString();
     }
+    // Diagnostic identity observations never provide process control authority.
+    public sealed class Identity {
+        public long ObservedMs, CorrelationPid, CreationFiletimeUtc;
+        public string CreationUtc, ImagePath, SnapshotName, Status, SnapshotStatus;
+        public uint? ParentCorrelationPid;
+        public string ParentSnapshotName;
+        public uint QueryAccess = 0x1000;
+        public string ImageCanonicalPath, ImageSha256; public long ImageBytes;
+        public bool ImagePinnedThroughoutControl;
+        public bool MembershipBefore, MembershipAfter;
+    }
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    struct ProcessEntry {
+        public uint Size, Usage, Pid; public UIntPtr DefaultHeap;
+        public uint Module, Threads, ParentPid; public int Priority;
+        public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string Name;
+    }
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode, ExactSpelling=true)]
+    static extern bool QueryFullProcessImageNameW(IntPtr process,uint flags,StringBuilder path,ref uint size);
+    [DllImport("kernel32.dll", EntryPoint="QueryInformationJobObject", SetLastError=true)]
+    static extern bool QueryJobProcessList(IntPtr job,int kind,IntPtr buffer,uint size,out uint returned);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool GetProcessTimes(IntPtr process,out long created,out long exited,out long kernel,out long user);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode, ExactSpelling=true)]
+    static extern bool Process32FirstW(IntPtr snapshot,ref ProcessEntry entry);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode, ExactSpelling=true)]
+    static extern bool Process32NextW(IntPtr snapshot,ref ProcessEntry entry);
+
+    static void ObserveKnownJobIdentities(IntPtr job,Receipt result,Stopwatch clock,
+        HashSet<string> completed,Action<string> fail,ControlFiles controlFiles) {
+        IntPtr list=IntPtr.Zero,snapshot=IntPtr.Zero;
+        try {
+            // The existing active cap is16. Never grow this buffer or widen the job.
+            int bytes=8+16*IntPtr.Size; list=Marshal.AllocHGlobal(bytes); uint needed;
+            Check(QueryJobProcessList(job,3,list,(uint)bytes,out needed),"read owned job live list");
+            uint assigned=unchecked((uint)Marshal.ReadInt32(list,0));
+            uint count=unchecked((uint)Marshal.ReadInt32(list,4));
+            if(count>16 || count!=assigned)throw new InvalidOperationException("Incomplete owned job identity list");
+            var ids=new List<uint>();
+            for(int i=0;i<count;i++)ids.Add(checked((uint)Marshal.ReadInt64(list,8+i*IntPtr.Size)));
+            var parents=new Dictionary<uint,ProcessEntry>(); string snapshotStatus="not-needed";
+            if(ids.Count>0) {
+                snapshot=CreateToolhelp32Snapshot(2,0);
+                if(snapshot==new IntPtr(-1)){snapshot=IntPtr.Zero;snapshotStatus="snapshot-unavailable-"+Marshal.GetLastWin32Error();}
+                else {
+                    snapshotStatus="read"; var entry=new ProcessEntry {Size=(uint)Marshal.SizeOf(typeof(ProcessEntry))};
+                    bool available=Process32FirstW(snapshot,ref entry); int entries=0;
+                    while(available) {
+                        if(++entries>4096)throw new InvalidOperationException("Diagnostic snapshot record budget");
+                        // Only retain entries for known membership and their parent correlations.
+                        if(ids.Contains(entry.Pid))parents[entry.Pid]=entry;
+                        available=Process32NextW(snapshot,ref entry);
+                    }
+                    if(Marshal.GetLastWin32Error()!=18)snapshotStatus="snapshot-terminal-unavailable-"+Marshal.GetLastWin32Error();
+                }
+            }
+            foreach(uint pid in ids) {
+                IntPtr query=IntPtr.Zero;
+                var observation=new Identity {ObservedMs=clock.ElapsedMilliseconds,CorrelationPid=pid,SnapshotStatus=snapshotStatus};
+                try {
+                    // Query-only handle: no TERMINATE, VM, DUP, suspend or write access.
+                    query=OpenProcess(0x1000,false,pid);
+                    if(query==IntPtr.Zero) {observation.Status="query-unavailable-"+Marshal.GetLastWin32Error();}
+                    else {
+                        bool inJob;
+                        Check(IsProcessInJob(query,job,out inJob),"read query handle membership");
+                        observation.MembershipBefore=inJob;
+                        if(!inJob)observation.Status="membership-race-not-owned";
+                        else {
+                            long created,exited,kernel,user;
+                            Check(GetProcessTimes(query,out created,out exited,out kernel,out user),"read known member creation time");
+                            observation.CreationFiletimeUtc=created;
+                            observation.CreationUtc=DateTime.FromFileTimeUtc(created).ToString("o");
+                            string key=pid+":"+created;
+                            if(completed.Contains(key))continue;
+                            var path=new StringBuilder(32768); uint length=32768;
+                            Check(QueryFullProcessImageNameW(query,0,path,ref length),"read known member image path");
+                            observation.ImagePath=path.ToString();
+                            Check(IsProcessInJob(query,job,out inJob),"recheck query handle membership");
+                            observation.MembershipAfter=inJob;
+                            observation.Status=inJob?"known-owned-member-identity":"membership-ended-during-query";
+                            ProcessEntry entry;
+                            if(parents.TryGetValue(pid,out entry)) {
+                                observation.SnapshotName=entry.Name;
+                                observation.ParentCorrelationPid=entry.ParentPid;
+                                ProcessEntry parent;
+                                if(parents.TryGetValue(entry.ParentPid,out parent))observation.ParentSnapshotName=parent.Name;
+                            }
+                            if(inJob) {AttributeControlImage(observation,controlFiles);completed.Add(key);}
+                        }
+                    }
+                } catch(Exception error) {observation.Status="identity-unavailable-"+error.GetType().Name;}
+                finally {if(query!=IntPtr.Zero)CloseHandle(query);}
+                if(result.Identities.Count>=64) {fail("diagnostic-identity-record-budget");return;}
+                result.Identities.Add(observation);
+            }
+        } catch(Exception error) {fail("diagnostic-identity-observer-"+error.GetType().Name);}
+        finally {if(snapshot!=IntPtr.Zero)CloseHandle(snapshot);if(list!=IntPtr.Zero)Marshal.FreeHGlobal(list);}
+    }
+
+    public sealed class ImagePin {
+        public string Path, CanonicalPath, Sha256;
+        public long Bytes;
+    }
+    public sealed class NaturalRoles {
+        public int NodeRoles, ConsoleHelpers, AccountedBirths;
+        public List<Identity> Identities=new List<Identity>();
+    }
+    sealed class ControlFiles : IDisposable {
+        public FileStream NodeStream, ConsoleStream;
+        public ImagePin Node, Console;
+        public void Dispose() {
+            if(ConsoleStream!=null)ConsoleStream.Dispose();
+            if(NodeStream!=null)NodeStream.Dispose();
+        }
+    }
+    [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode,ExactSpelling=true)]
+    static extern uint GetFinalPathNameByHandleW(IntPtr file,StringBuilder path,uint size,uint flags);
+    static string CanonicalFile(FileStream stream) {
+        var text=new StringBuilder(32768);
+        uint size=GetFinalPathNameByHandleW(stream.SafeFileHandle.DangerousGetHandle(),text,32768,0);
+        Check(size>0 && size<32768,"read pinned file canonical path");
+        string path=text.ToString();
+        if(path.StartsWith("\\\\?\\UNC\\",StringComparison.OrdinalIgnoreCase))path="\\\\"+path.Substring(8);
+        else if(path.StartsWith("\\\\?\\",StringComparison.Ordinal))path=path.Substring(4);
+        return System.IO.Path.GetFullPath(path);
+    }
+    static ImagePin CheckImage(FileStream stream,string path,long bytes,string digest) {
+        string expected=System.IO.Path.GetFullPath(path);
+        if((File.GetAttributes(expected)&FileAttributes.ReparsePoint)!=0 || stream.Length!=bytes)
+            throw new InvalidOperationException("Pinned executable shape changed");
+        string canonical=CanonicalFile(stream);
+        if(!String.Equals(expected,canonical,StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Pinned executable canonical path changed");
+        string actual;
+        using(var hash=System.Security.Cryptography.SHA256.Create()) {
+            actual=BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","").ToLowerInvariant();
+        }
+        stream.Position=0;
+        if(actual!=digest)throw new InvalidOperationException("Pinned executable bytes changed");
+        return new ImagePin {Path=expected,CanonicalPath=canonical,Bytes=bytes,Sha256=actual};
+    }
+    static ControlFiles OpenControlFiles(string node) {
+        var files=new ControlFiles();
+        try {
+            files.NodeStream=new FileStream(System.IO.Path.GetFullPath(node),FileMode.Open,FileAccess.Read,FileShare.Read);
+            files.Node=CheckImage(files.NodeStream,node,86973768,"9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e");
+            string console=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe");
+            if(!String.Equals(System.IO.Path.GetFullPath(console),@"C:\Windows\System32\conhost.exe",StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Exact current System32 console host required");
+            files.ConsoleStream=new FileStream(console,FileMode.Open,FileAccess.Read,FileShare.Read);
+            files.Console=CheckImage(files.ConsoleStream,console,867840,"b02ee54fb2ec69673386d41119ee8ed083a6eab3bfca6aa2155d20ce68ef8963");
+            return files;
+        } catch { files.Dispose();throw; }
+    }
+    public static ImagePin[] VerifyControlImagePins(string node) {
+        using(var files=OpenControlFiles(node))return new[]{files.Node,files.Console};
+    }
+    static void AttributeControlImage(Identity identity,ControlFiles files) {
+        if(files==null)return; // Ordinary Run retains generic query-only observations.
+        string image=System.IO.Path.GetFullPath(identity.ImagePath);
+        ImagePin pin=String.Equals(image,files.Node.CanonicalPath,StringComparison.OrdinalIgnoreCase)?files.Node:
+            String.Equals(image,files.Console.CanonicalPath,StringComparison.OrdinalIgnoreCase)?files.Console:null;
+        if(pin==null) {identity.Status="unrecognized-control-image";return;}
+        identity.ImageCanonicalPath=pin.CanonicalPath;
+        identity.ImageBytes=pin.Bytes;identity.ImageSha256=pin.Sha256;
+        identity.ImagePinnedThroughoutControl=true;
+    }
+    public static NaturalRoles ValidateNaturalRoles(Receipt receipt) {
+        return ValidateRoles(receipt,2,true);
+    }
+    public static NaturalRoles ValidateControlRoles(Receipt receipt,int expectedNodeRoles) {
+        if(expectedNodeRoles<1 || expectedNodeRoles>2)throw new ArgumentException("Original control Node-role budget only");
+        return ValidateRoles(receipt,expectedNodeRoles,false);
+    }
+    static NaturalRoles ValidateRoles(Receipt receipt,int expectedNodeRoles,bool natural) {
+        if(receipt.ControlImages.Count!=2 || receipt.TotalProcesses!=receipt.Births.Count || receipt.ActiveProcesses!=0
+            || receipt.Births.Count>expectedNodeRoles*2)
+            throw new InvalidOperationException("Natural role full accounting refused");
+        ImagePin node=receipt.ControlImages[0],console=receipt.ControlImages[1];
+        var roles=new NaturalRoles();var birthPids=new HashSet<long>();
+        var nodes=new Dictionary<long,Identity>();var helpers=new List<Identity>();
+        foreach(Birth birth in receipt.Births) {
+            if(!birthPids.Add(birth.CorrelationPid) || !birth.TerminalMs.HasValue
+                || (birth.TerminalMessage!=7 && birth.TerminalMessage!=8) || (natural && birth.TerminalMessage!=7))
+                throw new InvalidOperationException("Natural role birth/terminal identity refused");
+            Identity positive=null;
+            foreach(Identity item in receipt.Identities) {
+                if(item.CorrelationPid!=birth.CorrelationPid || item.Status!="known-owned-member-identity"
+                    || !item.MembershipBefore || !item.MembershipAfter || item.QueryAccess!=0x1000
+                    || item.CreationFiletimeUtc<=0 || !item.ImagePinnedThroughoutControl || item.SnapshotStatus!="read")continue;
+                if(positive!=null)throw new InvalidOperationException("Ambiguous natural birth identity");
+                positive=item;
+            }
+            // A missing or race-only observation never qualifies a process role.
+            if(positive==null)throw new InvalidOperationException("Natural birth identity missing or unrecognized");
+            ImagePin pin=null;
+            if(String.Equals(positive.ImageCanonicalPath,node.CanonicalPath,StringComparison.OrdinalIgnoreCase))pin=node;
+            else if(String.Equals(positive.ImageCanonicalPath,console.CanonicalPath,StringComparison.OrdinalIgnoreCase))pin=console;
+            if(pin==null || positive.ImageBytes!=pin.Bytes || positive.ImageSha256!=pin.Sha256
+                || !String.Equals(System.IO.Path.GetFullPath(positive.ImagePath),pin.CanonicalPath,StringComparison.OrdinalIgnoreCase)
+                || !String.Equals(positive.SnapshotName,System.IO.Path.GetFileName(pin.CanonicalPath),StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Natural executable role pin refused");
+            if(pin==node)nodes.Add(birth.CorrelationPid,positive);else helpers.Add(positive);
+            roles.Identities.Add(positive);roles.AccountedBirths++;
+        }
+        Identity root;
+        if(nodes.Count!=expectedNodeRoles || !nodes.TryGetValue(receipt.OriginalCorrelationPid,out root))
+            throw new InvalidOperationException("Exact original control Node roles required");
+        foreach(var pair in nodes) {
+            Identity child=pair.Value;
+            if(pair.Key==receipt.OriginalCorrelationPid)continue;
+            if(child.ParentCorrelationPid!=receipt.OriginalCorrelationPid || child.CreationFiletimeUtc<=root.CreationFiletimeUtc
+                || (child.ParentSnapshotName!=null && !String.Equals(child.ParentSnapshotName,System.IO.Path.GetFileName(node.CanonicalPath),StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Natural child Node parent role refused");
+        }
+        var helperParents=new HashSet<uint>();
+        foreach(Identity helper in helpers) {
+            Identity parent;
+            if(!helper.ParentCorrelationPid.HasValue || !helperParents.Add(helper.ParentCorrelationPid.Value)
+                || !nodes.TryGetValue(helper.ParentCorrelationPid.Value,out parent)
+                || helper.CreationFiletimeUtc<parent.CreationFiletimeUtc
+                || (helper.ParentSnapshotName!=null && !String.Equals(helper.ParentSnapshotName,System.IO.Path.GetFileName(node.CanonicalPath),StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Console helper positive parent attribution refused");
+        }
+        if(helpers.Count>expectedNodeRoles || roles.AccountedBirths!=receipt.Births.Count)
+            throw new InvalidOperationException("Natural console helper budget/full accounting refused");
+        roles.NodeRoles=nodes.Count;roles.ConsoleHelpers=helpers.Count;
+        return roles;
+    }
+
     public static Receipt Run(string exe,string[] args,string cwd,string environment,string outputDirectory) {
         return RunBounded(exe,args,cwd,environment,outputDirectory,1860000);
     }
     public static Receipt Qualify(string exe,string[] args,string cwd,string environment,string outputDirectory,int deadlineMs) {
         if(deadlineMs<1 || deadlineMs>10000)throw new ArgumentException("Qualification window must be at most10sec");
-        return RunBounded(exe,args,cwd,environment,outputDirectory,deadlineMs);
+        using(var files=OpenControlFiles(exe))
+            return RunBounded(exe,args,cwd,environment,outputDirectory,deadlineMs,files);
     }
-    static Receipt RunBounded(string exe,string[] args,string cwd,string environment,string outputDirectory,int deadlineMs) {
+    static Receipt RunBounded(string exe,string[] args,string cwd,string environment,string outputDirectory,int deadlineMs,ControlFiles controlFiles=null) {
         var result=new Receipt(); var clock=Stopwatch.StartNew(); object gate=new object();
+        var identityCompleted=new HashSet<string>();
+        if(controlFiles!=null)result.ControlImages.AddRange(new[]{controlFiles.Node,controlFiles.Console});
         Action<string> fail=reason=>{lock(gate){if(result.Failure==null)result.Failure=reason;}};
         IntPtr job=IntPtr.Zero,port=IntPtr.Zero,outRead=IntPtr.Zero,outWrite=IntPtr.Zero;
         IntPtr errRead=IntPtr.Zero,errWrite=IntPtr.Zero,input=IntPtr.Zero,attributes=IntPtr.Zero,handles=IntPtr.Zero,jobList=IntPtr.Zero,env=IntPtr.Zero;
@@ -139,6 +380,9 @@ public static class WindowsRecoveryJob {
                 } } catch {fail("original-pipe-or-log-failed");}
             });
             outTask=capture(stdout,"driver.stdout.log",true);errTask=capture(stderr,"driver.stderr.log",false);
+            ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles);
+            ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles);
+            if(result.Failure!=null)throw new InvalidOperationException("Pre-resume identity observer refused");
             Check(ResumeThread(original.Thread)!=0xffffffff,"resume admitted runner"); resumed=true;
             long failedAt=-1,rootExitAt=-1;
             while(true) {
@@ -157,6 +401,7 @@ public static class WindowsRecoveryJob {
                     } else if(message==4) result.ActiveZeroObserved=true;
                     else fail("unexpected-job-policy-notification-"+message);
                 } else if(Marshal.GetLastWin32Error()!=258)fail("completion-port-read-failed");
+                ObserveKnownJobIdentities(job,result,clock,identityCompleted,fail,controlFiles);
                 Accounting census=Sample(job);result.TotalProcesses=census.Total;result.ActiveProcesses=census.Active;
                 if(census.Total>16)fail("total-birth-budget-exceeded");
                 uint wait=WaitForSingleObject(original.Process,0);
