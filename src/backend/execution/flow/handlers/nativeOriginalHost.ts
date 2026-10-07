@@ -1,4 +1,4 @@
-import { constants, promises as fs } from 'node:fs';
+import { constants, promises as fs, fstatSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Flow } from '@/shared/types/flow';
@@ -94,7 +94,33 @@ async function readLedger(binding: Binding): Promise<Ledger> {
   } finally { await handle.close(); }
 }
 
-async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>): Promise<T> {
+type CommitCapability = { assertCurrent: () => Promise<void>; assertActive: () => void };
+
+function cleanupOwnedTemporary(binding: Binding, temporary: string, fd: number,
+  directoryIdentity: { dev: bigint; ino: bigint }): void {
+  try {
+    const base = getWorkspaceDataDir(binding.workspace);
+    const directory = path.dirname(temporary);
+    const normalize = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+    for (const part of [base, path.join(base, 'db'), path.dirname(directory), directory]) {
+      const stat = lstatSync(part);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(realpathSync(part)) !== normalize(part)) return;
+    }
+    const parent = lstatSync(directory, { bigint: true });
+    if (parent.dev !== directoryIdentity.dev || parent.ino !== directoryIdentity.ino) return;
+    const owned = fstatSync(fd, { bigint: true });
+    const current = lstatSync(temporary, { bigint: true });
+    if (!owned.isFile() || !current.isFile() || current.isSymbolicLink()
+      || owned.nlink !== BigInt(1) || current.nlink !== BigInt(1) || !privateOwner(owned) || !privateOwner(current)
+      || current.dev !== owned.dev || current.ino !== owned.ino) return;
+    // No awaited operation separates the last path/FD comparison and unlink.
+    // The workspace lock covers cooperating writers; this is not an OS-wide
+    // conditional unlink guarantee against arbitrary external writers.
+    unlinkSync(temporary);
+  } catch { /* Refusal remains primary; foreign or uncertain paths are retained. */ }
+}
+
+async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>, cap: CommitCapability): Promise<T> {
   return withWorkspaceMutation(() => withWorkspaceRuntimeLock(`native-original-${nativeDigest([binding.personaId, binding.goalId]).slice(0, 32)}`, async lock => {
     const directory = path.dirname(ledgerFile(binding));
     // Admit each private directory separately before following the next segment.
@@ -118,32 +144,40 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>)
     await lock.assertOwned();
     const temporary = `${ledgerFile(binding)}.${randomUUID()}.tmp`;
     const handle = await fs.open(temporary, 'wx', 0o600);
-    let temporaryIdentity;
+    let committed = false;
     try {
       await handle.writeFile(bytes); await handle.sync();
-      temporaryIdentity = await handle.stat({ bigint: true });
-    } finally { await handle.close(); }
-    await lock.assertOwned();
-    await assertDirectories(binding);
-    const currentDirectory = await fs.lstat(directory, { bigint: true });
-    if (currentDirectory.dev !== directoryIdentity.dev || currentDirectory.ino !== directoryIdentity.ino) return held();
-    const currentFile = await fs.lstat(ledgerFile(binding), { bigint: true }).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
-    });
-    if (Boolean(fileIdentity) !== Boolean(currentFile) || (fileIdentity && currentFile
-      && (fileIdentity.dev !== currentFile.dev || fileIdentity.ino !== currentFile.ino
-        || fileIdentity.mtimeNs !== currentFile.mtimeNs || fileIdentity.ctimeNs !== currentFile.ctimeNs))) return held();
-    const currentTemporary = await fs.lstat(temporary, { bigint: true });
-    if (!currentTemporary.isFile() || currentTemporary.isSymbolicLink() || currentTemporary.nlink !== BigInt(1)
-      || currentTemporary.dev !== temporaryIdentity.dev || currentTemporary.ino !== temporaryIdentity.ino
-      || currentTemporary.size !== BigInt(bytes.length) || !privateOwner(currentTemporary)) return held();
-    await fs.rename(temporary, ledgerFile(binding));
-    if (process.platform !== 'win32') {
-      const parent = await fs.open(directory, 'r');
-      try { await parent.sync(); } finally { await parent.close(); }
+      const temporaryIdentity = await handle.stat({ bigint: true });
+      await assertDirectories(binding);
+      const currentDirectory = await fs.lstat(directory, { bigint: true });
+      if (currentDirectory.dev !== directoryIdentity.dev || currentDirectory.ino !== directoryIdentity.ino) return held();
+      const currentFile = await fs.lstat(ledgerFile(binding), { bigint: true }).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (Boolean(fileIdentity) !== Boolean(currentFile) || (fileIdentity && currentFile
+        && (fileIdentity.dev !== currentFile.dev || fileIdentity.ino !== currentFile.ino
+          || fileIdentity.mtimeNs !== currentFile.mtimeNs || fileIdentity.ctimeNs !== currentFile.ctimeNs))) return held();
+      const currentTemporary = await fs.lstat(temporary, { bigint: true });
+      if (!currentTemporary.isFile() || currentTemporary.isSymbolicLink() || currentTemporary.nlink !== BigInt(1)
+        || currentTemporary.dev !== temporaryIdentity.dev || currentTemporary.ino !== temporaryIdentity.ino
+        || currentTemporary.size !== BigInt(bytes.length) || !privateOwner(currentTemporary)) return held();
+      await cap.assertCurrent();
+      await lock.assertOwned();
+      cap.assertActive();
+      // The final owner check is adjacent to rename; all awaited path checks are
+      // complete. Launch mutations also retain the outer Persona lease commit.
+      await fs.rename(temporary, ledgerFile(binding));
+      committed = true;
+      if (process.platform !== 'win32') {
+        const parent = await fs.open(directory, 'r');
+        try { await parent.sync(); } finally { await parent.close(); }
+      }
+      return result;
+    } finally {
+      if (!committed) cleanupOwnedTemporary(binding, temporary, handle.fd, directoryIdentity);
+      await handle.close();
     }
-    return result;
   }), binding.workspace);
 }
 
@@ -224,13 +258,22 @@ export async function createPersonaNativeOriginalHost(input: {
     provider: value?.provider, maxTurns: value?.maxTurns, temperature: value?.temperature,
     reasoningEffort: value?.reasoningEffort, fallbackPolicy: value?.fallbackPolicy });
   const modelPlanDigest = nativeDigest(modelPlan(model));
-  const assertCurrent = async () => {
-    authority.signal.throwIfAborted(); await authority.assertCurrent(); authority.signal.throwIfAborted();
+  const assertGoalCurrent = async () => {
+    authority.signal.throwIfAborted();
     const goal = await getPersonaWorkItem(binding.personaId, binding.goalId);
     if (!goal?.goal || goal.goal.state !== 'active' || goal.goal.rounds !== binding.round
       || goal.goal.pendingDispatchId !== binding.dispatchId) return held();
     authority.signal.throwIfAborted();
   };
+  const assertCurrent = async () => {
+    authority.signal.throwIfAborted(); await authority.assertCurrent(); await assertGoalCurrent();
+  };
+  // Every launch-cap mutation runs inside real commitWhileCurrent, which holds
+  // the Persona lease lock across this callback. Its contract forbids acquiring
+  // that same lock recursively. Re-read goal state and signal under the held
+  // lease, then revalidate ledger ownership adjacent to the rename.
+  const launchCap: CommitCapability = { assertCurrent: assertGoalCurrent,
+    assertActive: () => authority.signal.throwIfAborted() };
   await assertCurrent();
   const broker = createNativeBrokerAuthority(binding.leaseEpoch, assertCurrent);
   const root = createNativeLineageRootBinding({ workspace: binding.workspace, fleetRunId: binding.dispatchId,
@@ -240,13 +283,13 @@ export async function createPersonaNativeOriginalHost(input: {
   let child: ClaudeOwnedProcessRegistration | undefined;
   let exited = false;
   let closed = false;
-  const update = async (task: (reservation: Reservation) => Promise<void>) => {
+  const update = async (task: (reservation: Reservation) => Promise<void>, cap = launchCap) => {
     if (!original) return held();
     return mutate(binding, async ledger => {
       const reservation = ledger.reservations.find(item => item.invocationId === original!.descriptor.receipt.invocationId);
       if (!reservation || reservation.descriptorDigest !== nativeDigest(original!.descriptor)) return held();
       await task(reservation);
-    });
+    }, cap);
   };
   const session = createNativeInvocationSessionHook({ root,
     publish: async value => {
@@ -269,7 +312,7 @@ export async function createPersonaNativeOriginalHost(input: {
           ledger.reservations.push({ invocationId: descriptor.receipt.invocationId,
             descriptorDigest: nativeDigest(descriptor), owner: structuredClone(owner), lineageDigest: descriptor.lineage.digest,
             acceptanceDigest, planDigest: nativeDigest([binding.planDigest, modelPlanDigest]), modelId: input.modelId, maxTurns, state: 'accepted' });
-        });
+        }, launchCap);
       });
       original = value;
       authority.signal.addEventListener('abort', () => value.cancel(), { once: true });
@@ -337,18 +380,20 @@ export async function createPersonaNativeOriginalHost(input: {
         if (reservation.exit && nativeDigest(reservation.exit) !== nativeDigest(exit)) return held();
         reservation.exit = exit;
         if (reservation.state !== 'released') reservation.state = 'exited';
-      });
+      }, { assertCurrent: async () => { if (!original || !child || !exited || !closed) return held(); },
+        assertActive: () => { if (!original || !child || !exited || !closed) return held(); } });
     },
     releaseAfterTerminal: async () => {
       if (!original || !exited || !closed) return held();
       const value = original;
       const terminal = await value.waitTerminal();
       if (terminal.state !== 'terminal') return held();
-      await readSavedNativeTerminal({ invocationId: value.descriptor.receipt.invocationId,
+      const terminalCap = async () => { await readSavedNativeTerminal({ invocationId: value.descriptor.receipt.invocationId,
         expectedOwner: value.descriptor.receipt.owner, expectedLineageDigest: value.descriptor.lineage.digest,
         expectedDescriptorDigest: nativeDigest(value.descriptor), expectedWorkspace: binding.workspace,
-        assertReadAuthorized: async () => { if (value !== original || !exited || !closed) return held(); } });
-      await update(async reservation => { if (reservation.sdkOutcome !== 'completed') return held(); reservation.state = 'released'; });
+        assertReadAuthorized: async () => { if (value !== original || !exited || !closed) return held(); } }); };
+      await update(async reservation => { if (reservation.sdkOutcome !== 'completed') return held(); reservation.state = 'released'; },
+        { assertCurrent: terminalCap, assertActive: () => { if (value !== original || !exited || !closed) return held(); } });
     },
   };
   hosts.add(processHost);

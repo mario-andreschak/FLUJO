@@ -284,6 +284,8 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(replaced).toBe(true);
         expect(queryMock).not.toHaveBeenCalled();
         expect(await fs.readFile(sentinel, 'utf8')).toBe('{"external":"unchanged"}');
+        const folder = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger');
+        expect((await fs.readdir(folder)).filter(file => file.endsWith('.tmp'))).toEqual([]);
       } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
   }, 30000);
@@ -302,6 +304,59 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await fresh.invoke()).success).toBe(false);
         expect(queryMock).toHaveBeenCalledTimes(1);
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
+    });
+  }, 30000);
+
+  it('rechecks actual ledger lock ownership after the last awaited temp check and removes only its own refused temp', async () => {
+    await withClaim(async input => {
+      const { invoke, state } = await prepare(input);
+      const lstat = fs.lstat.bind(fs);
+      let revoked = false;
+      const spy = jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        const stat = await lstat(...args);
+        if (!revoked && String(args[0]).includes('host-ledger') && String(args[0]).endsWith('.tmp')) {
+          const root = path.join(getWorkspaceDataDir(), 'db', '.runtime-locks', 'enduring-agents');
+          const owned = (await fs.readdir(root)).find(file => file.startsWith('.native-original-') && file.endsWith('.lock'))!;
+          await fs.unlink(path.join(root, owned));
+          revoked = true;
+        }
+        return stat;
+      });
+      try {
+        expect((await invoke()).success).toBe(false);
+        expect(revoked).toBe(true);
+        expect(queryMock).not.toHaveBeenCalled();
+        const folder = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger');
+        expect(await fs.readdir(folder)).toEqual([]);
+      } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
+    });
+  }, 30000);
+
+  it('refuses late goal revocation and preserves a foreign replacement of the checked temporary path', async () => {
+    await withClaim(async (input, goalId) => {
+      const { invoke, state } = await prepare(input);
+      const lstat = fs.lstat.bind(fs);
+      let foreignPath: string | undefined;
+      const spy = jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        const stat = await lstat(...args);
+        const target = String(args[0]);
+        if (!foreignPath && target.includes('host-ledger') && target.endsWith('.tmp')) {
+          foreignPath = target;
+          await fs.rename(target, `${target}.displaced`);
+          await fs.writeFile(target, 'foreign replacement');
+          const root = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+          await savePersonaWorkItem({ ...root, goal: { ...root.goal!, state: 'paused' }, updatedAt: Date.now() });
+        }
+        return stat;
+      });
+      try {
+        expect((await invoke()).success).toBe(false);
+        expect(foreignPath).toBeDefined();
+        expect(queryMock).not.toHaveBeenCalled();
+        expect(await fs.readFile(foreignPath!, 'utf8')).toBe('foreign replacement');
+        const folder = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger');
+        expect((await fs.readdir(folder)).filter(file => file.endsWith('.json'))).toEqual([]);
+      } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
   }, 30000);
 });
