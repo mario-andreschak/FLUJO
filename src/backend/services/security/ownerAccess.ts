@@ -1,11 +1,11 @@
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import path from 'node:path';
 import {
-  authenticateOwnerBearer, ownerHasScopes, ownerPolicySchema, type OwnerScope, type OwnerPolicy, type OwnerPrincipal,
+  authenticateOwnerBearer, ownerHasScopes, type OwnerScope, type OwnerPolicy, type OwnerPrincipal,
 } from './ownerCredentials';
+import { ownerPolicyRevision as revision, readOwnerPolicy } from './ownerPolicy';
+import { ownerBrowserRequestAllowed, resolveOwnerSession, type OwnerSessionPrincipal } from './ownerSession';
+import { getExposureMode } from '../../../utils/http/exposureMode';
 
-export const MAX_OWNER_POLICY_BYTES = 64 * 1024;
+export { MAX_OWNER_POLICY_BYTES } from './ownerPolicy';
 
 /** These handlers already enforce the dedicated snapshot bearer, independently. */
 const SNAPSHOT_METHODS: Readonly<Record<string, string>> = {
@@ -21,6 +21,10 @@ function normalizePath(pathname: string): string {
 /** Protocol exceptions are narrower than the historical Origin allowlist. */
 export function isOwnerProtocolException(request: Request): boolean {
   const pathname = normalizePath(new URL(request.url).pathname);
+  // Logout may clear an expired/revoked cookie, but remains exact-origin/CSRF guarded.
+  if (pathname === '/api/owner/session' && request.method === 'DELETE') {
+    return ownerBrowserRequestAllowed(request, true);
+  }
   return (pathname === '/api/oauth/callback' && ['GET', 'POST'].includes(request.method))
     || (pathname === '/api/registry/oauth/callback' && request.method === 'GET')
     || (request.method === 'POST' && /^\/api\/webhooks\/[^/]+$/.test(pathname))
@@ -62,29 +66,6 @@ export function assertRemoteAvatarVoiceOrigin(request: Request): Response | null
   return request.headers.get('origin') === configured ? null : forbidden();
 }
 
-function readOwnerPolicy(filename: string): OwnerPolicy {
-  if (!path.isAbsolute(filename)) throw new Error('Invalid owner policy path');
-  const fd = openSync(filename, 'r');
-  try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_OWNER_POLICY_BYTES
-        || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) {
-      throw new Error('Invalid owner policy file');
-    }
-    const bytes = Buffer.alloc(MAX_OWNER_POLICY_BYTES + 1);
-    let length = 0;
-    while (length < bytes.length) {
-      const count = readSync(fd, bytes, length, bytes.length - length, null);
-      if (count === 0) break;
-      length += count;
-    }
-    if (length > MAX_OWNER_POLICY_BYTES) throw new Error('Owner policy too large');
-    return ownerPolicySchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')));
-  } finally {
-    closeSync(fd);
-  }
-}
-
 export interface AuthenticatedOwnerPrincipal extends OwnerPrincipal {
   readonly policyRevision: string;
   readonly expiresAt: number;
@@ -116,13 +97,15 @@ function forbidden(): Response {
   return Response.json({ error: 'Forbidden' }, { status: 403, headers: { 'Cache-Control': 'no-store' } });
 }
 
-function revision(policy: OwnerPolicy): string {
-  return createHash('sha256').update(JSON.stringify(policy)).digest('hex');
-}
-
 function authorize(request: Request, policy: OwnerPolicy, filename: string,
-  scopes: readonly OwnerScope[], requireWorkspace: boolean, now: number): OwnerRequestResolution {
-  const authenticated = authenticateOwnerBearer(request, policy, now);
+  scopes: readonly OwnerScope[], requireWorkspace: boolean, now: number, requireBearer = false): OwnerRequestResolution {
+  let session: OwnerSessionPrincipal | null = null;
+  try {
+    if (!requireBearer && !request.headers.has('authorization') && !scopes.includes('avatar:voice')) {
+      session = resolveOwnerSession(request, policy, filename, now);
+    }
+  } catch { return { ok: false, response: unavailable() }; }
+  const authenticated = session?.principal ?? authenticateOwnerBearer(request, policy, now);
   if (!authenticated) return { ok: false, response: unauthorized() };
   if (!ownerHasScopes(authenticated, scopes) || (requireWorkspace && !authenticated.workspaceId)) {
     return { ok: false, response: forbidden() };
@@ -130,7 +113,7 @@ function authorize(request: Request, policy: OwnerPolicy, filename: string,
   const record = policy.credentials.find(value => value.id === authenticated.credentialId)!;
   const credentialDigest = record.digest;
   const principal: AuthenticatedOwnerPrincipal = Object.freeze({ ...authenticated,
-    policyRevision: revision(policy), expiresAt: record.expiresAt });
+    policyRevision: revision(policy), expiresAt: Math.min(record.expiresAt, session?.expiresAt ?? record.expiresAt) });
   const authorization: OwnerRequestAuthorization = Object.freeze({ principal, recheck: (at = Date.now()) => {
     // A policy path/configuration switch revokes existing witnesses as well.
     const configured = process.env.FLUJO_OWNER_AUTH_FILE;
@@ -143,6 +126,8 @@ function authorize(request: Request, policy: OwnerPolicy, filename: string,
     if (!active || active.digest !== credentialDigest || active.revokedAt !== null
         || active.issuedAt > at || active.expiresAt <= at
         || active.workspaceId !== principal.workspaceId) return unauthorized();
+    try { if (session && !session.recheck(current, at)) return unauthorized(); }
+    catch { return unavailable(); }
     return ownerHasScopes(principal, scopes) ? null : forbidden();
   } });
   return { ok: true, authorization };
@@ -155,21 +140,21 @@ function authorize(request: Request, policy: OwnerPolicy, filename: string,
  * validate workspace existence, allowed Origin, and its own provider/effect fences.
  */
 export function resolveOwnerRequest(request: Request, scopes: readonly OwnerScope[] = requiredOwnerScopes(request),
-  options: { requireWorkspace?: boolean; now?: number } = {}): OwnerRequestResolution {
+  options: { requireWorkspace?: boolean; requireBearer?: boolean; now?: number } = {}): OwnerRequestResolution {
   const configured = process.env.FLUJO_OWNER_AUTH_FILE;
   if (configured === undefined) return { ok: false, response: unavailable() };
   const filename = configured.trim();
   let policy: OwnerPolicy;
   try { policy = readOwnerPolicy(filename); } catch { return { ok: false, response: unavailable() }; }
   return authorize(request, policy, filename, [...scopes], options.requireWorkspace === true || scopes.includes('avatar:voice'),
-    options.now ?? Date.now());
+    options.now ?? Date.now(), options.requireBearer === true);
 }
 
 /** Re-read durable revocation on every request; never rely on proxy globals. */
 export function assertOwnerRequest(request: Request): Response | null {
   const configured = process.env.FLUJO_OWNER_AUTH_FILE;
   // Explicitly configured-but-empty is an error, not anonymous fallback.
-  if (configured === undefined) return null;
+  if (configured === undefined) return getExposureMode() === 'localhost' ? null : unavailable();
   let policy;
   try {
     policy = readOwnerPolicy(configured.trim());
