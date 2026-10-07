@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import FirstOwnerPairing from '@/frontend/components/FirstOwnerPairing';
 import { useRouter } from 'next/navigation';
 
@@ -9,16 +9,24 @@ export default function OwnerLoginPage() {
   const [token, setToken] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const requestRef = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  useEffect(() => () => { ++generation.current; requestRef.current?.abort(); }, []);
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (requestRef.current) return;
+    const request = new AbortController(); requestRef.current = request;
+    const captured = generation.current;
+    const current = () => captured === generation.current && !request.signal.aborted;
     setBusy(true);
     setMessage('');
     try {
       const response = await fetch('/api/owner/session', {
-        method: 'POST', credentials: 'same-origin',
+        method: 'POST', credentials: 'same-origin', signal: request.signal,
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!current()) return;
       if (response.ok) {
         let destination = '/';
         const returnTo = new URLSearchParams(window.location.search).get('returnTo');
@@ -34,17 +42,24 @@ export default function OwnerLoginPage() {
         ? 'This credential or browser origin is not authorized.'
         : response.status === 401 ? 'The credential is invalid, expired or revoked.'
           : 'Owner authentication is unavailable. Check the owner policy and browser origin configuration.');
-    } catch { setMessage('Could not reach owner authentication.'); }
-    finally { setToken(''); setBusy(false); }
+    } catch { if (current()) setMessage('Could not reach owner authentication.'); }
+    finally {
+      if (captured === generation.current) { setToken(''); setBusy(false); requestRef.current = null; }
+    }
   }
 
   async function logout() {
-    setBusy(true);
+    if (requestRef.current) return;
+    const request = new AbortController(); requestRef.current = request;
+    const captured = generation.current;
+    const current = () => captured === generation.current && !request.signal.aborted;
+    setToken(''); setBusy(true);
     try {
-      const response = await fetch('/api/owner/session', { method: 'DELETE', credentials: 'same-origin' });
+      const response = await fetch('/api/owner/session', { method: 'DELETE', credentials: 'same-origin', signal: request.signal });
+      if (!current()) return;
       setMessage(response.ok ? 'Signed out.' : 'Could not sign out.');
-    } catch { setMessage('Could not reach owner authentication.'); }
-    finally { setBusy(false); }
+    } catch { if (current()) setMessage('Could not reach owner authentication.'); }
+    finally { if (captured === generation.current) { setBusy(false); requestRef.current = null; } }
   }
 
   return <main className="mx-auto max-w-md p-8">
