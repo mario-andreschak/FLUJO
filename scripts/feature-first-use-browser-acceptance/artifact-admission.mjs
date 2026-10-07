@@ -3,8 +3,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 const expectedSource = {
-  head: '52e2c862d5ffec37d10c559e1815fdb743c0bd46',
-  tree: 'c189aa95dfe00b1798a3fc7347c1112062c60812',
+  head: 'ea592d62075bafbb70ddbe1eb76479f1572aff81',
+  tree: 'eca03ce7627ba31f155a37da89deaf3a99ad2835',
 };
 const digest = value => createHash('sha256').update(value).digest('hex');
 const fail = message => { throw new Error(`First-use artifact admission: ${message}`); };

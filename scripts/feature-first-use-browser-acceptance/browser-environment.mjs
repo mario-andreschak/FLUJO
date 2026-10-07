@@ -203,7 +203,15 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
     if (sandboxPort === selectedPort) throw new Error('Could not allocate distinct candidate and sandbox ports.');
     baseURL = `http://127.0.0.1:${selectedPort}`;
     appLog = createWriteStream(path.join(dataDir, 'application.log'));
-    child = fork(launcher, [String(selectedPort)], { cwd: candidate.applicationRoot,
+    const boundNode = candidate.recordedArtifactBinding.node;
+    const actualNode = await fs.realpath(process.execPath);
+    const expectedNode = await fs.realpath(boundNode.file);
+    const sameNode = process.platform === 'win32' ? actualNode.toLowerCase() === expectedNode.toLowerCase() : actualNode === expectedNode;
+    const actualNodeBytes = await fs.readFile(actualNode);
+    if (!sameNode || actualNodeBytes.length !== boundNode.bytes || sha256(actualNodeBytes) !== boundNode.sha256) {
+      throw new Error('Owned candidate Node executable changed before fork.');
+    }
+    child = fork(launcher, [String(selectedPort)], { execPath: actualNode, cwd: candidate.applicationRoot,
       env: fixtureRuntimeEnvironment({ dataDir, baseURL, fixtureUrl: fixture.url, sandboxPort }), silent: true, windowsHide: true });
     owned = observeOwnedCandidate(child);
     child.stdout.pipe(appLog, { end: false });

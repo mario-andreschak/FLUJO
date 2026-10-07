@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { admitFeatureBrowserArtifact } from './artifact-admission.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
-const source = { head: '52e2c862d5ffec37d10c559e1815fdb743c0bd46', tree: 'c189aa95dfe00b1798a3fc7347c1112062c60812' };
+const source = { head: 'ea592d62075bafbb70ddbe1eb76479f1572aff81', tree: 'eca03ce7627ba31f155a37da89deaf3a99ad2835' };
 const actualNodePin = fs.readFile(process.execPath).then(bytes => ({ file: process.execPath,
   bytes: bytes.length, sha256: sha(bytes), version: process.version }));
 async function metadataFixture(t) {
