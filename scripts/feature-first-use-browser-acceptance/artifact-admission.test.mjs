@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { admitFeatureBrowserArtifact } from './artifact-admission.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
-const source = { head: 'a4d9cc564cf021eb1857ab8e6618f07c05453354', tree: '9dfd90d61a944d2432bf159af215ea6d5d8eda84' };
+const source = { head: '52e2c862d5ffec37d10c559e1815fdb743c0bd46', tree: 'c189aa95dfe00b1798a3fc7347c1112062c60812' };
 const actualNodePin = fs.readFile(process.execPath).then(bytes => ({ file: process.execPath,
   bytes: bytes.length, sha256: sha(bytes), version: process.version }));
 async function metadataFixture(t) {
@@ -62,10 +62,10 @@ test('a wrong receipt digest is refused before any candidate is admitted', async
   const options = await fixture.seal();
   await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, { ...options, receiptSha256: '0'.repeat(64) }), /receipt digest mismatch/);
 });
-test('a different Source head cannot use the current published Source admission', async t => {
+test('a different Source head cannot use the exact producer Source admission', async t => {
   const fixture = await metadataFixture(t);
   fixture.receipt.source = { ...source, head: 'f'.repeat(40) };
-  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, await fixture.seal()), /current published Source/);
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, await fixture.seal()), /exact producer Source/);
 });
 test('runtime bytes changed after sealing are refused', async t => {
   const fixture = await metadataFixture(t); const options = await fixture.seal();

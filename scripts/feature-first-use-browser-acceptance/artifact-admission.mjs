@@ -3,8 +3,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 const expectedSource = {
-  head: 'a4d9cc564cf021eb1857ab8e6618f07c05453354',
-  tree: '9dfd90d61a944d2432bf159af215ea6d5d8eda84',
+  head: '52e2c862d5ffec37d10c559e1815fdb743c0bd46',
+  tree: 'c189aa95dfe00b1798a3fc7347c1112062c60812',
 };
 const digest = value => createHash('sha256').update(value).digest('hex');
 const fail = message => { throw new Error(`First-use artifact admission: ${message}`); };
@@ -29,7 +29,7 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
   if (!record(receipt) || receipt.schemaVersion !== 1 || receipt.state !== 'ROOT_BOUND_PRODUCTION_BROWSER_CANDIDATE'
     || receipt.source?.head !== expectedSource.head || receipt.source?.tree !== expectedSource.tree
     || receipt.buildProvenanceAcceptedByRoot !== true || receipt.completeRecordedRuntimeInventory !== true) {
-    fail('current published Source and reviewed actual build/inventory binding are required');
+    fail('exact producer Source and reviewed actual build/inventory binding are required');
   }
   if (!['original-current-hosted-production-package', 'owned-exact-source-package'].includes(receipt.origin)) {
     fail('unsupported candidate origin');
