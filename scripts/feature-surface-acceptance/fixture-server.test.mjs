@@ -33,6 +33,8 @@ async function receipt(connection) {
 }
 
 async function checkProtocol(connection) {
+  assert.deepEqual(connection.getServerCapabilities().extensions?.['io.modelcontextprotocol/ui'],
+    { mimeTypes: ['text/html;profile=mcp-app'] });
   const initial = await receipt(connection);
   assert.equal(initial.toolCalls, 0);
   const { tools, pageCount } = await collectPages(connection);
