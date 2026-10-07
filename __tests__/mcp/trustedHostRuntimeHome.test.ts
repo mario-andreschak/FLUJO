@@ -1,0 +1,34 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
+import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+
+describe('approved host runtime-home isolation', () => {
+  let approved: ReturnType<typeof installTrustedHostProfile>;
+  beforeEach(async () => {
+    approved = installTrustedHostProfile({ environment: { HOME: 'synthetic-original-home' } });
+    await ensureWorkspaceDirs();
+  });
+  afterEach(() => approved.restore());
+  const runtimeDirectory = () => path.join(getWorkspaceDataDir(), 'userdata', 'mcp-runtime',
+    createHash('sha256').update(approved.config.name).digest('hex').slice(0, 24));
+
+  it('honors the explicit runtime-home option for a genuinely approved host', () => {
+    expect(resolveStdioLaunch(approved.config, { isolateRuntimeHome: false }).env.HOME)
+      .toBe('synthetic-original-home');
+    const isolated = resolveStdioLaunch(approved.config, { isolateRuntimeHome: true });
+    expect(isolated.env.HOME).toBe(path.join(runtimeDirectory(), 'home'));
+    expect(isolated.env.USERPROFILE).toBe(isolated.env.HOME);
+    expect(isolated.env.XDG_CONFIG_HOME).toBe(path.join(isolated.env.HOME, '.config'));
+  });
+
+  it('refuses an occupied runtime anchor without replacing its bytes or falling back to the host home', () => {
+    fs.mkdirSync(path.dirname(runtimeDirectory()), { recursive: true });
+    fs.writeFileSync(runtimeDirectory(), 'occupied-runtime-anchor');
+    expect(() => resolveStdioLaunch(approved.config, { isolateRuntimeHome: true }))
+      .toThrow(expect.objectContaining({ code: 'UNSAFE_MCP_RUNTIME_DIRECTORY' }));
+    expect(fs.readFileSync(runtimeDirectory(), 'utf8')).toBe('occupied-runtime-anchor');
+  });
+});
