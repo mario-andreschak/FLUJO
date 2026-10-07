@@ -30,4 +30,6 @@ Transfers expire for import after 24 hours. Expiry does not erase an archive or 
 
 ## Validation boundary
 
+OAuth bundles use the runtime’s full SDK envelope parser and serializer. Export validates the source workspace and purpose; restore rebinds the complete SDK value to the recipient workspace, including unknown provider extensions and private JWKS. Older whole-envelope transfers created without source binding validation must be re-exported; legacy field-encrypted transfers remain readable.
+
 Source tests cover mixed v1/v2/plaintext conversion, wrong passphrase, tampering, expiry, interrupted staging/publication, collisions, corrupt source refusal, actual owner/Origin/confirmation/lock HTTP gates, and restore plus restart unlock in separate Node processes. These are source tests, not installed-artifact, human, or external acceptance. This feature does not implement resumable in-place migration of existing workspaces or change the trusted single-owner deployment contract.

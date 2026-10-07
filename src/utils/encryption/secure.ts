@@ -11,6 +11,8 @@ import {
   serializeKeyring, unwrapKeyring, unwrapLegacyKey, wrapKeyring,
   type EncryptionMetadata, type EncryptionType, type Keyring,
 } from './format';
+import { assertCredentialMigrationReady, isCredentialMigrationPending } from './credentialMigrationState';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { readOperatorSecret } from './operatorSecret';
 export { isValidEncryptionSessionKey } from './format';
 
@@ -67,6 +69,7 @@ async function readMetadata(): Promise<EncryptionMetadata | null> {
 
 async function persist(ring: Keyring, type: EncryptionType, password: string,
   protection?: EncryptionMetadata['key_protection'], fresh = false): Promise<EncryptionMetadata> {
+  await assertCredentialMigrationReady();
   const metadata = await wrapKeyring(ring, type, password, protection);
   if (fresh) {
     const final = path.join(getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
@@ -87,7 +90,16 @@ async function persist(ring: Keyring, type: EncryptionType, password: string,
   }
   // Atomic rename: no ciphertext is written under a new key until this succeeds.
   // Interrupted migration leaves either complete v1 or complete v2 metadata.
-  await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
+  await withWorkspaceMutation(async () => {
+    await assertCredentialMigrationReady();
+    const current = await readMetadata();
+    // A v1 upgrader admitted after bulk migration must not overwrite the newly
+    // committed v2 key with its independently generated random key.
+    if (current?.encryption_version === 2 && current.key_id !== keyId(ring)) {
+      throw new EncryptionLockedError('Encryption key changed; retry using current metadata');
+    }
+    await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
+  });
   return metadata;
 }
 
@@ -155,6 +167,7 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
 
 async function getKeys(passwordOrToken?: string, isToken = false, allowInitialize = false): Promise<Keyring | { legacyKey: string }> {
   return withMetadataLock(async () => {
+    if (await isCredentialMigrationPending()) throw new EncryptionLockedError('Credential migration is pending; resume or roll back it before unlocking');
     const metadata = allowInitialize ? await metadataOrInitialize() : await readMetadata();
     if (!metadata) throw new EncryptionLockedError('Restore matching encryption metadata before decrypting credentials');
     if (metadata.key_protection === 'operator-file') {
@@ -247,6 +260,7 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
 }
 
 export async function isEncryptionLocked(): Promise<boolean> {
+  if (await isCredentialMigrationPending()) return true;
   let metadata = await readMetadata();
   if (!metadata && process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined) {
     try { metadata = await withMetadataLock(metadataOrInitialize); } catch { return true; }
@@ -277,6 +291,7 @@ export async function getEncryptionType(): Promise<EncryptionType | null> {
 }
 
 export async function getEncryptionStatus() {
+  if (await isCredentialMigrationPending()) return { initialized: true, locked: true, protection: 'migration-pending' };
   const locked = await isEncryptionLocked();
   const metadata = await readMetadata();
   return { initialized: metadata !== null, locked, protection: !metadata

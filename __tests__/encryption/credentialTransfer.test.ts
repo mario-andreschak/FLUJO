@@ -2,6 +2,9 @@ import fs from 'node:fs/promises';
 import { NextRequest } from 'next/server';
 import { POST as exportRoute } from '@/app/api/credential-transfer/route';
 import { POST as restoreRoute } from '@/app/api/credential-transfer/restore/route';
+import { authenticate } from '@/utils/encryption/secure';
+import { readOAuthTokens, readOAuthClientInformation, readOAuthCodeVerifier, sealOAuthCredential } from '@/backend/services/mcp/oauthCredentialStorage';
+import type { MCPStreamableConfig } from '@/shared/types/mcp';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { issueOwnerCredential } from '@/backend/services/security/ownerCredentials';
 import os from 'node:os';
@@ -37,7 +40,7 @@ beforeEach(async () => {
   const records = {
     encryption_key: metadata,
     models: [{ id: 'new', ApiKey: `encrypted:${seal('v2-canary', ring.activeKey, 'flujo:secret:v2')}` }, { id: 'legacy', ApiKey: oldCipher }, { id: 'failed', ApiKey: 'encrypted_failed:plaintext-canary' }],
-    mcp_servers: { server: { transport: 'streamable', oauthTokens: { access_token: 'oauth-canary' }, headers: { 'X-Legacy': 'header-canary' }, env: { UNMARKED: { value: 'env-canary', metadata: { isSecret: false } } } } },
+    mcp_servers: { server: { transport: 'streamable', oauthTokens: { access_token: 'oauth-canary', token_type: 'Bearer', issuer: 'https://issuer.example' }, headers: { 'X-Legacy': 'header-canary' }, env: { UNMARKED: { value: 'env-canary', metadata: { isSecret: false } } } } },
     global_env_vars: { UNMARKED: 'global-canary', LEGACY_ENCRYPTED: `encrypted:${seal('global-legacy-envelope-canary', ring.activeKey, 'flujo:secret:v2')}`, MARKED: { value: `encrypted:${seal('global-v2-canary', ring.activeKey, 'flujo:secret:v2')}`, metadata: { isSecret: true } } },
     registry_account: { accessToken: 'registry-canary', refreshToken: 'encrypted_failed:refresh-canary' },
   };
@@ -81,7 +84,9 @@ test('mixed v1/v2/plaintext credentials restore under a distinct recipient key w
   const loaded = await runWithWorkspace('recipient', () => loadServerConfigs());
   expect(Array.isArray(loaded)).toBe(true);
   expect(loaded).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'server', disabled: true })]));
-  expect(recover(mcp.oauthTokens.access_token)).toBe('oauth-canary');
+  const tokens = await runWithWorkspace('recipient', async () => { await authenticate(localPassword); return readOAuthTokens(mcp); });
+  expect(tokens?.access_token).toBe('oauth-canary');
+  expect(mcp.oauthTokens.ciphertext.startsWith('v2:')).toBe(true);
   expect(recover(mcp.headers['X-Legacy'].value)).toBe('header-canary');
   expect(mcp.headers['X-Legacy'].metadata.isSecret).toBe(true);
   expect(recover(mcp.env.UNMARKED.value)).toBe('env-canary');
@@ -207,15 +212,15 @@ test('actual restore route creates a fresh private workspace while source remain
 
 test('legacy MCP array records normalize to production keyed maps while malformed entries fail closed', async () => {
   const file = path.join(getWorkspaceDir('default-workspace'), 'db/mcp_servers.json');
-  await fs.writeFile(file, JSON.stringify([{ name: 'legacy-array', oauthTokens: { access_token: 'legacy-array-canary' } }]));
+  await fs.writeFile(file, JSON.stringify([{ name: 'legacy-array', oauthTokens: { access_token: 'legacy-array-canary', token_type: 'Bearer', issuer: 'https://issuer.example' } }]));
   await restoreCredentialTransfer(await exported(), recipientPassword, 'legacy-array-recipient', localPassword);
   const records = await readStore('legacy-array-recipient', 'mcp_servers');
   expect(Array.isArray(records)).toBe(false);
   expect(records['legacy-array'].disabled).toBe(true);
   const loaded = await runWithWorkspace('legacy-array-recipient', () => loadServerConfigs());
   expect(loaded).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'legacy-array', disabled: true })]));
-  const ring = await unwrapKeyring(await readStore('legacy-array-recipient', 'encryption_key'), localPassword);
-  expect(open(records['legacy-array'].oauthTokens.access_token.slice('encrypted:'.length), ring.activeKey, 'flujo:secret:v2')).toBe('legacy-array-canary');
+  const tokens = await runWithWorkspace('legacy-array-recipient', async () => { await authenticate(localPassword); return readOAuthTokens(records['legacy-array']); });
+  expect(tokens?.access_token).toBe('legacy-array-canary');
   await fs.writeFile(file, '{"invalid":"not-a-config"}');
   await expect(exported()).rejects.toThrow();
   expect(await fs.readFile(file, 'utf8')).toBe('{"invalid":"not-a-config"}');
@@ -232,4 +237,30 @@ test.each([
   await fs.writeFile(file, bytes);
   await expect(exported()).rejects.toThrow();
   expect(await fs.readFile(file)).toEqual(bytes);
+});
+
+test('whole OAuth envelopes rebind to a renamed recipient and preserve unknown SDK fields through actual runtime getters', async () => {
+  const sdk = { access_token: 'opaque-access-canary', token_type: 'Bearer', issuer: 'https://issuer.example',
+    extension: { secret: 'unknown-extension-canary', nested: ['nested-canary'] } };
+  const client = { client_id: 'registered-client', client_secret: 'client-secret-canary', issuer: 'https://issuer.example',
+    jwks: { keys: [{ kty: 'RSA', d: 'private-jwk-canary' }] } };
+  const verifier = 'private-verifier-canary';
+  const source = (await readStore('default-workspace', 'mcp_servers')).server;
+  source.oauthTokens = await runWithWorkspace('default-workspace', () => sealOAuthCredential('tokens', sdk));
+  source.oauthClientInformation = await runWithWorkspace('default-workspace', () => sealOAuthCredential('client', client));
+  source.oauthCodeVerifier = await runWithWorkspace('default-workspace', () => sealOAuthCredential('verifier', verifier));
+  await fs.writeFile(path.join(getWorkspaceDir('default-workspace'), 'db/mcp_servers.json'), JSON.stringify({ server: source }));
+  await restoreCredentialTransfer(await exported(), recipientPassword, 'renamed-recipient', localPassword);
+  const restored = (await readStore('renamed-recipient', 'mcp_servers')).server as MCPStreamableConfig;
+  expect(restored.disabled).toBe(true);
+  await runWithWorkspace('renamed-recipient', async () => {
+    expect(await authenticate(localPassword)).not.toBeNull();
+    expect(await readOAuthTokens(restored)).toEqual(sdk);
+    expect(await readOAuthClientInformation(restored)).toEqual(client);
+    expect(await readOAuthCodeVerifier(restored)).toBe(verifier);
+  });
+  const ring = await unwrapKeyring(await readStore('renamed-recipient', 'encryption_key'), localPassword);
+  const outer = restored.oauthTokens as { ciphertext: string };
+  expect(outer.ciphertext.startsWith('v2:')).toBe(true);
+  expect(JSON.parse(open(outer.ciphertext, ring.activeKey, 'flujo:secret:v2')).workspace).toBe('renamed-recipient');
 });

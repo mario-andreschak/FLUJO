@@ -7,6 +7,7 @@ import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
+import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('utils/storage/backend');
@@ -142,7 +143,9 @@ async function renameWithRetry(tmpPath: string, filePath: string, validate: () =
 }
 
 export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
+  await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
+    await assertCredentialStoreReady(filePath);
     const dirPath = path.dirname(filePath);
     await fs.mkdir(dirPath, { recursive: true });
     const directory = await fs.lstat(dirPath, { bigint: true });
@@ -189,6 +192,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
 
 export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
   const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     // Serialize against any in-flight write for the same key. We chain off the
     // previous write (ignoring its outcome) so a failure doesn't wedge the key.
@@ -218,6 +222,8 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
 }
 
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  // Outside tolerant recovery: a pending migration must never look like empty data.
+  await assertCredentialStoreReady(getFilePath(key));
   try {
     await ensureStorageDir();
     const filePath = getFilePath(key);
@@ -268,7 +274,9 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
 
 export async function clearItem(key: StorageKey): Promise<void> {
   const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
+    await assertCredentialStoreReady(filePath);
     try {
       await fs.unlink(filePath);
       log.verbose(`Successfully cleared item: ${filePath}`); // Added verbose log
