@@ -93,6 +93,7 @@ describe('private Codex profile cannot borrow native/local capabilities or stale
     expect(options.codexPathOverride).toBe('checked-codex-binary');
     expect(options.configOverrides).toEqual(['project_root_markers=[]']);
     expect(options.config.features).toEqual(RESTRICTED_CODEX_CONFIG.features);
+    expect(options.config.tools.experimental_request_user_input).toEqual({ enabled: false });
     expect(options.config.web_search).toBe('disabled');
     expect(options.config.history.persistence).toBe('none');
     expect(options.config.model_catalog_json).toBe('fixture-private-home/verified-models.json');
