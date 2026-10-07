@@ -66,6 +66,7 @@ import {
   saveMeeting,
 } from '@/backend/services/meetings/store';
 import { readMeetingEvents } from '@/backend/services/meetings/eventLog';
+import { withMeetingControlLock } from '@/backend/services/meetings/controlLock';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { ARCHIVED_MEETING_PARTICIPANT_NAME } from '@/shared/types/meeting';
 import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
@@ -370,19 +371,25 @@ describe('MeetingEngine Persona integration', () => {
 
     const run = meetingEngine.runToCompletion(meeting.id);
     const executionAuthority = await authorityCaptured;
-    const durable = (await getMeeting(meeting.id))!;
-    const successorGeneration = durable.personaReservationGeneration! + 1;
-    durable.personaReservationGeneration = successorGeneration;
-    durable.personaReservationIntent = {
-      generation: successorGeneration,
-      attemptId: 'successor-attempt',
-      ownerId: 'successor-owner',
-      state: 'running',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      expiresAt: Date.now() + 30_000,
-    };
-    await saveMeeting(durable);
+    // Model an admitted successor writer. The real heartbeat renews under this
+    // same lock; a bare read/write could overwrite or be overwritten by renewal.
+    await withMeetingControlLock(meeting.id, async () => {
+      const durable = (await getMeeting(meeting.id))!;
+      const successorGeneration = durable.personaReservationGeneration! + 1;
+      durable.personaReservationGeneration = successorGeneration;
+      durable.personaReservationIntent = {
+        generation: successorGeneration,
+        attemptId: 'successor-attempt',
+        ownerId: 'successor-owner',
+        state: 'running',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 30_000,
+      };
+      await saveMeeting(durable);
+      expect((await getMeeting(meeting.id))?.personaReservationGeneration)
+        .toBe(successorGeneration);
+    });
 
     await expect(executionAuthority.assertCurrent()).rejects.toThrow(/start intent was lost/i);
     const task = jest.fn().mockResolvedValue('must-not-commit');
