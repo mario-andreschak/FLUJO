@@ -14,6 +14,14 @@ one callback retires that callback's token immediately. A surviving sibling does
 not revive a retired root or ancestor. The outer owner keeps admission until all
 already-started participants settle, including after root failure.
 
+A later ordinary callback may request a new mutation after its inherited token
+retires. It waits for any closed snapshot boundary and obtains a new local and
+physical writer registration with a new admission and token. It never borrows a
+surviving sibling's admission, and checking the old token still refuses. This
+also applies when the ancestor retires during the admission check. Retired
+recovery callbacks and callbacks inherited from read capture cannot use this
+ordinary fallback; their retained context never authorizes a fresh write.
+
 `withWorkspaceRecoveryMutation` first closes ordinary admission and drains
 previously admitted writers, then obtains the existing physical snapshot owner.
 Recovery writes borrow that exclusive admission through live participants. They

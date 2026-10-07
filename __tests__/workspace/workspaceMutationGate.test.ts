@@ -18,6 +18,7 @@ import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 
 import {
   beginWorkspaceSnapshotBoundary,
+  assertWorkspaceMutationOwned,
   withWorkspaceMutation,
   withWorkspaceRecoveryMutation,
   withWorkspaceRecoveryCapture,
@@ -125,28 +126,66 @@ describe('workspace participant lifetimes', () => {
     });
   });
 
-  it('rejects a retired ancestor even while a sibling retains admission', async () => {
+  it('fresh-admits a retired ordinary ancestor without borrowing its surviving sibling', async () => {
     await runWithWorkspace('retired-ancestor', async () => {
       const hold = deferred<void>();
       const ready = deferred<void>();
       const late = deferred<void>();
+      const entered = deferred<void>();
+      const finishFresh = deferred<void>();
+      const registrations = mockProcessMutation.mock.calls.length;
       let sibling!: Promise<void>;
       let descendant!: Promise<unknown>;
-      const write = jest.fn(async () => undefined);
+      const write = jest.fn(async () => { entered.resolve(); await finishFresh.promise; });
       const root = withWorkspaceMutation(async () => {
         sibling = withWorkspaceMutation(async () => { ready.resolve(); await hold.promise; });
-        descendant = (async () => { await late.promise; return withWorkspaceMutation(write); })();
+        descendant = (async () => {
+          await late.promise;
+          await expect(assertWorkspaceMutationOwned()).rejects.toThrow('context has finished');
+          return withWorkspaceMutation(write);
+        })();
         await ready.promise;
       });
       await ready.promise;
       await flushMicrotasks();
       late.resolve();
-      await expect(descendant).rejects.toThrow('context has finished');
-      expect(write).not.toHaveBeenCalled();
-      expect(workspaceMutationStatus().activeMutations).toBe(1);
+      await entered.promise;
+      expect(mockProcessMutation).toHaveBeenCalledTimes(registrations + 2);
+      expect(workspaceMutationStatus().activeMutations).toBe(2);
+      let captured = false;
+      const capture = beginWorkspaceSnapshotBoundary().then(boundary => { captured = true; return boundary; });
+      await flushMicrotasks();
+      expect(captured).toBe(false);
       hold.resolve();
       await sibling;
       await root;
+      expect(workspaceMutationStatus().activeMutations).toBe(1);
+      expect(captured).toBe(false);
+      finishFresh.resolve();
+      await descendant;
+      (await capture).release();
+    });
+  });
+
+  it('makes a retired ordinary timer wait for a closed capture before fresh registration', async () => {
+    await runWithWorkspace('retired-ordinary-capture', async () => {
+      const trigger = deferred<void>();
+      const write = jest.fn(async () => undefined);
+      let late!: Promise<void>;
+      await withWorkspaceMutation(async () => {
+        late = (async () => { await trigger.promise; await withWorkspaceMutation(write); })();
+      });
+      const registrations = mockProcessMutation.mock.calls.length;
+      const boundary = await beginWorkspaceSnapshotBoundary();
+      trigger.resolve();
+      await flushMicrotasks();
+      expect(write).not.toHaveBeenCalled();
+      expect(mockProcessMutation).toHaveBeenCalledTimes(registrations);
+      expect(workspaceMutationStatus().activeMutations).toBe(0);
+      boundary.release();
+      await late;
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(mockProcessMutation).toHaveBeenCalledTimes(registrations + 1);
     });
   });
 
@@ -485,4 +524,33 @@ it('composes the native per-key queue and atomic writer under recovery without a
     if (!/^flujo-recovery-queue-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe owned recovery fixture cleanup');
     await fs.rm(fixture, { recursive: true, force: true });
   }
+});
+
+
+it('refuses a root-inherited recovery write after retirement without fresh admission while a child stays live', async () => {
+  await runWithWorkspace('retired-recovery-descendant', async () => {
+    const ready = deferred<void>();
+    const finishChild = deferred<void>();
+    const trigger = deferred<void>();
+    let child!: Promise<void>;
+    let late!: Promise<void>;
+    const effect = jest.fn(async () => undefined);
+    const root = withWorkspaceRecoveryMutation(async () => {
+      child = withWorkspaceMutation(async () => { ready.resolve(); await finishChild.promise; });
+      late = (async () => { await trigger.promise; return withWorkspaceMutation(effect); })();
+      await ready.promise;
+    });
+    await ready.promise;
+    await flushMicrotasks();
+    const registrations = mockProcessMutation.mock.calls.length;
+    const rejected = expect(late).rejects.toThrow('finished');
+    trigger.resolve();
+    await rejected;
+    expect(effect).not.toHaveBeenCalled();
+    expect(mockProcessMutation.mock.calls.length).toBe(registrations);
+    expect(workspaceMutationStatus().blocked).toBe(true);
+    finishChild.resolve();
+    await child;
+    await root;
+  });
 });
