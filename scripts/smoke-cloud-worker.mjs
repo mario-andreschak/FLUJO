@@ -451,6 +451,9 @@ async function startWorker(port, archivePath, archiveHash, harness) {
   budget.assertOpen();
   child = fork(launcher, production ? [String(port)] : [], {
     cwd: runtimeApplication, windowsHide: true, execPath: process.execPath, execArgv: [],
+    // A Windows worker needs no console. Keep its IPC and referenced handle;
+    // DETACHED_PROCESS does not break away from the controller's owned job.
+    detached: workerRecovery && process.platform === 'win32',
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...safeEnvironment(), FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archivePath,
       FLUJO_WORKER_SNAPSHOT_SHA256: archiveHash, FLUJO_WORKER_SNAPSHOT_KEY: key.toString('base64'),
@@ -560,7 +563,11 @@ async function performSmoke() {
     'db/flows/smoke-flow.json': JSON.stringify(flow),
     'userdata/mcp-smoke-input.txt': 'restored filesystem smoke input',
   };
-  if (workerRecovery) files['db/planned_executions.json'] = JSON.stringify({ version: 1, paused: false, executions: [copiedRecoveryPlan(flow.id)] });
+  if (workerRecovery) {
+    // Keep recovery within its job birth budget; ordinary smoke covers MCP.
+    files['db/mcp_servers.json'] = JSON.stringify({});
+    files['db/planned_executions.json'] = JSON.stringify({ version: 1, paused: false, executions: [copiedRecoveryPlan(flow.id)] });
+  }
   const zip = new JSZip();
   for (const [name, content] of Object.entries(files)) zip.file(name, content);
   zip.file('snapshot-manifest.json', JSON.stringify({ formatVersion: 2, layoutVersion: 2, workspace, generation: 0,
@@ -568,7 +575,7 @@ async function performSmoke() {
     files: Object.entries(files).map(([name, content]) => ({ path: name, size: Buffer.byteLength(content), sha256: sha256(content) })),
     source: { version: packageJson.version, platform: process.platform },
     runtime: { codexAuth: 'none', encryption: 'default', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot,
-      servers: [{ name: 'filesystem', kind: 'bundled', sourceRootPath: sourceFilesystemRoot }] } },
+      servers: workerRecovery ? [] : [{ name: 'filesystem', kind: 'bundled', sourceRootPath: sourceFilesystemRoot }] } },
   }));
   const plaintext = await zip.generateAsync({ type: 'nodebuffer' });
   const iv = randomBytes(12);
@@ -599,7 +606,7 @@ process.on('message',message=>{if(message==='stop')server.close(()=>{app.close()
   console.log(`Starting ${production ? 'packaged production' : 'isolated development'} worker with an encrypted synthetic snapshot...`);
   const ready = await startWorker(workerPort, archivePath, sha256(plaintext), harness);
   assert.equal(ready.workspace, workspace);
-  assert.deepEqual(ready.servers, [{ name: 'filesystem', status: 'ready' }]);
+  assert.deepEqual(ready.servers, workerRecovery ? [] : [{ name: 'filesystem', status: 'ready' }]);
   assert.equal(await withTimeout(checkHealth({ env: { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken,
     FLUJO_PORT: String(workerPort) } }), budget.remainingMs(), 'correct worker health'), true);
   assert.equal(await withTimeout(checkHealth({ env: { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'incorrect-synthetic-token',
@@ -621,25 +628,27 @@ process.on('message',message=>{if(message==='stop')server.close(()=>{app.close()
     workerSnapshotSourceVersion: 1,
     ...(production && /^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION ?? '') ? { revision: process.env.FLUJO_BUILD_REVISION } : {}),
   });
-  const filesystem = new Client({ name: 'flujo-worker-smoke', version: '1.0.0' }, { capabilities: {} });
-  await withSmokeCleanup(async () => {
-    await withTimeout(filesystem.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${workerPort}/mcp-proxy/filesystem?workspace=${workspace}`), {
-      requestInit: { headers: { authorization: `Bearer ${controlToken}` } },
-    })), budget.remainingMs(), 'original filesystem MCP connection');
-    const targetRoot = path.join(root, 'data', 'workspaces', workspace, 'userdata');
-    const allowed = await withTimeout(filesystem.callTool({ name: 'get_allowed_directories', arguments: {} }),
-      budget.remainingMs(), 'original MCP roots response');
-    assert.notEqual(allowed.isError, true);
-    assert.ok(allowed.structuredContent?.directories?.includes(targetRoot), 'MCP roots must move from the Windows snapshot to this worker.');
-    const read = await withTimeout(filesystem.callTool({ name: 'read_file', arguments: { path: path.join(targetRoot, 'mcp-smoke-input.txt') } }),
-      budget.remainingMs(), 'original MCP read response');
-    assert.notEqual(read.isError, true);
-    assert.ok(JSON.stringify(read).includes('restored filesystem smoke input'));
-    const written = await withTimeout(filesystem.callTool({ name: 'write_file', arguments: { path: path.join(targetRoot, 'mcp-smoke-output.txt'), content: 'worker MCP write succeeded' } }),
-      budget.remainingMs(), 'original MCP write response');
-    assert.notEqual(written.isError, true);
-    assert.equal(await fs.readFile(path.join(targetRoot, 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
-  }, () => withTimeout(filesystem.close(), 5_000, 'original MCP client close'));
+  if (!workerRecovery) {
+    const filesystem = new Client({ name: 'flujo-worker-smoke', version: '1.0.0' }, { capabilities: {} });
+    await withSmokeCleanup(async () => {
+      await withTimeout(filesystem.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${workerPort}/mcp-proxy/filesystem?workspace=${workspace}`), {
+        requestInit: { headers: { authorization: `Bearer ${controlToken}` } },
+      })), budget.remainingMs(), 'original filesystem MCP connection');
+      const targetRoot = path.join(root, 'data', 'workspaces', workspace, 'userdata');
+      const allowed = await withTimeout(filesystem.callTool({ name: 'get_allowed_directories', arguments: {} }),
+        budget.remainingMs(), 'original MCP roots response');
+      assert.notEqual(allowed.isError, true);
+      assert.ok(allowed.structuredContent?.directories?.includes(targetRoot), 'MCP roots must move from the Windows snapshot to this worker.');
+      const read = await withTimeout(filesystem.callTool({ name: 'read_file', arguments: { path: path.join(targetRoot, 'mcp-smoke-input.txt') } }),
+        budget.remainingMs(), 'original MCP read response');
+      assert.notEqual(read.isError, true);
+      assert.ok(JSON.stringify(read).includes('restored filesystem smoke input'));
+      const written = await withTimeout(filesystem.callTool({ name: 'write_file', arguments: { path: path.join(targetRoot, 'mcp-smoke-output.txt'), content: 'worker MCP write succeeded' } }),
+        budget.remainingMs(), 'original MCP write response');
+      assert.notEqual(written.isError, true);
+      assert.equal(await fs.readFile(path.join(targetRoot, 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
+    }, () => withTimeout(filesystem.close(), 5_000, 'original MCP client close'));
+  }
   const result = await fetch(`http://127.0.0.1:${workerPort}/v1/chat/completions?workspace=${workspace}`, {
     method: 'POST', headers: { authorization: `Bearer ${controlToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'flow-CloudSmoke', stream: false, messages: [{ role: 'user', content: 'Run the smoke flow.' }],
@@ -655,13 +664,15 @@ process.on('message',message=>{if(message==='stop')server.close(()=>{app.close()
   assert.equal(conversation.flowId, flow.id);
   assert.equal(conversation.unattended, true, 'A cloud worker must use unattended engine behavior.');
   assert.ok(saved.includes(answer), 'The conversation must contain the engine result.');
-  const callsBeforeRestart = providerCalls;
-  console.log('HTTP auth, real flow execution, and conversation persistence passed; restarting worker...');
-  await stopChild();
-  await startWorker(workerPort, archivePath, sha256(plaintext), harness);
-  assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Restart must preserve worker results.');
-  assert.equal(await fs.readFile(path.join(root, 'data', 'workspaces', workspace, 'userdata', 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
-  assert.equal(providerCalls, callsBeforeRestart, 'Restart must not replay the completed flow.');
+  if (!workerRecovery) {
+    const callsBeforeRestart = providerCalls;
+    console.log('HTTP auth, real flow execution, and conversation persistence passed; restarting worker...');
+    await stopChild();
+    await startWorker(workerPort, archivePath, sha256(plaintext), harness);
+    assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Restart must preserve worker results.');
+    assert.equal(await fs.readFile(path.join(root, 'data', 'workspaces', workspace, 'userdata', 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
+    assert.equal(providerCalls, callsBeforeRestart, 'Restart must not replay the completed flow.');
+  }
   if (workerRecovery) {
     recoveryReport = await captureWorkerRecoveryAttempt({ baseUrl: `http://127.0.0.1:${workerPort}`, workspace, controlToken, flowId: flow.id,
       // The current candidate's ordinary list may reconcile private receipts.
@@ -685,11 +696,14 @@ process.on('message',message=>{if(message==='stop')server.close(()=>{app.close()
         if (offlineMs) await delay(offlineMs, undefined, { signal: budget.signal });
         if (epoch !== undefined) recoveryEpoch = epoch;
         await startWorker(workerPort, archivePath, sha256(plaintext), harness);
+        assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Recovery restart must preserve the original worker result.');
       },
     }, { record: attempt => { recoveryAttempt = attempt; } });
     console.log('PASS: actual worker-local cron enrollment/tick/catch-up and later ordinary recurrence, copied suppression, retained interrupted dispatch and changed-epoch fencing.');
   }
-  console.log('PASS: encrypted restore, compatibility metadata, private ingress, restored MCP read/write, real ExecutionEngine/model dispatch, unattended flow, and restart preservation.');
+  console.log(workerRecovery
+    ? 'PASS: encrypted restore, compatibility metadata, private ingress, real ExecutionEngine/model dispatch, unattended flow, and recovery restart preservation.'
+    : 'PASS: encrypted restore, compatibility metadata, private ingress, restored MCP read/write, real ExecutionEngine/model dispatch, unattended flow, and restart preservation.');
 }
 try {
   wholeWindowTimer = setTimeout(() => {

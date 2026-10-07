@@ -106,26 +106,32 @@ function Check-Window {
 function Check-Pin($pin) {
     Check-Window
     if (-not [IO.Path]::IsPathFullyQualified($pin.path)) { throw 'Absolute pin required' }
-    $item = Get-Item -LiteralPath $pin.path
-    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -ne $pin.bytes) { throw 'Pin shape/bytes changed' }
-    if ((Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pin.sha256) { throw 'Pin digest changed' }
+    $item = [IO.FileInfo]::new($pin.path)
+    if (($item.Attributes -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) -or $item.Length -ne $pin.bytes) { throw 'Pin shape/bytes changed' }
+    $stream = [IO.File]::OpenRead($pin.path)
+    try { $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() }
+    finally { $stream.Dispose() }
+    if ($digest -cne $pin.sha256) { throw 'Pin digest changed' }
     Check-Window
 }
 function Check-Table([string]$root, $files) {
     if (-not [IO.Path]::IsPathFullyQualified($root) -or $files.Count -lt 1 -or $files.Count -gt 100000) { throw 'Root/file census refused' }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     [long]$bytes = 0
+    $canonicalRoot = [IO.Path]::GetFullPath($root)
     foreach ($file in $files) {
         if ($file.path.Length -gt 1024 -or $file.path -match '[\\:\x00-\x1f]' -or $file.path.StartsWith('/')) { throw 'Invalid relative path' }
         $parts = $file.path.Split('/')
-        if ($parts | Where-Object { $_ -eq '' -or $_ -eq '.' -or $_ -eq '..' -or $_ -match '[. ]$' }) { throw 'Path alias/escape' }
+        foreach ($part in $parts) {
+            if ($part -eq '' -or $part -eq '.' -or $part -eq '..' -or $part -match '[. ]$') { throw 'Path alias/escape' }
+        }
         if (-not $seen.Add($file.path)) { throw 'Duplicate path' }
         if ($file.bytes -lt 0 -or $file.bytes -gt 268435456 -or $file.sha256 -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid file pin' }
         $bytes += $file.bytes; if ($bytes -gt 34359738368) { throw 'Table byte budget exceeded' }
-        $current = [IO.Path]::GetFullPath($root)
+        $current = $canonicalRoot
         foreach ($part in @('') + $parts) {
-            if ($part) { $current = Join-Path $current $part }
-            if ((Get-Item -LiteralPath $current).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Junction/symlink refused' }
+            if ($part) { $current = [IO.Path]::Combine($current,$part) }
+            if ([IO.File]::GetAttributes($current) -band [IO.FileAttributes]::ReparsePoint) { throw 'Junction/symlink refused' }
         }
         Check-Pin ([pscustomobject]@{path=$current;bytes=$file.bytes;sha256=$file.sha256})
     }
