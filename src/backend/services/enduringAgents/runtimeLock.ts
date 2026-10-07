@@ -863,6 +863,24 @@ async function retireOwnedCanonical(
   lockPath: string,
   owner: LockOwnerRecord,
 ): Promise<void> {
+  // Keep a healthy logical owner live until its unlink completes. Other
+  // processes cannot recover this owner while it is live, and acquisition has
+  // already drained predecessor recovery intents before protected work began.
+  // Publishing abandonment first would require another intent to guard this
+  // unlink; that slower protocol is reserved for failed/uncertain retirement.
+  if (ACTIVE_OWNER_IDS.has(owner.ownerId)) {
+    try {
+      const current = await readOwner(lockPath);
+      if (current?.ownerId === owner.ownerId
+          && current.processInstanceId === owner.processInstanceId
+          && current.pid === owner.pid) {
+        await unlinkWithRetry(lockPath);
+        return;
+      }
+    } catch {
+      // Preserve the intent/abandonment protocol and deferred cleanup below.
+    }
+  }
   await withRecoveryIntent(lockRoot, lockPath, owner, async () => {
     let markerPath: string | null = null;
     try {

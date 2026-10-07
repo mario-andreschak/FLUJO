@@ -570,6 +570,17 @@ describe('enduring-agent Activity runtime', () => {
       const { persona } = await createJim('runtime-transient-release-jim');
       await enqueuePersonaMailboxItem(assignment(persona.id, 'transient-release'));
       const originalLink = fs.link.bind(fs);
+      const originalUnlink = fs.unlink.bind(fs);
+      let releaseFailures = 0;
+      // Exhaust healthy-owner unlink retries so the guarded recovery fallback
+      // actually runs; successful releases need no recovery intent.
+      jest.spyOn(fs, 'unlink').mockImplementation(async (targetPath) => {
+        if (String(targetPath).endsWith(`${persona.id}.lock`) && releaseFailures < 20) {
+          releaseFailures += 1;
+          throw Object.assign(new Error('transient canonical sharing conflict'), { code: 'EBUSY' });
+        }
+        return originalUnlink(targetPath);
+      });
       let injected = false;
       jest.spyOn(fs, 'link').mockImplementation(async (existingPath, targetPath) => {
         if (!injected && String(targetPath).includes('.lock.recovery.')) {
