@@ -8,6 +8,7 @@ This packet supports [#577](https://github.com/mario-andreschak/FLUJO/issues/577
 
 | Material | Purpose | Owner or consumer |
 | --- | --- | --- |
+| [Read-only reference workflows](reference-workflows.md) | Three synthetic task fixtures, receipt checker and current-app rehearsal | Pilot operator; Feature surface |
 | [Task protocol](tasks.md) and [practice fixture](fixtures/sample-notes.txt) | Reproduce the first model-plus-MCP run and the approval/debugger/proxy extensions | Pilot operator; Feature surface |
 | [Read-only reference workflows](reference-workflows.md) | Prepare a pinned separate fixture checkout and run three synthetic task cards | Technical operator |
 | [Journey requirements](journey-requirements.md) | Concrete UI outcomes and observation boundaries for #572 | Feature surface; accessibility/release acceptance |

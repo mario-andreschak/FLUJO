@@ -7,31 +7,6 @@ or write operation. It does not enroll anyone. An AI operator can run technical
 checks; that does not establish independent adoption, novice usability or benefit.
 The original [timed first-run card](tasks.md) remains unchanged.
 
-## Prepare the fixture checkout
-
-The reference scripts are not present in the current application source. Use their
-original source in a separate checkout; do not replace the application checkout
-or copy dependencies between the two. From a directory for new projects:
-
-```sh
-git clone https://github.com/mario-andreschak/FLUJO.git flujo-reference-fixture
-cd flujo-reference-fixture
-git fetch origin 40b20ec871eae66114b0d8152b748d75b5f06235
-git switch --detach 40b20ec871eae66114b0d8152b748d75b5f06235
-node --version
-npm ci --include=dev
-```
-
-Use a supported Node 22.x version at least 22.17.0 or Node 24.x at least 24.2.0.
-Keep this terminal in the fixture checkout for the source-check and answer-check
-commands below. In PowerShell, obtain the full fixture path with
-`(Resolve-Path scripts/product-fit-pilot/reference-server.mjs).Path` and the Node
-executable with `(Get-Command node).Source`. On POSIX, use
-`realpath scripts/product-fit-pilot/reference-server.mjs` and `command -v node`.
-Configure those absolute paths in the application selected for rehearsal.
-This pins test equipment only; it does not qualify that historical application
-revision or establish that the current application passes the task cards.
-
 ## Connect once
 
 Use a disposable FLUJO profile on the exact candidate selected by the release
@@ -173,5 +148,13 @@ The data/checker suite is dependency-free. The protocol suite uses this checkout
 installed real MCP SDK over in-memory and owned stdio transports. Its answers are
 test-authored, not model responses. Normal Jest discovery runs both through a
 small serial subprocess guard, rejecting zero assertions, skips and failures.
-Follow any active validation-slot coordination for this session. No source test qualifies
+Coordinate local checks with the shared validation slot. No source test qualifies
 an installed release, live provider, control/proxy journey or human pilot.
+# Current-app synthetic rehearsal
+
+Set `FEATURE_BROWSER_APP_DIR` to a compiled FLUJO checkout, then run `node scripts/product-fit-pilot/reference-journey.mjs`. The runner starts an owned app in an anonymous loopback profile, disables default connections, configures the local stdio fixture with an existing disposable working directory, discovers its tools, and invokes five reads through the current workspace-scoped tester API. It checks all three task packets against fresh receipts from the same fixture process and retains packets, report and app logs in the printed temporary directory. Shutdown is awaited even on failure.
+
+Answers are test-authored. This rehearsal does not dispatch a model, prove human UI completion, exercise approval/debugger/proxy flows, or establish installed-artifact acceptance or recurring benefit.
+
+Validation on the current compiled 3.46.3 app: all three tasks passed, discovery made zero tool calls, and the receipt ended with five accepted calls and no rejections. The 35 native checks and Jest bridge passed using an explicitly linked dependency graph with an identical package lock. The guarded local-dependency runner requires its own physical install; that runner was not claimed here.
+
