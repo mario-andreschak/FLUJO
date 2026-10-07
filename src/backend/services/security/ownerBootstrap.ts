@@ -75,7 +75,7 @@ export function pairFirstOwner(request: Request, confirmed: boolean, now = Date.
         || fs.realpathSync(configured.directory) !== configured.directory
         || ownerPolicyRevision(readOwnerPolicy(configured.bootstrap)) !== ownerPolicyRevision(configured.grant)
         || ownerPolicyRevision(readOwnerPolicy(staged)) !== ownerPolicyRevision(policy)
-        || !isOwnerBootstrapAvailable(now)) throw new Error();
+        || !isOwnerBootstrapAvailable(Math.max(now, Date.now()))) throw new Error();
     // No replacement: only one OS process can enroll the first owner.
     fs.linkSync(staged, configured.policy);
   } finally { fs.closeSync(fd); fs.unlinkSync(staged); }
