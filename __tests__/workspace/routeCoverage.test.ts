@@ -43,6 +43,7 @@ describe('workspace route coverage', () => {
   it('classifies every application route and keeps the installation-wide allowlist exact', () => {
     const marked: string[] = [];
     const ownerSessionRoutes: string[] = [];
+    const ownerBootstrapRoutes: string[] = [];
     for (const file of routes) {
       const source = fs.readFileSync(file, 'utf8');
       const pathname = pathnameOf(file);
@@ -56,6 +57,20 @@ describe('workspace route coverage', () => {
       }
 
       expect(INSTALLATION_WIDE.has(pathname)).toBe(false);
+      if (pathname === '/api/owner/bootstrap') {
+        ownerBootstrapRoutes.push(pathname);
+        expect(methods.sort()).toEqual(['GET', 'POST']);
+        expect(source).toContain("from '@/backend/services/security/ownerBootstrap'");
+        expect(source.match(/\bisOwnerBootstrapRequest\(request\)/g)).toHaveLength(2);
+        expect(source).toContain('readBoundedBody(request, 256)');
+        expect(source).toContain('input.confirmOwnerEnrollment !== true');
+        expect(source).toContain('pairFirstOwner(request, true)');
+        const admission = fs.readFileSync(path.join(process.cwd(), 'src/backend/services/security/ownerBootstrap.ts'), 'utf8');
+        expect(admission).toContain('ownerBrowserRequestAllowed(request, true)');
+        expect(admission).toContain('authenticateOwnerBearer(request, configured.grant, now)');
+        expect(admission).toContain('isOwnerBootstrapAvailable(Math.max(now, Date.now()))');
+        continue;
+      }
       if (pathname === '/api/owner/session') {
         ownerSessionRoutes.push(pathname);
         expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
@@ -89,5 +104,6 @@ describe('workspace route coverage', () => {
 
     expect(marked.sort()).toEqual([...INSTALLATION_WIDE].sort());
     expect(ownerSessionRoutes).toEqual(['/api/owner/session']);
+    expect(ownerBootstrapRoutes).toEqual(['/api/owner/bootstrap']);
   });
 });
