@@ -13,6 +13,8 @@ import { splitToolResultMedia } from '@/backend/services/runResources/toolResult
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { combineAbortSignals } from '../combineAbortSignals';
+import { NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
+import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 
 const ports = new WeakSet<object>();
 const authorities = new WeakSet<object>();
@@ -65,9 +67,13 @@ export function nativeToolInventoryDigest(
   tools: OpenAI.ChatCompletionFunctionTool[],
   toolNameMap?: Record<string, DecodedTool>,
   localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>,
+  terminationProtocol?: NativeHandoffProtocol,
 ): string {
+  if (terminationProtocol !== undefined && terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) {
+    throw new Error('Unknown native termination protocol.');
+  }
   const names = new Set<string>();
-  return nativeDigest(tools.filter(tool => tool.type === 'function').map(tool => {
+  const inventory = tools.filter(tool => tool.type === 'function').map(tool => {
     const name = tool.function.name;
     if (!name || names.has(name)) throw new Error('Native tool inventory has duplicate or empty names.');
     names.add(name);
@@ -77,7 +83,9 @@ export function nativeToolInventoryDigest(
     }
     const synthetic = Boolean(localToolExecutors?.[name]);
     const handoff = isHandoff(name);
-    if (handoff) throw new Error('Native handoff requires a confirmed SDK termination protocol and is not admitted.');
+    if (handoff && terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) {
+      throw new Error('Native handoff requires a confirmed SDK termination protocol and is not admitted.');
+    }
     if (Number(Boolean(decoded)) + Number(synthetic) + Number(handoff) !== 1) {
       throw new Error(`Native tool ${name} has no unique Worker-owned executor.`);
     }
@@ -86,7 +94,8 @@ export function nativeToolInventoryDigest(
       annotations: decoded?.annotations, binding: decoded,
       kind: decoded ? 'mcp' : handoff ? 'handoff' : 'synthetic',
     };
-  }));
+  });
+  return nativeDigest(terminationProtocol ? { terminationProtocol, tools: inventory } : inventory);
 }
 
 type BrokerService = ToolIdentityService & Pick<typeof import('@/backend/services/mcp').mcpService, 'callTool'>;
@@ -103,11 +112,17 @@ export interface NativeBrokerInput {
   authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
   authority: NativeBrokerAuthority;
   signal: AbortSignal;
+  terminationProtocol?: NativeHandoffProtocol;
+  originalProcessHost?: NativeOriginalProcessHost;
 }
 
 /** Freeze exactly the tools on this provider attempt; retain executors only here. */
 export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
   assertNativeBrokerAuthority(input.authority);
+  if (input.terminationProtocol !== undefined) {
+    if (input.terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) throw new Error('Unknown native termination protocol.');
+    assertNativeOriginalProcessHost(input.originalProcessHost);
+  }
   const advertised = structuredClone(input.tools.filter(tool => tool.type === 'function').map(tool => ({
     name: tool.function.name,
     description: tool.function.description ?? '',
@@ -129,7 +144,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
     }
     kinds.set(tool.name, bound[tool.name] ? 'mcp' : isHandoff(tool.name) ? 'handoff' : 'synthetic');
   }
-  const inventoryDigest = nativeToolInventoryDigest(input.tools, bound, executors);
+  const inventoryDigest = nativeToolInventoryDigest(input.tools, bound, executors, input.terminationProtocol);
   if (inventoryDigest !== input.receipt.owner.inventoryDigest
     || input.authority.leaseEpoch !== input.receipt.owner.leaseEpoch) {
     throw new Error('Native tool inventory or lease differs from the durable invocation.');
@@ -137,11 +152,30 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
   deepFreeze(advertised);
   deepFreeze(bound);
   const controller = new AbortController();
+  const pendingHandoffs = new Map<string, { entry: Awaited<ReturnType<typeof beginNativeTool>>['entry'];
+    terminal: NativeToolPortResult }>();
+  let handoffsConfirmed = false;
   const port: NativeToolPort = Object.freeze({
     invocationId: input.receipt.invocationId,
     inventoryDigest,
     advertised,
     cancel: () => controller.abort(),
+    confirmHandoffTermination: async toolInvocationIds => {
+      if (handoffsConfirmed || !pendingHandoffs.size
+        || nativeDigest([...pendingHandoffs.keys()]) !== nativeDigest(toolInvocationIds)) {
+        throw new Error('Native handoff receipts are incomplete or changed.');
+      }
+      assertNativeOriginalProcessHost(input.originalProcessHost);
+      input.signal.throwIfAborted();
+      await input.authority.assertCurrent();
+      await input.originalProcessHost.confirmHandoffTermination(input.receipt.invocationId, toolInvocationIds);
+      for (const { entry, terminal } of pendingHandoffs.values()) {
+        await finishNativeTool(entry, terminal, { assertCurrent: input.authority.assertCurrent, signal: input.signal });
+      }
+      input.signal.throwIfAborted();
+      await input.authority.assertCurrent();
+      handoffsConfirmed = true;
+    },
     dispatch: async ({ toolInvocationId, name, args, signal }: Parameters<NativeToolPort['dispatch']>[0]): Promise<NativeToolPortResult> => {
       if (!names.has(name) || !args || typeof args !== 'object' || Array.isArray(args)) {
         throw new Error('Native tool was not in the advertised inventory.');
@@ -184,12 +218,14 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       if (approved === false) {
         result = { content: [{ type: 'text', text: 'tool denied' }], isError: true };
       } else if (kind === 'handoff') {
+        assertNativeOriginalProcessHost(input.originalProcessHost);
+        if (input.terminationProtocol !== NATIVE_HANDOFF_PROTOCOL || pendingHandoffs.size >= 32) {
+          throw new Error('Native handoff termination capability is unavailable.');
+        }
         await assertCurrent();
-        const schema = advertised.find(tool => tool.name === name)?.inputSchema;
-        const spawnable = Boolean((schema as { properties?: Record<string, unknown> } | undefined)?.properties?.task);
-        result = { content: [{ type: 'text', text: spawnable
-          ? 'Worker spawned for this task. Call this tool again right now to spawn another parallel worker (one call per task). When you stop calling it, all spawned workers run concurrently and their merged results come back.'
-          : 'Handing off.' }] };
+        await markNativeToolEffectMayHaveStarted(entry);
+        await input.originalProcessHost.prepareHandoff(input.receipt.invocationId, toolInvocationId);
+        result = { content: [{ type: 'text', text: 'Handoff requested. Routing awaits confirmed SDK process termination.' }] };
       } else if (kind === 'synthetic') {
         await assertCurrent();
         await markNativeToolEffectMayHaveStarted(entry);
@@ -256,7 +292,8 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       }
       await input.authority.assertCurrent();
       const terminal = { result, transcriptText, kind };
-      await finishNativeTool(entry, terminal);
+      if (kind === 'handoff' && approved !== false) pendingHandoffs.set(toolInvocationId, { entry, terminal });
+      else await finishNativeTool(entry, terminal);
       combined.throwIfAborted();
       await input.authority.assertCurrent();
       combined.throwIfAborted();

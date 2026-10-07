@@ -34,6 +34,7 @@ export interface NativeInvocationSessionDescriptor {
   inventory: {
     digest: string;
     toolCount: number;
+    terminationProtocol?: import('./nativeHandoffProtocol').NativeHandoffProtocol;
   };
   payloadRef: NativeInvocationSessionPayloadRef;
 }
@@ -47,6 +48,7 @@ export interface NativeInvocationSessionPayload {
   };
   inventory: {
     tools: OpenAI.ChatCompletionFunctionTool[];
+    terminationProtocol?: import('./nativeHandoffProtocol').NativeHandoffProtocol;
     bindings: Record<string, DecodedTool>;
     syntheticNames: string[];
   };

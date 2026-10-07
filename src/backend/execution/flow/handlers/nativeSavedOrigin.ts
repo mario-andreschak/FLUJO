@@ -124,10 +124,12 @@ export async function readSavedNativeOrigin(input: { invocationId: string;
     || nativeDigest(archived.genericWire) !== descriptor.archive.sanitizedGenericWireDigest) return held();
   const payload = await readNativeSessionPayload(descriptor.payloadRef, input.root.workspace);
   if (payload.invocationId !== input.invocationId
+    || payload.inventory.terminationProtocol !== descriptor.inventory.terminationProtocol
     || !same(payload.archive, { sdkRequest: archived.sdkRequest, genericWire: archived.genericWire, media: archived.media })
     || payload.inventory.tools.length !== descriptor.inventory.toolCount
     || nativeToolInventoryDigest(payload.inventory.tools, payload.inventory.bindings,
-      Object.fromEntries(payload.inventory.syntheticNames.map(name => [name, async () => undefined])))
+      Object.fromEntries(payload.inventory.syntheticNames.map(name => [name, async () => undefined])),
+      descriptor.inventory.terminationProtocol)
       !== descriptor.inventory.digest
     || descriptor.inventory.digest !== receipt.owner.inventoryDigest) return held();
   input.signal.throwIfAborted();
@@ -197,10 +199,12 @@ export async function readSavedNativeTerminal(input: { invocationId: string;
         || nativeDigest(archived.genericWire) !== descriptor.archive.sanitizedGenericWireDigest) return held();
       const payload = await readNativeSessionPayload(descriptor.payloadRef, input.expectedWorkspace);
       if (payload.invocationId !== input.invocationId
+        || payload.inventory.terminationProtocol !== descriptor.inventory.terminationProtocol
         || !same(payload.archive, { sdkRequest: archived.sdkRequest, genericWire: archived.genericWire, media: archived.media })
         || payload.inventory.tools.length !== descriptor.inventory.toolCount
         || nativeToolInventoryDigest(payload.inventory.tools, payload.inventory.bindings,
-          Object.fromEntries(payload.inventory.syntheticNames.map(name => [name, async () => undefined])))
+          Object.fromEntries(payload.inventory.syntheticNames.map(name => [name, async () => undefined])),
+          descriptor.inventory.terminationProtocol)
           !== descriptor.inventory.digest
         || descriptor.inventory.digest !== input.expectedOwner.inventoryDigest) return held();
     });

@@ -828,7 +828,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   signal: abortController.signal,
                 });
                 if (!recordedNativeToolResults.has(callId)) {
-                  if (dispatched.kind === 'handoff') {
+                  if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
                     handoffCalls.push({ id: callId, name: advertised.name, args });
                     if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
                       endSpawning = true;
@@ -836,6 +836,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   }
                   recordToolResult({ id: callId, resultContent: dispatched.transcriptText });
                   recordedNativeToolResults.add(callId);
+                  if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
+                    await nativeOriginalProcessHost!.requestHandoffTermination(nativeToolPort.invocationId);
+                  }
                 }
                 return dispatched.result;
               } catch (error) {
@@ -1122,6 +1125,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     let resultText = '';
     let nativeSdkTerminal = false;
+    let nativeHandoffTerminated = false;
     let nativeLiveObserved = false;
     let accumulatedText = '';
     // Result totals and per-request stream usage have different scopes. Track
@@ -1411,9 +1415,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         closeInput();
         response.close();
         await nativeOriginalProcessHost.waitForExit();
+        if (handoffCalls.length && nativeToolPort && !signal?.aborted) {
+          if (!nativeToolPort.confirmHandoffTermination) throw new Error('Native handoff terminal confirmation is unavailable.');
+          await nativeToolPort.confirmHandoffTermination(handoffCalls.map(call => call.id!));
+          nativeHandoffTerminated = true;
+        }
       }
       if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
-      if (nativeToolPort && abortController.signal.aborted) dispatchOutcome = 'cancelled';
+      if (nativeToolPort && (signal?.aborted || (abortController.signal.aborted && !nativeHandoffTerminated))) dispatchOutcome = 'cancelled';
       closeInput();
       await watcher.stop();
       queuedDelivery?.requeue();
@@ -1549,7 +1558,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     };
 
     return { completion, transcript, contextUsage: usageTracker.getContextUsage(model.contextWindow),
-      ...(nativeToolPort ? { nativeSdkTerminal: nativeSdkTerminal && !abortController.signal.aborted
-        && !signal?.aborted } : {}) };
+      ...(nativeToolPort ? { nativeSdkTerminal: (nativeHandoffTerminated
+        || (nativeSdkTerminal && !abortController.signal.aborted)) && !signal?.aborted } : {}) };
   }
 }

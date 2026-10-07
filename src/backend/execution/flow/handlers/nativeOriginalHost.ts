@@ -30,6 +30,7 @@ const positive = (value: unknown): number | undefined =>
 type Reservation = { invocationId: string; descriptorDigest: string; owner: NativeInvocationSession['descriptor']['receipt']['owner'];
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
+  handoff?: { protocol: 'owned-claude-exit-close-v1'; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
   sdkUsage?: { source: 'claude-sdk-result'; numTurns?: number; inputTokens?: number;
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
   identity?: ClaudeOwnedProcessRegistration['identity']; sdkOutcome?: string; exit?: { code: number | null; signal: NodeJS.Signals | null } };
@@ -214,6 +215,9 @@ export interface NativeOriginalProcessHost {
   waitForExit(): Promise<void>;
   releaseAfterTerminal(): Promise<void>;
   observeSdkUsage(result: unknown): Promise<void>;
+  prepareHandoff(invocationId: string, toolInvocationId: string): Promise<void>;
+  requestHandoffTermination(invocationId: string): Promise<void>;
+  confirmHandoffTermination(invocationId: string, toolInvocationIds: readonly string[]): Promise<void>;
 }
 
 /** Only a live branded Persona root run can produce the runtime capabilities. */
@@ -280,6 +284,8 @@ export async function createPersonaNativeOriginalHost(input: {
   let child: ClaudeOwnedProcessRegistration | undefined;
   let exited = false;
   let closed = false;
+  let handoffStopRequested = false;
+  const handoffIds = new Set<string>();
   const update = async (task: (reservation: Reservation) => Promise<void>, cap = launchCap) => {
     if (!original) return held();
     return mutate(binding, async ledger => {
@@ -325,6 +331,37 @@ export async function createPersonaNativeOriginalHost(input: {
     },
   });
   const processHost: NativeOriginalProcessHost = {
+    prepareHandoff: async (invocationId, toolInvocationId) => {
+      if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
+        || handoffStopRequested || !toolInvocationId || toolInvocationId.length > 256
+        || handoffIds.size >= 32 || handoffIds.has(toolInvocationId)) return held();
+      await processHost.beforeFirstPrompt();
+      await authority.commitWhileCurrent!(() => update(async reservation => {
+        if (reservation.state !== 'registered') return held();
+        reservation.handoff = { protocol: 'owned-claude-exit-close-v1',
+          toolInvocationIds: [...handoffIds, toolInvocationId], state: 'requested' };
+      }));
+      handoffIds.add(toolInvocationId);
+    },
+    requestHandoffTermination: async invocationId => {
+      if (!original || original.descriptor.receipt.invocationId !== invocationId || !child
+        || !handoffIds.size || exited || closed || handoffStopRequested) return held();
+      await assertCurrent();
+      authority.signal.throwIfAborted();
+      handoffStopRequested = true;
+      child.requestStop();
+    },
+    confirmHandoffTermination: async (invocationId, toolInvocationIds) => {
+      if (!original || original.descriptor.receipt.invocationId !== invocationId || !child
+        || !handoffStopRequested || !exited || !closed || !handoffIds.size
+        || nativeDigest([...handoffIds]) !== nativeDigest(toolInvocationIds)) return held();
+      await assertCurrent();
+      await authority.commitWhileCurrent!(() => update(async reservation => {
+        if (reservation.state !== 'exited' || !reservation.exit || reservation.handoff?.state !== 'requested'
+          || nativeDigest(reservation.handoff.toolInvocationIds) !== nativeDigest(toolInvocationIds)) return held();
+        reservation.handoff.state = 'confirmed';
+      }));
+    },
     observeSdkUsage: async result => {
       if (!result || typeof result !== 'object' || !child || !original) return held();
       const value = result as Record<string, unknown>;

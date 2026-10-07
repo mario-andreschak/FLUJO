@@ -329,6 +329,7 @@ export async function beginNativeTool(
 export async function finishNativeTool(
   entry: ToolReceipt,
   result: NonNullable<ToolReceipt['result']>,
+  terminalFence?: { assertCurrent: () => Promise<void>; signal: AbortSignal },
 ): Promise<void> {
   await withNativeScopeMutation(entry.conversationId, async assertOwned => {
     const invocation = await readJson<NativeInvocationReceipt>(callFile(entry.invocationId));
@@ -340,7 +341,12 @@ export async function finishNativeTool(
     if (!current || current.fingerprint !== entry.fingerprint || current.state === 'terminal') {
       throw new Error('Native tool invocation is not pending.');
     }
-    await writeDurable(file, { ...current, state: 'terminal', result }, assertOwned);
+    await writeDurable(file, { ...current, state: 'terminal', result }, async () => {
+      terminalFence?.signal.throwIfAborted();
+      await terminalFence?.assertCurrent();
+      await assertOwned();
+      terminalFence?.signal.throwIfAborted();
+    });
   });
 }
 

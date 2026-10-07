@@ -19,7 +19,8 @@ jest.mock('@/backend/services/model/adapters', () => ({ getCompletionAdapter: ()
   new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
     '@/backend/services/model/adapters/claudeSubscriptionAdapter').ClaudeSubscriptionAdapter)() }));
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: (...args: unknown[]) => queryMock(...args),
-  createSdkMcpServer: (value: unknown) => value, tool: (name: string) => ({ name }) }));
+  createSdkMcpServer: (value: unknown) => value,
+  tool: (name: string, _description: unknown, _schema: unknown, handler: unknown) => ({ name, handler }) }));
 
 import { PersonaFlowDispatcher, personaFlowDispatchId } from '@/backend/services/enduringAgents/personaDispatcher';
 import { createPersonaWorkItem } from '@/backend/services/enduringAgents/workItems';
@@ -40,13 +41,15 @@ let sequence = 0;
 let promptCount = 0;
 let children: SpawnedProcess[] = [];
 let beforePrompt: (() => Promise<void>) | undefined;
+let emitHandoff = false;
+let afterHandoffStop: (() => Promise<void>) | undefined;
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
   previousData = process.env.FLUJO_DATA_DIR;
   process.env.FLUJO_DATA_DIR = directory;
   selectedModel = { ...modelFixture };
-  promptCount = 0; children = []; beforePrompt = undefined;
+  promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -65,6 +68,24 @@ beforeEach(async () => {
       expect(child.exitCode).toBeNull();
       promptCount++;
       yield { type: 'assistant', uuid: 'fixture-assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } };
+      if (emitHandoff) {
+        const sdk = options as typeof options & {
+          mcpServers: { flujo: { tools: { name: string; handler(args: Record<string, unknown>): Promise<unknown> }[] } };
+          canUseTool(name: string, args: Record<string, unknown>, options: { toolUseID: string }): Promise<{ behavior: string }>;
+        };
+        const handoff = sdk.mcpServers.flujo.tools.find(tool => tool.name.startsWith('handoff_to_'))!;
+        expect(handoff).toBeDefined();
+        expect(await sdk.canUseTool(`mcp__flujo__${handoff.name}`, {}, { toolUseID: 'handoff-fixture-1' }))
+          .toMatchObject({ behavior: 'allow' });
+        await handoff.handler({});
+        expect(child.exitCode).toBeNull();
+        const requested = (await ledger()).reservations[0];
+        expect(requested.state).not.toBe('released');
+        expect(requested.handoff).toMatchObject({ state: 'requested', toolInvocationIds: ['handoff-fixture-1'] });
+        await afterHandoffStop?.();
+        yield { type: 'assistant', uuid: 'post-handoff', message: { role: 'assistant', content: [{ type: 'text', text: 'must not route before close' }] } };
+        return;
+      }
       yield { type: 'result', subtype: 'success', result: 'done', session_id: 'offline-fixture',
         num_turns: 1, total_cost_usd: 0.012, duration_ms: 19, usage: { input_tokens: 7, output_tokens: 4 } };
     })();
@@ -79,7 +100,7 @@ afterEach(async () => {
 });
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
-  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff-refusal' = false) {
+  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
@@ -179,11 +200,37 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     }, 'no-handoff');
   }, 30000);
 
-  it('holds a production Core containing handoff tools before starting a native child', async () => {
+  it('routes an ordinary Core handoff only after the original owned SDK child exits and its pipes close', async () => {
+    emitHandoff = true;
     await withClaim(async () => undefined, async () => {
-      expect(promptCount).toBe(0);
-      expect(queryMock).not.toHaveBeenCalled();
-      expect(children).toEqual([]);
+      expect(promptCount).toBe(1);
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation).toMatchObject({ state: 'released', exit: { code: 0, signal: null },
+        sdkOutcome: 'completed', handoff: { protocol: 'owned-claude-exit-close-v1',
+          state: 'confirmed', toolInvocationIds: ['handoff-fixture-1'] } });
+      const tools = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal', 'tools', reservation.invocationId);
+      const records = await fs.readdir(tools);
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(await fs.readFile(path.join(tools, records[0]), 'utf8')))
+        .toMatchObject({ state: 'terminal', result: { kind: 'handoff' } });
+    }, 'handoff');
+  }, 30000);
+
+  it('retains unresolved handoff and Original holds when the goal is revoked before process-close confirmation', async () => {
+    emitHandoff = true;
+    await withClaim(async (input, goalId) => {
+      afterHandoffStop = async () => {
+        const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+        await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+      };
+    }, async () => {
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.handoff.state).toBe('requested');
+      const tools = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal', 'tools', reservation.invocationId);
+      const records = await fs.readdir(tools);
+      expect(JSON.parse(await fs.readFile(path.join(tools, records[0]), 'utf8')).state).toBe('effect-unknown');
     }, 'handoff-refusal');
   }, 30000);
 

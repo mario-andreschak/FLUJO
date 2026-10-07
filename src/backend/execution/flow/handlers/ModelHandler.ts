@@ -24,6 +24,7 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
 import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -2727,8 +2728,14 @@ export class ModelHandler {
                     const nativeTools = structuredClone(attemptTools ?? []);
                     const nativeBindings = structuredClone(opts.toolNameMap ?? {});
                     const nativeExecutors = Object.freeze({ ...localToolExecutors });
-                    const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors);
+                    const hasHandoff = nativeTools.some(tool => tool.type === 'function'
+                      && (tool.function.name === 'handoff' || tool.function.name.startsWith('handoff_to_')));
+                    const terminationProtocol = hasHandoff && model.adapter === 'claude-cli'
+                      && opts.nativeOriginalProcessHost ? NATIVE_HANDOFF_PROTOCOL : undefined;
+                    if (terminationProtocol) assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                    const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
                     nativeInventory = { digest: inventoryDigest, tools: nativeTools,
+                      ...(terminationProtocol ? { terminationProtocol } : {}),
                       bindings: nativeBindings, syntheticNames: Object.keys(nativeExecutors).sort() };
                     nativeReceipt = await prepareNativeInvocation({
                       conversationId: opts.conversationId!, runId: opts.runId!, nodeId: opts.nodeId!,
@@ -2744,6 +2751,7 @@ export class ModelHandler {
                       afterToolDispatch: () => assertFlowExecutionCurrent(opts.durableContext ?? {}),
                       authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
                       authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
+                      terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
                     });
                   })()
                 : undefined;
@@ -2839,6 +2847,7 @@ export class ModelHandler {
                             archive: { sdkRequest: archived.sdkRequest, genericWire: archived.genericWire,
                               media: archived.media },
                             inventory: { tools: nativeInventory.tools, bindings: nativeInventory.bindings,
+                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}),
                               syntheticNames: nativeInventory.syntheticNames },
                           });
                           const savedPayload = await readNativeSessionPayload(payloadRef);
@@ -2861,7 +2870,8 @@ export class ModelHandler {
                               sanitizedGenericWireDigest: nativeDigest(archived.genericWire),
                               mediaCount: archived.media.length,
                             },
-                            inventory: { digest: nativeInventory.digest, toolCount: nativeInventory.tools.length },
+                              inventory: { digest: nativeInventory.digest, toolCount: nativeInventory.tools.length,
+                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}) },
                             payloadRef,
                           }, abortController.signal, () => {
                             abortController.abort();

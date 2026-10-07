@@ -315,6 +315,8 @@ export interface NativeToolPortResult {
 export interface NativeToolPort {
   readonly invocationId: string;
   readonly inventoryDigest: string;
+  /** Confirm deferred handoff receipts only after the owned SDK process closes. */
+  confirmHandoffTermination?(toolInvocationIds: readonly string[]): Promise<void>;
   readonly advertised: ReadonlyArray<{
     name: string;
     description: string;
