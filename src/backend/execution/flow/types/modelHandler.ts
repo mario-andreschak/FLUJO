@@ -94,6 +94,7 @@ export interface ModelCallInput {
   nativeBrokerAuthority?: import('../handlers/nativeToolBroker').NativeBrokerAuthority;
   /** Trusted opt-in to publish the original native SDK session in-process. */
   nativeInvocationSessionHook?: import('../handlers/nativeInvocationSession').NativeInvocationSessionHook;
+  nativeOriginalHost?: Awaited<ReturnType<typeof import('../handlers/nativeOriginalHost').createPersonaNativeOriginalHost>>;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   personaAttribution?: PersonaAttribution;
   /** Final authority checks immediately before external side effects. */

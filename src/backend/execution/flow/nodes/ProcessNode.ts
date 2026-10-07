@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
+import { createPersonaNativeOriginalHost } from '../handlers/nativeOriginalHost';
 import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
@@ -1189,6 +1190,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
             beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
             beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
+            nativeOriginalHost: await createPersonaNativeOriginalHost({
+              authority: prepResult.executionAuthority, conversationId: prepResult.conversationId,
+              runId: prepResult.runId, nodeId: prepResult.nodeId, modelId: prepResult.boundModel,
+              personaAttribution: prepResult.personaAttribution,
+            }),
             executionAuthority: prepResult.executionAuthority,
             executionExtensionContext: prepResult.executionExtensionContext,
             personaAttribution: prepResult.personaAttribution,

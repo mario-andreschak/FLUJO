@@ -11,6 +11,14 @@ export interface ClaudeOwnedProcessRegistration {
   readonly close: Promise<void>;
 }
 
+const registrationRoot = globalThis as typeof globalThis & { __flujoClaudeOwnedRegistrations?: WeakMap<object, object | undefined> };
+const registrations = registrationRoot.__flujoClaudeOwnedRegistrations ??= new WeakMap<object, object | undefined>();
+export function assertClaudeOwnedProcessRegistration(value: unknown, owner: object): asserts value is ClaudeOwnedProcessRegistration {
+  if (!value || typeof value !== 'object' || !registrations.has(value) || registrations.get(value) !== owner) {
+    throw new Error('Owned Claude process registration is unavailable or mismatched.');
+  }
+}
+
 /** Prepared integration seam. The host must supply durable registration and
  * gate first prompt on ready, and await exit AND close before releasing its
  * Original/budget hold. It must bind registration to the accepted invocation
@@ -20,6 +28,8 @@ export function createClaudeOwnedProcessSpawner(input: {
   requestSdkStop(): void;
   register(process: ClaudeOwnedProcessRegistration): Promise<void>;
   stderr?: (chunk: string) => void;
+  /** Runtime Original capability; never serialized into command or SDK input. */
+  owner?: object;
 }): {
   spawnClaudeCodeProcess(options: SpawnOptions): SpawnedProcess;
   readonly ready: Promise<ClaudeOwnedProcessRegistration>;
@@ -65,6 +75,7 @@ export function createClaudeOwnedProcessSpawner(input: {
             // A fast exit during probing cannot become a live registration.
             if (child.exitCode !== null || child.signalCode !== null) throw new Error('Child exited before registration.');
             const registration = Object.freeze({ identity, requestStop: () => input.requestSdkStop(), exit, close });
+            registrations.set(registration, input.owner);
             await input.register(registration);
             resolve(registration);
           } catch (error) {

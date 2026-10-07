@@ -8,6 +8,8 @@ import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/c
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createClaudeOwnedProcessSpawner } from './claudeOwnedProcess';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
@@ -337,6 +339,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     onNativeSdkLive,
     onNativeSdkFinished,
     nativeToolPort,
+    nativeOriginalProcessHost,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
     // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
@@ -347,6 +350,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // require SDK-managed sampling-control support that does not exist today; if
     // that is ever desired, revisit this seam (issues #173 and #191).
   }: CompletionInput): Promise<CompletionResult> {
+    if (nativeOriginalProcessHost) {
+      assertNativeOriginalProcessHost(nativeOriginalProcessHost);
+      if (!nativeToolPort) throw new Error('Native Original process requires its owned broker.');
+    }
     if (nativeToolPort) {
       assertNativeToolPort(nativeToolPort);
       if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Claude broker requires a durable SDK dispatch receipt.');
@@ -877,7 +884,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     let pendingResults = 0;
     let steeringFailure: unknown;
     const closeInput = (): void => { inputClosed = true; wakeInput?.(); };
+    let ownedSpawner: ReturnType<typeof createClaudeOwnedProcessSpawner> | undefined;
     async function* promptStream(): AsyncGenerator<SDKUserMessage> {
+      if (nativeOriginalProcessHost) {
+        if (!ownedSpawner) throw new Error('Native Original child was not prepared.');
+        await ownedSpawner.ready;
+        await nativeOriginalProcessHost.beforeFirstPrompt();
+      }
       pendingResults++;
       yield sdkPromptMessage;
       while (!inputClosed) {
@@ -1069,6 +1082,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     let response: ReturnType<typeof query>;
     try {
+      if (nativeOriginalProcessHost) {
+        await nativeOriginalProcessHost.assertTurnBudget(queryOptions.maxTurns!);
+        ownedSpawner = createClaudeOwnedProcessSpawner({
+          owner: nativeOriginalProcessHost,
+          requestSdkStop: () => abortController.abort(),
+          register: process => nativeOriginalProcessHost.register(process),
+          stderr: queryOptions.stderr,
+        });
+        queryOptions.spawnClaudeCodeProcess = ownedSpawner.spawnClaudeCodeProcess;
+      }
       response = query({ prompt: promptStream(), options: queryOptions });
     } catch (error) {
       closeInput();
@@ -1323,6 +1346,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             pendingAbortedProse = undefined;
           }
         } else if (message.type === 'result') {
+          await nativeOriginalProcessHost?.observeSdkUsage(message);
           if (message.subtype === 'success') {
             resultText = (message as { result?: string }).result ?? '';
             nativeSdkTerminal = true;
@@ -1383,6 +1407,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      if (nativeOriginalProcessHost) {
+        closeInput();
+        response.close();
+        await nativeOriginalProcessHost.waitForExit();
+      }
       if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
       if (nativeToolPort && abortController.signal.aborted) dispatchOutcome = 'cancelled';
       closeInput();

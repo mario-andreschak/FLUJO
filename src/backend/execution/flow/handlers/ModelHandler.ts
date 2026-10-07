@@ -22,6 +22,7 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
+import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -1169,6 +1170,15 @@ export class ModelHandler {
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (!input.nativeOriginalHost && input.personaAttribution) {
+      input = { ...input, nativeOriginalHost: await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
+        conversationId, runId, nodeId, modelId, personaAttribution: input.personaAttribution }) };
+    }
+    if (input.nativeOriginalHost) {
+      assertNativeOriginalProcessHost(input.nativeOriginalHost.process);
+      input = { ...input, nativeBrokerAuthority: input.nativeOriginalHost.broker,
+        nativeInvocationSessionHook: input.nativeOriginalHost.session };
+    }
     if (input.nativeBrokerAuthority) {
       assertNativeBrokerAuthority(input.nativeBrokerAuthority);
       if (!conversationId || !runId || !nodeId || input.executionExtensionContext
@@ -1629,6 +1639,7 @@ export class ModelHandler {
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
       nativeBrokerAuthority: input.nativeBrokerAuthority,
       nativeInvocationSessionHook: input.nativeInvocationSessionHook,
+      nativeOriginalProcessHost: input.nativeOriginalHost?.process,
       toolNameMap,
       maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -1950,6 +1961,7 @@ export class ModelHandler {
       executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
       nativeBrokerAuthority?: NativeBrokerAuthority;
       nativeInvocationSessionHook?: NativeInvocationSessionHook;
+      nativeOriginalProcessHost?: NativeOriginalProcessHost;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -2937,6 +2949,7 @@ export class ModelHandler {
               toolNameMap: nativeToolPort ? undefined : opts?.toolNameMap,
               localToolExecutors: nativeToolPort ? undefined : localToolExecutors,
               nativeToolPort,
+              nativeOriginalProcessHost: opts?.nativeOriginalProcessHost,
               shouldEndAgenticTurn: opts?.shouldEndAgenticTurn,
               maxTurns: opts?.maxTurns,
               requestToolApproval: nativeToolPort ? undefined : opts?.requestToolApproval,
@@ -3169,6 +3182,7 @@ export class ModelHandler {
             });
             nativeTerminal = true;
             nativeSession?.settle({ state: 'terminal', outcome: 'completed' });
+            await opts?.nativeOriginalProcessHost?.releaseAfterTerminal();
           }
 
           attemptOutcome = 'completed';

@@ -123,6 +123,7 @@ export interface CompletionInput {
   /** Runtime-only, origin-owned policy port. A JSON value cannot satisfy its
    *  module-private capability check in either native adapter. */
   nativeToolPort?: NativeToolPort;
+  nativeOriginalProcessHost?: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
