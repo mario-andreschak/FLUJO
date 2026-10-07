@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { StorageKey } from '@/shared/types/storage';
@@ -149,7 +149,7 @@ async function syncParent() {
   const directory = path.dirname(credentialMigrationPath());
   await assertLinkFreeFileParent(getDataDir(), path.join(directory, 'probe'));
   const before = await fs.lstat(directory, { bigint: true });
-  const parent = await fs.open(directory, 'r');
+  const parent = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = await parent.stat({ bigint: true });
     if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino

@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { StorageKey } from '@/shared/types/storage';
 import { readPlainFile } from '@/utils/readPlainFile';
@@ -190,7 +190,7 @@ export async function restoreCredentialTransfer(envelope: Uint8Array, transferPa
       await fs.rename(staging, getWorkspaceDir(name));
       published = true;
       if (process.platform !== 'win32') {
-        const parent = await fs.open(root, 'r');
+        const parent = await fs.open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         try {
           const opened = await parent.stat({ bigint: true });
           if (!opened.isDirectory() || opened.dev !== rootIdentity.dev || opened.ino !== rootIdentity.ino

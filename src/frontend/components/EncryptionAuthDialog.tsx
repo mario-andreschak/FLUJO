@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/EncryptionAuthDialog');
@@ -26,12 +26,19 @@ import {
   ENCRYPTION_UNLOCKED_EVENT,
 } from '@/frontend/utils/encryptionLock';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import CredentialMigrationRecovery from './CredentialMigrationRecovery';
+import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { TranslationKey } from '@/frontend/i18n';
 
 export default function EncryptionAuthDialog() {
   const { verifyKey } = useStorage();
   const { t } = useI18n();
   
+  const [workspace] = useState(getSelectedWorkspace);
+  const statusGeneration = useRef(0);
+  const mounted = useRef(true);
+  const verifyBusy = useRef(false);
+  const [migrationPending, setMigrationPending] = useState(false);
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [isSetup, setIsSetup] = useState(false);
@@ -45,18 +52,27 @@ export default function EncryptionAuthDialog() {
 
   // Check if user encryption is enabled on component mount
   const checkEncryptionStatus = useCallback(async () => {
+      const generation = ++statusGeneration.current;
+      const current = () => mounted.current && generation === statusGeneration.current;
       log.debug('Checking encryption status');
       try {
         setIsCheckingStatus(true);
         
-        const response = await fetch('/api/encryption/secure', { method: 'POST',
+        const response = await fetch(withWorkspaceUrl('/api/encryption/secure', workspace), { method: 'POST',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'status' }) });
         if (!response.ok) throw new Error('Encryption status unavailable');
         const status = await response.json();
+        if (!current()) return;
+        if (status.protection === 'migration-pending' && status.initialized === true && status.locked === true) {
+          setMigrationPending(true); setIsSetup(false); setOperatorUnavailable(false);
+          setPassword(''); setConfirmation(''); setError(null);
+          setIsAuthenticated(false); setIsOpen(true); setIsCheckingStatus(false); return;
+        }
         if (typeof status.initialized !== 'boolean' || typeof status.locked !== 'boolean'
             || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file'].includes(status.protection)) {
           throw new Error('Encryption status unavailable');
         }
+        setMigrationPending(false); setError(null);
         const initialized = status.initialized;
         setIsSetup(!initialized && status.protection !== 'operator-file');
         setOperatorUnavailable(false);
@@ -94,15 +110,18 @@ export default function EncryptionAuthDialog() {
         setIsOpen(true);
         setIsCheckingStatus(false);
       } catch (error) {
+        if (!current()) return;
         log.error('Failed to check encryption status');
         setIsCheckingStatus(false);
         setError('encryption.unlock.error');
         setIsAuthenticated(false);
         setIsOpen(true);
       }
-    }, []);
+    }, [workspace]);
   useEffect(() => {
+    mounted.current = true;
     void checkEncryptionStatus();
+    return () => { mounted.current = false; ++statusGeneration.current; };
   }, [checkEncryptionStatus]);
 
   // Global lockdown handling (issue #77): install the 423 interceptor once and
@@ -122,6 +141,7 @@ export default function EncryptionAuthDialog() {
   }, [checkEncryptionStatus]);
 
   const handleVerify = async () => {
+    if (verifyBusy.current || migrationPending || operatorUnavailable) return;
     if (!password.trim()) {
       log.warn('Empty password submitted');
       setError('encryption.unlock.required');
@@ -131,18 +151,21 @@ export default function EncryptionAuthDialog() {
     if (isSetup && password !== confirmation) { setError('settings.encryption.mismatch'); return; }
     
     log.debug('Verifying encryption password');
+    verifyBusy.current = true;
+    const generation = statusGeneration.current;
     setIsLoading(true);
     setError(null);
     
     try {
       if (isSetup) {
-        const response = await fetch('/api/encryption/secure', { method: 'POST',
+        const response = await fetch(withWorkspaceUrl('/api/encryption/secure', workspace), { method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'initialize', password }) });
         if (!response.ok || (await response.json()).success !== true) throw new Error('Private encryption setup failed');
         setIsSetup(false);
       }
       const isValid = await verifyKey(password);
+      if (!mounted.current || generation !== statusGeneration.current) return;
       log.debug(`Password verification result: ${isValid}`);
       
       if (isValid) {
@@ -167,6 +190,7 @@ export default function EncryptionAuthDialog() {
     } finally {
       setPassword('');
       setConfirmation('');
+      verifyBusy.current = false;
       setIsLoading(false);
     }
   };
@@ -178,7 +202,7 @@ export default function EncryptionAuthDialog() {
   };
 
   // If still checking status or already authenticated, don't show anything
-  if (isCheckingStatus || isAuthenticated) {
+  if ((isCheckingStatus && !migrationPending) || isAuthenticated) {
     return null;
   }
 
@@ -196,6 +220,7 @@ export default function EncryptionAuthDialog() {
           <Typography variant="h6">{t(isSetup ? 'settings.encryption.setTitle' : 'encryption.unlock.title')}</Typography>
         </Box>
       </DialogTitle>
+      {migrationPending ? <DialogContent><CredentialMigrationRecovery workspace={workspace} onSettled={checkEncryptionStatus} /></DialogContent> : <>
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -247,6 +272,7 @@ export default function EncryptionAuthDialog() {
           {isLoading ? t('encryption.unlock.verifying') : t(isSetup ? 'settings.encryption.setAction' : 'encryption.unlock.action')}
         </Button>
       </DialogActions>
+      </>}
     </Dialog>
   );
 }
