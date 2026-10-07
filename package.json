@@ -92,9 +92,9 @@
     "@mario.andreschak/mcp-browser": "3.46.2",
     "@mario.andreschak/mcp-filesystem": "3.46.2",
     "@mario.andreschak/mcp-flujo": "3.46.2",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@mui/icons-material": "^6.5.0",
     "@mui/material": "^6.5.0",
     "@openai/codex-sdk": "^0.153.3",
@@ -117,7 +117,7 @@
     "react-markdown": "^10.1.0",
     "react-window": "^1.8.11",
     "remark-gfm": "^4.0.1",
-    "simple-git": "^3.36.0",
+    "simple-git": "4.0.2",
     "slate": "^0.126.0",
     "slate-dom": "^0.126.0",
     "slate-history": "^0.113.1",
@@ -132,7 +132,9 @@
     "fast-glob": "$fast-glob",
     "zod": "$zod",
     "postcss": "$postcss",
-    "sharp": "^0.35.4"
+    "sharp": "0.35.5",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
