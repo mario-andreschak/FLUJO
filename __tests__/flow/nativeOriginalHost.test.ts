@@ -142,7 +142,9 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       await dispatcher.submit({ personaId: persona.id, idempotencyKey: 'native-host-round', kind: 'assignment',
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
       { startPump: false });
-      await dispatcher.pump(persona.id);
+      if (production === 'handoff-refusal') {
+        await expect(dispatcher.pump(persona.id)).rejects.toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+      } else await dispatcher.pump(persona.id);
       expect(observed).toBe(true);
       if (failure) throw failure;
       await after?.(persona.id, goal.id);

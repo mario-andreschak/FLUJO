@@ -160,7 +160,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
     inventoryDigest,
     advertised,
     cancel: () => controller.abort(),
-    confirmHandoffTermination: async toolInvocationIds => {
+    confirmHandoffTermination: async (toolInvocationIds: readonly string[]) => {
       if (handoffsConfirmed || !pendingHandoffs.size
         || nativeDigest([...pendingHandoffs.keys()]) !== nativeDigest(toolInvocationIds)) {
         throw new Error('Native handoff receipts are incomplete or changed.');

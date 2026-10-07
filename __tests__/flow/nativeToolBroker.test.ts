@@ -11,6 +11,7 @@ import {
   assertNativeToolPort, createNativeBrokerAuthority, createNativeToolPort,
   nativeToolInventoryDigest,
 } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { NATIVE_HANDOFF_PROTOCOL } from '@/backend/execution/flow/handlers/nativeHandoffProtocol';
 
 const tool = (name: string): OpenAI.ChatCompletionFunctionTool => ({
   type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } },
@@ -22,6 +23,20 @@ const owner = (conversationId: string, inventoryDigest = 'inventory'): NativeInv
 });
 
 describe('native broker journal', () => {
+  it('does not admit a handoff protocol string or fake exit promises as an owned host capability', async () => {
+    const tools = [tool('handoff_to_finish')];
+    const digest = nativeToolInventoryDigest(tools, undefined, undefined, NATIVE_HANDOFF_PROTOCOL);
+    const receipt = await prepareNativeInvocation(owner('fake-handoff-cap', digest));
+    const confirm = jest.fn();
+    expect(() => createNativeToolPort({ receipt, tools,
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined),
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      signal: new AbortController().signal, terminationProtocol: NATIVE_HANDOFF_PROTOCOL,
+      originalProcessHost: { confirmHandoffTermination: confirm, waitForExit: async () => undefined } as never,
+    })).toThrow('held');
+    expect(confirm).not.toHaveBeenCalled();
+    expect((await nativeInvocationStatus(receipt.invocationId, receipt.owner)).state).toBe('prepared');
+  });
   let directory: string;
   beforeEach(async () => {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-native-broker-'));
