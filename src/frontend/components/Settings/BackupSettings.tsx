@@ -46,11 +46,13 @@ const backupOptions: BackupOption[] = [
   { key: 'encryptionKey', labelKey: 'settings.backup.option.encryption', descriptionKey: 'settings.backup.option.encryptionDescription', storageKey: StorageKey.ENCRYPTION_KEY },
 ];
 
+const ordinaryBackupOptions = backupOptions.filter(option => option.key !== 'encryptionKey' && option.key !== 'mcpServersFolder');
+
 export default function BackupSettings() {
   const { t } = useI18n();
   // State for selected options
   const [backupSelections, setBackupSelections] = useState<Record<string, boolean>>(
-    backupOptions.reduce((acc, option) => ({ ...acc, [option.key]: true }), {})
+    ordinaryBackupOptions.reduce((acc, option) => ({ ...acc, [option.key]: true }), {})
   );
   const [restoreSelections, setRestoreSelections] = useState<Record<string, boolean>>(
     backupOptions.reduce((acc, option) => ({ ...acc, [option.key]: true }), {})
@@ -97,7 +99,7 @@ export default function BackupSettings() {
     
     try {
       // Get selected options
-      const selectedOptions = Object.entries(backupSelections)
+      const selectedOptions = Object.entries(backupSelections).filter(([key]) => key !== 'encryptionKey' && key !== 'mcpServersFolder')
         .filter(([_, selected]) => selected)
         .map(([key]) => key);
       
@@ -239,7 +241,7 @@ export default function BackupSettings() {
   // Select/deselect all options
   const selectAllBackup = (select: boolean) => {
     const newSelections = { ...backupSelections };
-    backupOptions.forEach(option => {
+    ordinaryBackupOptions.forEach(option => {
       newSelections[option.key] = select;
     });
     setBackupSelections(newSelections);
@@ -276,6 +278,7 @@ export default function BackupSettings() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t('settings.backup.createHelp')}
         </Typography>
+        <Alert severity="info" sx={{ mb: 2 }}>{t('settings.backup.credentialOmission')}</Alert>
         
         <Box sx={{ mb: 2 }}>
           <Button 
@@ -294,7 +297,7 @@ export default function BackupSettings() {
         </Box>
         
         <FormGroup sx={{ mb: 3 }}>
-          {backupOptions.map((option) => (
+          {ordinaryBackupOptions.map((option) => (
             <FormControlLabel
               key={option.key}
               control={
