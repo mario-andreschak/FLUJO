@@ -125,7 +125,9 @@ export function verifyReleaseAttestations({ run, directory, sha, version, source
   for (const file of [...evidence.artifacts.map((item) => item.filename), 'manifest.json', EVIDENCE_FILE, SBOM_FILE]) {
     run('gh', ['attestation', 'verify', path.join(directory, file), '--repo', REPOSITORY,
       '--predicate-type', 'https://slsa.dev/provenance/v1',
-      '--signer-workflow', WORKFLOW, '--source-digest', sha, '--source-ref', 'refs/heads/main',
+      '--signer-workflow', WORKFLOW,
+      '--cert-identity', `https://github.com/${WORKFLOW}@refs/heads/main`,
+      '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com', '--source-digest', sha, '--source-ref', 'refs/heads/main',
       '--signer-digest', sha,
       '--deny-self-hosted-runners'], { stdio: 'inherit' });
   }
