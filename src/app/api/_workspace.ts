@@ -9,7 +9,8 @@ import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
 import { assertWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { authorizeExecutionTransport, withExecutionExtensionRoute } from '@/backend/execution/extensions';
-import { assertOwnerRequest } from '@/backend/services/security/ownerAccess';
+import { assertOwnerRequest, isOwnerProtocolException, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
+import { bindOwnerStream } from '@/backend/services/security/ownerStream';
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 
 const log = createLogger('app/api/_workspace');
@@ -185,11 +186,18 @@ export function withWorkspaceRoute<
     const transportRequest = (request ?? normalizedRequest) as Request;
     const extensionResponse = authorizeExecutionTransport(transportRequest);
     if (extensionResponse) return extensionResponse;
+    let ownerAuthorization: OwnerRequestAuthorization | undefined;
     if (extensionResponse === undefined) {
       const denied = isWorkerMode()
         ? assertSnapshotBearer(transportRequest)
         : assertOwnerRequest(transportRequest);
       if (denied) return denied;
+      if (!isWorkerMode() && process.env.FLUJO_OWNER_AUTH_FILE !== undefined
+          && !isOwnerProtocolException(transportRequest)) {
+        const resolved = resolveOwnerRequest(transportRequest);
+        if (!resolved.ok) return resolved.response;
+        ownerAuthorization = resolved.authorization;
+      }
     }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
       const selected = await withWorkspace(admittedRequest, () => Promise.resolve(
@@ -198,7 +206,9 @@ export function withWorkspaceRoute<
           ...rest,
         ),
       ));
-      return selected;
+      return ownerAuthorization && selected instanceof Response
+        ? bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
+        : selected;
     });
   }) as unknown as H;
 }
