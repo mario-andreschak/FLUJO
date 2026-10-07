@@ -22,7 +22,6 @@ import { isWorkerMode, setWorkerBootstrapStatus } from './workerMode';
 
 const MANIFEST_PATH = 'snapshot-manifest.json';
 const RESTORE_MARKER = '.flujo-worker-snapshot.json';
-const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export interface WorkerSnapshotRestoreResult {

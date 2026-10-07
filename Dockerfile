@@ -118,6 +118,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/src/shared/snapshotTransfer.json ./src/shared/snapshotTransfer.json
 
 # Keep writable data separate from the immutable bundled package workspace so a
 # persistent mcp-servers volume cannot mask the offline built-ins. Seed the
