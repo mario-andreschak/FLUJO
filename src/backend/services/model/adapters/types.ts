@@ -115,6 +115,15 @@ export interface CompletionInput {
     dispatchId: string;
     outcome: 'completed' | 'error' | 'cancelled';
   }) => Promise<void>;
+  /** Strict native-only: first event actually observed from the original SDK
+   * stream. It does not prove a host handle survives a process restart. */
+  onNativeSdkLive?: () => Promise<void>;
+  /** Strict native-only: original SDK stream has ended, before durable outcome acknowledgement. */
+  onNativeSdkFinished?: () => void;
+  /** Runtime-only, origin-owned policy port. A JSON value cannot satisfy its
+   *  module-private capability check in either native adapter. */
+  nativeToolPort?: NativeToolPort;
+  nativeOriginalProcessHost?: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -296,6 +305,31 @@ export interface CompletionInput {
   promptCacheMode?: 'explicit';
 }
 
+export interface NativeToolPortResult {
+  result: import('@modelcontextprotocol/sdk/types.js').CallToolResult;
+  transcriptText: string;
+  kind: 'mcp' | 'synthetic' | 'handoff';
+  ui?: NonNullable<FlujoChatMessage['ui']>;
+}
+
+export interface NativeToolPort {
+  readonly invocationId: string;
+  readonly inventoryDigest: string;
+  readonly advertised: ReadonlyArray<{
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+    annotations?: ToolAnnotations;
+  }>;
+  dispatch(input: {
+    toolInvocationId: string;
+    name: string;
+    args: Record<string, unknown>;
+    signal: AbortSignal;
+  }): Promise<NativeToolPortResult>;
+  cancel(): void;
+}
+
 /**
  * What an adapter returns. The OpenAI-shaped `completion` carries the final
  * answer + usage + any routing tool_calls (so downstream consumers work
@@ -305,6 +339,8 @@ export interface CompletionInput {
  * them in the conversation. Request/response adapters omit it.
  */
 export interface CompletionResult {
+  /** True only after the original native SDK emitted its terminal turn/result. */
+  nativeSdkTerminal?: boolean;
   routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
   completion: OpenAI.Chat.Completions.ChatCompletion;
   /** null means the adapter cannot report current context; usage is not a substitute. */

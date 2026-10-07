@@ -151,6 +151,13 @@ describe('portable workspace capture', () => {
     await put('db/codex-runtime/state_5.sqlite', Buffer.from('SQLite format 3\0synthetic'));
     await put('db/codex-runtime/state_5.sqlite-wal', 'synthetic wal');
     await put('db/codex-runtime/auth.json', 'stale auth');
+    const nativePrivatePaths = [
+      'db/native-tool-journal/calls/original.json',
+      'db/native-session-payloads/original/payload.json',
+      'db/native-session-origins/original.json',
+      'db/model-turns/chat-one/original.json.gz',
+    ];
+    for (const name of nativePrivatePaths) await put(name, 'private native request or journal');
     await put('mcp-servers/old-path/node_modules/dependency/index.js', 'old runtime');
     await put('userdata/mcp-runtime/provider-state.sqlite', Buffer.from('SQLite format 3\0synthetic'));
     await put('browser-profile/browser-state', 'local profile');
@@ -160,12 +167,17 @@ describe('portable workspace capture', () => {
     expect(captured.manifest.runtime.codexAuth).toBe('none');
     expect(mockBuildPlan).toHaveBeenCalledWith([expect.objectContaining({ name: 'test-server', env: { API_KEY: 'encrypted:synthetic' } })], workspace);
     expect(captured.zip.file('db/codex-runtime/state_5.sqlite')).toBeNull();
+    for (const name of nativePrivatePaths) {
+      expect(captured.zip.file(name)).toBeNull();
+      expect(captured.manifest.files.some(file => file.path === name)).toBe(false);
+    }
     const archive = await writeWorkspaceSnapshotArchive(captured);
     try {
       const bytes = await fs.readFile(archive.archivePath);
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(archive.sha256);
       const unpacked = await JSZip.loadAsync(decryptArchive(bytes));
       expect(JSON.parse(await unpacked.file('snapshot-manifest.json')!.async('string'))).toEqual(captured.manifest);
+      for (const name of nativePrivatePaths) expect(unpacked.file(name)).toBeNull();
     } finally {
       await fs.rm(archive.stagingDir, { recursive: true, force: true });
     }
