@@ -62,3 +62,12 @@ it('skips malformed nullable/non-string credential entries as the resolver does'
   const resolved = { env: { SECRET: 'synthetic-valid' }, headers: {} } as unknown as MCPServerConfig;
   expect(collectMcpDiagnosticSecrets(configured, resolved)).toEqual(['synthetic-valid']);
 });
+
+it('preserves complete diagnostic strings ending in ordinary letters or incomplete credential prefixes', () => {
+  const credential = 'synthetic-complete-credential';
+  const { redact } = createMcpDiagnosticRedactor([credential]);
+  for (const diagnostic of ['Connection timeout after 15s', 's', 'synthetic-', 'progress']) {
+    expect(redact(diagnostic)).toBe(diagnostic);
+  }
+  expect(redact(credential)).toBe('[REDACTED]');
+});

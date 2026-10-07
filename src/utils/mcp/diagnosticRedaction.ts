@@ -57,7 +57,7 @@ export function createMcpDiagnosticRedactor(values: readonly string[]) {
     variants.add(JSON.stringify(value).slice(1, -1));
   }
   const secrets = [...variants].sort((a, b) => b.length - a.length);
-  const consume = (text: string, final: boolean): { output: string; pending: string } => {
+  const consume = (text: string, final: boolean, maskPartial = false): { output: string; pending: string } => {
     let output = '';
     let index = 0;
     while (index < text.length) {
@@ -70,7 +70,7 @@ export function createMcpDiagnosticRedactor(values: readonly string[]) {
       if (match) {
         output += REDACTED;
         index += match.length;
-      } else if (partial && final) {
+      } else if (partial && final && maskPartial) {
         // Do not disclose a truncated credential prefix at terminal flush.
         output += REDACTED;
         index = text.length;
@@ -93,7 +93,7 @@ export function createMcpDiagnosticRedactor(values: readonly string[]) {
           return result.output;
         },
         end(): string {
-          const result = consume(pending, true);
+          const result = consume(pending, true, true);
           pending = '';
           return result.output;
         },
