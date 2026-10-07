@@ -28,7 +28,8 @@ import {
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
-import { decodeListCursor, encodeListCursor } from './listQuery';
+import { decodeListCursor, encodeListCursor, ListArgumentError } from './listQuery';
+import { isRunResourceIndexPressureError } from '@/backend/services/runResources/indexCache';
 
 const log = createLogger('backend/services/mcp/internalResources');
 
@@ -95,8 +96,17 @@ export async function internalListResources(cursor?: string): Promise<{
   nextCursor?: string;
   error?: string;
 }> {
+  let offset = 0;
   try {
-    let offset = cursor ? decodeListCursor(cursor) : 0;
+    offset = cursor ? decodeListCursor(cursor) : 0;
+  } catch (error) {
+    log.error('internalListResources failed', error);
+    return {
+      resources: [],
+      error: error instanceof ListArgumentError ? error.message : 'Invalid run-resource cursor.',
+    };
+  }
+  try {
     let hasMore = false;
     const resources: MCPResource[] = [];
     const ownership = new Map<string, Promise<boolean>>();
@@ -143,7 +153,12 @@ export async function internalListResources(cursor?: string): Promise<{
     };
   } catch (error) {
     log.error('internalListResources failed', error);
-    return { resources: [], error: error instanceof Error ? error.message : String(error) };
+    return {
+      resources: [],
+      error: isRunResourceIndexPressureError(error)
+        ? 'Resource index reads are busy. Retry after current reads finish.'
+        : 'Failed to list run resources.',
+    };
   }
 }
 

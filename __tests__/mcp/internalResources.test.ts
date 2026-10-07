@@ -269,3 +269,47 @@ describe('MCP resource unexpected-error response contract', () => {
     }
   });
 });
+
+describe('MCP resource-list error response contract', () => {
+  beforeEach(() => { loadConversationStateMock.mockClear(); });
+  it.each<[string, unknown]>([
+    ['Error', new Error('EACCES C:/private/workspace/db/run-resources Bearer synthetic_private_credential')],
+    ['string', 'C:/private/workspace/db/run-resources sk-synthetic_private_key'],
+  ])('bounds a directory-list %s failure before any ownership scan', async (_label, failure) => {
+    const listSpy = jest.spyOn(fs, 'readdir').mockRejectedValueOnce(failure);
+    try {
+      const result = await internalListResources();
+      expect(listSpy).toHaveBeenCalledTimes(1);
+      expect(listSpy).toHaveBeenCalledWith(tmpDir, { withFileTypes: true });
+      expect(result).toEqual({ resources: [], error: 'Failed to list run resources.' });
+      expect(loadConversationStateMock).not.toHaveBeenCalled();
+      expect(listPersonaFlowDispatchesMock).not.toHaveBeenCalled();
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it.each<[string, string, string]>([
+    ['malformed', 'not-a-real-cursor', '"cursor" is invalid or malformed.'],
+    ['oversized', 'x'.repeat(513), '"cursor" must be a non-empty cursor returned by a previous list call.'],
+  ])('preserves the exact %s cursor message before accessing the resource directory', async (_label, cursor, message) => {
+    const listSpy = jest.spyOn(fs, 'readdir');
+    try {
+      expect(await internalListResources(cursor)).toEqual({ resources: [], error: message });
+      expect(listSpy).not.toHaveBeenCalled();
+      expect(loadConversationStateMock).not.toHaveBeenCalled();
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it('preserves the public retry message for a cross-bundle pressure error without forwarding its raw text', async () => {
+    const pressure = Object.assign(new Error('C:/private/workspace/db/index.json Bearer synthetic_private_credential'), {
+      code: 'RUN_RESOURCE_INDEX_PRESSURE',
+    });
+    loadConversationStateMock.mockRejectedValueOnce(pressure);
+    expect(await internalListResources()).toEqual({
+      resources: [], error: 'Resource index reads are busy. Retry after current reads finish.',
+    });
+  });
+});
