@@ -30,12 +30,20 @@ const MAX_SOURCE_BYTES = 256 * 1024 * 1024;
 const MAX_MEMBERS = 16_384;
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 
+export const TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES = [
+  'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+  'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'TMPDIR', 'TMP', 'TEMP',
+  'NPM_CONFIG_CACHE', 'PIP_CACHE_DIR', 'UV_CACHE_DIR',
+  ...(process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH'] : []),
+] as const;
+
 /** A request for explicit host trust, never effective approval or an OS sandbox. */
 export const trustedHostMcpPolicySchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal('trusted-host'),
   privileges: z.literal('owner-account'),
   runtime: z.enum(['node', 'native']),
+  runtimeHome: z.enum(['host', 'isolated']).optional(),
   entryPoint: absolutePath,
   sourceRoot: absolutePath,
   sourceDigest: digestSchema,
@@ -211,7 +219,8 @@ export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
       domain: 'flujo:mcp:trusted-host-consent:v1', command, args, cwd, requestedEnvironment,
       policy: { ...policy, environmentNames: [...policy.environmentNames].sort() },
       capabilities: { roots, sampling: config.sampling ?? null, elicitation: config.elicitation ?? null,
-        apps: config.enableMcpApps === true, skills: config.enableMcpSkills === true, rootPath },
+        apps: config.enableMcpApps === true, skills: config.enableMcpSkills === true, rootPath,
+        runtimeHomeMode: config.runtimeHomeMode ?? null },
     })).digest('hex');
   } catch { throw new TrustedHostMcpError('HOST_POLICY_INVALID'); }
 }
