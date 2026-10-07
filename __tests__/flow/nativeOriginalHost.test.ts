@@ -5,6 +5,7 @@ import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sd
 import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFlow';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import type { Model } from '@/shared/types/model';
 
 const modelFixture: Model = { id: 'model-test', name: 'offline-native', displayName: 'Offline native',
@@ -28,7 +29,7 @@ import { createRoleVersion, getPersonaWorkItem, savePersonaWorkItem } from '@/ba
 import { stopPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
 import { buildTestRoleVersion, createPersonaFromRole, ensureTestRole } from '../enduringAgents/fixtures/personaFactory';
 import { runWithWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
-import { saveCollectionItem } from '@/utils/storage/backend';
+import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
@@ -80,7 +81,10 @@ beforeEach(async () => {
         expect(handoff).toBeDefined();
         expect(await sdk.canUseTool(`mcp__flujo__${handoff.name}`, {}, { toolUseID: 'handoff-fixture-1' }))
           .toMatchObject({ behavior: 'allow' });
-        await handoff.handler({});
+        const sdkArgs: Record<string, unknown> = {};
+        const pendingHandoff = handoff.handler(sdkArgs);
+        sdkArgs.prompt = 'late-sdk-mutation';
+        await pendingHandoff;
         expect(child.exitCode).toBeNull();
         const requested = (await ledger()).reservations[0];
         expect(requested.state).not.toBe('released');
@@ -138,7 +142,7 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
           return result;
         }
       } catch (error) { failure = error; }
-      return { status: 'completed', conversationId: input.conversationId!, runId: input.runId!,
+      return { status: production ? 'error' : 'completed', conversationId: input.conversationId!, runId: input.runId!,
         outputText: 'fixture', messages: [], sharedState: {} as SharedState } satisfies FlowRunResult;
     } } });
     try {
@@ -150,7 +154,10 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
         catch (error) { expect(error).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' }); }
       } else await dispatcher.pump(persona.id);
       expect(observed).toBe(true);
-      if (failure) throw failure;
+      if (failure) {
+        if (production === 'handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+        else throw failure;
+      }
       await after?.(persona.id, goal.id);
     } finally { await dispatcher.quiesce(persona.id); }
   });
@@ -231,6 +238,9 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(records).toHaveLength(1);
       expect(JSON.parse(await fs.readFile(path.join(tools, records[0]), 'utf8')))
         .toMatchObject({ state: 'terminal', result: { kind: 'handoff' } });
+      const saved = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(saved).toBeDefined();
+      expect(JSON.stringify(saved!.messages)).not.toContain('late-sdk-mutation');
     }, 'handoff');
   }, 30000);
 
@@ -248,6 +258,9 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       const tools = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal', 'tools', reservation.invocationId);
       const records = await fs.readdir(tools);
       expect(JSON.parse(await fs.readFile(path.join(tools, records[0]), 'utf8')).state).toBe('effect-unknown');
+      const holdId = createHash('sha256').update(JSON.stringify(reservation.owner.conversationId)).digest('hex');
+      expect(JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal',
+        'holds', `${holdId}.json`), 'utf8'))).toMatchObject({ invocationId: reservation.invocationId });
     }, 'handoff-refusal');
   }, 30000);
 

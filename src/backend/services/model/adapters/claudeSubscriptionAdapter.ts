@@ -822,14 +822,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             embedSchemaInDescription(advertised.description, fallbackSchema), shape,
             async (args: Record<string, unknown>): Promise<CallToolResult> => {
               try {
-                const callId = takeNativeToolCall(advertised.name, args);
+                // Keep deferred routing bound to the same JSON arguments as
+                // permission and the durable broker fingerprint, even if the
+                // SDK mutates its callback object during an awaited dispatch.
+                const capturedArgs = JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+                const callId = takeNativeToolCall(advertised.name, capturedArgs);
                 const dispatched = await nativeToolPort.dispatch({
-                  toolInvocationId: callId, name: advertised.name, args,
+                  toolInvocationId: callId, name: advertised.name, args: capturedArgs,
                   signal: abortController.signal,
                 });
                 if (!recordedNativeToolResults.has(callId)) {
                   if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
-                    handoffCalls.push({ id: callId, name: advertised.name, args });
+                    handoffCalls.push({ id: callId, name: advertised.name, args: capturedArgs });
                     if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
                       endSpawning = true;
                     }
