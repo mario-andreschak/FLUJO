@@ -88,6 +88,51 @@ describe('Persona lock acquisition directory observations', () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it('retires a healthy owner without manufacturing recovery or abandonment records', async () => {
+    const installs = jest.spyOn(fs, 'link');
+    await withPersonaRuntimeLock(personaId, async (lock) => { await lock.assertOwned(); });
+    expect(installs.mock.calls.map(([, target]) => String(target))).toEqual([lockPath]);
+    await expect(fs.readdir(lockRoot)).resolves.toEqual([]);
+  });
+
+  it('keeps a healthy owner live while its release unlink is pending', async () => {
+    const originalUnlink = fs.unlink.bind(fs);
+    let signalUnlink!: () => void;
+    let allowUnlink!: () => void;
+    let signalContender!: () => void;
+    const unlinkStarted = new Promise<void>(resolve => { signalUnlink = resolve; });
+    const unlinkGate = new Promise<void>(resolve => { allowUnlink = resolve; });
+    const contenderWaiting = new Promise<void>(resolve => { signalContender = resolve; });
+    let blocked = false;
+    jest.spyOn(fs, 'unlink').mockImplementation(async target => {
+      if (String(target) === lockPath && !blocked) {
+        blocked = true;
+        signalUnlink();
+        await unlinkGate;
+      }
+      return originalUnlink(target);
+    });
+    const installs = jest.spyOn(fs, 'link');
+    const first = withPersonaRuntimeLock(personaId, async () => 'first');
+    await unlinkStarted;
+    sleep.mockImplementationOnce(async ms => {
+      signalContender();
+      await first;
+      elapsed += ms;
+    });
+    const protectedWork = jest.fn(async () => 'second');
+    const second = withPersonaRuntimeLock(personaId, protectedWork);
+    await contenderWaiting;
+    try {
+      expect(protectedWork).not.toHaveBeenCalled();
+      expect(installs.mock.calls.some(([, target]) => String(target).includes('.recovery.'))).toBe(false);
+    } finally { allowUnlink(); }
+    await expect(first).resolves.toBe('first');
+    await expect(second).resolves.toBe('second');
+    expect(protectedWork).toHaveBeenCalledTimes(1);
+    await expect(fs.readdir(lockRoot)).resolves.toEqual([]);
+  });
+
   it('waits for a recovery intent appearing during installation and rechecks the installed owner', async () => {
     const originalLink = fs.link.bind(fs);
     const intentPath = lockPath + '.recovery.' + intentOwnerId;
