@@ -122,3 +122,17 @@ test('revocation before commit fences the staged enrollment without erasing prio
     expect(fs.readdirSync(path.dirname(policyFile)).filter(name => name.startsWith('.owner-enrollment'))).toEqual([]);
   } finally { spy.mockRestore(); }
 });
+
+test('a capability that expires while staging cannot commit using the earlier admission timestamp', () => {
+  const admittedAt = Date.now();
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(admittedAt);
+  const sync = fs.fsyncSync;
+  const barrier = jest.spyOn(fs, 'fsyncSync').mockImplementation(fd => {
+    sync(fd); clock.mockReturnValue(grant.credentials[0].expiresAt + 1);
+  });
+  try {
+    expect(() => pairFirstOwner(request(), true, admittedAt)).toThrow();
+    expect(fs.existsSync(policyFile)).toBe(false);
+    expect(fs.readdirSync(path.dirname(policyFile)).filter(name => name.startsWith('.owner-enrollment'))).toEqual([]);
+  } finally { barrier.mockRestore(); clock.mockRestore(); }
+});
