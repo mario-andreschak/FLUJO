@@ -223,6 +223,17 @@ export function assertWorkflowContract(workflows) {
       throw new Error(`${id} must enforce completed assertions and explicit skip accounting after Jest.`);
     }
   }
+  const mainTests = workflow.jobs.test.steps;
+  const isolation = mainTests.findIndex(step => step.name === 'Prepare real Linux MCP isolation image');
+  const suite = mainTests.findIndex(step => step.run === 'npm run test:ci');
+  if (isolation < 0 || isolation >= suite || mainTests[isolation].if !== undefined
+      || mainTests[isolation]['continue-on-error'] || mainTests[isolation].shell !== 'bash'
+      || !mainTests[isolation].run?.includes('set -euo pipefail')
+      || !mainTests[isolation].run?.includes('FLUJO_TEST_ISOLATION_IMAGE=$image')
+      || !mainTests[isolation].run?.includes('unix:///var/run/docker.sock')
+      || mainTests[suite].env?.FLUJO_RUN_ISOLATION_SOURCE_PROBE !== '1') {
+    throw new Error('Main CI must prepare a real Linux Docker image and execute both MCP isolation probes.');
+  }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)

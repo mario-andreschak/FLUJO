@@ -340,12 +340,30 @@ jobs:
       # A clean checkout has no compiled dist until this explicit prerequisite.
       - name: Build the standalone MCP packages
         run: npm run build:mcp
+      - name: Prepare real Linux MCP isolation image
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          docker_path="$(command -v docker)"
+          daemon='unix:///var/run/docker.sock'
+          test "$("$docker_path" --host "$daemon" info --format '{{.OSType}}/{{.CgroupVersion}}')" = 'linux/2'
+          "$docker_path" --host "$daemon" pull node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+          image="$("$docker_path" --host "$daemon" image inspect node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 --format '{{.Id}}')"
+          [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf '%s\n' "FLUJO_TEST_ISOLATION_DOCKER=$docker_path" "FLUJO_TEST_ISOLATION_DAEMON=$daemon" "FLUJO_TEST_ISOLATION_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Exercise real Linux MCP discovery and cleanup before the full suite
+        env:
+          FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1'
+        run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand __tests__/mcp/isolatedMcpContainerSource.test.ts
       # Jest's own exit code is deliberately not the gate: the baseline script
       # below is, because it distinguishes "a quarantined flake failed" from
       # "a suite stopped executing". It still records the raw results.
       - name: Run the suite
         id: jest
         continue-on-error: true
+        env:
+          FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1'
         run: npm run test:ci
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
