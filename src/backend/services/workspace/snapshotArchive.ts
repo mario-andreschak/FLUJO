@@ -522,6 +522,9 @@ export async function writeWorkspaceSnapshotArchive(
       }
     }
     const paths = Object.keys(captured.zip.files);
+    if (paths.length > getSnapshotLimits().maxMembers) {
+      throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot exceeds the archive member limit.');
+    }
     const allowedRuntime = new Set(['db/codex-runtime/', 'db/codex-runtime/auth.json', `db/codex-runtime/${CODEX_AUTH_SOURCE_FILE}`]);
     if (paths.some(name => /^db\/codex-private-/i.test(name))
         || paths.some(name => /^db\/codex-runtime(?:\/|$)/i.test(name) && !allowedRuntime.has(name))

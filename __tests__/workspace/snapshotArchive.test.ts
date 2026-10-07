@@ -335,6 +335,23 @@ describe('portable workspace capture', () => {
     await expect(captureWorkspaceSnapshot('research', 1, { signal: controller.signal })).rejects.toThrow('test cancellation');
   });
 
+  it('counts directories against the receiver member bound before staging or compression', async () => {
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    captured.zip.files = Object.fromEntries(Array.from({ length: 65_535 }, (_, index) => [`directory-${index}/`, {}])) as JSZip['files'];
+    const create = jest.spyOn(fs, 'mkdtemp');
+    const generate = jest.spyOn(captured.zip, 'generateNodeStream');
+    try {
+      await expect(writeWorkspaceSnapshotArchive(captured)).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+      expect(create).not.toHaveBeenCalled();
+      expect(generate).not.toHaveBeenCalled();
+    } finally { create.mockRestore(); generate.mockRestore(); }
+  });
+
+  it('refuses a manifest beyond the advertised receiver limit', async () => {
+    mockBuildPlan.mockReturnValueOnce({ formatVersion: 1, sourceWorkspaceRoot: 'x'.repeat(8 * 1024 * 1024), servers: [] });
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+  });
+
   it('writes flow-scoped MCP changes only into the archive and updates its integrity manifest', async () => {
     const original = '{"desktop":{"transport":"stdio","command":"desktop.exe","env":{},"disabled":false}}';
     await put('db/mcp_servers.json', original);
