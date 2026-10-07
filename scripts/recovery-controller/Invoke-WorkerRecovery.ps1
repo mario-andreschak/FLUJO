@@ -101,7 +101,7 @@ $expectedPackageArchives = @'
 ]
 '@ | ConvertFrom-Json
 function Check-Window {
-    if ($entryClock.ElapsedMilliseconds -ge 60_000) { throw 'Controller preentry deadline exceeded' }
+    if ($entryClock.ElapsedMilliseconds -ge 60000) { throw 'Controller preentry deadline exceeded' }
 }
 function Check-Pin($pin) {
     Check-Window
@@ -112,7 +112,7 @@ function Check-Pin($pin) {
     Check-Window
 }
 function Check-Table([string]$root, $files) {
-    if (-not [IO.Path]::IsPathFullyQualified($root) -or $files.Count -lt 1 -or $files.Count -gt 100_000) { throw 'Root/file census refused' }
+    if (-not [IO.Path]::IsPathFullyQualified($root) -or $files.Count -lt 1 -or $files.Count -gt 100000) { throw 'Root/file census refused' }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     [long]$bytes = 0
     foreach ($file in $files) {
