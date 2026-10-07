@@ -26,7 +26,7 @@
 import path from 'path';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import simpleGit, { SimpleGit } from 'simple-git';
+import { simpleGit, SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';

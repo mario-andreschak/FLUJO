@@ -49,7 +49,7 @@ const simpleGitFactory = jest.fn(() => ({
 }));
 jest.mock('simple-git', () => ({
   __esModule: true,
-  default: (...args: unknown[]) => simpleGitFactory(...(args as [])),
+  simpleGit: (...args: unknown[]) => simpleGitFactory(...(args as [])),
 }));
 
 // Force the encryption gate open so only the origin guard is under test.

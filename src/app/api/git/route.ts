@@ -1,7 +1,7 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import path from 'path';
 import fs from 'fs/promises';
 import { execSync, spawn, ExecSyncOptionsWithStringEncoding } from 'child_process';
