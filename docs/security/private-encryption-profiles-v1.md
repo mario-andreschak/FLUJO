@@ -64,3 +64,7 @@ expects an interactive unlock capability; operator capture/transfer integration
 is pending and must not substitute the mount secret into snapshot material.
 Source tests and temporary source processes
 do not establish installed-artifact, human or independent external acceptance.
+
+### Operator worker snapshots
+
+Deliberate worker snapshot capture authenticates the independently mounted operator secret against the exact captured encryption metadata; it does not require or create a browser unlock session. The private bootstrap key is confined to the deliberate worker archive. The worker must independently mount the matching operator secret outside its data directory. A copied bootstrap key never substitutes for that mount: missing or changed mounts keep operator-profile decryption locked, including after restart. Snapshot capture refuses mismatched metadata or unavailable mounts without exposing secret values in its error.

@@ -254,6 +254,23 @@ export async function isEncryptionInitialized(): Promise<boolean> {
   return (await readMetadata()) !== null;
 }
 
+/** Deliberate worker transfer only: authenticate the independently mounted profile
+ * against the exact captured metadata, without creating an interactive session. */
+export async function getOperatorWorkerBootstrapKey(capturedMetadata: EncryptionMetadata): Promise<string> {
+  return withMetadataLock(async () => {
+    await assertCredentialMigrationReady();
+    const metadata = await readMetadata();
+    if (!metadata || metadata.key_protection !== 'operator-file'
+        || metadataRevision(metadata) !== metadataRevision(capturedMetadata)) {
+      throw new EncryptionLockedError('Worker snapshot encryption metadata changed');
+    }
+    const secret = readOperatorSecret();
+    if (!secret) throw new EncryptionLockedError('Private encryption operator secret is unavailable');
+    const ring = await unwrapKeyring(metadata, secret);
+    return serializeKeyring(ring, metadataRevision(metadata));
+  });
+}
+
 export async function isUserEncryptionEnabled(): Promise<boolean> {
   const metadata = await readMetadata();
   return metadata?.encryption_type === 'user' && metadata.key_protection !== 'operator-file';

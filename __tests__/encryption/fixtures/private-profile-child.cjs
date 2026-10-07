@@ -26,7 +26,8 @@ const lines = require('node:readline').createInterface({ input: process.stdin })
     const ciphertext = await secure.encryptWithPassword(input.value);
     process.stdout.write(`${JSON.stringify({ ciphertext })}\n`);
   } else {
-    const values = await Promise.all(input.ciphertexts.map(value => secure.decryptWithPassword(value)));
+    const { runWithWorkspace } = require(path.join(process.argv[2], 'src/utils/workspace.ts'));
+    const values = await runWithWorkspace(input.workspace, () => Promise.all(input.ciphertexts.map(value => secure.decryptWithPassword(value))));
     process.stdout.write(`${JSON.stringify({ recovered: values.every((value, index) => value === input.expected[index]) })}\n`);
   }
   process.stdin.destroy();
