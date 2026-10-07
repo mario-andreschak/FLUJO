@@ -108,7 +108,8 @@ export async function readSavedNativeOrigin(input: { invocationId: string;
   const lineage = await readNativeOriginLineage({ receipt, authority: input.authority,
     root: input.root, signal: input.signal });
   if (!same(lineage, descriptor.lineage)) return held();
-  const archived = await readNativeModelTurnSnapshot(receipt.owner.conversationId, input.invocationId, input.root.workspace);
+  const archived = await readNativeModelTurnSnapshot(receipt.owner.conversationId, input.invocationId,
+    input.root.workspace, input.signal);
   assertNativeArchiveFormat(archived, descriptor.archive.archiveVersion);
   if (!archived || archived.entry.outcome !== 'running' || archived.entry.id !== input.invocationId
     || archived.entry.conversationId !== receipt.owner.conversationId
