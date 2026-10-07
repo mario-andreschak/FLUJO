@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import JSZip from 'jszip';
 import type { Model } from '@/shared/types/model';
 import type { MCPServerConfig } from '@/shared/types/mcp';
@@ -20,9 +20,12 @@ const mockDek = jest.fn< string | null, []>(() => null);
 jest.mock('@/utils/encryption/session', () => ({ getServerDek: () => mockDek() }));
 
 import { captureWorkspaceSnapshot, writeWorkspaceSnapshotArchive } from '@/backend/services/workspace/snapshotArchive';
+import { runWithWorkspace } from '@/utils/workspace';
+import { encryptWithPassword, getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
+import { parseSessionKey, open, type EncryptionMetadata } from '@/utils/encryption/format';
 import { CODEX_AUTH_SOURCE_FILE } from '@/backend/services/model/adapters/codexAuth';
 
-const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
+const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
 
 describe('portable workspace capture', () => {
   let root: string;
@@ -35,6 +38,7 @@ describe('portable workspace capture', () => {
     workspace = path.join(root, 'workspaces', 'research');
     process.env.FLUJO_DATA_DIR = root;
     process.env.CODEX_HOME = path.join(root, 'personal');
+    delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
     delete process.env.FLUJO_PARENT_DATA_DIR;
     delete process.env.FLUJO_SNAPSHOT_MAX_BYTES;
     delete process.env.FLUJO_SNAPSHOT_MAX_FILE_BYTES;
@@ -122,6 +126,37 @@ describe('portable workspace capture', () => {
     const captured = await captureWorkspaceSnapshot('research', 1);
     expect(captured.manifest.runtime.encryption).toBe('user');
     expect(JSON.parse(await captured.zip.file('db/worker-bootstrap-secrets.json')!.async('string'))).toEqual({ version: 1, workspaceDek: 'a'.repeat(16) });
+  });
+
+  it('captures a headless operator profile without an interactive key and refuses missing or changed mounts', async () => {
+    const secretRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-independent-operator-'));
+    const secretFile = path.join(secretRoot, 'secret');
+    const secret = randomBytes(32).toString('base64url');
+    try {
+      await fs.writeFile(secretFile, secret, { mode: 0o600 });
+      process.env.FLUJO_ENCRYPTION_SECRET_FILE = secretFile;
+      const ciphertext = await runWithWorkspace('research', () => encryptWithPassword('operator-worker-token'));
+      await put('db/models.json', JSON.stringify([{ id: 'headless', ApiKey: `encrypted:${ciphertext}` }]));
+      expect(mockDek()).toBeNull();
+      const captured = await captureWorkspaceSnapshot('research', 1);
+      const bootstrap = JSON.parse(await captured.zip.file('db/worker-bootstrap-secrets.json')!.async('string'));
+      const ring = parseSessionKey(bootstrap.workspaceDek);
+      expect('activeKey' in ring).toBe(true);
+      if (!('activeKey' in ring)) throw new Error('Expected private keyring');
+      expect(open(ciphertext!, ring.activeKey, 'flujo:secret:v2')).toBe('operator-worker-token');
+      expect(JSON.stringify(captured.manifest)).not.toContain('operator-worker-token');
+      expect(await captured.zip.file('db/encryption_key.json')!.async('string')).not.toContain(secret);
+      expect(captured.manifest.files.find(file => file.path === 'db/worker-bootstrap-secrets.json')?.mode).toBe(0o600);
+      const metadata = JSON.parse(await captured.zip.file('db/encryption_key.json')!.async('string')) as EncryptionMetadata;
+      await expect(runWithWorkspace('research', () => getOperatorWorkerBootstrapKey({ ...metadata, key_id: 'changed' })))
+        .rejects.toThrow('metadata changed');
+      await fs.writeFile(secretFile, randomBytes(32).toString('base64url'));
+      await expect(captureWorkspaceSnapshot('research', 2)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+      await fs.unlink(secretFile);
+      await expect(captureWorkspaceSnapshot('research', 3)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+      await fs.writeFile(secretFile, secret, { mode: 0o600 });
+      expect((await captureWorkspaceSnapshot('research', 4)).manifest.runtime.encryption).toBe('user');
+    } finally { await fs.rm(secretRoot, { recursive: true, force: true }); }
   });
 
   it('refuses an opaque SQLite database in user data instead of making a torn live backup', async () => {

@@ -4,13 +4,15 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { WORKSPACE_SUBTREES, getWorkspaceDataDir } from '@/utils/workspace';
+import { WORKSPACE_SUBTREES, runWithWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { addFolderToZipLinkSafe, assertLinkFreeFileParent } from './backupRestoreFs';
 import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorkspaceFlowDependencies, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
+import { getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
+import type { EncryptionMetadata } from '@/utils/encryption/format';
 import { getServerDek } from '@/utils/encryption/session';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Model } from '@/shared/types/model';
@@ -328,10 +330,17 @@ export async function captureWorkspaceSnapshot(
       throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', error instanceof Error ? error.message : 'Codex login is unavailable.');
     }
   }
-  const encryptionMetadata = await readCapturedJson<{ encryption_type?: string }>('db/encryption_key.json', {});
+  const encryptionMetadata = await readCapturedJson<EncryptionMetadata>('db/encryption_key.json', {} as EncryptionMetadata);
   const encryption = encryptionMetadata.encryption_type === 'user' ? 'user' : 'default';
   if (encryption === 'user') {
-    const workspaceDek = getServerDek();
+    let workspaceDek: string | null;
+    try {
+      workspaceDek = encryptionMetadata.key_protection === 'operator-file'
+        ? await runWithWorkspace(workspace, () => getOperatorWorkerBootstrapKey(encryptionMetadata))
+        : getServerDek();
+    } catch {
+      throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Restore the matching independent operator secret before creating a worker snapshot.');
+    }
     if (!workspaceDek) throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Unlock this workspace before creating a worker snapshot.');
     putPrivateFile('db/worker-bootstrap-secrets.json', Buffer.from(JSON.stringify({ version: 1, workspaceDek })));
   }

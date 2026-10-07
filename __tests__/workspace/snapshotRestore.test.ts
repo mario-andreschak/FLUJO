@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import JSZip from 'jszip';
 import { version } from '../../package.json';
 import { restoreConfiguredWorkerSnapshot, unlockWorkerSnapshot } from '@/backend/services/workspace/snapshotRestore';
@@ -9,11 +10,11 @@ import { WORKSPACE_LAYOUT_VERSION } from '@/backend/services/workspace/layoutVer
 import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 import { WORKSPACE_SUBTREES, runWithWorkspace } from '@/utils/workspace';
 import { getServerDek } from '@/utils/encryption/session';
-import { newKeyring, seal, serializeKeyring, wrapKeyring } from '@/utils/encryption/format';
-import { decryptWithPassword } from '@/utils/encryption/secure';
+import { metadataRevision, newKeyring, seal, serializeKeyring, wrapKeyring } from '@/utils/encryption/format';
+import { decryptWithPassword, isEncryptionLocked } from '@/utils/encryption/secure';
 
 const digest = (content: Buffer | string) => createHash('sha256').update(content).digest('hex');
-const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE',
+const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE',
   'FLUJO_WORKER_SNAPSHOT', 'FLUJO_WORKER_SNAPSHOT_SHA256', 'FLUJO_WORKER_SNAPSHOT_KEY', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
 
 describe('worker snapshot restore', () => {
@@ -26,6 +27,7 @@ describe('worker snapshot restore', () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-restore-'));
     destination = path.join(root, 'target', 'workspaces', 'research');
     process.env.FLUJO_DATA_DIR = path.join(root, 'target');
+    delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
     delete process.env.FLUJO_PARENT_DATA_DIR;
     process.env.FLUJO_WORKER_MODE = '1';
     delete process.env.FLUJO_WORKER_SNAPSHOT_KEY;
@@ -174,6 +176,46 @@ describe('worker snapshot restore', () => {
       expect(getServerDek()).toBe(workspaceDek);
     });
     expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain(workspaceDek);
+  });
+
+  it('restores operator credentials across restart while requiring the independent worker mount even with a bootstrap key', async () => {
+    const secret = randomBytes(32).toString('base64url');
+    const mount = path.join(root, 'independent-secret');
+    await fs.writeFile(mount, secret, { mode: 0o600 });
+    process.env.FLUJO_ENCRYPTION_SECRET_FILE = mount;
+    const ring = newKeyring();
+    const metadata = await wrapKeyring(ring, 'user', secret, 'operator-file');
+    const ciphertext = seal('restored-operator-token', ring.activeKey, 'flujo:secret:v2');
+    await archive({ files: {
+      'db/encryption_key.json': JSON.stringify(metadata),
+      'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek: serializeKeyring(ring, metadataRevision(metadata)) }),
+      'db/models.json': JSON.stringify([{ id: 'operator', ApiKey: `encrypted:${ciphertext}` }]),
+    }, mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    await runWithWorkspace('research', async () => {
+      await unlockWorkerSnapshot(result);
+      expect(await decryptWithPassword(ciphertext)).toBe('restored-operator-token');
+      // Restart has no interactive session. An independent mount remains the authority.
+      global.__flujo_server_deks_by_workspace = undefined;
+      global.__flujo_server_dek = undefined;
+      expect(await isEncryptionLocked()).toBe(false);
+      expect(await decryptWithPassword(ciphertext)).toBe('restored-operator-token');
+      await unlockWorkerSnapshot(result);
+      await fs.unlink(mount);
+      expect(await isEncryptionLocked()).toBe(true);
+      expect(await decryptWithPassword(ciphertext)).toBeNull();
+      await fs.writeFile(mount, secret, { mode: 0o600 });
+      expect(await decryptWithPassword(ciphertext)).toBe('restored-operator-token');
+    });
+    const child = spawnSync(process.execPath, [path.join(process.cwd(), '__tests__/encryption/fixtures/private-profile-child.cjs'),
+      process.cwd(), require.resolve('typescript')], {
+      env: { ...process.env },
+      input: JSON.stringify({ operation: 'read', workspace: 'research', ciphertexts: [ciphertext], expected: ['restored-operator-token'] }) + '\n',
+      encoding: 'utf8', timeout: 20_000,
+    });
+    expect(child.status).toBe(0);
+    expect(child.stdout.trim()).toBe('{"recovered":true}');
+    expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain('restored-operator-token');
   });
 
   it('restores a v2 keyring that can decrypt both new and legacy snapshot secrets without the password', async () => {
