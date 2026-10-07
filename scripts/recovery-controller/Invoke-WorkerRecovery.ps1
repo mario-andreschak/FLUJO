@@ -20,81 +20,81 @@ $expectedProducerEvidence = @'
     "sha256": "e3a01453b7bc7dfd37bf7d7f164b224a00c0d1a9bf0ea0a64db9367051fae50d"
   },
   "producerRootReview": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a10377-6ce9-72a3-9ae6-dc21476275eb/ea592-original-producer-root-join-v2/review.json",
-    "bytes": 4206,
-    "sha256": "15a4ab6a443e31c326b7d0e2e2d7f76764c3007f41c2c0129c830a187171bd57"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a10377-6ce9-72a3-9ae6-dc21476275eb/producer-and-short47-success-root-v83/review.json",
+    "bytes": 5065,
+    "sha256": "4e016fb886ce5f0bd5cdcd07fc8edc4c6531a2b68eeef98b523257441e1af16d"
   },
   "originalProducerResult": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/result.json",
-    "bytes": 23917,
-    "sha256": "0ce089b1e4af1df7fc34ab9de568d10f321d6adb986224aa71bb5accd2a0922f"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/result.json",
+    "bytes": 25090,
+    "sha256": "acfe094189a22d6de137ef3e4df8bc1ed389005c33e097bc2da9859de845e7fa"
   },
   "buildReceipt": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/ordinary-production-build-original-result.json",
-    "bytes": 12670,
-    "sha256": "1c8d6746c4aadb22961bd4c78f6ab66a2dbe15842c43fd8afccf477a3ccac171"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/ordinary-production-build-original-result.json",
+    "bytes": 13537,
+    "sha256": "62b2da6fa03b91b6d836eba0af07fdfa9e09101180e78589465a50d2349a203d"
   },
   "packReceipt": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/five-actual-packages-original-result.json",
-    "bytes": 5172,
-    "sha256": "2d515dc2b881e8183bf3f131de0eaaffa7974fd43aa025b510d2be8daebf3f9c"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/five-actual-packages-original-result.json",
+    "bytes": 5218,
+    "sha256": "8f9ed9ecaae871fd1ddd3541891f14c5706720b7f1e4a37c6d8c2bb9ffbdecae"
   },
   "archive": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/artifacts/flujo-ai-3.46.3.tgz",
-    "bytes": 10344082,
-    "sha256": "f1ed62b496610d09afc82b7bbfa16a1ec13a5e65e69ed31fbe0bcac3d2dcd1e7"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/artifacts/flujo-ai-3.46.3.tgz",
+    "bytes": 10339465,
+    "sha256": "73b5f9f370d41a36bf450050fa3e7ac2817cccb03f861d4ed1e4f15ceb9f1554"
   },
   "graphReceipt": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/after-complete-own91930-graph.json",
-    "bytes": 27318857,
-    "sha256": "951e9dc94cbc9ae840badefff0e390cb802e88a0e4257e642bc7b9a768593323"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/after-complete-own91930-graph.json",
+    "bytes": 27410813,
+    "sha256": "bc370cf7897f54801304c460cd116539ab1721499e995cb8f98a77249d7e529b"
   },
   "artifactJoin": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/five-original-packages-artifact-join.json",
-    "bytes": 5670,
-    "sha256": "786136c8fbd09692c78f3c95e709ff1d9da743eb899e6116eee28fb51f17fdec"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/five-original-packages-artifact-join.json",
+    "bytes": 5769,
+    "sha256": "e738f4fd8e0dcb9a593655341d63bd0a87ff4c9fe4453a0fc2afe97795817355"
   },
   "generatedOutputReceipt": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/after-complete-generated-output-pins.json",
-    "bytes": 706581,
-    "sha256": "c63195b19c672400ffc130b78f9f83f4e9c11230e4e1cd5e61e43c028c35624f"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/after-complete-generated-output-pins.json",
+    "bytes": 708941,
+    "sha256": "ad84ba293d87eb3850ffa8cc01316ef88ae13466e00987f5eb9c4edfe2e4233c"
   },
   "originalEvidence": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/completed-original-producer-evidence-pins.json",
-    "bytes": 241946,
-    "sha256": "5e0f3a57460f385a17d10798901671373e6cde7b318ecf03c0dce29d64055eb8"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/completed-original-nrec2-producer-output-pins-v1.json",
+    "bytes": 252625,
+    "sha256": "9bbde6cfe889e896257fcdc06df68afcecb945d1396d8e86c9b3dc886264750d"
   },
   "graphRootReview": {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a10377-6ce9-72a3-9ae6-dc21476275eb/ea592-source-own-graph-root-v1/review.json",
-    "bytes": 4298,
-    "sha256": "317d3c3cfe7717958eff9622d888a1e9a35f654b7e213830c55209dc760d9d45"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a10377-6ce9-72a3-9ae6-dc21476275eb/ea592-monitor-install-success-root-v80/review.json",
+    "bytes": 3191,
+    "sha256": "ccbaa93f8231a6c83a89e9237b2837cf1085b6dda02e425a77e1a56d87aea6f6"
   }
 }
 '@ | ConvertFrom-Json
 $expectedPackageArchives = @'
 [
   {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/artifacts/flujo-ai-3.46.3.tgz",
-    "bytes": 10344082,
-    "sha256": "f1ed62b496610d09afc82b7bbfa16a1ec13a5e65e69ed31fbe0bcac3d2dcd1e7"
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/artifacts/flujo-ai-3.46.3.tgz",
+    "bytes": 10339465,
+    "sha256": "73b5f9f370d41a36bf450050fa3e7ac2817cccb03f861d4ed1e4f15ceb9f1554"
   },
   {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/artifacts/mario.andreschak-mcp-filesystem-3.46.3.tgz",
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/artifacts/mario.andreschak-mcp-filesystem-3.46.3.tgz",
     "bytes": 56613,
     "sha256": "918435f4274c5d84ffafc07e1c0b5bcf662af768cbe27319b3b78a1679e50a21"
   },
   {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/artifacts/mario.andreschak-mcp-bash-3.46.3.tgz",
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/artifacts/mario.andreschak-mcp-bash-3.46.3.tgz",
     "bytes": 57885,
     "sha256": "a8cb28f8d9734cbed4764a8ec0388f80f1ea77999b7b045c56e9c378c1f44755"
   },
   {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/artifacts/mario.andreschak-mcp-browser-3.46.3.tgz",
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/artifacts/mario.andreschak-mcp-browser-3.46.3.tgz",
     "bytes": 95401,
     "sha256": "1ed59e83050e60b7f77ef92d6adf4f897a382202623cc0af9213310cdadc95fa"
   },
   {
-    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/ea592-ordinary-producer-prospective-20261007-v1/original-producer-entry-v1/artifacts/mario.andreschak-mcp-flujo-3.46.3.tgz",
+    "path": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103aa-de4b-70c0-922c-8ff43432af13/engineering-evidence/missing-source-nrec2-ordinary-producer-20261007-v1/original-nrec2-producer-entry-v1/artifacts/mario.andreschak-mcp-flujo-3.46.3.tgz",
     "bytes": 11678,
     "sha256": "40c9d29272aaa98363770cccdb9f305134cb76bb94fdc3a0f7b339bd88f6caa6"
   }
