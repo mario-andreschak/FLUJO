@@ -19,6 +19,10 @@ Approval is checked before launch, immediately before transport start, after awa
 
 Trusted-host arguments do not interpolate the shared global secret store. Roots advertise only the exact approved literal server entries, with no inherited workspace roots, node overlay or unrestricted-drive fallback. The roots handler uses the actual managed transport generation; renewed same-name capabilities cannot authorize an older client. Beta local clients use legacy negotiation because automatic negotiation can clone an untracked sibling process.
 
+Environment consent and launch share admission of own string data properties. Inherited fields, accessors and non-string values refuse admission without invoking getters. The launch environment has a null prototype, preserving explicitly approved names such as `__proto__` as data properties.
+
+Both execution profiles read private owner and approval files through the same bounded, stable-descriptor reader. Links, multiple hard links, changing identities, invalid UTF-8 and files inside application data refuse admission. POSIX ownership and permission checks apply; Windows ACL privacy qualification remains open.
+
 Byte verification yields, so admission reloads the authoritative stored configuration afterward and checks its enabled state, transport and captured digest along with fresh private approval. Retaining an old grant cannot authorize a config disabled, removed or retargeted during fingerprinting. Broker environment validation runs only on the trusted-host branch; the isolated branch retains its existing attach-helper environment. Failures after broker issuance revoke its lease, and both profile generations revoke on transport retirement.
 
 Installation and build scripts remain a separate execution boundary. Runtime approval does not authorize package installation, image pulls, lifecycle scripts, a registry's latest version or inspection-time tool execution. Existing installation assessments remain assistive evidence. A preinstalled package's consent can authorize only its declared, fingerprinted runtime revision.
