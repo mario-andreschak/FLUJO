@@ -157,4 +157,3 @@ Set `FEATURE_BROWSER_APP_DIR` to a compiled FLUJO checkout, then run `node scrip
 Answers are test-authored. This rehearsal does not dispatch a model, prove human UI completion, exercise approval/debugger/proxy flows, or establish installed-artifact acceptance or recurring benefit.
 
 Validation on the current compiled 3.46.3 app: all three tasks passed, discovery made zero tool calls, and the receipt ended with five accepted calls and no rejections. The 35 native checks and Jest bridge passed using an explicitly linked dependency graph with an identical package lock. The guarded local-dependency runner requires its own physical install; that runner was not claimed here.
-
