@@ -13,6 +13,7 @@ jest.mock("@/backend/services/mcp/tools", () => ({
 }));
 
 jest.mock("@/backend/services/mcp/connection", () => ({
+  createStdioTransport: jest.requireActual('@/backend/services/mcp/connection').createStdioTransport,
   createNewClient: jest.fn(),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
@@ -23,7 +24,7 @@ jest.mock("@/backend/services/mcp/connection", () => ({
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { MCPService } from "@/backend/services/mcp";
 import { loadServerConfigs } from "@/backend/services/mcp/config";
-import { attachTrustedHost } from "@/backend/services/mcp/trustedHost";
+import { createStdioTransport } from "@/backend/services/mcp/connection";
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 import { callTool as dispatchTool } from "@/backend/services/mcp/tools";
 import { registerExternalAuthorizationClient } from "@/backend/services/mcp/externalAuthorization";
@@ -63,8 +64,7 @@ function connectedClient(state: string): Client {
 beforeEach(() => {
   profile = installTrustedHostProfile({ name: 'gated-server' });
   jest.mocked(loadServerConfigs).mockResolvedValue([profile.config]);
-  transport = { start: async () => undefined, close: async () => undefined };
-  attachTrustedHost(transport, profile.config);
+  transport = createStdioTransport(profile.config);
   global.__mcp_clients?.clear();
   global.__mcp_external_authorization_status?.clear();
   dispatchToolMock.mockClear();

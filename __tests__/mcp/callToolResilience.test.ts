@@ -37,6 +37,7 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 
 const createNewClientMock = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
+  createStdioTransport: jest.requireActual('@/backend/services/mcp/connection').createStdioTransport,
   createNewClient: (...args: unknown[]) => createNewClientMock(...args),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
@@ -45,7 +46,7 @@ jest.mock('@/backend/services/mcp/connection', () => ({
 }));
 
 import { MCPService } from '@/backend/services/mcp';
-import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
+import { createStdioTransport } from '@/backend/services/mcp/connection';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 
 const makeClient = () => ({
@@ -114,8 +115,7 @@ describe('MCPService.callTool', () => {
     profile.config.source = { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' };
     profile.approve();
     loadServerConfigsMock.mockResolvedValue([profile.config]);
-    const transport = { start: async () => undefined, close: async () => undefined };
-    attachTrustedHost(transport, profile.config);
+    const transport = createStdioTransport(profile.config);
     createNewClientMock.mockReturnValue({ ...makeClient(), transport });
     try {
     const svc = new MCPService();
