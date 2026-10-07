@@ -235,7 +235,9 @@ export async function withWorkspaceRecoveryCapture<T>(
   const signal = options.signal;
   const timeoutMs = options.timeoutMs ?? 30_000;
   const started = performance.now();
-  const boundary = await beginWorkspaceSnapshotBoundary(workspace, timeoutMs, signal, true);
+  // A read may abandon its local admission on cancellation. The physical
+  // snapshot primitive still retains its owner until the pending read settles.
+  const boundary = await beginWorkspaceSnapshotBoundary(workspace, timeoutMs, signal);
   try {
     const { withWorkspaceProcessSnapshot } = await import('../enduringAgents/runtimeLock');
     return await runWithWorkspace(workspace, () => withWorkspaceProcessSnapshot(
