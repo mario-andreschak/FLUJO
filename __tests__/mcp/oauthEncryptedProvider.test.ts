@@ -116,6 +116,34 @@ test('fieldwise encrypted migration records decrypt at provider use without dest
   expect(JSON.stringify(config)).toBe(before);
 });
 
+test('historical failed-encryption plaintext markers require unlock and are replaced only by a new sealed save', async () => {
+  config.oauthTokens = { ...tokens, access_token: `encrypted_failed:${tokens.access_token}`,
+    refresh_token: `encrypted_failed:${tokens.refresh_token}`, id_token: `encrypted_failed:${tokens.id_token}` };
+  config.oauthClientInformation = { ...client, client_secret: `encrypted_failed:${client.client_secret}` };
+  config.oauthCodeVerifier = 'encrypted_failed:verifier-canary';
+  const legacy = JSON.stringify(config);
+  await expect(provider().tokens()).resolves.toMatchObject(tokens);
+  await expect(provider().clientInformation()).resolves.toEqual(client);
+  await expect(provider().codeVerifier()).resolves.toBe('verifier-canary');
+  expect(JSON.stringify(config)).toBe(legacy);
+  lockServer();
+  await expect(provider().tokens()).rejects.toThrow('Stored OAuth credentials are unavailable');
+  await expect(provider().clientInformation()).rejects.toThrow('Stored OAuth credentials are unavailable');
+  await expect(provider().codeVerifier()).rejects.toThrow('Stored OAuth credentials are unavailable');
+  expect(await authenticate('explicit-test-private-profile-passphrase')).toBeTruthy();
+  config.oauthCodeVerifier = 'encrypted_failed:';
+  await expect(provider().codeVerifier()).rejects.toThrow('Stored OAuth credentials are unavailable');
+  await provider().saveTokens(tokens);
+  await provider().saveClientInformation(client);
+  await provider().saveCodeVerifier('verifier-canary');
+  const disk = await fs.readFile(path.join(fixture.root, 'workspaces/default-workspace/db/mcp_servers.json'), 'utf8');
+  expect(disk).not.toContain('encrypted_failed:');
+  expect(disk).not.toContain('canary');
+  for (const value of [config.oauthTokens, config.oauthClientInformation, config.oauthCodeVerifier]) {
+    expect(value).toMatchObject({ format: 'flujo-oauth-v1', ciphertext: expect.stringMatching(/^v2:/) });
+  }
+});
+
 test('transfer serialization can rebind a decoded full SDK value while rejecting a forged source workspace or purpose', () => {
   const value = { ...tokens, extension: { nested: ['private-extension', 42] } };
   const source = serializeOAuthCredential('tokens', value, 'source-workspace');
