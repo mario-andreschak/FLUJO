@@ -1,4 +1,4 @@
-import { promises as fs, type BigIntStats } from 'node:fs';
+import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteWithoutLinks, assertLinkFreeFileParent } from '@/backend/services/workspace/backupRestoreFs';
 import { readPlainFile } from '@/utils/readPlainFile';
@@ -40,7 +40,7 @@ export async function admitCodexDirectory(directory: string, create = false): Pr
   if (create && process.platform !== 'win32') {
     if (last.stat.uid !== BigInt(process.getuid?.() ?? -1)) throw unavailable();
     // Tighten a legacy home using its admitted descriptor, never a path chmod.
-    const handle = await fs.open(target, 'r');
+    const handle = await fs.open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       if (!sameDirectory(last.stat, await handle.stat({ bigint: true }))) throw unavailable();
       await handle.chmod(0o700);
