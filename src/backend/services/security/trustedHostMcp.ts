@@ -154,7 +154,8 @@ export function fingerprintTrustedHostSource(sourceRoot: string): string {
   } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
 }
 
-function readPrivateApproval(filename: string | undefined): unknown {
+/** Shared local execution authority reader; callers translate profile-specific errors. */
+export function readPrivateApproval(filename: string | undefined): unknown {
   if (!filename || !path.isAbsolute(filename)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const relative = path.relative(path.resolve(getDataDir()), path.resolve(filename));
   if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');

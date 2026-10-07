@@ -205,6 +205,29 @@ test('malformed approval/policy and absent configuration fail closed without hos
   expect(create).not.toHaveBeenCalled();
 });
 
+test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])('refuses multiply linked %s before either SDK launch', name => {
+  fs.linkSync(process.env[name]!, path.join(directory, `${name}-alias`));
+  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(() => createBetaTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(create).not.toHaveBeenCalled();
+});
+
+test('refuses an approval file that changes during its actual descriptor read', () => {
+  const original = fs.readSync;
+  let changed = false;
+  jest.spyOn(fs, 'readSync').mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    const count = Reflect.apply(original, fs, args) as number;
+    if (!changed && count > 0) {
+      changed = true;
+      fs.appendFileSync(process.env.FLUJO_MCP_ISOLATION_FILE!, ' ');
+    }
+    return count;
+  }) as typeof fs.readSync);
+  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(changed).toBe(true);
+  expect(create).not.toHaveBeenCalled();
+});
+
 test('remote transports cannot carry an ignored isolation declaration', () => {
   const remote = { ...config, transport: 'streamable', serverUrl: 'https://example.invalid' } as unknown as Parameters<typeof createTransport>[0];
   expect(() => createTransport(remote)).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
