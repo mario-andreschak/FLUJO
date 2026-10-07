@@ -212,6 +212,19 @@ function argument(args, long, short) {
   return args.find((arg) => arg.startsWith(`${long}=`))?.slice(long.length + 1);
 }
 
+async function resolveExistingPath(directory) {
+  let current = path.resolve(directory);
+  const missing = [];
+  for (;;) {
+    try { return path.join(await fs.realpath(current), ...missing); }
+    catch (error) {
+      if (error.code !== 'ENOENT' || path.dirname(current) === current) throw error;
+      missing.unshift(path.basename(current));
+      current = path.dirname(current);
+    }
+  }
+}
+
 /** Use the same numeric loopback address for Next's bind and its advertised proof. */
 export function withLocalInstanceHostname(args, env) {
   const normalized = [...args];
@@ -247,8 +260,19 @@ export async function prepareLocalInstance({ env = process.env, args = [], appRo
   if (!tokenPattern.test(token)) throw new Error('Local cloud control token must contain at least 32 URL-safe ASCII characters.');
   const dataRoot = path.resolve(childEnv.FLUJO_PARENT_DATA_DIR?.trim() || childEnv.FLUJO_DATA_DIR?.trim() || appRoot);
   const requestedDirectory = localInstanceDirectory(childEnv);
-  const workspaceRelative = path.relative(path.join(dataRoot, 'workspaces'), requestedDirectory);
-  if (workspaceRelative === '' || (!workspaceRelative.startsWith('..') && !path.isAbsolute(workspaceRelative))) {
+  const [resolvedDataRoot, resolvedDirectory, ...publicRoots] = await Promise.all([
+    dataRoot, requestedDirectory, path.join(appRoot, 'public'), path.join(appRoot, '.next', 'static'),
+  ].map(resolveExistingPath));
+  for (const publicRoot of publicRoots) {
+    for (const selected of [resolvedDataRoot, resolvedDirectory]) {
+      const relative = path.relative(publicRoot, selected);
+      if (relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) {
+        throw new Error('Local data and instance discovery must remain outside public asset stores.');
+      }
+    }
+  }
+  const workspaceRelative = path.relative(path.join(resolvedDataRoot, 'workspaces'), resolvedDirectory);
+  if (workspaceRelative === '' || (workspaceRelative !== '..' && !workspaceRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(workspaceRelative))) {
     throw new Error('Local instance discovery must remain outside workspace snapshots.');
   }
   const directory = await ensurePrivateDirectory(requestedDirectory);

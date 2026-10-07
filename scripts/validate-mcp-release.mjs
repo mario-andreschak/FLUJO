@@ -118,6 +118,7 @@ for (const required of [
   'bin/node-runtime.mjs',
   'bin/node-runtime-preflight.mjs',
   'scripts/launch-next.mjs',
+  'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',
   'mcp-servers/browser/scripts/install-browser.mjs',
   '.next/BUILD_ID',

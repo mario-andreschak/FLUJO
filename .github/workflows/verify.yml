@@ -185,6 +185,8 @@ jobs:
       # Tests intercept every release subprocess before execution.
       - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs
       - run: node --test tests/installer-repository.test.mjs
+      - name: Verify isolated launcher bootstrap and child environment
+        run: node --test scripts/bootstrap-directory.test.mjs scripts/bootstrap-launcher.test.mjs
       - run: node --test scripts/run-local-jest.test.mjs
       - run: node --test scripts/release-evidence.test.mjs
       - name: Verify maintainer evidence boundaries

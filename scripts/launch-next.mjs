@@ -27,6 +27,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import nextEnv from '@next/env';
+import { loadBootstrapEnvironment } from './bootstrap-directory.mjs';
 import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.mjs';
 import { prepareLocalInstance, withLocalInstanceHostname, privateStorageFailureStage } from './local-instance.mjs';
 
@@ -35,7 +36,7 @@ const { loadEnvConfig } = nextEnv;
 
 /** Load standard Next.js dotenv files before FLUJO reads launcher-level values. */
 export function loadLaunchEnvironment(directory, dev = false) {
-  return loadEnvConfig(directory, dev);
+  return loadBootstrapEnvironment(directory, dev, loadEnvConfig);
 }
 
 /**
@@ -134,7 +135,6 @@ export function forwardNextShutdown(child, instance, registered, { parent = proc
 /** Spawn `next <passthroughArgs>` with the TLS-configured env and forward its exit. */
 async function launchNext(passthroughArgs) {
   const runtimeEnvDirectory = process.env.FLUJO_CONTAINER ? '/app/data' : process.cwd();
-  process.env.FLUJO_RUNTIME_ENV_DIR = runtimeEnvDirectory;
   loadLaunchEnvironment(runtimeEnvDirectory, passthroughArgs[0] === 'dev');
   const baseEnv = {
     ...process.env,
