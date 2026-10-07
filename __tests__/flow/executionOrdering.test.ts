@@ -77,7 +77,8 @@ import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEven
 import { loadItem } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
-import type { MCPServerConfig } from '@/shared/types/mcp';
+import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from '@/backend/services/security/trustedHostMcp';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 
@@ -95,6 +96,7 @@ let actualToolCalls = 0;
 let profile = '';
 const httpBodies: Record<string, unknown>[] = [];
 const toolChildren: ChildProcess[] = [];
+let toolProfile: ReturnType<typeof installTrustedHostProfile> | undefined;
 const realStep = FlowExecutor.executeStep;
 
 function record(conversationId: string, operation: string) {
@@ -145,12 +147,17 @@ function answer(response: ServerResponse, body: Record<string, unknown>, content
 }
 
 async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
-  const config = {
-    name: 'ordering-fixture', transport: 'stdio', command: process.execPath,
-    args: [path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs')],
-    env: {}, disabled: false, rootPath: process.cwd(), source: { type: 'local' },
-    _buildCommand: '', _installCommand: '',
-  } as MCPServerConfig;
+  toolProfile = installTrustedHostProfile({ name: 'ordering-fixture' });
+  const config = toolProfile.config;
+  const entryPoint = path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs');
+  config.command = process.execPath;
+  config.args = [entryPoint];
+  config.cwd = process.cwd();
+  config.source = { type: 'local' };
+  Object.assign(config.trustedHost!, { runtime: 'node', entryPoint,
+    sourceRoot: path.dirname(entryPoint), sourceDigest: fingerprintTrustedHostSource(path.dirname(entryPoint)),
+    executableDigest: fingerprintTrustedHostExecutable(process.execPath) });
+  toolProfile.approve();
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });
   const definition = flow(id, { maxTurns });
   definition.nodes.push(node('mcp-fixture', 'mcp', { boundServer: config.name, enabledTools: ['identity'] }));
@@ -264,6 +271,8 @@ afterEach(async () => {
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
   }
+  toolProfile?.restore();
+  toolProfile = undefined;
 });
 
 describe('execution ordering with real graph and loopback SDK dispatch', () => {
