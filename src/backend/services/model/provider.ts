@@ -13,6 +13,8 @@ interface ProviderModelRecord {
   owned_by?: string;
   supported_parameters?: unknown;
   context_length?: unknown;
+  /** vLLM reports a served model's context size under this name. */
+  max_model_len?: unknown;
   max_completion_tokens?: unknown;
   top_provider?: { max_completion_tokens?: unknown };
   architecture?: {
@@ -48,7 +50,9 @@ function discoverProviderMetadata(model: ProviderModelRecord): Partial<Normalize
   const contextWindow =
     typeof model.context_length === 'number' && Number.isFinite(model.context_length)
       ? model.context_length
-      : undefined;
+      : typeof model.max_model_len === 'number' && Number.isFinite(model.max_model_len)
+        ? model.max_model_len
+        : undefined;
   const maxTokens =
     typeof model.top_provider?.max_completion_tokens === 'number' &&
     Number.isFinite(model.top_provider.max_completion_tokens)
