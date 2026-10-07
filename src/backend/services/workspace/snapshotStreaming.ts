@@ -1,22 +1,32 @@
 import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { SNAPSHOT_ENCRYPTION, getSnapshotLimits } from './snapshotTransfer';
 import { Readable } from 'node:stream';
 
 /** Persist only wire bytes; ZIP and base64 chunks never become whole-archive strings. */
 export async function writeSnapshotStream(source: Readable, destination: string, key: Buffer | null, signal?: AbortSignal) {
   const observeError = () => undefined;
   source.on('error', observeError);
-  let output;
-  try { output = await fs.open(destination, 'wx', 0o600); }
-  catch (error) { source.destroy(); throw error; }
   const wireHash = createHash('sha256');
   const plainHash = createHash('sha256');
-  const iv = key ? randomBytes(12) : undefined;
-  const cipher = key ? createCipheriv('aes-256-gcm', key, iv!) : undefined;
+  let setup;
+  try {
+    const limits = getSnapshotLimits();
+    const iv = key ? randomBytes(12) : undefined;
+    const cipher = key ? createCipheriv('aes-256-gcm', key, iv!) : undefined;
+    if (cipher) cipher.setAAD(Buffer.from(SNAPSHOT_ENCRYPTION.v2Aad));
+    signal?.throwIfAborted();
+    const output = await fs.open(destination, 'wx', 0o600);
+    setup = { limits, iv, cipher, output };
+  }
+  catch (error) { source.destroy(); throw error; }
+  const { limits, iv, cipher, output } = setup;
+  let plaintextSize = 0;
   let carry = Buffer.alloc(0);
   let size = 0;
   const write = async (bytes: Buffer) => {
     signal?.throwIfAborted();
+    if (size + bytes.length > (key ? limits.maxEncryptedBytes : limits.maxArchiveBytes)) throw new Error('Snapshot exceeds the archive size limit.');
     for (let offset = 0; offset < bytes.length;) {
       const result = await output.write(bytes, offset, bytes.length - offset);
       if (!result.bytesWritten) throw new Error('Snapshot write made no progress.');
@@ -41,10 +51,12 @@ export async function writeSnapshotStream(source: Readable, destination: string,
   let primaryFailure = false;
   try {
     signal?.throwIfAborted();
-    if (iv) await write(Buffer.from(`{"format":"flujo-workspace-encrypted","version":1,"iv":"${iv.toString('base64')}","data":"`));
+    if (iv) await write(Buffer.from(`{"format":"flujo-workspace-encrypted","version":2,"iv":"${iv.toString('base64')}","data":"`));
     for await (const value of source) {
       signal?.throwIfAborted();
       const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      plaintextSize += bytes.length;
+      if (plaintextSize > limits.maxArchiveBytes) throw new Error('Snapshot exceeds the archive size limit.');
       plainHash.update(bytes);
       if (cipher) await encode(cipher.update(bytes));
       else await write(bytes);

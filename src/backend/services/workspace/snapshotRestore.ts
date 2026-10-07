@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { createHash } from 'node:crypto';
+import { getSnapshotLimits } from './snapshotTransfer';
 import { openSnapshotInput } from './snapshotInput';
 import { inspectSnapshotZip, snapshotMemberChunks } from './snapshotZip';
 import path from 'node:path';
@@ -46,11 +47,6 @@ interface WorkerManifest {
 declare global {
   var __flujo_worker_snapshot_restore:
     { key: string; promise: Promise<WorkerSnapshotRestoreResult> } | undefined;
-}
-
-function limit(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -184,10 +180,11 @@ export async function unlockWorkerSnapshot(result: WorkerSnapshotRestoreResult):
 
 async function restoreArchive(archivePath: string, digest: string): Promise<WorkerSnapshotRestoreResult> {
   setWorkerBootstrapStatus({ state: 'restoring', archiveSha256: digest, error: undefined });
-  const maxFileBytes = limit('FLUJO_SNAPSHOT_MAX_FILE_BYTES', 256 * 1024 * 1024);
-  const maxBytes = limit('FLUJO_SNAPSHOT_MAX_BYTES', 1024 * 1024 * 1024);
+  const limits = getSnapshotLimits();
+  const maxFileBytes = limits.maxFileBytes;
+  const maxBytes = limits.maxUncompressedBytes;
   const input = await openSnapshotInput(archivePath, process.env.FLUJO_WORKER_SNAPSHOT_KEY,
-    maxBytes + MAX_MANIFEST_BYTES, digest);
+    limits.maxArchiveBytes, digest);
   try {
     const members = await inspectSnapshotZip(input, maxFileBytes, maxBytes, safeMember);
     const manifestEntry = members.find(member => member.name === MANIFEST_PATH && !member.directory);

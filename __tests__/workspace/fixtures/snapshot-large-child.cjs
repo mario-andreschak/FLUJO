@@ -78,7 +78,7 @@ const { tmpdir } = require('node:os');
     process.env.FLUJO_DATA_DIR = path.join(root, 'target');
     process.env.FLUJO_WORKER_MODE = '1';
     process.env.FLUJO_WORKER_SNAPSHOT = downloaded;
-    process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = archive.plaintextSha256;
+    process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = archive.sha256;
     process.env.FLUJO_WORKER_SNAPSHOT_KEY = key;
     const { restoreConfiguredWorkerSnapshot } = require(path.join(process.argv[2], 'src/backend/services/workspace/snapshotRestore.ts'));
     await restoreConfiguredWorkerSnapshot();

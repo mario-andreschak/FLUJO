@@ -8,6 +8,7 @@ import { assertCurrentMain } from './npm-release.mjs';
 export const IMAGE = 'ghcr.io/mario-andreschak/flujo';
 export const IMAGE_EVIDENCE = 'image-evidence.json';
 export const IMAGE_SBOM = 'image.sbom.cdx.json';
+const SNAPSHOT_DEFAULT_LIMITS = JSON.parse(readFileSync(new URL('../src/shared/snapshotTransfer.json', import.meta.url), 'utf8')).snapshotLimits;
 const REPOSITORY = 'mario-andreschak/FLUJO';
 const WORKFLOW = `${REPOSITORY}/.github/workflows/publish-image.yml`;
 const SHA = /^[a-f0-9]{40}$/;
@@ -29,7 +30,8 @@ function requiredImageLabels(sha, version) {
   return { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
     'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': `https://github.com/${REPOSITORY}`,
     'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
-    'io.flujo.worker.snapshot-source': '1' };
+    'io.flujo.worker.snapshot-source': '1', 'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+    'io.flujo.worker.snapshot-default-limits': JSON.stringify(SNAPSHOT_DEFAULT_LIMITS) };
 }
 
 function assertImageLabels(actual, sha, version, subject) {
@@ -45,6 +47,7 @@ export function inspectTestedImage(run, imageId, sha, version) {
   if (images.length !== 1 || image?.Id !== imageId || image.Os !== 'linux' || image.Architecture !== 'amd64' || image.Config?.User !== 'node') {
     throw new Error('Tested image must be a single Linux/amd64 image running as node.');
   }
+  if (image.Config.Env?.some(value => /^(?:FLUJO_SNAPSHOT_MAX_FILE_BYTES|FLUJO_SNAPSHOT_MAX_BYTES)(?:=|$)/.test(value))) throw new Error('Image has unqualified snapshot limit overrides.');
   const labels = requiredImageLabels(sha, version);
   assertImageLabels(image.Config.Labels, sha, version, 'Tested image');
   return { imageId, platform: 'linux/amd64', user: 'node', labels };

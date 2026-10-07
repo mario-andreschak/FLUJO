@@ -140,7 +140,7 @@ test('a cold OS worker restores an authenticated operator snapshot and uses real
         process.cwd(), require.resolve('typescript')], { encoding: 'utf8', timeout: 30_000,
         env: { ...process.env, FLUJO_DATA_DIR: path.join(root, 'worker'), FLUJO_ENCRYPTION_SECRET_FILE: undefined,
           FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archive.archivePath, FLUJO_WORKER_SNAPSHOT_KEY: key.toString('base64'),
-          FLUJO_WORKER_SNAPSHOT_SHA256: archive.plaintextSha256 } });
+          FLUJO_WORKER_SNAPSHOT_SHA256: archive.sha256 } });
       expect({ status: result.status, diagnostic: result.stderr }).toEqual({ status: 0, diagnostic: '' });
       expect(result.stdout).toContain('WORKER_TRANSFER_SOURCE_PASS');
     } catch (error) { failed = true; throw error; } finally {

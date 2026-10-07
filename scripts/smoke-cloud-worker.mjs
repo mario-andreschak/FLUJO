@@ -231,7 +231,9 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   assert.equal(infoResponse.status, 200);
   const info = await infoResponse.json();
   assert.deepEqual(info.workerCompatibility, {
+    ...JSON.parse(await fs.readFile(new URL('../src/shared/snapshotTransfer.json', import.meta.url), 'utf8')),
     applicationVersion: packageJson.version, snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1,
+    workerSnapshotSourceVersion: 1,
     ...(production && /^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION ?? '') ? { revision: process.env.FLUJO_BUILD_REVISION } : {}),
   });
   const filesystem = new Client({ name: 'flujo-worker-smoke', version: '1.0.0' }, { capabilities: {} });
@@ -624,6 +626,7 @@ process.on('message',message=>{if(message==='stop')server.close(()=>{app.close()
   assert.equal(infoResponse.status, 200);
   const info = await boundedJson(infoResponse);
   assert.deepEqual(info.workerCompatibility, {
+    ...JSON.parse(await fs.readFile(new URL('../src/shared/snapshotTransfer.json', import.meta.url), 'utf8')),
     applicationVersion: packageJson.version, snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1,
     workerSnapshotSourceVersion: 1,
     ...(production && /^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION ?? '') ? { revision: process.env.FLUJO_BUILD_REVISION } : {}),

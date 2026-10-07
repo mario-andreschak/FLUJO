@@ -1,4 +1,5 @@
 import applicationPackage from '../../../../package.json';
+import { SNAPSHOT_ENCRYPTION, getSnapshotLimits } from './snapshotTransfer';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 
 /** Change the protocol when the worker control/restore contract becomes incompatible. */
@@ -13,6 +14,8 @@ export interface WorkerCompatibility {
   layoutVersion: typeof WORKSPACE_LAYOUT_VERSION;
   workerProtocolVersion: typeof WORKER_PROTOCOL_VERSION;
   workerSnapshotSourceVersion: typeof WORKER_SNAPSHOT_SOURCE_VERSION;
+  snapshotEncryption: typeof SNAPSHOT_ENCRYPTION;
+  snapshotLimits: ReturnType<typeof getSnapshotLimits>;
   revision?: string;
 }
 
@@ -23,6 +26,8 @@ export function getWorkerCompatibility(): WorkerCompatibility {
   const revision = process.env.FLUJO_BUILD_REVISION;
   return {
     applicationVersion: applicationPackage.version,
+    snapshotEncryption: { ...SNAPSHOT_ENCRYPTION, readVersions: [...SNAPSHOT_ENCRYPTION.readVersions] },
+    snapshotLimits: getSnapshotLimits(),
     snapshotFormatVersion: WORKER_SNAPSHOT_FORMAT_VERSION,
     layoutVersion: WORKSPACE_LAYOUT_VERSION,
     workerProtocolVersion: WORKER_PROTOCOL_VERSION,

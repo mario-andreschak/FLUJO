@@ -3,6 +3,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { SNAPSHOT_ENCRYPTION } from './snapshotTransfer';
 
 const BLOCK = 64 * 1024;
 const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
@@ -184,15 +185,18 @@ function decodeSmall(value: unknown, length: number) {
 /** Decode order-independent v1 JSON incrementally, then authenticate before returning a ZIP reader. */
 export async function openSnapshotInput(filename: string, keyValue: string | undefined, maxBytes: number, expectedDigest: string) {
   const expected = await fs.lstat(filename, { bigint: true });
-  const maxInput = keyValue === undefined ? maxBytes : Math.ceil(maxBytes * 4 / 3) + 4096;
+  const maxInput = keyValue === undefined ? maxBytes : 4 * Math.ceil(maxBytes / 3) + 4096;
   if (!expected.isFile() || expected.isSymbolicLink() || expected.nlink !== BigInt(1) || expected.size > BigInt(maxInput)) throw invalid();
   const source = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   let ownedReader: SnapshotInput | undefined;
   let successful = false;
+  let envelopeVersion = 0;
+  const wireHash = createHash('sha256');
   let spoolRoot: string | undefined; let ciphertext: FileHandle | undefined; let key: Buffer | undefined;
   try {
     const reader = ownedReader = await SnapshotInput.create();
     if (!same(expected, await source.stat({ bigint: true })) || !same(expected, await fs.lstat(filename, { bigint: true }))) throw invalid();
+    for (let position = 0; position < Number(expected.size); position += BLOCK) wireHash.update(await readExact(source, position, Math.min(BLOCK, Number(expected.size) - position)));
     const hash = createHash('sha256');
     const accept = async (bytes: Buffer) => {
       if (reader.size + bytes.length > maxBytes) throw invalid();
@@ -218,8 +222,10 @@ export async function openSnapshotInput(filename: string, keyValue: string | und
         if (next !== 44) throw invalid();
       }
       await cursor.whitespace();
-      if (await cursor.byte() !== -1 || values.size !== 5 || values.get('format') !== 'flujo-workspace-encrypted' || values.get('version') !== 1 || dataLength < 0) throw invalid();
+      if (await cursor.byte() !== -1 || values.size !== 5 || values.get('format') !== 'flujo-workspace-encrypted' || ![1, 2].includes(values.get('version') as number) || dataLength < 0) throw invalid();
+      envelopeVersion = values.get('version') as number;
       const decipher = createDecipheriv('aes-256-gcm', key, decodeSmall(values.get('iv'), 12));
+      if (envelopeVersion === 2) decipher.setAAD(Buffer.from(SNAPSHOT_ENCRYPTION.v2Aad));
       decipher.setAuthTag(decodeSmall(values.get('tag'), 16));
       for (let position = 0; position < dataLength; position += BLOCK) await accept(decipher.update(await readExact(ciphertext, position, Math.min(BLOCK, dataLength - position))));
       await accept(decipher.final());
@@ -227,7 +233,8 @@ export async function openSnapshotInput(filename: string, keyValue: string | und
     } else {
       for (let position = 0; position < Number(expected.size); position += BLOCK) await accept(await readExact(source, position, Math.min(BLOCK, Number(expected.size) - position)));
     }
-    if (hash.digest('hex') !== expectedDigest) throw new Error('Worker snapshot SHA-256 mismatch.');
+    const plaintextDigest = hash.digest('hex');
+    if ((envelopeVersion === 2 ? wireHash.digest('hex') : plaintextDigest) !== expectedDigest) throw new Error('Worker snapshot SHA-256 mismatch.');
     if (!same(expected, await source.stat({ bigint: true })) || !same(expected, await fs.lstat(filename, { bigint: true }))) throw invalid();
     await reader.finish(); successful = true; return reader;
   } catch (error) { await ownedReader?.close().catch(() => undefined); throw error; }

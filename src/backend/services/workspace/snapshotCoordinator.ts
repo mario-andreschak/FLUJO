@@ -47,6 +47,7 @@ export interface SnapshotInfo {
   sha256?: string;
   plaintextSha256?: string;
   encrypted?: boolean;
+  encryptionVersion?: 0 | 1 | 2;
   recipientKeyUsed?: boolean;
   errorCode?: string;
   error?: string;
@@ -65,6 +66,7 @@ interface SnapshotSessionRecord {
   sha256?: string;
   plaintextSha256?: string;
   encrypted?: boolean;
+  encryptionVersion?: 0 | 1 | 2;
   recipientKeyUsed?: boolean;
   archivePath?: string;
   stagingDir?: string;
@@ -128,6 +130,7 @@ function publicInfo(session: SnapshotSessionRecord): SnapshotInfo {
     sha256: session.sha256,
     plaintextSha256: session.plaintextSha256,
     encrypted: session.encrypted,
+    encryptionVersion: session.encryptionVersion,
     recipientKeyUsed: session.recipientKeyUsed,
     errorCode: session.errorCode,
     error: session.error,
@@ -231,6 +234,7 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
     session.sha256 = archive.sha256;
     session.plaintextSha256 = archive.plaintextSha256;
     session.encrypted = archive.encrypted;
+    session.encryptionVersion = archive.encryptionVersion ?? (archive.encrypted ? 1 : 0);
     session.recipientKeyUsed = archive.recipientKeyUsed ?? false;
     session.recipientKey = undefined;
     await captured.dispose?.();
@@ -331,6 +335,7 @@ export const snapshotCoordinator = {
       controller: new AbortController(),
       flowIds: options.flowIds ? [...options.flowIds] : undefined,
       recipientKey: options.recipientKey,
+      encryptionVersion: options.recipientKey !== undefined || process.env.FLUJO_WORKER_SNAPSHOT_KEY !== undefined ? 2 : 0,
     };
     sessions.set(normalizedWorkspace, session);
     const expiryTimer = setTimeout(() => {
@@ -357,7 +362,7 @@ export const snapshotCoordinator = {
   async readDownload(
     sessionId: string,
     workspace = getCurrentWorkspace(),
-  ): Promise<{ content: ReadableStream<Uint8Array>; sha256: string; plaintextSha256: string; encrypted: boolean; recipientKeyUsed: boolean; size: number }> {
+  ): Promise<{ content: ReadableStream<Uint8Array>; sha256: string; plaintextSha256: string; encrypted: boolean; encryptionVersion: number; recipientKeyUsed: boolean; size: number }> {
     const normalizedWorkspace = normalizeWorkspaceName(workspace);
     const session = requireSession(normalizedWorkspace, sessionId);
     await expireIfNeeded(session);
@@ -397,7 +402,7 @@ export const snapshotCoordinator = {
       );
     }
     return { content, sha256: session.sha256, plaintextSha256: session.plaintextSha256 ?? session.sha256,
-      encrypted: session.encrypted ?? false, recipientKeyUsed: session.recipientKeyUsed ?? false, size: session.archiveBytes };
+      encrypted: session.encrypted ?? false, encryptionVersion: session.encryptionVersion ?? 0, recipientKeyUsed: session.recipientKeyUsed ?? false, size: session.archiveBytes };
   },
 
   async finalize(

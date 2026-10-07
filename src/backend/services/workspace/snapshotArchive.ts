@@ -2,6 +2,7 @@ import { promises as fs, type Stats, type BigIntStats } from 'node:fs';
 import { readPlainFile, PlainFileReadError } from '@/utils/readPlainFile';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { getSnapshotLimits } from './snapshotTransfer';
 import { SnapshotInput } from './snapshotInput';
 import { writeSnapshotStream } from './snapshotStreaming';
 import { tmpdir } from 'node:os';
@@ -24,8 +25,6 @@ import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import appPackage from '../../../../package.json';
 
-const DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024;
-const DEFAULT_MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
 const WORKSPACE_METADATA_FILE = '.workspace.json';
 
 export interface SnapshotManifestFile {
@@ -71,6 +70,7 @@ export interface WorkspaceArchiveResult {
   plaintextSha256: string;
   encrypted: boolean;
   recipientKeyUsed?: boolean;
+  encryptionVersion?: 0 | 1 | 2;
   size: number;
   files: number;
   bytes: number;
@@ -125,11 +125,6 @@ async function hasStoredCredentials(zip: JSZip): Promise<boolean> {
   } catch {
     throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Credential inventory cannot be verified for plaintext export.');
   }
-}
-
-function configuredLimit(name: string, fallback: number): number {
-  const value = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function isInside(root: string, candidate: string, allowRoot = false): boolean {
@@ -225,14 +220,9 @@ export async function captureWorkspaceSnapshot(
     );
   }
 
-  const maxFileBytes = configuredLimit(
-    'FLUJO_SNAPSHOT_MAX_FILE_BYTES',
-    DEFAULT_MAX_FILE_BYTES,
-  );
-  const maxSnapshotBytes = configuredLimit(
-    'FLUJO_SNAPSHOT_MAX_BYTES',
-    DEFAULT_MAX_SNAPSHOT_BYTES,
-  );
+  const limits = getSnapshotLimits();
+  const maxFileBytes = limits.maxFileBytes;
+  const maxSnapshotBytes = limits.maxUncompressedBytes;
   const files: SnapshotManifestFile[] = [];
   let totalBytes = 0;
   const zip = new JSZip();
@@ -476,7 +466,9 @@ export async function captureWorkspaceSnapshot(
       runtime: { mcpTransfer, codexAuth, encryption, ...(selectedFlowIds ? { selectedFlowIds } : {}) },
       excludedRuntimePaths,
     };
-    zip.file('snapshot-manifest.json', JSON.stringify(manifest, null, 2));
+    const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2));
+    if (manifestBytes.length > limits.maxManifestBytes || Object.keys(zip.files).length + 1 > limits.maxMembers) throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot manifest or member count exceeds the restore limit.');
+    zip.file('snapshot-manifest.json', manifestBytes);
 
     let disposed = false;
     const captured: CapturedWorkspaceSnapshot = { zip, manifest, files: files.length, bytes: totalBytes, dispose: async () => {
@@ -563,6 +555,7 @@ export async function writeWorkspaceSnapshotArchive(
         sha256: persisted.sha256,
         plaintextSha256: persisted.plaintextSha256,
         encrypted: Boolean(key),
+        encryptionVersion: key ? 2 : 0,
         recipientKeyUsed: capture?.recipientKeyUsed ?? false,
         size: persisted.size,
         files: captured.files,

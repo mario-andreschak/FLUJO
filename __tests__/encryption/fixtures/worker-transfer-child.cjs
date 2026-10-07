@@ -59,10 +59,19 @@ let stage = 'restore';
       reexported = await writeWorkspaceSnapshotArchive(captured);
       stage = 'verify-reexport';
       if (!reexported.encrypted || !reexported.plaintextSha256) throw new Error('Worker re-export must be encrypted');
-      const envelope = JSON.parse(fs.readFileSync(reexported.archivePath, 'utf8'));
+      const wire = fs.readFileSync(reexported.archivePath);
+      const envelope = JSON.parse(wire.toString('utf8'));
+      if (envelope.version !== 2 || reexported.encryptionVersion !== 2
+        || require('node:crypto').createHash('sha256').update(wire).digest('hex') !== reexported.sha256) {
+        throw new Error('Worker re-export version or wire digest mismatch');
+      }
       const decipher = require('node:crypto').createDecipheriv('aes-256-gcm', Buffer.from(process.env.FLUJO_WORKER_SNAPSHOT_KEY, 'base64'), Buffer.from(envelope.iv, 'base64'));
+      decipher.setAAD(Buffer.from('flujo:workspace-snapshot:v2', 'utf8'));
       decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
       const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
+      if (require('node:crypto').createHash('sha256').update(plaintext).digest('hex') !== reexported.plaintextSha256) {
+        throw new Error('Worker re-export plaintext digest mismatch');
+      }
       const zip = await require('jszip').loadAsync(plaintext);
       const { workspaceDek } = JSON.parse(await zip.file('db/worker-bootstrap-secrets.json').async('string'));
       if (workspaceDek !== getServerDek()) throw new Error('Worker re-export key mismatch');

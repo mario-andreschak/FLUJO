@@ -26,6 +26,35 @@ describe('bounded authenticated snapshot transport', () => {
     await writeSnapshotStream(new Readable().wrap(zip.generateNodeStream({ streamFiles: true, compression: 'DEFLATE' })), file, null);
     return fs.readFile(file);
   }
+  it('writes authenticated v2 and requires the exact encrypted wire digest', async () => {
+    const bytes = await fixture(); const key = randomBytes(32); const file = path.join(root, 'v2');
+    const result = await writeSnapshotStream(Readable.from([bytes]), file, key);
+    const wire = await fs.readFile(file);
+    expect(JSON.parse(wire.toString()).version).toBe(2);
+    expect(result.sha256).toBe(sha(wire));
+    expect(result.plaintextSha256).toBe(sha(bytes));
+    const input = await openSnapshotInput(file, key.toString('base64'), 1024 * 1024, result.sha256);
+    try { expect(await input.read(0, bytes.length)).toEqual(bytes); } finally { await input.close(); }
+    await expect(openSnapshotInput(file, key.toString('base64'), 1024 * 1024, result.plaintextSha256)).rejects.toThrow('SHA-256');
+    await fs.writeFile(file, JSON.stringify(JSON.parse(wire.toString()), null, 2));
+    await expect(openSnapshotInput(file, key.toString('base64'), 1024 * 1024, result.sha256)).rejects.toThrow('SHA-256');
+  });
+  it.each(['downgrade', 'missing-aad', 'wrong-aad'])('rejects v2 authentication changes (%s)', async kind => {
+    const bytes = await fixture(); const key = randomBytes(32); const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    if (kind !== 'missing-aad') cipher.setAAD(Buffer.from(kind === 'wrong-aad' ? 'incorrect' : 'flujo:workspace-snapshot:v2'));
+    const data = Buffer.concat([cipher.update(bytes), cipher.final()]);
+    const wire = Buffer.from(JSON.stringify({ format: 'flujo-workspace-encrypted', version: kind === 'downgrade' ? 1 : 2,
+      iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') }));
+    const file = path.join(root, 'bad-v2'); await fs.writeFile(file, wire);
+    await expect(openSnapshotInput(file, key.toString('base64'), 1024 * 1024, sha(wire))).rejects.toThrow('decrypt');
+  });
+  it('destroys the source when encryption setup fails before output acquisition', async () => {
+    const source = new Readable({ read() {} }); const file = path.join(root, 'invalid-key');
+    await expect(writeSnapshotStream(source, file, Buffer.alloc(1))).rejects.toThrow();
+    expect(source.destroyed).toBe(true);
+    await expect(fs.lstat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   it.each([false, true])('validates legacy and data-descriptor ZIPs (streamed=%s)', async streamed => {
     const bytes = await fixture(streamed); const file = path.join(root, 'input'); await fs.writeFile(file, bytes);
     const input = await openSnapshotInput(file, undefined, 1024 * 1024, sha(bytes));

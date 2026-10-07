@@ -78,7 +78,8 @@ describe('portable workspace capture', () => {
       expect(process.env.FLUJO_WORKER_SNAPSHOT_KEY).toBe(ambient);
       const envelope = JSON.parse((await fs.readFile(result.archivePath)).toString());
       const decipher = createDecipheriv('aes-256-gcm', recipient, Buffer.from(envelope.iv, 'base64'));
-      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+      if (envelope.version === 2) decipher.setAAD(Buffer.from('flujo:workspace-snapshot:v2'));
+    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
       const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
       expect(createHash('sha256').update(plaintext).digest('hex')).toBe(result.plaintextSha256);
       const restored = await JSZip.loadAsync(plaintext);
@@ -112,6 +113,7 @@ describe('portable workspace capture', () => {
   function decryptArchive(wire: Buffer): Buffer {
     const envelope = JSON.parse(wire.toString());
     const decipher = createDecipheriv('aes-256-gcm', Buffer.from(process.env.FLUJO_WORKER_SNAPSHOT_KEY!, 'base64'), Buffer.from(envelope.iv, 'base64'));
+    if (envelope.version === 2) decipher.setAAD(Buffer.from('flujo:workspace-snapshot:v2'));
     decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
   }
@@ -195,9 +197,10 @@ describe('portable workspace capture', () => {
       expect(archive.encrypted).toBe(true);
       expect(archive.sha256).toBe(createHash('sha256').update(wire).digest('hex'));
       const envelope = JSON.parse(wire.toString());
-      expect(envelope).toMatchObject({ format: 'flujo-workspace-encrypted', version: 1 });
+      expect(envelope).toMatchObject({ format: 'flujo-workspace-encrypted', version: 2 });
       const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
-      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+      if (envelope.version === 2) decipher.setAAD(Buffer.from('flujo:workspace-snapshot:v2'));
+    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
       const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
       expect(archive.plaintextSha256).toBe(createHash('sha256').update(plaintext).digest('hex'));
       expect(archive.sha256).not.toBe(archive.plaintextSha256);

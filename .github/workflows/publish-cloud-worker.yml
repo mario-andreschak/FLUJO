@@ -84,9 +84,13 @@ jobs:
           assert.equal(image.Os, 'linux');
           assert.equal(image.Architecture, 'amd64');
           assert.equal(image.Config.User, 'node');
+          assert.ok(!image.Config.Env?.some(value => /^(?:FLUJO_SNAPSHOT_MAX_FILE_BYTES|FLUJO_SNAPSHOT_MAX_BYTES)(?:=|$)/.test(value)));
           for (const [key, value] of Object.entries({
             'io.flujo.application.version': process.env.APPLICATION_VERSION,
             'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+            'io.flujo.worker.snapshot-source': '1',
+            'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+            'io.flujo.worker.snapshot-default-limits': JSON.stringify(JSON.parse(fs.readFileSync('src/shared/snapshotTransfer.json', 'utf8')).snapshotLimits),
             'org.opencontainers.image.revision': process.env.GITHUB_SHA,
             'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
           })) assert.equal(image.Config.Labels[key], value, `Incorrect ${key}`);

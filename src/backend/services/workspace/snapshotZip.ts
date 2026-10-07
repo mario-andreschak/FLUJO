@@ -23,7 +23,7 @@ export async function inspectSnapshotZip(input: SnapshotInput, maxFileBytes: num
   const directorySize = tail.readUInt32LE(tailEnd + 12);
   const directoryOffset = tail.readUInt32LE(tailEnd + 16);
   if (tail.readUInt16LE(tailEnd + 4) || tail.readUInt16LE(tailEnd + 6) || tail.readUInt16LE(tailEnd + 8) !== count
-      || count === 0xffff || count > 100_000 || directoryOffset + directorySize !== end) throw failure();
+      || count === 0xffff || count > 65_534 || directoryOffset + directorySize !== end) throw failure();
   const names = new Map<string, boolean>(); const members: SnapshotZipMember[] = [];
   const ranges: Array<{ start: number; end: number }> = [];
   let offset = directoryOffset; let total = 0;

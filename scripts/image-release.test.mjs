@@ -18,7 +18,8 @@ const env = { GITHUB_REPOSITORY: 'mario-andreschak/FLUJO', GITHUB_REF: 'refs/hea
 const labels = { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
   'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
   'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
-  'io.flujo.worker.snapshot-source': '1' };
+  'io.flujo.worker.snapshot-source': '1', 'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+  'io.flujo.worker.snapshot-default-limits': '{"maxFileBytes":268435456,"maxUncompressedBytes":1073741824,"maxManifestBytes":8388608,"maxArchiveBytes":1082130432,"maxEncryptedBytes":1442844672,"maxMembers":65534}' };
 
 function runner(options = {}) {
   const calls = [];
@@ -74,6 +75,21 @@ test('tested configuration requires non-root Linux/amd64 source and compatibilit
   for (const image of [{ Id: otherId }, { Os: 'windows' }, { Architecture: 'arm64' },
     { Config: { User: 'root', Labels: labels } }, { Config: { User: 'node', Labels: { ...labels, 'io.flujo.worker.protocol': '2' } } }]) {
     assert.throws(() => inspectTestedImage(runner({ image }).run, imageId, sha, version));
+  }
+});
+
+test('snapshot image qualification rejects missing reader versions, changed bounds and runtime overrides', () => {
+  for (const change of [
+    { 'io.flujo.worker.snapshot-envelope-read-versions': undefined },
+    { 'io.flujo.worker.snapshot-envelope-read-versions': '1' },
+    { 'io.flujo.worker.snapshot-default-limits': '{}' },
+  ]) {
+    const candidate = { ...labels, ...change };
+    for (const key of Object.keys(candidate)) if (candidate[key] === undefined) delete candidate[key];
+    assert.throws(() => inspectTestedImage(runner({ image: { Config: { User: 'node', Labels: candidate } } }).run, imageId, sha, version));
+  }
+  for (const override of ['FLUJO_SNAPSHOT_MAX_FILE_BYTES=268435456', 'FLUJO_SNAPSHOT_MAX_BYTES=1073741824']) {
+    assert.throws(() => inspectTestedImage(runner({ image: { Config: { User: 'node', Labels: labels, Env: [override] } } }).run, imageId, sha, version));
   }
 });
 

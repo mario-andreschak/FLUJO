@@ -164,9 +164,9 @@ describe('worker snapshot restore', () => {
       expect(digest(wire)).toBe(exported.sha256);
       expect(exported.plaintextSha256).not.toBe(exported.sha256);
       process.env.FLUJO_WORKER_SNAPSHOT = exported.archivePath;
-      process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = exported.plaintextSha256;
+      process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = exported.sha256;
       if (scenario === 'wrong-key') process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
-      if (scenario === 'wrong-digest') process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = exported.sha256;
+      if (scenario === 'wrong-digest') process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = exported.plaintextSha256;
       if (scenario === 'tamper') {
         const envelope = JSON.parse(wire.toString());
         const data = Buffer.from(envelope.data, 'base64'); data[0] ^= 1;
@@ -174,9 +174,9 @@ describe('worker snapshot restore', () => {
         await fs.writeFile(exported.archivePath, JSON.stringify(envelope));
       }
       if (scenario === 'valid') {
-        await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: exported.plaintextSha256 });
+        await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: exported.sha256 });
         global.__flujo_worker_snapshot_restore = undefined;
-        await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: exported.plaintextSha256 });
+        await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: exported.sha256 });
         expect(await fs.readFile(path.join(destination, 'db/flows/flow-one.json'), 'utf8')).toBe('{"id":"flow-one"}');
       } else {
         await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow(scenario === 'wrong-digest' ? 'SHA-256' : 'decryption failed');
