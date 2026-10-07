@@ -95,8 +95,12 @@ export async function admitFeatureBrowserArtifact(applicationRoot, {
     fail('candidate application contains a dotenv file');
   }
   const appRelative = path.relative(root, app).split(path.sep).join('/');
+  // Next 16.3.8 promotes immutable build seeds into this runtime cache.
+  // Keep the compiled server/app and server/pages artifacts in the inventory.
+  const routeCache = `${appRelative}/.next/server/route-cache`;
   const ignored = file => file === `${appRelative}/.next/trace`
-    || file === `${appRelative}/.next/cache` || file.startsWith(`${appRelative}/.next/cache/`);
+    || file === `${appRelative}/.next/cache` || file.startsWith(`${appRelative}/.next/cache/`)
+    || file === routeCache || file.startsWith(`${routeCache}/`);
   const seen = new Set();
   let totalBytes = 0;
   for (const entry of runtimeFiles) {

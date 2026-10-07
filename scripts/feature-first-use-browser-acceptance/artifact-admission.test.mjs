@@ -114,3 +114,50 @@ test('an added runtime file cannot hide outside a pinned external inventory', as
   await fs.writeFile(path.join(fixture.root, 'node_modules/unrecorded.js'), '// Unrecorded synthetic bytes');
   await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /unrecorded entry/);
 });
+
+async function addDocumentedRouteCache(fixture) {
+  const root = path.join(fixture.applicationRoot, '.next/server/route-cache');
+  const namespace = path.join(root, 'APP_PAGE', sha('/mcp/page'), '$');
+  await fs.mkdir(namespace, { recursive: true });
+  await fs.writeFile(path.join(namespace, 'mcp.html'), 'Disposable Next route-cache response');
+  await fs.writeFile(path.join(namespace, 'mcp.rsc'), 'Disposable Next route-cache payload');
+  return root;
+}
+
+test('documented Next route-cache writes remain mutable while every recorded runtime file is verified', async t => {
+  const fixture = await externalMetadataFixture(t);
+  const options = await fixture.seal();
+  await addDocumentedRouteCache(fixture);
+  const result = await admitFeatureBrowserArtifact(fixture.applicationRoot, options);
+  assert.equal(result.runtimeFileCount, 5);
+  assert.deepEqual(result.runtimeInventory, fixture.receipt.runtimeInventory);
+});
+
+test('a similarly named sibling cannot hide beside the documented Next route cache', async t => {
+  const fixture = await externalMetadataFixture(t);
+  const options = await fixture.seal();
+  await addDocumentedRouteCache(fixture);
+  const sibling = path.join(fixture.applicationRoot, '.next/server/route-cache-extra');
+  await fs.mkdir(sibling);
+  await fs.writeFile(path.join(sibling, 'unrecorded.rsc'), 'Unrecorded sibling bytes');
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /unrecorded entry/);
+});
+
+test('documented route-cache writes cannot conceal changed immutable server artifacts', async t => {
+  const fixture = await externalMetadataFixture(t);
+  const options = await fixture.seal();
+  await addDocumentedRouteCache(fixture);
+  await fs.writeFile(path.join(fixture.applicationRoot, '.next/server/app-paths-manifest.json'), '{"changed":true}');
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /runtime file byte\/digest mismatch/);
+});
+
+test('a documented route-cache root cannot be a link or junction outside the candidate runtime', async t => {
+  const fixture = await externalMetadataFixture(t);
+  const options = await fixture.seal();
+  const outside = path.join(path.dirname(fixture.root), 'outside-route-cache');
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, 'unrecorded.rsc'), 'Outside synthetic bytes');
+  await fs.symlink(outside, path.join(fixture.applicationRoot, '.next/server/route-cache'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(admitFeatureBrowserArtifact(fixture.applicationRoot, options), /unadmitted link/);
+});

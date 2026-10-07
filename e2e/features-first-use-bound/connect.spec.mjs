@@ -86,11 +86,17 @@ for (const [transport, title, endpoint] of [
 
       const testRun = configure.getByRole('button', { name: '3) Test run', exact: true });
       await testRun.click();
-      await expect(configure.getByText('Connection test passed. The server completed the MCP handshake.', { exact: true })).toBeVisible();
+      await expect(configure.getByRole('alert')).toHaveText('Connection test passed. The server is reachable.');
+      await expect(configure.getByText('Connection result: MCP handshake successful.', { exact: false })).toBeVisible();
+      await expect(configure.getByText('Tools discovered: 128.', { exact: false })).toBeVisible();
+      await expect.poll(() => environment.fixture.state.snapshot().listRequests).toBeGreaterThan(0);
       await expect(testRun).toBeEnabled();
       expect(environment.fixture.state.snapshot().toolCalls).toBe(0);
       record('actual connection handshake passed without a tool invocation');
-      await configure.getByRole('button', { name: 'Add server', exact: true }).click();
+      expect((await environment.request('/api/mcp/servers')).some(config => config.name === name)).toBe(false);
+      // The manual handoff prefills initialConfig, so the current draft button
+      // says Update server. Its onAdd handler creates the first saved entry.
+      await configure.getByRole('button', { name: 'Update server', exact: true }).click();
       await expect(configure).not.toBeVisible();
       await expect.poll(async () => (await environment.request('/api/mcp/servers'))
         .some(config => config.name === name && config.disabled !== true)).toBe(true);
