@@ -18,6 +18,7 @@ function fixture() {
     equipment: { root: equipmentRoot, head: 'b'.repeat(40), tree: 'c'.repeat(40), graphReceipt: reference,
       qualification: { status: 'QUALIFIED', nodeCases: 47, nativeCases: 4, receipt: reference },
       files: ['scripts/smoke-cloud-worker.mjs', 'scripts/worker-recovery-acceptance.mjs',
+        'scripts/pinned-file-read.mjs',
         'scripts/worker-recovery-runtime.mjs', 'scripts/worker-recovery-binding.mjs',
         'scripts/mcp-smoke-cleanup.mjs', 'scripts/healthcheck.mjs',
         'scripts/persona-browser-acceptance/next-process.cjs',

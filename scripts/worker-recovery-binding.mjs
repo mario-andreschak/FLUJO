@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { promises as fs, createReadStream } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { readPinnedFile } from './pinned-file-read.mjs';
 
 export const recoveryProducer = Object.freeze({
   head: 'ea592d62075bafbb70ddbe1eb76479f1572aff81',
@@ -86,6 +87,7 @@ export function checkRecoveryBinding(binding, { application, equipmentRoot }) {
     }
   }
   const required = ['scripts/smoke-cloud-worker.mjs', 'scripts/worker-recovery-acceptance.mjs',
+    'scripts/pinned-file-read.mjs',
     'scripts/worker-recovery-runtime.mjs', 'scripts/worker-recovery-binding.mjs',
     'scripts/mcp-smoke-cleanup.mjs', 'scripts/healthcheck.mjs',
     'scripts/persona-browser-acceptance/next-process.cjs',
@@ -116,12 +118,8 @@ async function assertPlainPath(root, relative) {
   return current;
 }
 async function verifyFile(file, entry, signal) {
-  signal?.throwIfAborted();
-  const stat = await fs.lstat(file);
-  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size === entry.bytes, 'Pinned file shape/size changed.');
-  const digest = createHash('sha256');
-  for await (const bytes of createReadStream(file, { signal })) digest.update(bytes);
-  assert.equal(digest.digest('hex'), entry.sha256, 'Pinned file digest changed.');
+  await readPinnedFile(file, { maxBytes: maximumFileBytes, expectedBytes: entry.bytes,
+    expectedSha256: entry.sha256, signal, collect: false });
 }
 export async function verifyRecoveryBinding({ bindingPath, bindingSha256, application, equipmentRoot, signal }) {
   assert.equal(recoveryProducerQualification.status, 'QUALIFIED',
@@ -130,9 +128,7 @@ export async function verifyRecoveryBinding({ bindingPath, bindingSha256, applic
     'Actual producer qualification census is not frozen.');
   assert.ok(path.isAbsolute(bindingPath ?? ''), 'Recovery requires an absolute Root-admitted binding.');
   assert.match(bindingSha256 ?? '', digestPattern, 'Recovery requires the independently admitted binding digest.');
-  const stat = await fs.lstat(bindingPath);
-  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= maximumBindingBytes);
-  const raw = await fs.readFile(bindingPath, { signal });
+  const raw = await readPinnedFile(bindingPath, { maxBytes: maximumBindingBytes, signal });
   assert.equal(hash(raw), bindingSha256, 'Recovery binding changed.');
   const binding = checkRecoveryBinding(JSON.parse(raw), { application, equipmentRoot });
   for (const [root, table] of [[application, binding.payload.files], [equipmentRoot, binding.equipment.files]]) {
