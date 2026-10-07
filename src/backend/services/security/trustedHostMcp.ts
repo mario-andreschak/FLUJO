@@ -1,6 +1,6 @@
 import fs, { constants, type BigIntStats } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, scryptSync } from 'node:crypto';
 import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
@@ -97,13 +97,12 @@ function sameIdentity(before: BigIntStats, after: BigIntStats): boolean {
 }
 
 function readStableFile(filename: string, maximum: number, consume: (chunk: Buffer) => void): BigIntStats {
-  assertLinkFree(filename);
-  const before = fs.lstatSync(filename, { bigint: true });
-  if (!before.isFile() || before.nlink !== BigInt(1) || before.size > BigInt(maximum)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
   const fd = fs.openSync(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = fs.fstatSync(fd, { bigint: true });
-    if (!sameIdentity(before, opened) || !opened.isFile()) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    assertLinkFree(filename);
+    if (!sameIdentity(opened, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
     const buffer = Buffer.alloc(64 * 1024);
     let length = 0;
     while (true) {
@@ -215,13 +214,18 @@ export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
     const rootEntry = z.string().max(2048).refine(value => !value.includes('${global:') && !/[\x00-\x1f\x7f]/.test(value));
     const roots = z.array(rootEntry).max(64).parse(config.roots ?? []);
     const rootPath = rootEntry.parse(config.rootPath ?? '');
-    return createHash('sha256').update(JSON.stringify({
-      domain: 'flujo:mcp:trusted-host-consent:v1', command, args, cwd, requestedEnvironment,
+    const consent = JSON.stringify({
+      domain: 'flujo:mcp:trusted-host-consent:v2', command, args, cwd, requestedEnvironment,
       policy: { ...policy, environmentNames: [...policy.environmentNames].sort() },
       capabilities: { roots, sampling: config.sampling ?? null, elicitation: config.elicitation ?? null,
         apps: config.enableMcpApps === true, skills: config.enableMcpSkills === true, rootPath,
         runtimeHomeMode: config.runtimeHomeMode ?? null },
-    })).digest('hex');
+    });
+    // Configured environment/arguments can contain credentials. Their consent
+    // commitment must resist cheap offline guessing, rather than hash secrets
+    // with the same fast SHA-256 used for public package byte fingerprints.
+    const salt = JSON.stringify(['flujo:mcp:trusted-host-consent:v2', getCurrentWorkspace(), config.name, policy.sourceRoot]);
+    return scryptSync(consent, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex');
   } catch { throw new TrustedHostMcpError('HOST_POLICY_INVALID'); }
 }
 
@@ -280,13 +284,12 @@ async function assertLinkFreeAsync(filename: string): Promise<void> {
 
 async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal): Promise<{ digest: string; size: number }> {
   if (signal?.aborted) throw new Error();
-  await assertLinkFreeAsync(filename);
-  const before = await fs.promises.lstat(filename, { bigint: true });
-  if (!before.isFile() || before.nlink !== BigInt(1) || before.size > BigInt(maximum)) throw new Error();
   const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat({ bigint: true });
-    if (!sameIdentity(before, opened) || !opened.isFile()) throw new Error();
+    if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)) throw new Error();
+    await assertLinkFreeAsync(filename);
+    if (!sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new Error();
     const hash = createHash('sha256');
     const buffer = Buffer.alloc(64 * 1024);
     let length = 0;
