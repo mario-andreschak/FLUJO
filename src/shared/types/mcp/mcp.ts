@@ -238,6 +238,8 @@ export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   launch?: MCPLaunchSpec;
 };
 
+export type MCPEncryptedOAuthValue = { format: 'flujo-oauth-v1'; ciphertext: string };
+
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
   transport: 'streamable';
   serverUrl: string;
@@ -252,9 +254,9 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthScopes?: string[];
   // Stored OAuth data
   oauthClientMetadata?: OAuthClientMetadata;
-  oauthClientInformation?: OAuthClientInformation;
-  oauthTokens?: OAuthTokens;
-  oauthCodeVerifier?: string;
+  oauthClientInformation?: OAuthClientInformation | MCPEncryptedOAuthValue;
+  oauthTokens?: OAuthTokens | MCPEncryptedOAuthValue;
+  oauthCodeVerifier?: string | MCPEncryptedOAuthValue;
   /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
   oauthState?: string;
   /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */

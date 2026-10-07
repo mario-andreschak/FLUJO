@@ -1,6 +1,9 @@
 import { auth as authV1, fetchToken as fetchTokenV1 } from '@modelcontextprotocol/sdk/client/auth.js';
 import { auth as authV2, fetchToken as fetchTokenV2, type OAuthClientProvider as BetaOAuthClientProvider } from '@modelcontextprotocol/client';
 import type { MCPStreamableConfig } from '@/shared/types/mcp';
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 
 const mockLoadConfigs = jest.fn();
 const mockSaveConfigs = jest.fn();
@@ -25,10 +28,13 @@ const oldClient = { client_id: 'synthetic-old-client', client_secret: 'synthetic
 
 let config: MCPStreamableConfig;
 let provider: MCPOAuthClientProvider;
-beforeEach(() => {
+beforeEach(async () => {
+  privateFixture = await installPrivateProfileFixture();
   mockLoadConfigs.mockReset();
   mockSaveConfigs.mockReset().mockResolvedValue({ success: true });
-  mockDecrypt.mockReset().mockResolvedValue('synthetic-manual-secret');
+  mockDecrypt.mockReset().mockImplementation((value: string) => value === 'encrypted:synthetic-secret'
+    ? Promise.resolve('synthetic-manual-secret')
+    : jest.requireActual('@/backend/utils/resolveGlobalVars').resolveAndDecryptApiKey(value));
   config = { name: 'issuer-test', transport: 'streamable', serverUrl, disabled: true, rootPath: '', env: {},
     _buildCommand: '', _installCommand: '',
     oauthClientInformation: { ...oldClient }, oauthTokens: { ...oldTokens }, oauthCodeVerifier: 'synthetic-verifier' };
@@ -56,19 +62,18 @@ it.each([undefined, null, '', '   ', 42])('withholds malformed credential issuer
 it('retains an exact SDK issuer and registration metadata across a narrower client save', async () => {
   await provider.saveClientInformation({ ...oldClient, issuer: trustedIssuer,
     redirect_uris: [redirectUri], client_name: 'synthetic-registration', scope: 'read write' });
-  const metadata = config.oauthClientMetadata;
+  const metadata = await provider.clientInformation();
   await provider.saveClientInformation({ ...oldClient, issuer: trustedIssuer });
-  expect(config.oauthClientInformation?.issuer).toBe(trustedIssuer);
-  expect(config.oauthClientMetadata).toBe(metadata);
+  await expect(provider.clientInformation()).resolves.toMatchObject(metadata!);
+  expect(config.oauthClientMetadata).toBeUndefined();
   const saved = (mockSaveConfigs.mock.calls[1][0] as Map<string, MCPStreamableConfig>).get(config.name)!;
-  expect(saved.oauthClientInformation?.issuer).toBe(trustedIssuer);
-  expect(saved.oauthClientMetadata).toEqual(metadata);
+  await expect(new MCPOAuthClientProvider(saved, redirectUri).clientInformation()).resolves.toMatchObject(metadata!);
+  expect(saved.oauthClientMetadata).toBeUndefined();
 });
 
 it('keeps issuer and expiration tracking only after a successful token save', async () => {
   await provider.saveTokens({ ...oldTokens, issuer: trustedIssuer, expires_in: 3600 });
-  expect(config.oauthTokens?.issuer).toBe(trustedIssuer);
-  expect((config.oauthTokens as { issued_at?: number }).issued_at).toEqual(expect.any(Number));
+  await expect(provider.tokens()).resolves.toMatchObject({ issuer: trustedIssuer, issued_at: expect.any(Number) });
   const before = JSON.stringify(config);
   mockSaveConfigs.mockResolvedValueOnce({ success: false, error: 'synthetic-storage-secret' });
   await expect(provider.saveTokens({ ...oldTokens, issuer: changedIssuer })).rejects.toThrow('OAuth credential persistence failed');
@@ -135,7 +140,7 @@ describe.each([['v1', authV1, fetchTokenV1], ['v2', authV2, fetchTokenV2]] as co
     expect(sent).not.toContain(oldClient.client_secret);
     expect(sent).not.toContain(oldTokens.refresh_token);
     expect(requests.filter(request => request.method === 'POST').map(request => request.url)).toEqual([`${trustedIssuer}register`]);
-    expect(config.oauthClientInformation?.issuer).toBe(trustedIssuer);
+    await expect(provider.clientInformation()).resolves.toMatchObject({ issuer: trustedIssuer });
     expect(new URL(config.authorizationUrl!).searchParams.get('client_id')).toBe('synthetic-fresh-client');
     expect(config.oauthState).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
@@ -157,8 +162,8 @@ describe.each([['v1', authV1, fetchTokenV1], ['v2', authV2, fetchTokenV2]] as co
     await expect(auth(provider, { serverUrl, fetchFn })).resolves.toBe('AUTHORIZED');
     expect(requests.filter(request => request.method === 'POST').map(request => request.url)).toEqual([`${trustedIssuer}token`]);
     expect(requests.find(request => request.method === 'POST')?.body).toContain(oldTokens.refresh_token);
-    expect(config.oauthTokens).toMatchObject({ issuer: trustedIssuer, refresh_token: 'synthetic-refreshed-refresh' });
-    await expect(provider.tokens()).resolves.toBe(config.oauthTokens);
+    expect(config.oauthTokens).toMatchObject({ format: 'flujo-oauth-v1', ciphertext: expect.stringMatching(/^v2:/) });
+    await expect(provider.tokens()).resolves.toMatchObject({ issuer: trustedIssuer, refresh_token: 'synthetic-refreshed-refresh' });
   });
 
   it('rejects mismatched manual credentials before a token request or verifier read', async () => {
