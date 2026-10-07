@@ -173,11 +173,11 @@ export function assertIsolatedMcpArguments(value: unknown): void {
   visit(value, 0);
 }
 
-export function attachMcpIsolation(transport: IsolationTransport, config: MCPStdioConfig, managed: ManagedMcpIsolation): void {
+export function attachMcpIsolation(transport: IsolationTransport, config: MCPStdioConfig, managed: ManagedMcpIsolation, onRetire?: () => void): void {
   transport.__flujoMcpIsolation = managed;
   const start = transport.start.bind(transport);
   const close = transport.close.bind(transport);
-  const wrapClose = (callback: (() => void) | undefined) => () => { managed.close(); callback?.(); };
+  const wrapClose = (callback: (() => void) | undefined) => () => { onRetire?.(); managed.close(); callback?.(); };
   let onclose = wrapClose(transport.onclose);
   Object.defineProperty(transport, 'onclose', { configurable: true,
     get: () => onclose,
@@ -189,11 +189,12 @@ export function attachMcpIsolation(transport: IsolationTransport, config: MCPStd
         throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
       }
       await start();
-    } catch (error) { managed.close(); throw error; }
+    } catch (error) { onRetire?.(); managed.close(); throw error; }
   };
   transport.close = async () => {
     // Remove the server before closing the attach client. An attach client's
     // exit is not a container exit witness, and a hanging SDK close cannot skip it.
+    onRetire?.();
     managed.close();
     await close();
   };

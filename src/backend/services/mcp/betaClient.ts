@@ -301,7 +301,7 @@ export function createBetaTransport(
     const parameters = {
       command,
       args,
-      env: runtimeBroker ? { ...env, ...trustedHostBrokerEnvironment(config, runtimeBroker.env) } : env,
+      env: runtimeBroker ? { ...env, ...(isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) } : env,
       cwd,
       stderr: isolation ? 'ignore' as const : 'pipe' as const,
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -312,7 +312,7 @@ export function createBetaTransport(
       Object.freeze(parameters);
     }
     transport = new BetaStdioClientTransport(parameters);
-    if (isolation) attachMcpIsolation(transport, config, isolation);
+    if (isolation) attachMcpIsolation(transport, config, isolation, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
     else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
   } catch (error) {
     isolation?.close();

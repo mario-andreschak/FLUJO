@@ -1008,24 +1008,24 @@ export function createStdioTransport(
     `Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`,
   );
 
-  const transportoptions: StdioServerParameters = {
-    command: command,
-    args: args,
-    env: runtimeBroker ? { ...env, ...trustedHostBrokerEnvironment(config, runtimeBroker.env) } : env,
-    cwd: cwd,
-    stderr: isolation ? 'ignore' : 'pipe',
-    ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
-  };
-  if (!isolation) {
-    Object.freeze(transportoptions.args);
-    Object.freeze(transportoptions.env);
-    Object.freeze(transportoptions);
-  }
-
   let transport: StdioClientTransport;
   try {
+    const transportoptions: StdioServerParameters = {
+      command: command,
+      args: args,
+      env: runtimeBroker ? { ...env, ...(isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) } : env,
+      cwd: cwd,
+      stderr: isolation ? 'ignore' : 'pipe',
+      ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
+    };
+    if (!isolation) {
+      Object.freeze(transportoptions.args);
+      Object.freeze(transportoptions.env);
+      Object.freeze(transportoptions);
+    }
+
     transport = new StdioClientTransport(transportoptions);
-    if (isolation) attachMcpIsolation(transport, config, isolation);
+    if (isolation) attachMcpIsolation(transport, config, isolation, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
     else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
   } catch (error) {
     isolation?.close();

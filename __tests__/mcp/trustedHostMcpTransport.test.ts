@@ -15,6 +15,7 @@ import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trusted
 import { callTool } from '@/backend/services/mcp/tools';
 import { createRootsListHandler, setNodeRoots, _resetNodeRootsForTests } from '@/backend/services/mcp/roots';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { getMcpAppRuntimeBrokerSnapshot, revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
 
 jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: jest.fn() }));
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn(async () => undefined), saveItem: jest.fn() }));
@@ -56,6 +57,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  revokeMcpAppRuntimeBrokerForServer(config.name);
   jest.restoreAllMocks();
   _resetNodeRootsForTests();
   for (const [name, value] of Object.entries(saved)) {
@@ -207,4 +209,42 @@ test('roots removal retires its actual managed generation', async () => {
   expect(await handler()).toEqual({ roots: [] });
   expect(close).toHaveBeenCalledTimes(1);
   await expect(getManagedTrustedHost(transport)!.assertCurrent(config)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
+});
+
+test.each(['v1', 'beta'])('%s revokes the actual issued broker lease after host environment refusal', era => {
+  config = { ...config, enableMcpApps: true };
+  approve();
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
+  expect(() => era === 'v1' ? createStdioTransport(config, { enableRuntimeBroker: true }) : createBetaTransport(config, { enableRuntimeBroker: true }))
+    .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
+  expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
+});
+
+test.each(['disabled', 'removed', 'retargeted'].flatMap(change => ['tool', 'roots'].map(request => ({ change, request }))))
+('$request rechecks a $change stored config after fingerprinting while the old grant remains valid', async ({ change, request }) => {
+  const transport = createStdioTransport(config);
+  const close = jest.fn(() => transport.close());
+  const sdkCall = jest.fn();
+  const client = { transport, close, callTool: sdkCall } as unknown as Client;
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const open = fs.promises.open.bind(fs.promises);
+  jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === config.command) {
+      const read = handle.read.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => { enter(); await barrier; return read(...readArgs); }) as typeof handle.read;
+    }
+    return handle;
+  });
+  const result = request === 'tool' ? callTool(client, config.name, 'probe', {}, 5) : createRootsListHandler(config, client)();
+  await entered;
+  configs.mockResolvedValue(change === 'removed' ? [] : [{ ...config, ...(change === 'disabled' ? { disabled: true } : { args: ['retargeted'] }) }]);
+  release();
+  if (request === 'tool') expect(await result).toMatchObject({ success: false, error: 'HOST_CONSENT_REQUIRED' });
+  else expect(await result).toEqual({ roots: [] });
+  expect(sdkCall).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledTimes(1);
 });

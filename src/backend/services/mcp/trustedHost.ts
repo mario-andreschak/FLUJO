@@ -91,8 +91,13 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
       checkLive();
       if (current.name !== captured.name || current.disabled || trustedHostMcpPolicyDigest(current) !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       const authority = await verifyTrustedHostMcp(current, cancellation.signal);
+      // Fingerprinting yields. A snapshot from before that await cannot admit
+      // a server that was removed, disabled or retargeted while checking bytes.
+      const latest = await currentConfig(captured.name);
+      const fresh = trustedHostMcpApproval(latest);
       checkLive();
-      if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
+          || fresh.ownerId !== initial.ownerId || fresh.digest !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     },
   });
   managedHosts.set(transport, managed);
