@@ -5,6 +5,17 @@ This is Source equipment on qualified owned-schema baseline
 memory and operational controls are **UNRUN**. The scenario does not reproduce
 the unavailable original transcript or establish the cause of its fatal OOM.
 
+The first actual integrated run failed both controls: guarded execution reached
+proof emission but Jest could not resolve the unexported `openai/package.json`
+subpath; admission-off initialization eagerly evaluated a circular SWC export
+getter. Those raw failures and owned roots remain preserved. This successor
+reads bounded installed package metadata by walking at most six directories
+up from the supported `openai` entry, verifies checkout-local containment and
+the package name, and records its real version/hash. Its test-only admission
+mock copies lazy export descriptors and replaces only the named budget controls,
+without enumerating getter values during module initialization. These repairs
+have not yet been executed or qualified.
+
 The original report describes approximately 500k parent tokens, 900–1400k child
 tokens, three completed children, one AtlasCloud 400 failure and four queued
 children. This fixture retains a 2,000,000-character parent and eight independent
