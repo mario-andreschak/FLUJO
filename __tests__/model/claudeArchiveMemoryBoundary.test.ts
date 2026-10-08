@@ -70,7 +70,7 @@ beforeEach(async () => {
       if (first.done) throw new Error('Claude adapter closed input before SDK forwarding');
       const child = spawn(process.execPath, [path.join(__dirname, 'fixtures', 'claudeArchiveSdkBridge.mjs')], {
         cwd: fixture.root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP,
+        env: { NODE_ENV: 'test', PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP,
           HOME: fixture.root, USERPROFILE: fixture.root, CLAUDE_CONFIG_DIR: fixture.root,
           CLAUDE_SECURESTORAGE_CONFIG_DIR: fixture.root },
       });
@@ -149,11 +149,14 @@ const input = (extra: Partial<CompletionInput> = {}): CompletionInput => ({
   conversationId: 'claude-memory', nodeId: 'node', ...extra,
 } as CompletionInput);
 
-const capture: NonNullable<CompletionInput['onSdkRequest']> = snapshot => archiveModelDispatch({
+const capture: NonNullable<CompletionInput['onSdkRequest']> = async snapshot => {
+  const entry = await archiveModelDispatch({
   conversationId: 'claude-memory', nodeId: 'node', modelId: 'offline', modelName: 'offline-model',
   adapter: snapshot.adapter, operation: snapshot.operation, attempt: 1,
   canonicalMessages: canonical, genericWire: [{ role: 'user', content: canonical[0].content }], sdkRequest: snapshot.request,
-});
+  });
+  return entry.dispatchId;
+};
 
 it('rejects actual archive pressure before Claude query/SDK/HTTP and removes the external abort listener', async () => {
   let release!: () => void;
@@ -194,3 +197,4 @@ it('preserves best-effort ordinary diagnostic failures while the actual SDK and 
   expect(queryMock).toHaveBeenCalledTimes(1);
   expect(requests).toHaveLength(1);
 });
+
