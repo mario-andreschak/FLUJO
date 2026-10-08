@@ -9,6 +9,18 @@ const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 
 async function loadSource(filename) {
   const require = createRequire(import.meta.url);
+  // The normal production build emits exactly these fixed modules. Prefer the
+  // built issuer/ACL helper so image qualification needs no source or compiler.
+  const names = new Set(['ownerCredentials.ts', 'windowsPrivateAuthority.ts']);
+  const name = path.basename(filename);
+  if (!names.has(name) || path.dirname(filename) !== path.join(sourceRoot, 'src/backend/services/security')) throw new Error('Unsupported smoke security module.');
+  const compiled = path.join(sourceRoot, 'scripts', 'compiled-security', name.replace(/\.ts$/, '.cjs'));
+  try {
+    await fs.access(compiled);
+    return require(compiled);
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // Unbuilt developer checkout only; production images fail if their required
+  // compiled artifact is absent instead of manufacturing a credential issuer.
   const ts = require('typescript');
   const loaded = new Module(filename);
   loaded.filename = filename;
@@ -42,7 +54,7 @@ export async function createSmokeOperator() {
       const authority = await loadSource(path.join(sourceRoot, 'src/backend/services/security/windowsPrivateAuthority.ts'));
       await authority.windowsPrivateAuthorityStampAsync(ownerFile);
     }
-    return { token: issued.token, env: { FLUJO_OWNER_AUTH_FILE: ownerFile,
+    return { token: issued.token, expiresAt: issued.record.expiresAt, env: { FLUJO_OWNER_AUTH_FILE: ownerFile,
       FLUJO_MCP_TRUSTED_HOST_FILE: path.join(directory, 'approval.json') }, restore };
   } catch (error) {
     try { await restore(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Smoke operator setup and cleanup failed.', { cause: error }); }
@@ -50,8 +62,13 @@ export async function createSmokeOperator() {
   }
 }
 
-export async function approveSmokeServer(baseUrl, name, token, timeoutMs) {
+export async function approveSmokeServer(baseUrl, name, token, timeoutMs, { workspace, expiresAt = Date.now() + 120_000 } = {}) {
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 15 * 60_000) throw new Error('Invalid smoke consent expiry.');
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+  if (workspace !== undefined) {
+    if (typeof workspace !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(workspace)) throw new Error('Invalid smoke workspace.');
+    headers['x-flujo-workspace'] = workspace;
+  }
   const url = new URL(`/api/mcp/servers/${encodeURIComponent(name)}/host-consent`, baseUrl);
   url.searchParams.set('runtimeHome', 'host');
   const preview = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
@@ -59,7 +76,7 @@ export async function approveSmokeServer(baseUrl, name, token, timeoutMs) {
   const reviewed = await preview.json();
   if (reviewed.serverName !== name || !/^[a-f0-9]{64}$/.test(reviewed.policyDigest)) throw new Error('Invalid installed package consent preview.');
   const approval = await fetch(url, { method: 'POST', headers, signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify({ runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt: Date.now() + 120_000 }) });
+    body: JSON.stringify({ runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt }) });
   if (!approval.ok || (await approval.json()).approved !== true) throw new Error(`Installed ${name} consent approval returned ${approval.status}.`);
 }
 

@@ -42,7 +42,8 @@ completed invocation with its hold absent and effects resolved. SDK completion
 or a process phase alone cannot release an unknown Original.
 
 This is an internal Source capability, not a Worker transport or fleet eligibility
-switch. The current host mint remains bound to genuine Persona dispatch. A fleet
+switch. Host minting requires genuine Persona dispatch or an admitted trusted
+Worker execution context. A fleet
 integration still needs independently authenticated Worker ownership, a scoped
 tool gateway and qualification of its actual deployed image and provider route.
 
