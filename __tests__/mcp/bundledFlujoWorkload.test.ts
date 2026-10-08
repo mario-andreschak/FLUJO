@@ -104,7 +104,7 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
 });
 
 test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
-  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent'] as const)
+  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-acquisition-ambiguous'] as const)
 ('real private consent and fresh guarded workload contract: %s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
@@ -253,6 +253,43 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
     let expectedCloseCount = 1;
+    if (mode === 'retire-acquisition-ambiguous') {
+      const actualOpen = fs.openSync, actualStat = fs.fstatSync, actualClose = fs.closeSync, actualUnlink = fs.unlinkSync;
+      const recordName = path.join(workloadDirectory, `${key}.json`);
+      let acquired: number | undefined, failedStat = false;
+      const opened = jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+        const fd = actualOpen(...args);
+        if (String(args[0]) === recordName && typeof args[1] === 'number' && (args[1] & fs.constants.O_RDWR) === 0 && acquired === undefined) acquired = fd;
+        return fd;
+      });
+      const stat = jest.spyOn(fs, 'fstatSync').mockImplementation((...args: Parameters<typeof fs.fstatSync>) => {
+        if (args[0] === acquired && !failedStat) { failedStat = true; throw Object.assign(new Error('Owned acquisition validation fault.'), { code: 'EIO' }); }
+        return actualStat(...args);
+      });
+      const closed = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
+        if (fd === acquired) throw Object.assign(new Error('Ambiguous acquired descriptor close.'), { code: 'EIO' });
+        actualClose(fd);
+      });
+      const unlink = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+        if (String(filename) === recordName) throw Object.assign(new Error('Owned unlink fault.'), { code: 'EIO' });
+        actualUnlink(filename);
+      });
+      try { await expect(transport.close()).rejects.toThrow(); }
+      finally { opened.mockRestore(); stat.mockRestore(); closed.mockRestore(); unlink.mockRestore(); }
+      expect(failedStat).toBe(true); expect(acquired).toBeDefined();
+      foreignDescriptors.push(acquired!);
+      expect(actualStat(acquired!).isFile()).toBe(true);
+      const retryOpen = jest.spyOn(fs, 'openSync');
+      try { await expect(transport.close()).rejects.toThrow(); }
+      finally { retryOpen.mockRestore(); }
+      expect(retryOpen.mock.calls.filter(args => String(args[0]) === recordName)).toEqual([]);
+      expect(actualStat(acquired!).isFile()).toBe(true);
+      expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+      // The fixture owns this genuinely acquired handle. Closing it establishes
+      // authoritative EBADF; no production clear or authority mock is involved.
+      actualClose(acquired!); foreignDescriptors.pop();
+      expectedCloseCount = 3;
+    }
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
       const actualUnlink = fs.unlinkSync;
       const actualClose = fs.closeSync;
