@@ -36,13 +36,17 @@ export async function createOwnedPrivateApprovalStage(filename: string, value: u
   } catch (error) { await dispose(); throw error; }
   return {
     path: stage,
-    async publish(destination: string, beforeEffect?: () => void) {
+    async publish(destination: string, beforeEffect?: () => void, afterHeldRead?: () => Promise<void>) {
       if (path.dirname(destination) !== path.dirname(stage) || signal.aborted) throw new Error('Approval publication retired.');
       await readPrivateApprovalAsync(stage, signal);
       if (!same(identity, await handle.stat({ bigint: true })) || !await owned()) throw new Error('Owned approval stage changed.');
       const bytes = Buffer.alloc(content.length + 1);
       try {
         const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+        // Optional observation barrier for exercising actual late publication
+        // races. All native, digest, held/named checks and the final effect
+        // callback still execute; the observer cannot supply their results.
+        if (afterHeldRead) await afterHeldRead();
         if (bytesRead !== content.length || createHash('sha256').update(bytes.subarray(0, bytesRead)).digest('hex') !== expectedDigest
             || !same(identity, await handle.stat({ bigint: true })) || !same(identity, await fs.promises.lstat(stage, { bigint: true }))) throw new Error('Owned approval bytes changed.');
       } finally { bytes.fill(0); }
