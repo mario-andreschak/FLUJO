@@ -143,13 +143,18 @@ async function renameWithRetry(tmpPath: string, filePath: string, validate: () =
   }
 }
 
-export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
+export async function writeFileAtomic(filePath: string, data: string, assertCurrent?: () => Promise<void>): Promise<void> {
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     await assertCredentialStoreReady(filePath);
     await assertWorkspaceMutationOwned();
     const dirPath = path.dirname(filePath);
     await assertBundledFlujoWorkloadEffectCurrent();
+    if (assertCurrent) {
+      await assertCurrent();
+      await assertWorkspaceMutationOwned();
+      await assertBundledFlujoWorkloadEffectCurrent();
+    }
     await fs.mkdir(dirPath, { recursive: true });
     const directory = await fs.lstat(dirPath, { bigint: true });
     const canonicalDirectory = await fs.realpath(dirPath);
@@ -161,12 +166,22 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
     try {
       await assertWorkspaceMutationOwned();
       await assertBundledFlujoWorkloadEffectCurrent();
+      if (assertCurrent) {
+        await assertCurrent();
+        await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+      }
       const handle = await fs.open(tmpPath, 'wx', 0o600);
       created = true;
       try {
         owned = await handle.stat({ bigint: true });
         await assertWorkspaceMutationOwned();
         await assertBundledFlujoWorkloadEffectCurrent();
+        if (assertCurrent) {
+          await assertCurrent();
+          await assertWorkspaceMutationOwned();
+          await assertBundledFlujoWorkloadEffectCurrent();
+        }
         await handle.writeFile(data);
         await assertWorkspaceMutationOwned();
         await handle.sync();
@@ -197,6 +212,11 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
         }
         await assertWorkspaceMutationOwned();
         await assertBundledFlujoWorkloadEffectCurrent();
+        if (assertCurrent) {
+          await assertCurrent();
+          await assertWorkspaceMutationOwned();
+          await assertBundledFlujoWorkloadEffectCurrent();
+        }
       });
       created = false;
       await assertWorkspaceMutationOwned();
@@ -213,7 +233,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   });
 }
 
-export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
+export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () => Promise<void>): Promise<void> {
   const filePath = getFilePath(key);
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
@@ -226,7 +246,7 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
     const previous = writeChains.get(chainKey) ?? Promise.resolve();
     const run = previous
       .catch(() => { /* prior write's error is surfaced to its own caller */ })
-      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
+      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2), assertCurrent));
     writeChains.set(chainKey, run);
 
     try {
