@@ -116,7 +116,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
   const cancellation = new AbortController();
   const deadline = setTimeout(() => {
     cancellation.abort(new Error('Workload fixture cancellation deadline.'));
-    stamp('deadline-abort');
+    try { stamp('deadline-abort'); } catch { /* Keep cancellation independent of diagnostic logging. */ }
   }, 55_000);
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
   let readerDelegate!: { current: typeof import('@/backend/services/security/trustedHostMcp').readPrivateApprovalSetAsync };
