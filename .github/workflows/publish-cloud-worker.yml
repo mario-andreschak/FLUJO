@@ -52,7 +52,7 @@ jobs:
         run: |
           node -e 'const fs=require("fs"); const version=require("./package.json").version; if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version)) throw Error("Invalid image version"); fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);'
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build Linux worker image without publishing
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
