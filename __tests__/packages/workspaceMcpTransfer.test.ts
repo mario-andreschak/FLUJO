@@ -9,6 +9,7 @@ import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
 import { saveConfig } from '@/backend/services/mcp/config';
+import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
 
 let mockWorkspace = '';
 const mockConfigStorage = new Map<StorageKey, unknown>();
@@ -381,11 +382,17 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
   });
   loadConfigs.mockResolvedValue([config]);
   client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(targetFiles).href }] }));
+  const owner = installBundledFixtureOwner();
   connect.mockImplementationOnce(async () => {
     const rebuilt = updateConfig.mock.calls[0][1];
+    const { previewBundledHostConsent, approveBundledHostConsent } = await import('@/backend/services/security/bundledMcpConsent');
+    const preview = await previewBundledHostConsent(rebuilt.name, { runtimeHome: 'host' });
+    const approved = await approveBundledHostConsent(owner.request(rebuilt.name), rebuilt.name, {
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+    });
     // Exercise the managed production transport without changing its reviewed environment.
     const { createStdioTransport } = await import('@/backend/services/mcp/connection');
-    await client.connect(createStdioTransport(rebuilt));
+    await client.connect(createStdioTransport(approved.config));
     return { success: true };
   });
   try {
@@ -401,7 +408,8 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
     expect(await fs.readFile(targetFile, 'utf8')).toBe('cloud-worker-smoke');
     await expect(fs.access(path.join(sourceFiles, 'worker-result.txt'))).rejects.toThrow();
   } finally {
-    await client.close();
-    await fs.rm(sourceRoot, { recursive: true, force: true });
+    try { await client.close(); } finally {
+      try { owner.restore(); } finally { await fs.rm(sourceRoot, { recursive: true, force: true }); }
+    }
   }
 }, 30_000);

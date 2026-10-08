@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { issueOwnerCredential, ownerPolicySchema } from '@/backend/services/security/ownerCredentials';
-import { getCurrentWorkspace } from '@/utils/workspace';
 
 /** Provision an owned operator; approval still goes through the real protected writer. */
 export function installBundledFixtureOwner() {
@@ -21,8 +20,7 @@ export function installBundledFixtureOwner() {
   };
   try {
     const expiresAt = Date.now() + 120_000;
-    const issued = issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], expiresAt,
-      Date.now(), { workspaceId: getCurrentWorkspace() });
+    const issued = issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], expiresAt);
     const ownerId = 'owned-bundled-fixture-operator';
     const owner = ownerPolicySchema.parse({ schemaVersion: 1, ownerId, credentials: [issued.record] });
     const ownerFile = path.join(directory, 'owner.json');
