@@ -31,7 +31,8 @@ const protocolSchemas: Record<string, { path: string; method: 'GET' | 'POST'; sc
 };
 
 export async function computeBundledFlujoWorkloadDefinitions() {
-  const [domains, tools] = await Promise.all([import('./flujoControlApi'), import('./internalTools')]);
+  const [domains, tools, screenshot] = await Promise.all([import('./flujoControlApi'), import('./internalTools'), import('./systemScreenshot')]);
+  const screenshotEnabled = screenshot.systemScreenshotEnabled();
   const definitions = tools.internalToolDefinitions();
   const groups = [['authoring', domains.FLUJO_AUTHORING_TOOLS], ['flows', domains.FLUJO_FLOW_TOOLS],
     ['servers', domains.FLUJO_SERVER_TOOLS], ['automation', domains.FLUJO_AUTOMATION_TOOLS], ['state', domains.FLUJO_STATE_TOOLS]] as const;
@@ -41,6 +42,10 @@ export async function computeBundledFlujoWorkloadDefinitions() {
     if (seen.has(name)) throw new Error('Duplicate workload action refused.');
     seen.add(name);
     const selected = definitions.filter(definition => definition.name === name);
+    // Only this actual operator-gated definition may be unavailable. Changing
+    // its availability changes the committed inventory and requires consent.
+    if (name === 'system_screenshot' && selected.length === 0 && !screenshotEnabled
+        && screenshot.systemScreenshotToolDefinition() === undefined) continue;
     if (selected.length !== 1) throw new Error('Missing or ambiguous workload definition.');
     const schema = selected[0].inputSchema;
     result.push({ action: { action: name, method: 'POST', path: prefix + route,
@@ -51,6 +56,7 @@ export async function computeBundledFlujoWorkloadDefinitions() {
   if (result.length > 70) throw new Error('Workload inventory exceeds its bound.');
   result.sort((left, right) => left.action.action < right.action.action ? -1 : left.action.action > right.action.action ? 1 : 0);
   canonicalWorkloadJson(result.map(item => item.action));
+  if (screenshotEnabled !== screenshot.systemScreenshotEnabled()) throw new Error('Workload capability availability changed.');
   return result;
 }
 
