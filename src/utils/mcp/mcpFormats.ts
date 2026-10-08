@@ -66,10 +66,19 @@ export function buildSingleServerJson(
   serverConfig: MCPServerConfig | undefined,
   proxyBaseUrl: string,
   formatId: McpFormatId = 'claude',
+  workspace?: string,
 ): string {
   const base = (proxyBaseUrl || '').replace(/\/$/, '');
   const cfg: ClaudeConfig = serverConfig
-    ? getMcpFormat(formatId).export([serverConfig], { proxyBaseUrl: base })
-    : { mcpServers: { [name]: { type: 'http', url: `${base}/mcp-proxy/${name}` } } };
+    ? getMcpFormat(formatId).export([serverConfig], { proxyBaseUrl: base, workspace })
+    : {
+        mcpServers: {
+          [name]: {
+            type: 'http',
+            url: `${base}/mcp-proxy/${encodeURIComponent(name)}`
+              + (workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''),
+          },
+        },
+      };
   return JSON.stringify(cfg, null, 2);
 }

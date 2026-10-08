@@ -5,6 +5,14 @@ import { FEATURES } from '@/config/features'; // Import feature flags
 import { FlowEngine } from './engine/FlowEngine';
 import { PocketflowEngine } from './engine/PocketflowEngine';
 import { EmitFn } from '@/shared/types/execution/events';
+import { captureBefore, captureAfterAndEmit, SnapshotContext } from '@/backend/services/snapshot/snapshotHook';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
+import { emitErrorOnce } from './normalizeError';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -16,10 +24,20 @@ const log = createLogger('backend/execution/flow/FlowExecutor');
 // a stale compiled flow until a process restart. Same cross-instance-coherence
 // reasoning as the global-backed scheduler and MCP recovery maps.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_flow_engine: FlowEngine | undefined;
-  // eslint-disable-next-line no-var
   var __flujo_conversation_states: Map<string, SharedState> | undefined;
+  var __flujo_flow_engines_by_workspace: Map<string, FlowEngine> | undefined;
+  var __flujo_conversation_states_by_workspace: Map<string, Map<string, SharedState>> | undefined;
+}
+
+function enginesByWorkspace(): Map<string, FlowEngine> {
+  return global.__flujo_flow_engines_by_workspace ??
+    (global.__flujo_flow_engines_by_workspace = new Map());
+}
+
+function statesByWorkspace(): Map<string, Map<string, SharedState>> {
+  return global.__flujo_conversation_states_by_workspace ??
+    (global.__flujo_conversation_states_by_workspace = new Map());
 }
 
 // --- Debug snapshot slimming -------------------------------------------------
@@ -38,7 +56,7 @@ declare global {
  *  promoted to its own DebugStep.modelInput field, so drop it from the raw
  *  prep snapshot to avoid embedding it twice per step. 'modelInputs' is the
  *  per-model-call array (issue #167) — promoted the same way, so strip it too. */
-const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs'] as const;
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs', 'modelInputForArchive'] as const;
 
 /** Lightweight state snapshot: everything except the conversation/tool payloads. */
 function slimStateSnapshot(state: SharedState): Partial<SharedState> {
@@ -85,10 +103,19 @@ export class FlowExecutor {
   // planned (saveConversations) run, so its .jsonl held only the turn-start
   // reconcile line and the transcript vanished on reload (issue #49).
   static get conversationStates(): Map<string, SharedState> {
-    if (!global.__flujo_conversation_states) {
-      global.__flujo_conversation_states = new Map<string, SharedState>();
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      if (!global.__flujo_conversation_states) {
+        global.__flujo_conversation_states = new Map<string, SharedState>();
+      }
+      return global.__flujo_conversation_states;
     }
-    return global.__flujo_conversation_states;
+    let states = statesByWorkspace().get(workspace);
+    if (!states) {
+      states = new Map<string, SharedState>();
+      statesByWorkspace().set(workspace, states);
+    }
+    return states;
   }
 
   // The active execution engine. Replace the constructed engine to swap
@@ -96,16 +123,27 @@ export class FlowExecutor {
   // flow cache is shared across module instances and clearFlowCache() is
   // coherent everywhere.
   private static get engine(): FlowEngine {
-    if (!global.__flujo_flow_engine) {
-      global.__flujo_flow_engine = new PocketflowEngine();
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      if (!global.__flujo_flow_engine) {
+        global.__flujo_flow_engine = new PocketflowEngine();
+      }
+      return global.__flujo_flow_engine;
     }
-    return global.__flujo_flow_engine;
+    let engine = enginesByWorkspace().get(workspace);
+    if (!engine) {
+      engine = new PocketflowEngine();
+      enginesByWorkspace().set(workspace, engine);
+    }
+    return engine;
   }
   // Writable so the engine can be swapped for another framework, and so tests can
   // stub it. The setter writes through to the shared global to keep every module
   // instance pointing at the one engine.
   private static set engine(value: FlowEngine) {
-    global.__flujo_flow_engine = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_flow_engine = value;
+    else enginesByWorkspace().set(workspace, value);
   }
 
   /** Invalidate cached/compiled flow definitions (e.g. after a flow is edited). */
@@ -133,6 +171,11 @@ export class FlowExecutor {
     } catch {
       return null;
     }
+  }
+
+  /** Build the exact pre-call wire preview for the next Process node. */
+  static previewNextModelInput(sharedState: SharedState) {
+    return this.engine.previewModelInput(sharedState);
   }
 
   /**
@@ -167,11 +210,17 @@ export class FlowExecutor {
     // Track the node we attempted, for error reporting. Seeded with the
     // resume target so an error during resolution still names a node.
     let attemptedNodeId: string | undefined = currentNodeId;
+    let attemptedNodeName: string | undefined;
+    let attemptedNodeType: string | undefined;
+    let nodeStartedAt: number | undefined;
 
     try {
       // Resolve the node to run (resume / start) via the engine.
       const node = await this.engine.resolveNode(sharedState);
       attemptedNodeId = node.id;
+      attemptedNodeName = node.name;
+      attemptedNodeType = node.type;
+      nodeStartedAt = Date.now();
       sharedState.currentNodeId = node.id;
       log.info(`Executing step for node ${node.id} (${node.type}) in conversation ${conversationId}`);
 
@@ -185,11 +234,37 @@ export class FlowExecutor {
 
       emit?.({ type: 'node:enter', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type } });
 
+      // --- Filesystem snapshot: START capture (issue #250) ---
+      // Best-effort, never throws: takes a shadow-repo snapshot of the
+      // confinement roots before an armed (filesystem/bash) Process node runs.
+      let snapshotCtx: SnapshotContext | null = null;
+      snapshotCtx = await captureBefore(node, sharedState, emit);
+
       // --- Execute the node via the engine (mutates sharedState in place) ---
       const runResult = await this.engine.runNode(node, sharedState, emit);
       const action = runResult.action;
       prepResult = runResult.prepResult;
       execResult = runResult.execResult;
+
+      // --- Filesystem snapshot: END capture + changed-files emit (issue #250) ---
+      await captureAfterAndEmit(node, snapshotCtx, sharedState, emit);
+
+      // Issue #383 (gap 1): a handler can RETURN `{ success: false, error }`
+      // and resolve to ERROR_ACTION without ever throwing (e.g. ProcessNode's
+      // non-critical execCore failure path). That never reaches the catch
+      // block below, so without this the UI never learns why the run stopped.
+      // `post()` already set sharedState.lastResponse before returning here.
+      if (action === ERROR_ACTION) {
+        const priorResponse = sharedState.lastResponse as { error?: string; errorDetails?: Record<string, unknown> } | string | undefined;
+        const priorMessage = typeof priorResponse === 'string' ? priorResponse : priorResponse?.error;
+        const priorDetails = typeof priorResponse === 'object' ? priorResponse?.errorDetails : undefined;
+        emitErrorOnce(
+          sharedState,
+          emit,
+          Object.assign(new Error(priorMessage || 'Node execution failed.'), priorDetails ? { details: priorDetails } : {}),
+          { nodeId: node.id, nodeName: node.name }
+        );
+      }
 
       emit?.({ type: 'node:exit', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type }, action });
 
@@ -228,6 +303,17 @@ export class FlowExecutor {
       // Update state in map *after* successful execution and trace update
       this.conversationStates.set(conversationId, sharedState);
 
+      if (sharedState.logicalRunId) {
+        recordStatisticsEvent(createStatisticsEvent({
+          type: 'node.visit',
+          runId: sharedState.logicalRunId,
+          flow: { id: sharedState.flowId || 'unknown', name: sharedState.flowSnapshot?.name },
+          node: { id: node.id, name: node.name, type: node.type },
+          outcome: sharedState.isCancelled ? 'cancelled' : action === ERROR_ACTION ? 'error' : 'completed',
+          durationMs: Math.max(0, Date.now() - (nodeStartedAt ?? Date.now())),
+        }));
+      }
+
       log.debug(`[FlowExecutor] Returning from executeStep for node ${node.id} with action: "${action}"`);
       return { sharedState, action };
 
@@ -240,7 +326,9 @@ export class FlowExecutor {
       // it into errorDetails so downstream response formatting reports the
       // *real* failure (e.g. a 429 rate limit) instead of collapsing everything
       // to a generic 500/internal_error.
-      const modelDetails = (error as any)?.details;
+      const modelDetails = error && typeof error === 'object' && 'details' in error
+        ? error.details
+        : undefined;
       sharedState.lastResponse = {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -256,10 +344,9 @@ export class FlowExecutor {
       // Keep track of where the error occurred
       sharedState.currentNodeId = attemptedNodeId;
 
-      emit?.({
-        type: 'error',
-        node: attemptedNodeId ? { nodeId: attemptedNodeId } : undefined,
-        message: error instanceof Error ? error.message : String(error),
+      emitErrorOnce(sharedState, emit, error, {
+        nodeId: attemptedNodeId,
+        nodeName: attemptedNodeName,
       });
 
       // --- Add error step to trace (only if debug mode is enabled) ---
@@ -289,6 +376,18 @@ export class FlowExecutor {
 
       // Update state map with error state
       this.conversationStates.set(conversationId, sharedState);
+
+      if (sharedState.logicalRunId && nodeStartedAt !== undefined && attemptedNodeId) {
+        recordStatisticsEvent(createStatisticsEvent({
+          type: 'node.visit',
+          runId: sharedState.logicalRunId,
+          flow: { id: sharedState.flowId || 'unknown', name: sharedState.flowSnapshot?.name },
+          node: { id: attemptedNodeId, name: attemptedNodeName, type: attemptedNodeType },
+          outcome: sharedState.isCancelled ? 'cancelled' : 'error',
+          durationMs: Math.max(0, Date.now() - nodeStartedAt),
+          errorClass: classifyStatisticsError(error),
+        }));
+      }
 
       return { sharedState, action: ERROR_ACTION };
     }

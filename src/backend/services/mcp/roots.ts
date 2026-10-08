@@ -1,11 +1,63 @@
+import fs from 'fs';
+import path from 'path';
 import { pathToFileURL } from 'url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { ListRootsRequestSchema, Root } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPServerConfig } from '@/shared/types/mcp';
+import { StorageKey, type Settings } from '@/shared/types/storage';
+import {
+  bindToCurrentWorkspace,
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+  loadWorkspaceRoots,
+  workspaceCacheKey,
+} from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/roots');
+
+/** Missing/false intentionally means unrestricted; confinement is opt-in. */
+export function mcpRootsRestrictionEnabled(settings: Settings | undefined): boolean {
+  return settings?.experimental?.restrictMcpFilesystemToRoots === true;
+}
+
+/**
+ * Filesystem roots exposed when the user has not opted into MCP roots
+ * confinement. Windows needs one entry per mounted drive; POSIX has one root.
+ */
+export function unrestrictedHostRoots(): Root[] {
+  if (process.platform !== 'win32') {
+    return [{ uri: pathToFileURL('/').href, name: '/' }];
+  }
+
+  const roots: Root[] = [];
+  for (let code = 65; code <= 90; code += 1) {
+    const drive = `${String.fromCharCode(code)}:\\`;
+    try {
+      if (fs.existsSync(drive)) roots.push({ uri: pathToFileURL(drive).href, name: drive });
+    } catch {
+      // An inaccessible removable/network drive should not break roots/list.
+    }
+  }
+  if (roots.length > 0) return roots;
+
+  const fallback = path.parse(process.cwd()).root || 'C:\\';
+  return [{ uri: pathToFileURL(fallback).href, name: fallback }];
+}
+
+async function loadMcpRootsRestriction(): Promise<boolean> {
+  try {
+    const { loadItem } = await import('@/utils/storage/backend');
+    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+    return mcpRootsRestrictionEnabled(settings);
+  } catch (error) {
+    // A settings read failure must not silently turn the opt-in restriction on.
+    log.warn('Could not read the MCP roots restriction setting; using unrestricted roots', error);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // MCP roots (issues 15 + 46 + owner directive of 2026-07-06)
@@ -41,15 +93,18 @@ const log = createLogger('backend/services/mcp/roots');
 // instance/hot-reload reason as __mcp_clients in ./index.ts.
 // ---------------------------------------------------------------------------
 declare global {
-  // eslint-disable-next-line no-var
-  var __mcp_node_roots: Map<string, { serverName: string; roots: string[] }> | undefined;
+  var __mcp_node_roots: Map<string, { workspace?: string; serverName: string; roots: string[] }> | undefined;
 }
 if (typeof global.__mcp_node_roots === 'undefined') {
   global.__mcp_node_roots = new Map();
 }
 
-function nodeRootsRegistry(): Map<string, { serverName: string; roots: string[] }> {
+function nodeRootsRegistry(): Map<string, { workspace?: string; serverName: string; roots: string[] }> {
   return global.__mcp_node_roots!;
+}
+
+function nodeKey(nodeId: string): string {
+  return getCurrentWorkspace() === DEFAULT_WORKSPACE ? nodeId : workspaceCacheKey(nodeId);
 }
 
 /**
@@ -64,7 +119,8 @@ function nodeRootsRegistry(): Map<string, { serverName: string; roots: string[] 
  */
 export function setNodeRoots(serverName: string, nodeId: string, roots: string[] | undefined): string[] {
   const cleaned = (roots ?? []).filter((r) => typeof r === 'string' && r.trim().length > 0);
-  const previous = nodeRootsRegistry().get(nodeId);
+  const key = nodeKey(nodeId);
+  const previous = nodeRootsRegistry().get(key);
 
   const affected = new Set<string>([serverName]);
   if (previous) affected.add(previous.serverName);
@@ -72,11 +128,11 @@ export function setNodeRoots(serverName: string, nodeId: string, roots: string[]
   for (const name of affected) before.set(name, getNodeRoots(name));
 
   if (cleaned.length === 0) {
-    if (nodeRootsRegistry().delete(nodeId)) {
+    if (nodeRootsRegistry().delete(key)) {
       log.debug(`Cleared node roots for node ${nodeId}`);
     }
   } else {
-    nodeRootsRegistry().set(nodeId, { serverName, roots: cleaned });
+    nodeRootsRegistry().set(key, { workspace: getCurrentWorkspace(), serverName, roots: cleaned });
     log.debug(`Registered ${cleaned.length} node root(s) for node ${nodeId} on server ${serverName}`);
   }
 
@@ -94,8 +150,10 @@ export function setNodeRoots(serverName: string, nodeId: string, roots: string[]
 /** All node-contributed roots currently registered for a server (raw strings, de-duped). */
 export function getNodeRoots(serverName: string): string[] {
   const out: string[] = [];
+  const workspace = getCurrentWorkspace();
   for (const entry of nodeRootsRegistry().values()) {
-    if (entry.serverName !== serverName) continue;
+    const entryWorkspace = entry.workspace ?? DEFAULT_WORKSPACE;
+    if (entryWorkspace !== workspace || entry.serverName !== serverName) continue;
     for (const root of entry.roots) {
       if (!out.includes(root)) out.push(root);
     }
@@ -103,9 +161,24 @@ export function getNodeRoots(serverName: string): string[] {
   return out;
 }
 
+/**
+ * Returns the roots registered by a specific node for the given server, or an
+ * empty array if that node has none. Used by confinement.ts for per-call
+ * per-node root enforcement (issue #266).
+ */
+export function getNodeRootsForId(serverName: string, nodeId: string): string[] {
+  const entry = nodeRootsRegistry().get(nodeKey(nodeId));
+  const entryWorkspace = entry?.workspace ?? DEFAULT_WORKSPACE;
+  if (!entry || entryWorkspace !== getCurrentWorkspace() || entry.serverName !== serverName) return [];
+  return entry.roots;
+}
+
 /** Test hook: wipe all node-level roots registrations. */
 export function _resetNodeRootsForTests(): void {
-  nodeRootsRegistry().clear();
+  const workspace = getCurrentWorkspace();
+  for (const [key, entry] of nodeRootsRegistry()) {
+    if ((entry.workspace ?? DEFAULT_WORKSPACE) === workspace) nodeRootsRegistry().delete(key);
+  }
 }
 
 /**
@@ -122,7 +195,12 @@ export function normalizeRootUri(input: string): string | null {
     return null;
   }
   try {
-    return pathToFileURL(s).href;
+    // MCP config paths use the selected workspace as their relative-path base,
+    // matching process launch, config loading and confined shipped tools. Letting
+    // pathToFileURL resolve them implicitly would instead use process.cwd() (the
+    // FLUJO application directory in packaged/workspace installs).
+    const absolute = path.isAbsolute(s) ? s : path.resolve(getWorkspaceDataDir(), s);
+    return pathToFileURL(absolute).href;
   } catch (error) {
     log.warn(`Could not convert root "${s}" to a file URI:`, error);
     return null;
@@ -159,10 +237,14 @@ async function resolveRootEntry(entry: string): Promise<Root | null> {
  * working folder. Reading everything live — not from a frozen snapshot — is what lets
  * roots changes take effect without a reconnect.
  */
-export async function resolveServerRoots(config: MCPServerConfig): Promise<Root[]> {
+export async function resolveServerRoots(
+  config: MCPServerConfig,
+  inheritedWorkspaceRoots?: string[],
+): Promise<Root[]> {
+  const workspaceRoots = inheritedWorkspaceRoots ?? await loadWorkspaceRoots();
   const raw = (config as { roots?: unknown }).roots;
   const serverRoots = Array.isArray(raw) ? raw : [];
-  const entries = [...serverRoots, ...getNodeRoots(config.name)];
+  const entries = [...workspaceRoots, ...serverRoots, ...getNodeRoots(config.name)];
 
   const out: Root[] = [];
   const seen = new Set<string>();
@@ -207,16 +289,33 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
 }
 
 /**
- * Register the `roots/list` request handler on a client so the server can discover the
- * workspace folders FLUJO has scoped it to. Called for EVERY client (the roots
- * capability is always declared); roots are resolved fresh on each request — config
- * re-read from storage, node overlay and global-variable values read live — so they
- * always reflect the current state without ever needing a reconnect.
+ * The `roots/list` handler body, shared by the v1 registration below and the
+ * v2-beta client (betaClient.ts): roots are resolved fresh on each request —
+ * config re-read from storage, node overlay and global-variable values read
+ * live — so they always reflect the current state without ever needing a
+ * reconnect.
  */
-export function registerRootsHandler(client: Client, config: MCPServerConfig): void {
-  client.setRequestHandler(ListRootsRequestSchema, async () => {
-    const roots = await resolveServerRoots(await freshestConfig(config));
+export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
+  return bindToCurrentWorkspace(async () => {
+    const [restricted, workspaceRoots] = await Promise.all([
+      loadMcpRootsRestriction(),
+      loadWorkspaceRoots(),
+    ]);
+    // Choosing workspace folders is itself an explicit scope. Preserve the
+    // legacy unrestricted-host behavior only while no workspace scope exists.
+    const roots = restricted || workspaceRoots.length > 0
+      ? await resolveServerRoots(await freshestConfig(config), workspaceRoots)
+      : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
   });
+}
+
+/**
+ * Register the `roots/list` request handler on a client so the server can discover the
+ * workspace folders FLUJO has scoped it to. Called for EVERY client (the roots
+ * capability is always declared).
+ */
+export function registerRootsHandler(client: Client, config: MCPServerConfig): void {
+  client.setRequestHandler(ListRootsRequestSchema, createRootsListHandler(config));
 }

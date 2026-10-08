@@ -35,10 +35,15 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 
 import path from 'path';
+import fs from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { RegistryServer, getInstallOptions, buildConfigFromOption } from '@/utils/mcp/registry';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { MCPServerConfig } from '@/shared/types/mcp';
+import { StorageKey } from '@/shared/types/storage';
 import { POST } from '@/app/api/git/route';
+import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const { loadItem } = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
 const { __git: mockGit } = jest.requireMock('simple-git') as any;
@@ -51,6 +56,7 @@ const req = (body: unknown) =>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  loadItem.mockReset().mockImplementation(async (_key: StorageKey, fallback: unknown) => fallback);
 });
 
 describe('registry buildRemoteConfig rootPath default (issue 52)', () => {
@@ -74,7 +80,8 @@ describe('registry buildRemoteConfig rootPath default (issue 52)', () => {
 
 describe('loadServerConfigs rootPath normalization (issue 52)', () => {
   const load = async (stored: Record<string, unknown>) => {
-    loadItem.mockResolvedValue(stored);
+    loadItem.mockImplementation(async (key: StorageKey, fallback: unknown) =>
+      key === StorageKey.MCP_SERVERS ? stored : fallback);
     const result = await loadServerConfigs();
     expect(Array.isArray(result)).toBe(true);
     return result as MCPServerConfig[];
@@ -101,6 +108,50 @@ describe('loadServerConfigs rootPath normalization (issue 52)', () => {
     // stdio configs keep whatever they had — the normalization is remote-only.
     expect(configs.find(c => c.name === 'stdio-slash')!.rootPath).toBe('/');
     expect(configs.find(c => c.name === 'stdio-normal')!.rootPath).toBe('mcp-servers/stdio-normal');
+  });
+
+  it('remaps migrated managed paths throughout launch specs, roots and argv flags', async () => {
+    const owner = 'legacy-launch-remap';
+    const legacyOwner = path.join(getDataDir(), 'mcp-servers', owner);
+    const migratedOwner = path.join(getWorkspaceDataDir(), 'mcp-servers', owner);
+    await fs.rm(legacyOwner, { recursive: true, force: true });
+    await fs.mkdir(path.join(migratedOwner, 'bin'), { recursive: true });
+    const legacyEntry = path.join(legacyOwner, 'bin', 'server.js');
+    const migratedEntry = path.join(migratedOwner, 'bin', 'server.js');
+    const configs = await load({
+      legacy: {
+        transport: 'streamable',
+        serverUrl: 'http://localhost:4321/mcp',
+        rootPath: legacyOwner,
+        roots: [pathToFileURL(legacyOwner).href],
+        env: {
+          CONFIG_PATH: path.join(legacyOwner, 'config.json'),
+          SECRET_PATH: { value: legacyEntry, metadata: { isSecret: true } },
+        },
+        launch: {
+          command: legacyEntry,
+          cwd: legacyOwner,
+          args: [`--config=${path.join(legacyOwner, 'config.json')}`],
+          env: { LAUNCH_CONFIG: path.join(legacyOwner, 'launch.json') },
+        },
+      },
+    });
+    const config = configs[0] as MCPServerConfig & {
+      launch: { command: string; cwd: string; args: string[] };
+    };
+    expect(config.rootPath).toBe(migratedOwner);
+    expect(config.roots).toEqual([pathToFileURL(migratedOwner).href]);
+    expect(config.env).toEqual(expect.objectContaining({
+      CONFIG_PATH: path.join(migratedOwner, 'config.json'),
+      SECRET_PATH: { value: migratedEntry, metadata: { isSecret: true } },
+    }));
+    expect(config.launch).toEqual(expect.objectContaining({
+      command: migratedEntry,
+      cwd: migratedOwner,
+      args: [`--config=${path.join(migratedOwner, 'config.json')}`],
+      env: { LAUNCH_CONFIG: path.join(migratedOwner, 'launch.json') },
+    }));
+    await fs.rm(migratedOwner, { recursive: true, force: true });
   });
 });
 

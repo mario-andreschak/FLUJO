@@ -16,6 +16,14 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { isLocked } from '@/utils/encryption/lockGate';
 import type { Tool, CallToolResult, Resource, ResourceTemplate, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { MCP_APPS_EXTENSION_ID } from './appsProtocol';
+import type {
+  McpGetSkillResult,
+  McpListSkillsResult,
+  McpReadSkillDirectoryResult,
+  McpSkillsExtensionCapability,
+} from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/proxyForward');
 
@@ -64,7 +72,9 @@ export async function proxyListTools(serverName: string): Promise<{ tools: Tool[
   if (!connect.success) {
     throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
   }
-  const result = await mcpService.listServerTools(serverName);
+  // A transparent MCP relay must preserve app-only definitions. The outer
+  // host owns model/app visibility enforcement for its own caller.
+  const result = await mcpService.listServerTools(serverName, 'all');
   if (result.error) {
     throw new Error(`Failed to list tools for '${serverName}': ${result.error}`);
   }
@@ -94,7 +104,20 @@ export async function proxyCallTool(
       isError: true,
     };
   }
-  const result = await mcpService.callTool(serverName, toolName, args);
+  const result = await mcpService.callTool(
+    serverName,
+    toolName,
+    args,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    // The proxy cannot infer whether an inbound tools/call came from the outer
+    // host's model or its MCP App iframe. That host has already authorized the
+    // call, so forward through FLUJO's neutral host path without filtering it a
+    // second time as a model invocation.
+    'host',
+  );
   if (result.success) {
     return result.data as CallToolResult;
   }
@@ -140,7 +163,105 @@ export async function proxyListResourceTemplates(serverName: string): Promise<{ 
   return { resourceTemplates: (result.resourceTemplates ?? []) as ResourceTemplate[] };
 }
 
-/** Forward a `resources/read` to the downstream server. */
+/**
+ * Forward a `resources/read` to the downstream server.
+ *
+ * Error mapping:
+ * - Lock / connection failure → generic `Error` (SDK serialises as -32603 InternalError).
+ * - Missing or invalid resource URI → `McpError(-32602 InvalidParams)` rather than the
+ *   default -32603 InternalError. This matches the pattern already used in `resources.ts`
+ *   and is closer to the MCP 2026-07-28 spec intent (which introduces -32002 ResourceNotFound;
+ *   update when that code is exported by whichever SDK version is in use).
+ */
+export async function getProxySkillsCapability(
+  serverName: string,
+): Promise<McpSkillsExtensionCapability | undefined> {
+  if (await isLocked()) return undefined;
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) return undefined;
+  return mcpService.getServerSkillsCapability(serverName);
+}
+
+/** Preserve the downstream MCP Apps extension during proxy initialization. */
+export async function getProxyAppsCapability(
+  serverName: string,
+): Promise<Record<string, unknown> | undefined> {
+  if (await isLocked()) return undefined;
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) return undefined;
+  const capabilities = mcpService.getClient(serverName)?.getServerCapabilities?.() as
+    | { extensions?: Record<string, unknown> }
+    | undefined;
+  const capability = capabilities?.extensions?.[MCP_APPS_EXTENSION_ID];
+  return capability && typeof capability === 'object' && !Array.isArray(capability)
+    ? { ...(capability as Record<string, unknown>) }
+    : undefined;
+}
+
+export async function proxyListSkills(
+  serverName: string,
+  cursor?: string,
+): Promise<McpListSkillsResult> {
+  if (await isLocked()) throw new Error(LOCKED_MESSAGE);
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.listServerSkills(serverName, cursor);
+  if (result.availability !== 'available' || result.error) {
+    throw new Error(
+      result.error || `MCP Skills are unavailable for downstream server '${serverName}'.`,
+    );
+  }
+  const { resultType, skills, nextCursor, ttlMs, cacheScope } = result;
+  return {
+    resultType,
+    skills,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    ...(ttlMs === undefined ? {} : { ttlMs }),
+    ...(cacheScope === undefined ? {} : { cacheScope }),
+  };
+}
+
+export async function proxyGetSkill(
+  serverName: string,
+  uri: string,
+): Promise<McpGetSkillResult> {
+  if (await isLocked()) throw new Error(LOCKED_MESSAGE);
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.getServerSkill(serverName, uri);
+  if (!result.success || !result.data) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Skill not found: '${uri}' on server '${serverName}': ${result.error ?? 'unknown error'}`,
+    );
+  }
+  return result.data;
+}
+
+export async function proxyReadSkillDirectory(
+  serverName: string,
+  uri: string,
+  cursor?: string,
+): Promise<McpReadSkillDirectoryResult> {
+  if (await isLocked()) throw new Error(LOCKED_MESSAGE);
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.readServerSkillDirectory(serverName, uri, cursor);
+  if (!result.success || !result.data) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Skill directory not found: '${uri}' on server '${serverName}': ${result.error ?? 'unknown error'}`,
+    );
+  }
+  return result.data;
+}
+
 export async function proxyReadResource(serverName: string, uri: string): Promise<ReadResourceResult> {
   if (await isLocked()) {
     throw new Error(LOCKED_MESSAGE);
@@ -151,7 +272,12 @@ export async function proxyReadResource(serverName: string, uri: string): Promis
   }
   const result = await mcpService.readResource(serverName, uri);
   if (!result.success || !result.data) {
-    throw new Error(`Failed to read resource '${uri}' from '${serverName}': ${result.error ?? 'unknown error'}`);
+    // Use InvalidParams (-32602) rather than InternalError (-32603) for missing/invalid
+    // resource URIs — this gives clients a recoverable, params-level signal.
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Resource not found: '${uri}' on server '${serverName}': ${result.error ?? 'unknown error'}`,
+    );
   }
   return result.data as ReadResourceResult;
 }

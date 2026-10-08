@@ -1,6 +1,6 @@
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
+import { FlowSnapshotSchema } from '@/shared/types/enduringAgent';
 import { 
   FlowServiceResponse, 
   FlowOperationResponse, 
@@ -18,6 +18,12 @@ import { StorageKey } from '@/shared/types/storage';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
 import {
+  generatedFlowName,
+  validateFlowDisplayName,
+} from '@/utils/shared/flowNamePolicy';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import {
   archiveFlowVersion,
   listFlowVersions,
   getFlowVersion,
@@ -25,8 +31,51 @@ import {
   FlowVersionRecord,
   FlowVersionSummary,
 } from './flowVersions';
+import {
+  createFlowExecutionSnapshot,
+  type FlowExecutionSnapshot,
+} from './executionSnapshot';
+import {
+  erasePersonaOwnedFlowFilesWithinLock,
+  inspectPersonaOwnedFlowsWithinLock,
+  readStoredFlow,
+  withFlowMutationLock,
+} from './personaOwnedFlows';
+
+export type { FlowExecutionSnapshot } from './executionSnapshot';
 
 const log = createLogger('backend/services/flow/index');
+
+export interface ConvertProcessToSubflowResponse extends FlowServiceResponse {
+  parentFlow?: Flow;
+  childFlow?: Flow;
+  conflict?: boolean;
+}
+
+export interface MigrateMcpServerReferencesResponse extends FlowServiceResponse {
+  migratedFlows: number;
+  migratedReferences: number;
+  failedFlowIds?: string[];
+}
+
+function canonicalizeFlow(value: unknown): Flow {
+  return FlowSnapshotSchema.parse(value);
+}
+
+/** Remove runtime/legacy data before a flow crosses the persistence boundary. */
+function stripNonPersistedProperties(flow: Flow): void {
+  // Issue #339: unattended behavior is derived from the invocation source. A
+  // legacy request/file may still carry this removed field; mutate it away so
+  // it cannot be re-persisted or returned by save routes.
+  delete (flow as Flow & { unattended?: unknown }).unattended;
+
+  for (const node of flow.nodes) {
+    if (node.type !== 'process' || !node.data?.properties) continue;
+    const properties = node.data.properties as Record<string, unknown>;
+    delete properties.mcpNodes;
+    delete properties.resourceNodes;
+  }
+}
 
 // The flows snapshot is global-backed so every module instance shares ONE cache.
 // In production (`next start`) the module instance that runs the scheduler/startup
@@ -37,18 +86,36 @@ const log = createLogger('backend/services/flow/index');
 // worked. Same reasoning as SchedulerService's `global.__flujo_scheduler` and the
 // MCP service's global recovery maps.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_flowsCache: Flow[] | null | undefined;
+  var __flujo_flowsCacheByWorkspace: Map<string, Flow[] | null> | undefined;
   // One-shot promise guarding the legacy-file -> per-flow-file migration so it
   // runs at most once per process (idempotent even if it somehow ran twice).
-  // eslint-disable-next-line no-var
   var __flujo_flowsMigration: Promise<void> | undefined;
+  var __flujo_flowsMigrationByWorkspace: Map<string, Promise<void>> | undefined;
+}
+
+function flowsCacheByWorkspace(): Map<string, Flow[] | null> {
+  return global.__flujo_flowsCacheByWorkspace ??
+    (global.__flujo_flowsCacheByWorkspace = new Map());
+}
+
+function flowsMigrationByWorkspace(): Map<string, Promise<void>> {
+  return global.__flujo_flowsMigrationByWorkspace ??
+    (global.__flujo_flowsMigrationByWorkspace = new Map());
 }
 
 // Flows are stored one file per flow under db/flows/<id>.json (the legacy layout
 // was a single db/flows.json array, migrated on first access). StorageKey.FLOWS
 // ('flows') doubles as the collection directory name and the legacy file's key.
 const FLOWS_COLLECTION: string = StorageKey.FLOWS;
+const FLOW_BEHAVIOR_RULES_BACKUP_COLLECTION = 'flow-behavior-rules-backups';
+
+export interface FlowBehaviorRulesMigrationResult {
+  migrated: number;
+  alreadyCanonical: number;
+  failed: number;
+  failedFlowIds: string[];
+}
 
 // Serialize a flow's *content* (everything except the server-managed
 // createdAt/updatedAt) for the version-archiving no-op check, so refreshing a
@@ -63,17 +130,28 @@ function stripTimestamps(flow: Flow): string {
 // failure the guard is cleared so a later call can retry (the migration is
 // idempotent, so retrying is safe).
 async function ensureFlowsMigrated(): Promise<void> {
-  if (!global.__flujo_flowsMigration) {
-    global.__flujo_flowsMigration = (async () => {
+  const workspace = getCurrentWorkspace();
+  const migrations = flowsMigrationByWorkspace();
+  const existing = workspace === DEFAULT_WORKSPACE
+    ? global.__flujo_flowsMigration
+    : migrations.get(workspace);
+  if (existing) return existing;
+
+  const migration = (async () => {
       try {
         await migrateArrayFileToCollection<Flow>(StorageKey.FLOWS, FLOWS_COLLECTION, (f) => f.id);
       } catch (error) {
         log.error('Flow storage migration failed', error);
-        global.__flujo_flowsMigration = undefined;
+        if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = undefined;
+        else migrations.delete(workspace);
       }
     })();
-  }
-  return global.__flujo_flowsMigration;
+
+  // Keep the legacy globals authoritative for the default workspace because
+  // existing HMR/test reset hooks intentionally poke them directly.
+  if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = migration;
+  else migrations.set(workspace, migration);
+  return migration;
 }
 
 /**
@@ -81,11 +159,27 @@ async function ensureFlowsMigrated(): Promise<void> {
  * This is the core backend service that handles all flow operations
  */
 export class FlowService { // Add export keyword here
+  private async ownerExists(flow: Flow): Promise<boolean> {
+    if (!flow.personaOwnership) return true;
+    const { getPersona, getPersonaDeletionTombstone } = await import('@/backend/services/enduringAgents/store');
+    const owner = flow.personaOwnership.personaId;
+    return !await getPersonaDeletionTombstone(owner) && !!await getPersona(owner);
+  }
+
+  private async refreshOwnedFlows(flows: Flow[]): Promise<Flow[]> {
+    const refreshed = await Promise.all(flows.map((flow) => flow.personaOwnership ? this.getFlow(flow.id) : flow));
+    return refreshed.filter((flow): flow is Flow => flow !== null);
+  }
   private get flowsCache(): Flow[] | null {
-    return global.__flujo_flowsCache ?? null;
+    const workspace = getCurrentWorkspace();
+    return workspace === DEFAULT_WORKSPACE
+      ? global.__flujo_flowsCache ?? null
+      : flowsCacheByWorkspace().get(workspace) ?? null;
   }
   private set flowsCache(value: Flow[] | null) {
-    global.__flujo_flowsCache = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsCache = value;
+    else flowsCacheByWorkspace().set(workspace, value);
   }
 
   /**
@@ -96,7 +190,7 @@ export class FlowService { // Add export keyword here
       // Try to use cache first
       if (this.flowsCache) {
         log.debug('Using cached flows');
-        return this.flowsCache;
+        return this.refreshOwnedFlows(this.flowsCache);
       }
 
       log.debug('Loading flows from storage');
@@ -107,21 +201,83 @@ export class FlowService { // Add export keyword here
       // the next real save persists the values; files are not rewritten here.
       const raw = await listCollectionItemsWithStats<Flow>(FLOWS_COLLECTION);
       const flows = raw.map(({ item, mtimeMs }) => {
-        if (item.createdAt != null && item.updatedAt != null) return item;
+        const canonical = canonicalizeFlow(item);
+        if (canonical.createdAt != null && canonical.updatedAt != null) return canonical;
         const ts = Math.floor(mtimeMs);
         return {
-          ...item,
-          createdAt: item.createdAt ?? ts,
-          updatedAt: item.updatedAt ?? ts,
+          ...canonical,
+          createdAt: canonical.createdAt ?? ts,
+          updatedAt: canonical.updatedAt ?? ts,
         };
       });
       this.flowsCache = flows;
       log.info('Loaded flows from storage', { count: flows.length });
-      return flows;
+      return this.refreshOwnedFlows(flows);
     } catch (error) {
       log.error('Failed to load flows', error);
       return [];
     }
+  }
+
+  /** Find a flow by its authored display name. */
+  async getFlowByName(name: string): Promise<Flow | null> {
+    const flows = await this.loadFlows();
+    return flows.find((flow) => flow.name === name) ?? null;
+  }
+
+  /**
+   * Explicit, idempotent #470 field migration. Originals are backed up once in
+   * db/flow-behavior-rules-backups before atomic collection writes replace
+   * legacy Flow records. Conflicting aliases are reported and never rewritten.
+   */
+  async migrateBehaviorRulesField(): Promise<FlowBehaviorRulesMigrationResult> {
+    return withFlowMutationLock(() => this.migrateBehaviorRulesFieldWithinLock());
+  }
+
+  private async migrateBehaviorRulesFieldWithinLock(): Promise<FlowBehaviorRulesMigrationResult> {
+    await ensureFlowsMigrated();
+    const result: FlowBehaviorRulesMigrationResult = {
+      migrated: 0,
+      alreadyCanonical: 0,
+      failed: 0,
+      failedFlowIds: [],
+    };
+    const records = await listCollectionItemsWithStats<unknown>(FLOWS_COLLECTION);
+    for (const { item } of records) {
+      const raw = item as Record<string, unknown>;
+      const flowId = typeof raw?.id === 'string' ? raw.id : '<unknown>';
+      try {
+        const canonical = canonicalizeFlow(item);
+        if (!Object.prototype.hasOwnProperty.call(raw, 'permissionRules')) {
+          result.alreadyCanonical += 1;
+          continue;
+        }
+        assertSafeCollectionId(canonical.id);
+        const existingBackup = await loadCollectionItem<unknown | null>(
+          FLOW_BEHAVIOR_RULES_BACKUP_COLLECTION,
+          canonical.id,
+          null,
+        );
+        if (!existingBackup) {
+          await saveCollectionItem(FLOW_BEHAVIOR_RULES_BACKUP_COLLECTION, canonical.id, {
+            flowId: canonical.id,
+            backedUpAt: Date.now(),
+            flow: item,
+          });
+        }
+        await saveCollectionItem(FLOWS_COLLECTION, canonical.id, canonical);
+        result.migrated += 1;
+      } catch (error) {
+        result.failed += 1;
+        result.failedFlowIds.push(flowId);
+        log.warn('Flow Behavior-rule migration skipped one record', { flowId });
+      }
+    }
+    if (result.migrated > 0) {
+      this.flowsCache = null;
+      await this.invalidateExecutionCache();
+    }
+    return result;
   }
 
   /**
@@ -133,7 +289,7 @@ export class FlowService { // Add export keyword here
 
       // Cache hit first.
       const cached = this.flowsCache?.find(f => f.id === flowId) || null;
-      if (cached) {
+      if (cached && !cached.personaOwnership) {
         log.debug(`Flow ${flowId} found in cache`);
         return cached;
       }
@@ -146,12 +302,15 @@ export class FlowService { // Add export keyword here
       await ensureFlowsMigrated();
       let flow: Flow | null = null;
       try {
-        flow = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+        const stored = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+        flow = stored ? canonicalizeFlow(stored) : null;
       } catch (error) {
         // Unsafe id or an unreadable file: treat as not found rather than throw.
         log.debug(`getFlow: could not load flow ${flowId}`, error);
         flow = null;
       }
+
+      if (flow && !await this.ownerExists(flow)) return null;
 
       // Refresh the shared cache entry, but only when a cache already exists —
       // never build a partial one-item cache that loadFlows would then trust.
@@ -166,6 +325,25 @@ export class FlowService { // Add export keyword here
       return flow;
     } catch (error) {
       log.error(`Failed to get flow ${flowId}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Capture the current workspace Flow as one immutable, content-addressed
+   * execution source. This deliberately bypasses the mutable cache and returns
+   * the exact persisted definition and hash from a single authoritative read.
+   */
+  async readFlowExecutionSnapshot(flowId: string): Promise<FlowExecutionSnapshot | null> {
+    try {
+      assertSafeCollectionId(flowId);
+      await ensureFlowsMigrated();
+      const stored = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+      const flow = stored ? canonicalizeFlow(stored) : null;
+      if (!flow || flow.id !== flowId || !await this.ownerExists(flow)) return null;
+      return createFlowExecutionSnapshot(getCurrentWorkspace(), flow);
+    } catch (error) {
+      log.debug(`readFlowExecutionSnapshot: could not capture flow ${flowId}`, error);
       return null;
     }
   }
@@ -190,19 +368,45 @@ export class FlowService { // Add export keyword here
    */
   async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
     try {
+      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow)));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to save flow' };
+    }
+  }
+
+  private async saveFlowWithinMutation(flow: Flow): Promise<FlowServiceResponse> {
+    try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
+      const nameError = validateFlowDisplayName(flow.name);
+      if (nameError) {
+        throw new Error(`Invalid Flow display name (${nameError}).`);
+      }
+      const canonical = canonicalizeFlow(flow);
+      delete (flow as Flow & { permissionRules?: unknown }).permissionRules;
+      Object.assign(flow, canonical);
+      flow.name = flow.name.normalize('NFC').trim();
       // Validate the id before it is used as a file name (path-traversal guard).
       assertSafeCollectionId(flow.id);
       await ensureFlowsMigrated();
 
+      // mcpNodes/resourceNodes are compiled from attachment edges at runtime and
+      // must never become persisted source-of-truth data. This also cleans legacy
+      // files the next time they are saved.
+      stripNonPersistedProperties(flow);
+
       // Version history: when this save OVERWRITES an existing flow, archive
       // the definition being replaced (skipping no-op saves). Best-effort —
       // a save must never fail because history could not be written.
-      let previous: Flow | null = null;
-      try {
-        previous = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flow.id, null);
-      } catch (error) {
-        log.debug(`saveFlow: could not read previous definition of ${flow.id} for versioning`, error);
+      const previous = await readStoredFlow(flow.id);
+      if (previous && previous.personaOwnership?.personaId !== flow.personaOwnership?.personaId) {
+        throw new Error('An existing Flow cannot change or remove its Persona owner. Create a distinct copy instead.');
+      }
+      if (flow.personaOwnership) {
+        const { getPersona, getPersonaDeletionTombstone } = await import('@/backend/services/enduringAgents/store');
+        const owner = flow.personaOwnership.personaId;
+        if (await getPersonaDeletionTombstone(owner) || !await getPersona(owner)) {
+          throw new Error('The Flow owner is missing or being deleted.');
+        }
       }
       // Compare content ONLY (excluding the server-managed timestamps), so a
       // save that merely refreshes updatedAt is not treated as a real edit and
@@ -252,9 +456,233 @@ export class FlowService { // Add export keyword here
   }
 
   /**
+   * Clone one canonical Flow into a distinct Persona-owned ordinary Flow.
+   * Nested callable Flows remain referenced normally and are frozen by the
+   * existing execution-snapshot closure when future Activities begin.
+   */
+  async cloneFlowForPersona(
+    sourceFlowId: string,
+    personaId: string,
+    name?: string,
+    options: {
+      id?: string;
+      groupId?: string;
+      kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
+    } = {},
+  ): Promise<{ success: boolean; flow?: Flow; error?: string }> {
+    const source = await this.getFlow(sourceFlowId);
+    if (!source) {
+      return { success: false, error: `Flow "${sourceFlowId}" not found.` };
+    }
+    if (source.personaOwnership && source.personaOwnership.personaId !== personaId) {
+      return { success: false, error: 'A Flow owned by another Persona cannot be copied.' };
+    }
+
+    const clone = JSON.parse(JSON.stringify(source)) as Flow;
+    clone.id = options.id ?? uuidv4();
+    clone.name = generatedFlowName(
+      name?.trim() || `${source.name} Persona copy`,
+      [],
+      clone.id,
+    );
+    clone.favorite = undefined;
+    clone.folder = options.groupId ? `Persona ${personaId}` : undefined;
+    clone.createdAt = undefined;
+    clone.updatedAt = undefined;
+    clone.personaOwnership = {
+      personaId,
+      sourceFlowId: source.personaOwnership?.sourceFlowId ?? source.id,
+      ...(options.groupId ? { groupId: options.groupId } : {}),
+      kind: options.kind ?? 'custom',
+    };
+    const saved = await this.saveFlow(clone);
+    return saved.success
+      ? { success: true, flow: clone }
+      : { success: false, error: saved.error || 'Failed to create Persona Flow copy.' };
+  }
+
+  /**
+   * Rewrite persisted node bindings after an MCP server is renamed.
+   *
+   * MCP servers are currently identified by name, so every node stores the
+   * server name directly in `properties.boundServer`. A config rename therefore
+   * has to cascade through saved flows or those bindings become dangling. Clone
+   * only affected flows/nodes so a failed save cannot mutate the shared cache
+   * before persistence succeeds.
+   */
+  async migrateMcpServerReferences(
+    oldName: string,
+    newName: string,
+  ): Promise<MigrateMcpServerReferencesResponse> {
+    if (!oldName || !newName || oldName === newName) {
+      return { success: true, migratedFlows: 0, migratedReferences: 0 };
+    }
+
+    const flows = await this.loadFlows();
+    let migratedFlows = 0;
+    let migratedReferences = 0;
+    const failedFlowIds: string[] = [];
+
+    for (const flow of flows) {
+      let referencesInFlow = 0;
+      const nodes = flow.nodes.map((node) => {
+        const properties = node.data?.properties;
+        if (!properties || properties.boundServer !== oldName) return node;
+
+        referencesInFlow += 1;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            properties: {
+              ...properties,
+              boundServer: newName,
+            },
+          },
+        };
+      });
+
+      if (referencesInFlow === 0) continue;
+
+      const result = await this.saveFlow({ ...flow, nodes });
+      if (result.success) {
+        migratedFlows += 1;
+        migratedReferences += referencesInFlow;
+      } else {
+        failedFlowIds.push(flow.id);
+        log.warn(
+          `Failed to migrate MCP server references in flow ${flow.id}`,
+          result.error,
+        );
+      }
+    }
+
+    if (failedFlowIds.length > 0) {
+      return {
+        success: false,
+        error: `Failed to migrate MCP server references in ${failedFlowIds.length} flow(s)`,
+        migratedFlows,
+        migratedReferences,
+        failedFlowIds,
+      };
+    }
+
+    return { success: true, migratedFlows, migratedReferences };
+  }
+
+  /**
+   * Persist a Process -> Subflow conversion as one compensated operation.
+   * The child is written first so the parent never references a missing flow.
+   * If the parent write fails (including after a partial write), restore the
+   * captured parent and remove the new child before reporting failure.
+   */
+  async convertProcessToSubflow(
+    parentDraft: Flow,
+    childDraft: Flow,
+    processNodeId: string,
+    expectedUpdatedAt?: number,
+  ): Promise<ConvertProcessToSubflowResponse> {
+    const existing = await this.getFlow(parentDraft.id);
+    if (!existing) {
+      return { success: false, error: `Flow "${parentDraft.id}" not found` };
+    }
+    if (
+      typeof expectedUpdatedAt === 'number' &&
+      typeof existing.updatedAt === 'number' &&
+      existing.updatedAt !== expectedUpdatedAt
+    ) {
+      return {
+        success: false,
+        conflict: true,
+        error: 'The parent flow changed after this editor was opened. Reload it and build the conversion preview again.',
+      };
+    }
+
+    const originalParent = JSON.parse(JSON.stringify(existing)) as Flow;
+    const currentProcess = existing.nodes.find(node => node.id === processNodeId);
+    const childProcess = childDraft.nodes.find(node => node.id === processNodeId);
+    const replacement = parentDraft.nodes.find(node => node.id === processNodeId);
+    const referencedChildId = replacement?.data?.properties?.subflowId;
+
+    if (currentProcess && currentProcess.type !== 'process' && currentProcess.data?.type !== 'process') {
+      return { success: false, error: 'The selected node is no longer a Process in the saved parent flow.' };
+    }
+    if (childProcess?.type !== 'process' && childProcess?.data?.type !== 'process') {
+      return { success: false, error: 'The child draft does not contain the selected Process node.' };
+    }
+    if (
+      (replacement?.type !== 'subflow' && replacement?.data?.type !== 'subflow') ||
+      referencedChildId !== childDraft.id
+    ) {
+      return { success: false, error: 'The rewritten parent does not contain a valid Subflow replacement.' };
+    }
+    if (!childDraft.id || childDraft.id === existing.id || !childDraft.name?.trim()) {
+      return { success: false, error: 'The child flow needs a distinct ID and a non-empty name.' };
+    }
+    if (await this.getFlow(childDraft.id)) {
+      return { success: false, error: `A flow with child ID "${childDraft.id}" already exists.` };
+    }
+
+    // Clone caller-owned drafts because saveFlow intentionally stamps and
+    // strips persistence-only fields in place.
+    const childFlow = JSON.parse(JSON.stringify(childDraft)) as Flow;
+    const parentFlow = JSON.parse(JSON.stringify({ ...parentDraft, id: existing.id })) as Flow;
+    const childResult = await this.saveFlow(childFlow);
+    if (!childResult.success) {
+      return { success: false, error: childResult.error || 'Failed to save the child flow.' };
+    }
+
+    const parentResult = await this.saveFlow(parentFlow);
+    if (parentResult.success) {
+      return { success: true, parentFlow, childFlow };
+    }
+
+    const rollbackErrors: string[] = [];
+    const childRollback = await this.deleteFlow(childFlow.id);
+    if (!childRollback.success) {
+      rollbackErrors.push(`child cleanup failed: ${childRollback.error || 'unknown error'}`);
+    }
+    const parentRollback = await this.saveFlow(originalParent);
+    if (!parentRollback.success) {
+      rollbackErrors.push(`parent restore failed: ${parentRollback.error || 'unknown error'}`);
+    }
+    const suffix = rollbackErrors.length > 0 ? ` Rollback warning: ${rollbackErrors.join('; ')}.` : '';
+    return {
+      success: false,
+      error: `${parentResult.error || 'Failed to save the rewritten parent flow.'}${suffix}`,
+    };
+  }
+
+  /**
    * Delete a flow by ID
    */
   async deleteFlow(flowId: string): Promise<FlowServiceResponse> {
+    try {
+      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.deleteFlowWithinMutation(flowId)));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete flow' };
+    }
+  }
+
+  async inspectPersonaOwnedFlows(personaId: string) {
+    return withFlowMutationLock(() => inspectPersonaOwnedFlowsWithinLock(personaId));
+  }
+
+  async deletePersonaOwnedFlows(personaId: string): Promise<void> {
+    await withFlowMutationLock(async () => {
+      const { getPersonaDeletionTombstone } = await import('@/backend/services/enduringAgents/store');
+      if (!await getPersonaDeletionTombstone(personaId)) throw new Error('Owned Flow erasure requires a durable Persona deletion intent.');
+      const inspection = await inspectPersonaOwnedFlowsWithinLock(personaId);
+      try { await erasePersonaOwnedFlowFilesWithinLock(inspection); }
+      finally {
+        // Drop even partially erased records; a failed deletion remains retryable.
+        this.flowsCache = null;
+        await this.invalidateExecutionCache();
+      }
+    });
+  }
+
+  private async deleteFlowWithinMutation(flowId: string): Promise<FlowServiceResponse> {
     try {
       log.debug(`Deleting flow: ${flowId}`);
       await ensureFlowsMigrated();
@@ -287,12 +715,17 @@ export class FlowService { // Add export keyword here
 
   /** Archived (superseded) versions of a flow, newest first. */
   async listFlowVersions(flowId: string): Promise<FlowVersionSummary[]> {
-    return listFlowVersions(flowId);
+    const summaries = await listFlowVersions(flowId);
+    const readable = await Promise.all(summaries.map(async (summary) => (
+      await this.getFlowVersion(flowId, summary.versionId) ? summary : null
+    )));
+    return readable.filter((summary): summary is FlowVersionSummary => summary !== null);
   }
 
   /** One archived version with its full definition, or null. */
   async getFlowVersion(flowId: string, versionId: string): Promise<FlowVersionRecord | null> {
-    return getFlowVersion(flowId, versionId);
+    const record = await getFlowVersion(flowId, versionId);
+    return record && await this.ownerExists(record.flow) ? record : null;
   }
 
   /**

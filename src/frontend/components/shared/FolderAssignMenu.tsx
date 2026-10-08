@@ -8,16 +8,17 @@ import {
   ListItemText,
   Divider,
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
   Button,
 } from '@mui/material';
+import DialogHeaderActions from './DialogHeaderActions';
 import CheckIcon from '@mui/icons-material/Check';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import FolderOffOutlinedIcon from '@mui/icons-material/FolderOffOutlined';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface FolderAssignMenuProps {
   anchorEl: HTMLElement | null;
@@ -44,6 +45,7 @@ const FolderAssignMenu = ({
   onClose,
   onAssign,
 }: FolderAssignMenuProps) => {
+  const { t } = useI18n();
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
@@ -66,7 +68,14 @@ const FolderAssignMenu = ({
 
   return (
     <>
-      <Menu anchorEl={anchorEl} open={open} onClose={onClose}>
+      <Menu
+        anchorEl={anchorEl}
+        open={open}
+        onClose={onClose}
+        // Menu is portalled, but React events still bubble through the card that
+        // rendered it. Keep folder actions from also activating that card.
+        onClick={(event) => event.stopPropagation()}
+      >
         {folders.length > 0 && folders.map((folder) => (
           <MenuItem key={folder} onClick={() => handleAssign(folder)} selected={folder === currentFolder}>
             <ListItemIcon>
@@ -84,25 +93,33 @@ const FolderAssignMenu = ({
           <ListItemIcon>
             <CreateNewFolderOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="New folder…" />
+          <ListItemText primary={t('folderAssign.newAction')} />
         </MenuItem>
         {currentFolder && (
           <MenuItem onClick={() => handleAssign(undefined)}>
             <ListItemIcon>
               <FolderOffOutlinedIcon fontSize="small" />
             </ListItemIcon>
-            <ListItemText primary="Remove from folder" />
+            <ListItemText primary={t('folderAssign.remove')} />
           </MenuItem>
         )}
       </Menu>
 
-      <Dialog open={newFolderOpen} onClose={() => setNewFolderOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>New folder</DialogTitle>
+      <Dialog
+        open={newFolderOpen}
+        onClose={() => setNewFolderOpen(false)}
+        maxWidth="xs"
+        fullWidth
+        // The dialog is opened from the portalled menu and remains a descendant
+        // of the owning card in React's event tree.
+        onClick={(event) => event.stopPropagation()}
+      >
+        <DialogHeaderActions title={t('folderAssign.newTitle')} onClose={() => setNewFolderOpen(false)} />
         <DialogContent>
           <TextField
             autoFocus
             margin="dense"
-            label="Folder name"
+            label={t('folderAssign.name')}
             fullWidth
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
@@ -115,9 +132,9 @@ const FolderAssignMenu = ({
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setNewFolderOpen(false)}>Cancel</Button>
+          <Button onClick={() => setNewFolderOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" disabled={!newFolderName.trim()} onClick={confirmNewFolder}>
-            Create
+            {t('common.create')}
           </Button>
         </DialogActions>
       </Dialog>

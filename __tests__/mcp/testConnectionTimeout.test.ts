@@ -20,7 +20,6 @@ function stdio(command: string, args: string[] = []): MCPStdioConfig {
     args,
     env: {},
     disabled: false,
-    autoApprove: [],
     rootPath: '',
     _buildCommand: '',
     _installCommand: '',

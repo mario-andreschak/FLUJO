@@ -177,6 +177,7 @@ describe('evaluateAiGate (flow-gate)', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     const input = runFlowMock.mock.calls[0][0];
     expect(input.flowId).toBe('checker-flow');
+    expect(input.source).toBe('trigger');
     expect(input.mode).toBe('ephemeral');
     expect(input.requireApproval).toBe(false);
     expect(input.userTurn).toBe(true);

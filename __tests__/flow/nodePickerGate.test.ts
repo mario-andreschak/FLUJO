@@ -5,7 +5,7 @@
  * conditions under which the picker may open, so the stray-popup regression
  * cannot come back.
  */
-import { shouldOpenNodePicker, NodePickerGateArgs } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/nodePickerGate';
+import { directConfigurationTargetFor, shouldOpenNodePicker, NodePickerGateArgs } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/nodePickerGate';
 
 // A create-capable pane drop from a Process node's bottom (source) handle.
 const base: NodePickerGateArgs = {
@@ -88,5 +88,18 @@ describe('shouldOpenNodePicker', () => {
         landedOnHandle: true,
       })
     ).toBe(false);
+  });
+});
+
+describe('directConfigurationTargetFor', () => {
+  it('routes MCP and Resource handles directly to their specialized pickers', () => {
+    expect(directConfigurationTargetFor('process', 'process-left-mcp')).toBe('mcp');
+    expect(directConfigurationTargetFor('process', 'process-right-resource')).toBe('resource');
+    expect(directConfigurationTargetFor('static', 'static-left-mcp')).toBe('mcp');
+  });
+
+  it('keeps the node-type picker for ordinary and non-attachment connections', () => {
+    expect(directConfigurationTargetFor('process', 'process-bottom')).toBeNull();
+    expect(directConfigurationTargetFor('resource', 'resource-out')).toBeNull();
   });
 });

@@ -1,0 +1,2293 @@
+import { createHash } from 'crypto';
+import { promises as fs } from 'fs';
+import { cpus, release } from 'os';
+import path from 'path';
+import { performance } from 'perf_hooks';
+
+import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFlow';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { StorageKey } from '@/shared/types/storage';
+import {
+  BEHAVIOR_OUTCOME_MIN_SAMPLES,
+  PersonaFlowDispatcher,
+  _getPersonaRuntimeEventLogStateForTests,
+  _setPersonaRuntimeClockForTests,
+  _setPersonaRuntimeEventLogConfigForTests,
+  acknowledgePersonaActivityDelivery,
+  activateBehaviorProposal,
+  appendPersonaRuntimeEvent,
+  approveBehaviorProposal,
+  claimNextPersonaActivity,
+  completePersonaActivity,
+  createBehaviorProposal,
+  getBehaviorProposal,
+  getPersonaStorageStats,
+  inspectAndReconcilePersonaRuntime,
+  prunePersonaLeaseHistory,
+  recordBehaviorOutcomeSample,
+  recoverPersonaRuntime,
+  readPersonaRuntimeEvents,
+  routePersonaMailboxItem,
+  searchPersonaMemory,
+  sweepPersonaRuntimeEventSegments,
+  type BehaviorProposalCompileResult,
+  type PersonaActivityClaim,
+  type PersonaFlowDispatchRecord,
+} from '@/backend/services/enduringAgents';
+import {
+  getBehaviorBinding,
+  getBehaviorOutcomeMetric,
+  getBehaviorRevision,
+  getPersonaActivity,
+  getPersonaLeaseRecord,
+  listPersonaActivities,
+  listMemoryItems,
+  listPersonaLeaseRecords,
+  listPersonaMailboxItems,
+  saveMemoryItem,
+  savePersonaActivity,
+  savePersonaMailboxItem,
+} from '@/backend/services/enduringAgents/store';
+import { behaviorOutcomeMetricId } from '@/backend/services/enduringAgents/behaviorOutcome';
+import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
+import {
+  compactPersonaActivities,
+  compactPersonaFlowDispatches,
+  compactPersonaMailboxItems,
+  getBehaviorCallPinRetentionPolicy,
+} from '@/backend/services/enduringAgents/compactRuntime';
+import { createBehaviorCallPin, completeBehaviorCallPin, listBehaviorCallPins } from '@/backend/services/enduringAgents/behaviorCallPins';
+import { applyRetention } from '@/backend/services/enduringAgents/retention';
+import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { FEATURES } from '@/config/features';
+import {
+  ENDURING_AGENT_SCHEMA_VERSION,
+  MemoryItemSchema,
+  PersonaActivitySchema,
+  PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
+  PERSONA_ACTIVITY_SCHEMA_VERSION,
+  type MemoryItem,
+  type PersonaActivity,
+  type PersonaLease,
+} from '@/shared/types/enduringAgent';
+import type { Flow, FlowNode } from '@/shared/types/flow';
+import { runWithWorkspace } from '@/utils/workspace';
+
+import {
+  createPersonaProcessEnvironment,
+  removePersonaProcessEnvironment,
+  restartPersonaProcess,
+  startPersonaProcess,
+  type PersonaProcessClient,
+} from '../personaProcessBoundaryHarness';
+import { createPersonaFromRole } from '../fixtures/personaFactory';
+import {
+  PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+  SOAK_ACCEPTANCE_NUMERIC_CONTRACTS,
+  createSoakCriterion,
+  soakEnforcementFailures,
+  stableJsonStringify,
+  type JsonObject,
+  type LearningRollbackEvidence,
+  type SoakCriterionId,
+  type SoakCriterionResult,
+  type SoakFaultEvidence,
+  type SoakRunIdentity,
+  type SoakRunMode,
+  type WorkloadReconciliationEvidence,
+} from './evidence';
+import { defaultFaultSchedule, type SoakFaultKind } from './faultInjector';
+import { scoreRecallPrecision } from './groundTruth';
+import {
+  percentile,
+  renderSoakReport,
+  type DailySoakMetric,
+} from './metrics';
+import { createSeededStubModel } from './stubModel';
+import { VirtualPersonaRuntimeClock } from './virtualClock';
+import { generatePersonaSoakWorkload, type SoakActivity } from './workloadGenerator';
+
+export interface PersonaSoakOptions {
+  days: number;
+  activitiesPerDay: number;
+  seed: number;
+  outputDirectory?: string;
+  gatingMode?: 'enforce' | 'warn' | 'report';
+  withLearning?: boolean;
+  commitSha?: string;
+  runId?: string;
+  runMode?: SoakRunMode;
+}
+
+export interface PersonaSoakSummary {
+  schemaVersion: typeof PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION;
+  runIdentity: SoakRunIdentity;
+  seed: number;
+  days: number;
+  activities: number;
+  ingressLabels: string[];
+  splitBrainCount: number;
+  strandedLeaseCount: number;
+  stuckPersonaCount: number;
+  learning: 'passed' | 'failed' | 'skipped';
+  runtimeEvidence: {
+    workspaceId: string;
+    personaId: string;
+    behaviorBindingId: string;
+    behaviorRevisionId: string;
+    persistedActivities: number;
+    persistedMailboxItems: number;
+    persistedLeaseAcquisitions: number;
+    retainedLeaseRecords: number;
+    observedFencingTokenCount: number;
+    leaseAcquisitionProofSha256: string;
+    persistedDispatches: number;
+    modelCalls: number;
+  };
+  workloadReconciliation: WorkloadReconciliationEvidence;
+  faultEvidence: SoakFaultEvidence[];
+  learningEvidence: LearningRollbackEvidence;
+  criteria: SoakCriterionResult[];
+  metrics: DailySoakMetric[];
+}
+
+interface MutableFeatureSnapshot {
+  runtimeRetention: boolean;
+  leasePruning: boolean;
+  maintenanceAdmission: boolean;
+  maintenanceDiagnosis: boolean;
+  outcomeMetrics: boolean;
+  outcomeAutoRollback: boolean;
+}
+
+interface ProcessPersona {
+  persona: { id: string };
+}
+
+interface ProcessClaim {
+  mailboxItem: { id: string };
+  activity: { id: string };
+  lease: { fencingToken: number };
+  fence: {
+    workspaceId: string;
+    personaId: string;
+    activityId: string;
+    leaseId: string;
+    holderId: string;
+    fencingToken: number;
+  };
+  recovered: boolean;
+}
+
+interface ProcessRuntimeSnapshot {
+  activities: Array<{ id: string; status: string; error?: string }>;
+  mailboxItems: Array<{ id: string; status: string; claimedActivityId?: string }>;
+  lease: { activityId: string; status: string; fencingToken: number } | null;
+}
+
+const DAY_MS = 86_400_000;
+const RECALL_SAMPLES_PER_DAY = 5;
+const APPEND_SAMPLES_PER_DAY = 5;
+const FULL_GATE_DAYS = 28;
+const FULL_GATE_ACTIVITIES_PER_DAY = 20;
+const LEASE_HISTORY_SOAK_CAP = 50;
+const SOAK_DISPATCH_WALL_TIMEOUT_MS = 30_000;
+// Each foreground dispatch can also create a memory-maintenance Activity.
+// Bound work per pump independently of the random placement of steering inputs.
+const SOAK_DISPATCH_BATCH_SIZE = 4;
+const SOAK_SMOKE_WALL_BUDGET_MS = 10 * 60_000;
+const SOAK_ACCEPTANCE_WALL_BUDGET_MS = 45 * 60_000;
+const SOAK_TEARDOWN_WALL_TIMEOUT_MS = 30_000;
+let workspaceSequence = 0;
+
+function remainingWallClockBudget(
+  deadlineMs: number,
+  operationCapMs: number,
+  description: string,
+): number {
+  const remainingMs = Math.floor(deadlineMs - Date.now());
+  if (remainingMs <= 0) {
+    throw new Error(`${description} exceeded the overall Persona soak wall-clock budget.`);
+  }
+  return Math.min(operationCapMs, remainingMs);
+}
+
+async function withWallClockTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  description: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${description} exceeded ${timeoutMs} ms of wall-clock time.`));
+        }, timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function debug(message: string): void {
+  if (
+    process.env.PERSONA_SOAK_DEBUG === '1'
+    || process.env.PERSONA_SOAK_DEBUG === 'verbose'
+  ) {
+    process.stderr.write(`[persona-soak] ${message}\n`);
+  }
+}
+
+function debugActivity(message: string): void {
+  if (process.env.PERSONA_SOAK_DEBUG === 'verbose') {
+    process.stderr.write(`[persona-soak] ${message}\n`);
+  }
+}
+
+function featureSnapshot(): MutableFeatureSnapshot {
+  return {
+    runtimeRetention: FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION,
+    leasePruning: FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING,
+    maintenanceAdmission: FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION,
+    maintenanceDiagnosis: FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS,
+    outcomeMetrics: FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS,
+    outcomeAutoRollback: FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK,
+  };
+}
+
+function restoreFeatures(snapshot: MutableFeatureSnapshot): void {
+  FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = snapshot.runtimeRetention;
+  FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = snapshot.leasePruning;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = snapshot.maintenanceAdmission;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = snapshot.maintenanceDiagnosis;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = snapshot.outcomeMetrics;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = snapshot.outcomeAutoRollback;
+}
+
+function fenceForClaim(claim: PersonaActivityClaim) {
+  return {
+    workspaceId: claim.lease.workspaceId,
+    personaId: claim.activity.personaId,
+    activityId: claim.activity.id,
+    leaseId: claim.lease.id,
+    holderId: claim.lease.holderId,
+    fencingToken: claim.lease.fencingToken,
+  };
+}
+
+async function flowResult(input: FlowRunInput, outputText: string, now: number): Promise<FlowRunResult> {
+  // Replacing runFlow must still provide its durable conversation boundary:
+  // the real dispatcher appends memory-maintenance results after it returns.
+  const sharedState: SharedState = {
+    conversationId: input.conversationId!,
+    flowId: input.flowDefinition!.id,
+    title: 'Persona soak',
+    createdAt: now,
+    updatedAt: now,
+    status: 'completed',
+    messages: [],
+    lastResponse: outputText,
+    trackingInfo: { executionId: input.runId!, startTime: now, nodeExecutionTracker: [] },
+    personaAttribution: input.personaAttribution,
+    executionAuthority: input.executionAuthority,
+  };
+  await persistConversationState(`conversations/${input.conversationId}` as StorageKey, sharedState);
+  return {
+    status: 'completed',
+    conversationId: input.conversationId!,
+    runId: input.runId!,
+    outputText,
+    messages: [],
+    sharedState,
+  };
+}
+
+export function assertSoakDispatchesDrained(records: PersonaFlowDispatchRecord[]): void {
+  const unfinished = records.filter(record => !['completed', 'error', 'cancelled'].includes(record.state));
+  const failedMaintenance = records.filter(record => (
+    record.admission.kind === 'maintenance' && record.state !== 'completed'
+  ));
+  if (unfinished.length || failedMaintenance.length) {
+    const failures = [...new Map([...unfinished, ...failedMaintenance].map(record => [record.id, record])).values()];
+    throw new Error(`Soak dispatch queue did not drain: ${unfinished.length} unfinished, `
+      + `${failedMaintenance.length} unsuccessful maintenance dispatches. `
+      + failures.slice(0, 5).map(record => `${record.id}: ${record.state}${record.error ? ` (${record.error.message})` : ''}`).join('; '));
+  }
+}
+
+function processNode(flow: Flow): FlowNode {
+  const node = flow.nodes.find((candidate) => candidate.type === 'process');
+  if (!node) throw new Error('The soak learning fixture has no process node.');
+  return node;
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function workloadSourceId(activity: SoakActivity, suffix = ''): string {
+  return `soak-workload-${activity.id}${suffix}`;
+}
+
+function criterion(input: {
+  id: SoakCriterionId;
+  mode: SoakRunMode;
+  passed: boolean;
+  summary: string;
+  observed: JsonObject;
+  threshold: string;
+  thresholdSource: string;
+  provenance: string[];
+  recordIds?: string[];
+  failureReason?: string;
+}): SoakCriterionResult {
+  return createSoakCriterion({
+    id: input.id,
+    mode: input.mode,
+    status: input.passed ? 'passed' : 'failed',
+    summary: input.summary,
+    observed: input.observed,
+    threshold: {
+      description: input.threshold,
+      source: input.thresholdSource,
+    },
+    provenance: {
+      sources: input.provenance,
+      ...(input.recordIds ? { recordIds: input.recordIds } : {}),
+    },
+    ...(!input.passed
+      ? { failureReason: input.failureReason ?? input.summary }
+      : {}),
+  });
+}
+
+function notEvaluated(input: {
+  id: SoakCriterionId;
+  mode: SoakRunMode;
+  summary: string;
+  observed?: JsonObject;
+  threshold: string;
+  thresholdSource: string;
+  provenance: string[];
+  failureReason: string;
+}): SoakCriterionResult {
+  return createSoakCriterion({
+    id: input.id,
+    mode: input.mode,
+    status: 'not_evaluated',
+    summary: input.summary,
+    observed: input.observed ?? {},
+    threshold: {
+      description: input.threshold,
+      source: input.thresholdSource,
+    },
+    provenance: { sources: input.provenance },
+    failureReason: input.failureReason,
+  });
+}
+
+function countByStatus(records: Array<{ status: string }>): JsonObject {
+  const counts: Record<string, number> = {};
+  for (const record of records) counts[record.status] = (counts[record.status] ?? 0) + 1;
+  return counts;
+}
+
+async function captureRuntimeEvidence(personaId: string): Promise<JsonObject> {
+  const [activities, mailboxItems, leases, snapshot, events] = await Promise.all([
+    listPersonaActivities(personaId),
+    listPersonaMailboxItems(personaId),
+    listPersonaLeaseRecords(personaId),
+    inspectAndReconcilePersonaRuntime(personaId, { recentEventLimit: 0 }),
+    readPersonaRuntimeEvents(personaId),
+  ]);
+  return {
+    activityStatuses: countByStatus(activities),
+    mailboxStatuses: countByStatus(mailboxItems),
+    leaseStatuses: countByStatus(leases),
+    activeLeaseCount: leases.filter(lease => lease.status === 'active').length,
+    lifecycleState: snapshot?.projection.lifecycleState ?? 'missing',
+    stuck: snapshot?.projection.stuck ?? false,
+    eventCount: events.length,
+    firstEventSeq: events[0]?.seq ?? null,
+    lastEventSeq: events.at(-1)?.seq ?? null,
+  };
+}
+
+async function captureRuntimeEvidenceSafely(personaId: string): Promise<JsonObject> {
+  try {
+    return await captureRuntimeEvidence(personaId);
+  } catch (error) {
+    return {
+      captureError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function assertValidFaultResult(kind: SoakFaultKind, fault: JsonObject): void {
+  if (kind !== 'lease-expiry') return;
+  if (
+    fault.recovered !== true
+    || fault.holderChanged !== true
+    || fault.terminalStatus !== 'completed'
+    || fault.staleCompletionRejected !== true
+    || fault.terminalActivityCount !== 1
+    || fault.terminalMailboxCount !== 1
+    || fault.terminalSuccessEventCount !== 1
+  ) {
+    throw new Error(
+      `Fault handler returned invalid lease-expiry recovery evidence: ${JSON.stringify(fault)}`,
+    );
+  }
+}
+
+async function executeFaultEvidence(input: {
+  personaId: string;
+  day: number;
+  kind: SoakFaultKind;
+  run: () => Promise<JsonObject>;
+}): Promise<SoakFaultEvidence> {
+  const id = `day-${input.day}:${input.kind}`;
+  let before: JsonObject = { captured: false };
+  let fault: JsonObject | undefined;
+  try {
+    before = await captureRuntimeEvidence(input.personaId);
+    fault = await input.run();
+    assertValidFaultResult(input.kind, fault);
+    const after = await captureRuntimeEvidence(input.personaId);
+    return {
+      id,
+      day: input.day,
+      kind: input.kind,
+      status: 'passed',
+      before,
+      fault,
+      after,
+      provenance: [
+        'production mailbox/activity/lease stores',
+        'inspectAndReconcilePersonaRuntime',
+        'production fault handler',
+      ],
+    };
+  } catch (error) {
+    return {
+      id,
+      day: input.day,
+      kind: input.kind,
+      status: 'failed',
+      before,
+      fault: fault ?? {
+        attempted: true,
+      },
+      after: await captureRuntimeEvidenceSafely(input.personaId),
+      provenance: [
+        'production mailbox/activity/lease stores',
+        'inspectAndReconcilePersonaRuntime',
+        'production fault handler',
+      ],
+      failureReason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function reconcileWorkload(input: {
+  workload: SoakActivity[];
+  personaId: string;
+  behaviorBindingId: string;
+  behaviorRevisionId: string;
+  activities: PersonaActivity[];
+  mailboxItems: Awaited<ReturnType<typeof listPersonaMailboxItems>>;
+}): WorkloadReconciliationEvidence {
+  const result: WorkloadReconciliationEvidence = {
+    attempted: input.workload.length,
+    accepted: 0,
+    completed: 0,
+    failed: 0,
+    duplicate: 0,
+    unresolved: 0,
+    missingSourceIds: [],
+    duplicateSourceIds: [],
+    nonterminalSourceIds: [],
+    mailboxLinkMismatchSourceIds: [],
+    identityMismatchSourceIds: [],
+  };
+
+  for (const workloadItem of input.workload) {
+    const steering = workloadItem.ingress.admission === 'steering';
+    const activitySourceId = workloadSourceId(workloadItem, steering ? '-host' : '');
+    const relatedSourceId = steering ? workloadSourceId(workloadItem, '-related') : undefined;
+    const activities = input.activities.filter(
+      activity => activity.source.sourceId === activitySourceId,
+    );
+    const unexpectedRelatedActivities = relatedSourceId
+      ? input.activities.filter(activity => activity.source.sourceId === relatedSourceId)
+      : [];
+    const hostMailboxItems = input.mailboxItems.filter(
+      item => item.source.sourceId === activitySourceId,
+    );
+    const relatedMailboxItems = relatedSourceId
+      ? input.mailboxItems.filter(item => item.source.sourceId === relatedSourceId)
+      : [];
+    const expectedMailboxItems = [...hostMailboxItems, ...relatedMailboxItems];
+    const expectedMailboxCount = steering ? 2 : 1;
+
+    if (
+      expectedMailboxItems.length === expectedMailboxCount
+      && expectedMailboxItems.every(item => item.status !== 'rejected')
+    ) {
+      result.accepted += 1;
+    }
+
+    if (
+      activities.length === 0
+      || hostMailboxItems.length === 0
+      || (steering && relatedMailboxItems.length === 0)
+    ) {
+      result.missingSourceIds.push(activitySourceId);
+      result.unresolved += 1;
+      continue;
+    }
+    if (
+      activities.length !== 1
+      || unexpectedRelatedActivities.length !== 0
+      || hostMailboxItems.length !== 1
+      || relatedMailboxItems.length !== (steering ? 1 : 0)
+    ) {
+      result.duplicateSourceIds.push(activitySourceId);
+      result.duplicate += 1;
+      continue;
+    }
+
+    const activity = activities[0];
+    const hostMailboxItem = hostMailboxItems[0];
+    const relatedMailboxItem = relatedMailboxItems[0];
+    const identityMatches = activity.personaId === input.personaId
+      && expectedMailboxItems.every(item => item.personaId === input.personaId)
+      && activity.behaviorId === input.behaviorBindingId
+      && activity.behaviorRevisionId === input.behaviorRevisionId;
+    if (!identityMatches) result.identityMismatchSourceIds.push(activitySourceId);
+
+    const mailboxLinkMatches = hostMailboxItem.claimedActivityId === activity.id
+      && (
+        !relatedMailboxItem
+        || (
+          relatedMailboxItem.targetActivityId === activity.id
+          && relatedMailboxItem.deliveryStatus === 'delivered'
+        )
+      );
+    if (!mailboxLinkMatches) {
+      result.mailboxLinkMismatchSourceIds.push(activitySourceId);
+    }
+
+    if (activity.status === 'error' || activity.status === 'cancelled') {
+      result.failed += 1;
+    } else if (activity.status !== 'completed') {
+      result.nonterminalSourceIds.push(activitySourceId);
+      result.unresolved += 1;
+    } else if (identityMatches && mailboxLinkMatches) {
+      result.completed += 1;
+    } else {
+      result.unresolved += 1;
+    }
+  }
+
+  return result;
+}
+
+async function routeSteeringActivity(
+  personaId: string,
+  activity: SoakActivity,
+): Promise<void> {
+  const relationKey = `soak-relation-${activity.id}`;
+  const host = await routePersonaMailboxItem({
+    personaId,
+    idempotencyKey: `${activity.id}-host`,
+    kind: 'interactive_chat',
+    source: { kind: 'chat', sourceId: workloadSourceId(activity, '-host') },
+    relationKey,
+    summary: `Host Activity for ${activity.ingress.label}`,
+  });
+  if (host.decision !== 'queued') {
+    throw new Error(`Steering host ${activity.id} was not queued.`);
+  }
+  const claim = await claimNextPersonaActivity({ personaId, ttlMs: 30_000 });
+  if (!claim) throw new Error(`Steering host ${activity.id} was not claimed.`);
+  const related = await routePersonaMailboxItem({
+    personaId,
+    idempotencyKey: `${activity.id}-related`,
+    kind: 'interactive_chat',
+    source: { kind: 'chat', sourceId: workloadSourceId(activity, '-related') },
+    relationKey,
+    relatedAction: 'steer',
+    summary: `Related input for ${activity.ingress.label}`,
+  });
+  if (related.decision !== 'steered' || related.targetActivityId !== claim.activity.id) {
+    throw new Error(`Related input ${activity.id} did not steer into its live Activity.`);
+  }
+  await acknowledgePersonaActivityDelivery({
+    ...fenceForClaim(claim),
+    mailboxItemId: related.item.id,
+  });
+  await completePersonaActivity({ ...fenceForClaim(claim), status: 'completed' });
+}
+
+async function submitWorkloadActivity(
+  dispatcher: PersonaFlowDispatcher,
+  personaId: string,
+  activity: SoakActivity,
+): Promise<PersonaFlowDispatchRecord> {
+  const submission = await dispatcher.submit({
+    personaId,
+    idempotencyKey: activity.id,
+    kind: activity.ingress.mailboxKind,
+    source: {
+      kind: activity.ingress.sourceKind,
+      sourceId: workloadSourceId(activity),
+    },
+    relationKey: `soak-relation-${activity.id}`,
+    summary: `Runtime-backed soak input ${activity.id} (${activity.variant})`,
+    flowInput: {
+      source: 'api',
+      prompt: `Complete deterministic soak input ${activity.id}.`,
+      mode: 'conversation',
+    },
+  }, { startPump: false, waitForCompletion: false });
+  return submission.dispatch;
+}
+
+async function completeWorkloadBatch(
+  dispatcher: PersonaFlowDispatcher,
+  personaId: string,
+  dispatches: PersonaFlowDispatchRecord[],
+  runDeadlineMs: number,
+): Promise<void> {
+  if (dispatches.length === 0) return;
+  const description = `Dispatch batch ${dispatches[0].id}..${dispatches.at(-1)!.id}`;
+  const pumpTimeoutMs = remainingWallClockBudget(
+    runDeadlineMs,
+    SOAK_DISPATCH_WALL_TIMEOUT_MS,
+    `${description} pump`,
+  );
+  await withWallClockTimeout(
+    dispatcher.pump(personaId),
+    pumpTimeoutMs,
+    `${description} pump`,
+  );
+
+  await Promise.all(dispatches.map(async (dispatch) => {
+    const waitTimeoutMs = remainingWallClockBudget(
+      runDeadlineMs,
+      SOAK_DISPATCH_WALL_TIMEOUT_MS,
+      `Dispatch ${dispatch.id} durable completion wait`,
+    );
+    const waitController = new AbortController();
+    let completed: PersonaFlowDispatchRecord;
+    try {
+      completed = await withWallClockTimeout(
+        dispatcher.wait(dispatch.id, {
+          timeoutMs: waitTimeoutMs,
+          signal: waitController.signal,
+        }),
+        waitTimeoutMs,
+        `Dispatch ${dispatch.id} durable completion wait`,
+      );
+    } finally {
+      waitController.abort(new Error(`Dispatch ${dispatch.id} completion wait ended.`));
+    }
+    if (completed.state !== 'completed' || !completed.activityId) {
+      throw new Error(`Dispatch ${dispatch.id} did not complete a persisted Activity: ${JSON.stringify({
+        state: completed?.state ?? 'missing',
+        activityId: completed?.activityId ?? null,
+        lastError: completed?.lastError ?? null,
+      })}`);
+    }
+  }));
+}
+
+async function compactRuntime(personaId: string, now: number) {
+  await withPersonaRuntimeLock(personaId, async (lock) => {
+    await compactPersonaMailboxItems(personaId, now);
+    await compactPersonaActivities(personaId, now);
+    await compactPersonaFlowDispatches(personaId, now);
+    await applyRetention(
+      await listBehaviorCallPins(personaId),
+      getBehaviorCallPinRetentionPolicy(await listPersonaActivities(personaId), lock),
+      now,
+    );
+  });
+
+  const before = await listPersonaLeaseRecords(personaId);
+  const proofRecords = before
+    .map(lease => ({
+      id: lease.id,
+      activityId: lease.activityId,
+      holderId: lease.holderId,
+      fencingToken: lease.fencingToken,
+      acquiredAt: lease.acquiredAt,
+      expiresAt: lease.expiresAt,
+      releasedAt: lease.releasedAt ?? null,
+      status: lease.status,
+    }))
+    .sort((left, right) => left.fencingToken - right.fencingToken || left.id.localeCompare(right.id));
+  const prePruneSnapshotSha256 = createHash('sha256')
+    .update(stableJsonStringify(proofRecords))
+    .digest('hex');
+
+  const previousLeasePruning = FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING;
+  let pruning: Awaited<ReturnType<typeof prunePersonaLeaseHistory>>;
+  try {
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    pruning = await prunePersonaLeaseHistory(personaId, {
+      retainedCount: LEASE_HISTORY_SOAK_CAP,
+      maxDeletesPerSweep: 10_000,
+    });
+  } finally {
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = previousLeasePruning;
+  }
+  const after = await listPersonaLeaseRecords(personaId);
+  if (pruning.retainedUnverifiable > 0) {
+    throw new Error(
+      `Lease-history pruning retained ${pruning.retainedUnverifiable} unverifiable records.`,
+    );
+  }
+  if (after.length > LEASE_HISTORY_SOAK_CAP) {
+    throw new Error(
+      `Lease-history pruning retained ${after.length} records; cap is ${LEASE_HISTORY_SOAK_CAP}.`,
+    );
+  }
+
+  await sweepPersonaRuntimeEventSegments();
+  return {
+    beforeCount: before.length,
+    afterCount: after.length,
+    ...pruning,
+    minFencingToken: proofRecords[0]?.fencingToken ?? null,
+    maxFencingToken: proofRecords.at(-1)?.fencingToken ?? null,
+    prePruneSnapshotSha256,
+  };
+}
+
+async function exerciseLeaseExpiry(
+  personaId: string,
+  clock: VirtualPersonaRuntimeClock,
+  token: string,
+): Promise<JsonObject> {
+  const sourceId = `soak-fault-lease-expiry-${token}`;
+  await routePersonaMailboxItem({
+    personaId,
+    idempotencyKey: `fault-lease-expiry-${token}`,
+    kind: 'assignment',
+    source: { kind: 'assignment', sourceId },
+    summary: 'Exercise expired-lease recovery.',
+  });
+  const first = await claimNextPersonaActivity({ personaId, ttlMs: 1_000 });
+  if (!first) throw new Error('Lease-expiry fault could not claim its Activity.');
+
+  // Inject the durable prefix of a crash before the mailbox claim marker.
+  // The production runtime can prove this fence was never published, so the
+  // same Activity is safe to reclaim instead of being fail-closed as uncertain.
+  await savePersonaMailboxItem({
+    ...first.mailboxItem,
+    status: 'queued',
+    claimedActivityId: undefined,
+  });
+
+  await clock.advanceBy(1_001);
+  const recovered = await claimNextPersonaActivity({ personaId, ttlMs: 1_000 });
+  if (!recovered) {
+    const [activity, expiredLease] = await Promise.all([
+      getPersonaActivity(personaId, first.activity.id),
+      getPersonaLeaseRecord(first.lease.id),
+    ]);
+    throw new Error(`Lease-expiry fault did not transfer the Activity to a later owner: ${JSON.stringify({
+      activityId: first.activity.id,
+      terminalStatus: activity?.status ?? 'missing',
+      expiredLeaseStatus: expiredLease?.status ?? 'missing',
+    })}`);
+  }
+  if (
+    !recovered.recovered
+    || recovered.activity.id !== first.activity.id
+    || recovered.lease.holderId === first.lease.holderId
+    || recovered.lease.fencingToken <= first.lease.fencingToken
+  ) {
+    throw new Error(`Lease-expiry fault did not recover the Activity with a higher fence: ${JSON.stringify({
+      first: {
+        activityId: first.activity.id,
+        token: first.lease.fencingToken,
+        expiresAt: first.lease.expiresAt,
+      },
+      recovered: {
+        activityId: recovered.activity.id,
+        token: recovered.lease.fencingToken,
+        recovered: recovered.recovered,
+      },
+      now: clock.now(),
+    })}`);
+  }
+  let staleCompletionRejected = false;
+  try {
+    await completePersonaActivity({ ...fenceForClaim(first), status: 'completed' });
+  } catch {
+    staleCompletionRejected = true;
+  }
+  if (!staleCompletionRejected) {
+    throw new Error('The stale lease owner completed work after a higher fence was acquired.');
+  }
+  await completePersonaActivity({ ...fenceForClaim(recovered), status: 'completed' });
+
+  const [activities, mailboxItems, events] = await Promise.all([
+    listPersonaActivities(personaId),
+    listPersonaMailboxItems(personaId),
+    readPersonaRuntimeEvents(personaId),
+  ]);
+  const terminalActivities = activities.filter((activity) => (
+    activity.id === first.activity.id && activity.status === 'completed'
+  ));
+  const terminalMailboxItems = mailboxItems.filter((item) => (
+    item.source.sourceId === sourceId
+    && item.claimedActivityId === first.activity.id
+    && item.status === 'completed'
+  ));
+  const completedEventId = `activity:${first.activity.id}:completed:completed`;
+  const terminalSuccessEvents = events.filter((event) => (
+    event.eventId === completedEventId
+    && event.type === 'activity:completed'
+    && event.activityId === first.activity.id
+  ));
+  if (
+    terminalActivities.length !== 1
+    || terminalMailboxItems.length !== 1
+    || terminalSuccessEvents.length !== 1
+  ) {
+    throw new Error(`Lease-expiry fault did not persist exactly one terminal success: ${JSON.stringify({
+      activityId: first.activity.id,
+      terminalActivityCount: terminalActivities.length,
+      terminalMailboxCount: terminalMailboxItems.length,
+      terminalSuccessEventCount: terminalSuccessEvents.length,
+    })}`);
+  }
+  return {
+    activityId: first.activity.id,
+    firstLeaseId: first.lease.id,
+    recoveredLeaseId: recovered.lease.id,
+    firstHolderId: first.lease.holderId,
+    recoveredHolderId: recovered.lease.holderId,
+    firstFencingToken: first.lease.fencingToken,
+    recoveredFencingToken: recovered.lease.fencingToken,
+    recovered: true,
+    holderChanged: recovered.lease.holderId !== first.lease.holderId,
+    staleCompletionRejected,
+    terminalStatus: terminalActivities[0].status,
+    terminalActivityCount: terminalActivities.length,
+    terminalMailboxCount: terminalMailboxItems.length,
+    terminalSuccessEventCount: terminalSuccessEvents.length,
+  };
+}
+
+async function exerciseConcurrentClaimant(personaId: string, token: string): Promise<JsonObject> {
+  await routePersonaMailboxItem({
+    personaId,
+    idempotencyKey: `fault-concurrent-${token}`,
+    kind: 'assignment',
+    source: { kind: 'assignment', sourceId: `soak-fault-concurrent-${token}` },
+    summary: 'Exercise concurrent claim exclusion.',
+  });
+  const attempts = await Promise.allSettled([
+    claimNextPersonaActivity({ personaId, ttlMs: 30_000 }),
+    claimNextPersonaActivity({ personaId, ttlMs: 30_000 }),
+  ]);
+  const claims = attempts
+    .filter((attempt): attempt is PromiseFulfilledResult<PersonaActivityClaim | null> => (
+      attempt.status === 'fulfilled'
+    ))
+    .map((attempt) => attempt.value)
+    .filter((claim): claim is PersonaActivityClaim => claim !== null);
+  if (claims.length !== 1) {
+    throw new Error(`Concurrent-claimant fault produced ${claims.length} successful claims.`);
+  }
+  await completePersonaActivity({ ...fenceForClaim(claims[0]), status: 'completed' });
+  return {
+    fulfilledAttempts: attempts.filter(attempt => attempt.status === 'fulfilled').length,
+    successfulClaimCount: claims.length,
+    activityId: claims[0].activity.id,
+    leaseId: claims[0].lease.id,
+    fencingToken: claims[0].lease.fencingToken,
+    terminalStatus: 'completed',
+  };
+}
+
+async function exerciseGracefulRestart(
+  dispatcher: PersonaFlowDispatcher,
+  makeDispatcher: () => PersonaFlowDispatcher,
+  personaId: string,
+  token: string,
+): Promise<{ dispatcher: PersonaFlowDispatcher; evidence: JsonObject }> {
+  const submission = await dispatcher.submit({
+    personaId,
+    idempotencyKey: `fault-graceful-restart-${token}`,
+    kind: 'assignment',
+    source: { kind: 'assignment', sourceId: `soak-fault-graceful-${token}` },
+    summary: 'Persist work before replacing the dispatcher instance.',
+    flowInput: {
+      source: 'api',
+      prompt: 'Complete after a graceful dispatcher restart.',
+      mode: 'conversation',
+    },
+  }, { startPump: false });
+  const restarted = makeDispatcher();
+  await restarted.reconcileAndDrain();
+  const record = await restarted.get(submission.dispatch.id);
+  if (record?.state !== 'completed') {
+    throw new Error('Graceful-restart fault did not drain the durable dispatch.');
+  }
+  return {
+    dispatcher: restarted,
+    evidence: {
+      dispatchId: submission.dispatch.id,
+      activityId: record.activityId ?? null,
+      beforeState: submission.dispatch.state,
+      afterState: record.state,
+      durableDrainCompleted: true,
+    },
+  };
+}
+
+async function exerciseAdministrativeRecovery(personaId: string): Promise<JsonObject> {
+  const recovered = await recoverPersonaRuntime({ personaId, confirmation: 'RECOVER' });
+  if (recovered.lifecycleState !== 'idle' || recovered.closedActivityIds.length > 0) {
+    throw new Error('Administrative recovery did not leave an idle, coherent runtime.');
+  }
+  return {
+    lifecycleState: recovered.lifecycleState,
+    closedActivityIds: recovered.closedActivityIds,
+  };
+}
+
+export async function exerciseHardCrashProcessBoundary(seed: number): Promise<JsonObject> {
+  const environment = await createPersonaProcessEnvironment(`soak-hard-crash-${seed}`);
+  const clients: PersonaProcessClient[] = [];
+  try {
+    const first = await startPersonaProcess(environment);
+    clients.push(first);
+    const created = await first.request<ProcessPersona>({
+      type: 'createPersona',
+      name: 'Soak hard-crash Persona',
+      idempotencyKey: `soak-hard-crash-persona-${seed}`,
+      coreFlowRef: `soak-hard-crash-flow-${seed}`,
+    });
+    await first.request({
+      type: 'enqueue',
+      input: {
+        personaId: created.persona.id,
+        idempotencyKey: `soak-hard-crash-work-${seed}`,
+        kind: 'assignment',
+        source: { kind: 'assignment', sourceId: `soak-hard-crash-source-${seed}` },
+        summary: 'Recover one active Activity after SIGKILL.',
+      },
+    });
+    const before = await first.request<ProcessClaim | null>({
+      type: 'claim', personaId: created.persona.id, ttlMs: 1_000,
+    });
+    if (!before) throw new Error('Hard-crash fault could not claim its Activity.');
+    await first.kill();
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    const restarted = await restartPersonaProcess(environment);
+    clients.push(restarted);
+    const after = await restarted.request<ProcessClaim | null>({
+      type: 'claim', personaId: created.persona.id, ttlMs: 1_000,
+    });
+    const runtime = await restarted.request<ProcessRuntimeSnapshot>({
+      type: 'inspect', personaId: created.persona.id,
+    });
+    const activity = runtime.activities.find((candidate) => candidate.id === before.activity.id);
+    const mailboxItem = runtime.mailboxItems.find(
+      (candidate) => candidate.id === before.mailboxItem.id,
+    );
+    const lease = runtime.lease;
+    if (
+      after !== null
+      || !activity
+      || activity.status !== 'error'
+      || !activity.error?.includes('automatic replay was suppressed')
+      || !mailboxItem
+      || mailboxItem.status !== 'rejected'
+      || mailboxItem.claimedActivityId !== before.activity.id
+      || !lease
+      || lease.activityId !== before.activity.id
+      || lease.status !== 'expired'
+      || lease.fencingToken !== before.lease.fencingToken
+    ) {
+      throw new Error(`Hard-crash process recovery did not fail closed coherently: ${JSON.stringify({
+        replayedClaim: after,
+        activity,
+        mailboxItem,
+        lease,
+      })}`);
+    }
+    return {
+      personaId: created.persona.id,
+      activityId: before.activity.id,
+      mailboxItemId: before.mailboxItem.id,
+      fencingToken: before.lease.fencingToken,
+      replayedClaim: false,
+      terminalStatus: activity.status,
+      mailboxStatus: mailboxItem.status,
+      leaseStatus: lease.status,
+      failClosed: true,
+    };
+  } finally {
+    await Promise.all(clients.map((client) => client.close().catch(() => undefined)));
+    await removePersonaProcessEnvironment(environment);
+  }
+}
+
+function terminalLearningActivity(input: {
+  id: string;
+  personaId: string;
+  behaviorId: string;
+  revisionId: string;
+  succeeded: boolean;
+  at: number;
+}): PersonaActivity {
+  return PersonaActivitySchema.parse({
+    schemaVersion: PERSONA_ACTIVITY_SCHEMA_VERSION,
+    id: input.id,
+    personaId: input.personaId,
+    kind: 'assignment',
+    status: 'completed',
+    source: { kind: 'assignment', sourceId: input.id },
+    behaviorId: input.behaviorId,
+    behaviorRevisionId: input.revisionId,
+    outcome: {
+      schemaVersion: PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
+      resolution: input.succeeded ? 'succeeded' : 'failed',
+      ...(input.succeeded ? {} : { blockerKind: 'unknown' }),
+      decisionSource: 'engine',
+      evidenceRefs: [],
+      decidedAt: input.at,
+    },
+    createdAt: input.at,
+    updatedAt: input.at,
+    startedAt: input.at,
+    completedAt: input.at,
+  }) as PersonaActivity;
+}
+
+async function exerciseLearningRollback(seed: number): Promise<LearningRollbackEvidence> {
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
+  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+
+  const setup = await createPersonaFromRole({
+    name: 'Soak learning Persona',
+    autonomyLevel: 'propose_overrides',
+    idempotencyKey: `soak-learning-persona-${seed}`,
+  });
+  const binding = setup.behaviorBindings.find((candidate) => candidate.slotKey === 'primary');
+  if (!binding) throw new Error('Learning soak Persona has no Primary Behavior binding.');
+  const baseRevision = await getBehaviorRevision(binding.activeRevisionId);
+  if (!baseRevision) throw new Error('Learning soak Persona has no active base revision.');
+  const baselineAt = Date.now() - 1_000;
+  for (let index = 0; index < BEHAVIOR_OUTCOME_MIN_SAMPLES; index += 1) {
+    await savePersonaActivity(terminalLearningActivity({
+      id: `soak_learning_baseline_${seed}_${index}`,
+      personaId: setup.persona.id,
+      behaviorId: binding.id,
+      revisionId: baseRevision.id,
+      succeeded: true,
+      at: baselineAt,
+    }));
+  }
+
+  const compiler = async (): Promise<BehaviorProposalCompileResult> => {
+    const flow = clone(baseRevision.flowSnapshot);
+    const node = processNode(flow);
+    node.data.properties = {
+      ...node.data.properties,
+      promptTemplate: 'Use the deliberately regressed soak instruction and verify outcomes.',
+    };
+    return { success: true, flow, errorCount: 0, warningCount: 0, issues: [] };
+  };
+  const proposal = await createBehaviorProposal({
+    personaId: setup.persona.id,
+    behaviorId: binding.id,
+    baseBehaviorRevisionId: baseRevision.id,
+    rationale: 'The soak gate needs a real activated revision to test automatic regression rollback.',
+    evidenceRefs: [{ kind: 'activity', id: `soak_learning_baseline_${seed}_0`, observedAt: baselineAt }],
+    candidateSpec: { soak: 'deliberate-regression' },
+    evals: [{
+      id: 'soak-candidate-compiles',
+      run: ({ candidateFlow }) => ({ passed: processNode(candidateFlow).data.properties?.promptTemplate
+        === 'Use the deliberately regressed soak instruction and verify outcomes.' }),
+    }],
+    actor: 'persona-soak',
+  }, { compiler });
+  await approveBehaviorProposal(proposal.id, {
+    actor: 'persona-soak-reviewer',
+    reason: 'Deliberately activate a deterministic regression for rollback verification.',
+  });
+  const activated = await activateBehaviorProposal(proposal.id);
+  if (!activated.activatedRevisionId) throw new Error('Learning soak proposal was not activated.');
+
+  for (let index = 0; index < BEHAVIOR_OUTCOME_MIN_SAMPLES; index += 1) {
+    const failed = terminalLearningActivity({
+      id: `soak_learning_regression_${seed}_${index}`,
+      personaId: setup.persona.id,
+      behaviorId: binding.id,
+      revisionId: activated.activatedRevisionId,
+      succeeded: false,
+      at: Date.now(),
+    });
+    await savePersonaActivity(failed);
+    await recordBehaviorOutcomeSample(failed);
+  }
+  const [metric, currentBinding, currentProposal] = await Promise.all([
+    getBehaviorOutcomeMetric(behaviorOutcomeMetricId(proposal.id)),
+    getBehaviorBinding(binding.id),
+    getBehaviorProposal(proposal.id),
+  ]);
+  return {
+    evaluated: true,
+    personaId: setup.persona.id,
+    behaviorId: binding.id,
+    proposalId: proposal.id,
+    metricId: behaviorOutcomeMetricId(proposal.id),
+    baseRevisionId: baseRevision.id,
+    activatedRevisionId: activated.activatedRevisionId,
+    ...(currentBinding?.activeRevisionId
+      ? { finalRevisionId: currentBinding.activeRevisionId }
+      : {}),
+    ...(currentProposal?.status ? { proposalStatus: currentProposal.status } : {}),
+    ...(metric?.verdict ? { metricVerdict: metric.verdict } : {}),
+    baselineSamples: BEHAVIOR_OUTCOME_MIN_SAMPLES,
+    regressionSamples: BEHAVIOR_OUTCOME_MIN_SAMPLES,
+    ...(metric?.autoRollbackAt ? { autoRollbackAt: metric.autoRollbackAt } : {}),
+  };
+}
+
+function overlappingLeasePairs(leases: PersonaLease[]): string[] {
+  const ordered = [...leases].sort((left, right) => (
+    left.acquiredAt - right.acquiredAt || left.fencingToken - right.fencingToken
+  ));
+  const overlaps: string[] = [];
+  for (let leftIndex = 0; leftIndex < ordered.length; leftIndex += 1) {
+    const left = ordered[leftIndex];
+    const leftEnd = Math.min(left.releasedAt ?? left.expiresAt, left.expiresAt);
+    for (let rightIndex = leftIndex + 1; rightIndex < ordered.length; rightIndex += 1) {
+      const right = ordered[rightIndex];
+      if (right.acquiredAt >= leftEnd) break;
+      const rightEnd = Math.min(right.releasedAt ?? right.expiresAt, right.expiresAt);
+      if (left.acquiredAt < rightEnd) {
+        overlaps.push([left.id, right.id].sort().join(':'));
+      }
+    }
+  }
+  return overlaps;
+}
+
+function observeLeaseAcquisitions(
+  leases: PersonaLease[],
+  acquisitionsById: Map<string, string>,
+  acquisitionIdByToken: Map<number, string>,
+  overlapPairs: Set<string>,
+): void {
+  for (const pair of overlappingLeasePairs(leases)) overlapPairs.add(pair);
+  for (const lease of leases) {
+    const proof = stableJsonStringify({
+      id: lease.id,
+      workspaceId: lease.workspaceId,
+      personaId: lease.personaId,
+      activityId: lease.activityId,
+      holderId: lease.holderId,
+      fencingToken: lease.fencingToken,
+      acquiredAt: lease.acquiredAt,
+    });
+    const previousProof = acquisitionsById.get(lease.id);
+    if (previousProof && previousProof !== proof) {
+      throw new Error(`Lease acquisition ${lease.id} changed immutable proof fields.`);
+    }
+    const tokenOwner = acquisitionIdByToken.get(lease.fencingToken);
+    if (tokenOwner && tokenOwner !== lease.id) {
+      throw new Error(
+        `Fencing token ${lease.fencingToken} belongs to both ${tokenOwner} and ${lease.id}.`,
+      );
+    }
+    acquisitionsById.set(lease.id, proof);
+    acquisitionIdByToken.set(lease.fencingToken, lease.id);
+  }
+}
+
+function leaseAcquisitionProofDigest(acquisitionsById: Map<string, string>): string {
+  return createHash('sha256')
+    .update(stableJsonStringify([...acquisitionsById.entries()].sort(([left], [right]) => (
+      left.localeCompare(right)
+    ))))
+    .digest('hex');
+}
+
+async function createRecallFixtures(personaId: string, now: number): Promise<MemoryItem> {
+  const item = MemoryItemSchema.parse({
+    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    id: 'soak_memory_release_branch',
+    personaId,
+    kind: 'semantic',
+    scope: 'persona',
+    status: 'active',
+    content: 'The release branch sentinel is orchid-489.',
+    confidence: 1,
+    importance: 1,
+    sourceRefs: [{ kind: 'tool_result', id: 'soak-ground-truth' }],
+    trust: 'verified_tool',
+    createdAt: now,
+    updatedAt: now,
+  }) as MemoryItem;
+  return saveMemoryItem(item);
+}
+
+async function createDailyNoiseMemory(personaId: string, day: number, now: number): Promise<void> {
+  await saveMemoryItem(MemoryItemSchema.parse({
+    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    id: `soak_memory_noise_${day}`,
+    personaId,
+    kind: 'semantic',
+    scope: 'persona',
+    status: 'active',
+    content: `Unrelated deterministic noise fact for simulated day ${day}.`,
+    confidence: 0.5,
+    importance: 0.2,
+    sourceRefs: [{ kind: 'tool_result', id: `soak-noise-${day}` }],
+    trust: 'verified_tool',
+    createdAt: now,
+    updatedAt: now,
+  }) as MemoryItem);
+}
+
+export async function writePersonaSoakFailureDiagnostic(input: {
+  outputDirectory: string;
+  runId: string;
+  commitSha: string;
+  mode: SoakRunMode;
+  seed: number;
+  days: number;
+  activitiesPerDay: number;
+  learningEnabled: boolean;
+  startedAt: string;
+  phase: string;
+  day: number;
+  lastActivityId: string | null;
+  error: unknown;
+  failedAt?: string;
+}): Promise<{ filename: string; failedAt: string; message: string }> {
+  const filename = 'persona-soak-failure.json';
+  const failedAt = input.failedAt ?? new Date().toISOString();
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const failure = {
+    schemaVersion: PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+    authoritative: false,
+    acceptanceEligible: false,
+    runIdentity: {
+      runId: input.runId,
+      commitSha: input.commitSha,
+      mode: input.mode,
+      seed: input.seed,
+      days: input.days,
+      activitiesPerDay: input.activitiesPerDay,
+      learningEnabled: input.learningEnabled,
+      startedAt: input.startedAt,
+    },
+    failure: {
+      phase: input.phase,
+      day: input.day,
+      lastActivityId: input.lastActivityId,
+      message,
+      failedAt,
+    },
+  };
+  await fs.mkdir(input.outputDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(input.outputDirectory, filename),
+    `${stableJsonStringify(failure, 2)}\n`,
+  );
+  return { filename, failedAt, message };
+}
+
+export async function runPersonaSoak(options: PersonaSoakOptions): Promise<PersonaSoakSummary> {
+  const exactAcceptanceConfiguration = options.days === FULL_GATE_DAYS
+    && options.activitiesPerDay === FULL_GATE_ACTIVITIES_PER_DAY;
+  const runMode = options.runMode
+    ?? (exactAcceptanceConfiguration ? 'acceptance' : 'smoke');
+  const fullGate = runMode !== 'smoke';
+  const wallStartedAt = Date.now();
+  const wallClockBudgetMs = fullGate
+    ? SOAK_ACCEPTANCE_WALL_BUDGET_MS
+    : SOAK_SMOKE_WALL_BUDGET_MS;
+  const runDeadlineMs = wallStartedAt + wallClockBudgetMs;
+  const startedAt = wallStartedAt + 1_000;
+  const suppliedCommitSha = options.commitSha
+    ?? process.env.PERSONA_SOAK_COMMIT
+    ?? process.env.GITHUB_SHA;
+  if (runMode !== 'smoke' && !/^[0-9a-f]{40}$/.test(suppliedCommitSha ?? '')) {
+    throw new Error(
+      'Acceptance and infrastructure soak runs require a full 40-character lowercase commit SHA.',
+    );
+  }
+  const commitSha = suppliedCommitSha ?? 'unreported';
+  const runId = options.runId
+    ?? process.env.PERSONA_SOAK_RUN_ID
+    ?? `local-${process.pid}-${options.seed}-${wallStartedAt}`;
+  const clock = new VirtualPersonaRuntimeClock(startedAt, 100_000);
+  const workload = generatePersonaSoakWorkload({ ...options, startAt: startedAt });
+  const faults = defaultFaultSchedule(options.days);
+  const expectedFaultIds = faults.map(fault => `day-${fault.day}:${fault.kind}`);
+  const metrics: DailySoakMetric[] = [];
+  const features = featureSnapshot();
+  const previousClock = _setPersonaRuntimeClockForTests(clock);
+  const previousEventConfig = _setPersonaRuntimeEventLogConfigForTests({
+    maxSegmentBytes: 1_048_576,
+    maxSegmentEvents: 100,
+    retentionDays: 7,
+    maxClosedSegments: 2,
+  });
+  workspaceSequence += 1;
+  const workspaceId = `persona-soak-${process.pid}-${options.seed}-${workspaceSequence}`;
+  const progressPath = options.outputDirectory
+    ? path.join(options.outputDirectory, 'persona-soak-progress.jsonl')
+    : undefined;
+  let progressPhase = 'initializing';
+  let progressDay = 0;
+  let progressActivityId: string | null = null;
+  const appendProgress = async (record: Record<string, unknown>): Promise<void> => {
+    if (!progressPath) return;
+    await fs.appendFile(progressPath, `${stableJsonStringify(record)}\n`);
+  };
+  let summary: PersonaSoakSummary | undefined;
+
+  try {
+    if (options.outputDirectory) {
+      await fs.mkdir(options.outputDirectory, { recursive: true });
+      await Promise.all([
+        'persona-soak.json',
+        'persona-soak.jsonl',
+        'persona-soak.md',
+        'persona-soak-progress.jsonl',
+        'persona-soak-failure.json',
+        'SHA256SUMS',
+      ].map(filename => fs.rm(path.join(options.outputDirectory!, filename), { force: true })));
+      await appendProgress({
+        recordType: 'run_started',
+        runId,
+        commitSha,
+        mode: runMode,
+        days: options.days,
+        activitiesPerDay: options.activitiesPerDay,
+        learningEnabled: Boolean(options.withLearning),
+        wallClockBudgetMs,
+        wallClockDeadlineAt: new Date(runDeadlineMs).toISOString(),
+        startedAt: new Date(wallStartedAt).toISOString(),
+      });
+    }
+    summary = await runWithWorkspace(workspaceId, async () => {
+      // The harness executes one explicit, evidence-captured sweep per simulated
+      // day. Per-terminal retention would rescan the same growing collections
+      // after every Activity and turn the acceptance harness quadratic again.
+      FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
+      FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
+      FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
+      FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
+      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
+
+      const bundle = await createPersonaFromRole({
+        name: 'Runtime-backed soak Persona',
+        autonomyLevel: 'propose_overrides',
+        interruptionPolicy: 'related_only',
+        idempotencyKey: `persona-soak-${options.seed}`,
+      });
+      const personaId = bundle.persona.id;
+      const primaryBinding = bundle.behaviorBindings.find(candidate => candidate.slotKey === 'primary');
+      if (!primaryBinding) throw new Error('Runtime-backed soak Persona has no Primary binding.');
+      // Factory Role snapshots can differ from the Persona's authored Core.
+      // Resolve the same immutable revision that production admission pins,
+      // before fixing the expected identity for every generated Activity.
+      const coreRevision = await resolvePersonaCoreRevision(personaId);
+      if (coreRevision.behaviorId !== primaryBinding.id) {
+        throw new Error('Runtime-backed soak Core does not belong to its Primary binding.');
+      }
+      const behaviorBindingId = primaryBinding.id;
+      const behaviorRevisionId = coreRevision.id;
+      debug(`created Persona ${personaId}`);
+      const groundTruth = await createRecallFixtures(personaId, clock.now());
+      const stubModel = createSeededStubModel(options.seed, [{
+        id: groundTruth.id,
+        subject: 'release branch sentinel',
+        value: 'orchid-489',
+      }]);
+      let modelCalls = 0;
+      const runFlowStub = async (input: FlowRunInput): Promise<FlowRunResult> => {
+        debugActivity(`runFlow entered for ${input.personaAttribution?.activityId ?? 'unknown Activity'}`);
+        if (!input.executionAuthority || !input.personaAttribution?.activityId) {
+          throw new Error('Soak specialist persistence requires a real Activity fence.');
+        }
+        const call = await createBehaviorCallPin({
+          personaId,
+          activityId: input.personaAttribution.activityId,
+          parentBehaviorRevisionId: coreRevision.id,
+          revision: coreRevision,
+          callKey: 'soak-specialist',
+        }, input.executionAuthority);
+        modelCalls += 1;
+        const completion = await stubModel.createCompletion({} as never);
+        const output = completion.completion.choices[0]?.message.content;
+        const result = await flowResult(input, typeof output === 'string' ? output : '', clock.now());
+        await completeBehaviorCallPin(call, 'completed', input.executionAuthority, undefined, result.outputText);
+        debugActivity(`runFlow completed for ${input.personaAttribution?.activityId ?? 'unknown Activity'}`);
+        return result;
+      };
+      const makeDispatcher = () => new PersonaFlowDispatcher({
+        workspaceId,
+        leaseTtlMs: 30_000,
+        heartbeatIntervalMs: 5_000,
+        dependencies: { runFlow: runFlowStub },
+      });
+      let dispatcher = makeDispatcher();
+      let hardCrashExecuted = false;
+      const faultEvidence: SoakFaultEvidence[] = [];
+      const persistedLeaseOverlapPairs = new Set<string>();
+      const observedLeaseAcquisitions = new Map<string, string>();
+      const observedLeaseIdByFencingToken = new Map<number, string>();
+
+      try {
+      for (let day = 1; day <= options.days; day += 1) {
+        progressDay = day;
+        progressPhase = `day-${day}:workload`;
+        debug(`day ${day} started`);
+        const dailyWorkload = workload.filter((activity) => activity.day === day);
+        const pendingDispatches: PersonaFlowDispatchRecord[] = [];
+        const flushPendingDispatches = async (): Promise<void> => {
+          if (pendingDispatches.length === 0) return;
+          const batch = pendingDispatches.splice(0, pendingDispatches.length);
+          progressActivityId = batch.at(-1)?.id ?? progressActivityId;
+          progressPhase = `day-${day}:dispatch-batch`;
+          await completeWorkloadBatch(dispatcher, personaId, batch, runDeadlineMs);
+        };
+        for (const activity of dailyWorkload) {
+          remainingWallClockBudget(
+            runDeadlineMs,
+            SOAK_DISPATCH_WALL_TIMEOUT_MS,
+            `Day ${day} Activity ${activity.id}`,
+          );
+          progressActivityId = activity.id;
+          progressPhase = `day-${day}:activity`;
+          debugActivity(`day ${day} dispatching ${activity.id} via ${activity.ingress.admission}`);
+          await clock.advanceTo(activity.scheduledAt);
+          if (activity.ingress.admission === 'steering') {
+            await flushPendingDispatches();
+            await routeSteeringActivity(personaId, activity);
+          } else {
+            pendingDispatches.push(
+              await submitWorkloadActivity(dispatcher, personaId, activity),
+            );
+            if (pendingDispatches.length >= SOAK_DISPATCH_BATCH_SIZE) {
+              await flushPendingDispatches();
+            }
+          }
+        }
+        await flushPendingDispatches();
+
+        assertSoakDispatchesDrained(await dispatcher.list(personaId));
+        progressActivityId = null;
+        const scheduledFaults = faults.filter((fault) => fault.day === day);
+        const executedFaults: string[] = [];
+        for (const fault of scheduledFaults) {
+          progressPhase = `day-${day}:fault:${fault.kind}`;
+          debug(`day ${day} executing fault ${fault.kind}`);
+          const token = `${day}-${fault.kind}`;
+          let evidence: SoakFaultEvidence;
+          switch (fault.kind) {
+            case 'lease-expiry':
+              evidence = await executeFaultEvidence({
+                personaId,
+                day,
+                kind: fault.kind,
+                run: () => exerciseLeaseExpiry(personaId, clock, token),
+              });
+              break;
+            case 'concurrent-claimant':
+              evidence = await executeFaultEvidence({
+                personaId,
+                day,
+                kind: fault.kind,
+                run: () => exerciseConcurrentClaimant(personaId, token),
+              });
+              break;
+            case 'graceful-restart':
+              evidence = await executeFaultEvidence({
+                personaId,
+                day,
+                kind: fault.kind,
+                run: async () => {
+                  const restarted = await exerciseGracefulRestart(
+                    dispatcher, makeDispatcher, personaId, token,
+                  );
+                  dispatcher = restarted.dispatcher;
+                  return restarted.evidence;
+                },
+              });
+              break;
+            case 'administrative-recovery':
+              evidence = await executeFaultEvidence({
+                personaId,
+                day,
+                kind: fault.kind,
+                run: () => exerciseAdministrativeRecovery(personaId),
+              });
+              break;
+            case 'hard-crash':
+              if (fullGate) {
+                evidence = await executeFaultEvidence({
+                  personaId,
+                  day,
+                  kind: fault.kind,
+                  run: () => exerciseHardCrashProcessBoundary(options.seed),
+                });
+                hardCrashExecuted = evidence.status === 'passed';
+              } else {
+                const snapshot = await captureRuntimeEvidenceSafely(personaId);
+                evidence = {
+                  id: `day-${day}:${fault.kind}`,
+                  day,
+                  kind: fault.kind,
+                  status: 'not_evaluated',
+                  before: snapshot,
+                  fault: { attempted: false },
+                  after: snapshot,
+                  provenance: ['personaProcessBoundaryHarness'],
+                  failureReason: 'The OS process-boundary scenario is reserved for acceptance runs.',
+                };
+              }
+              break;
+            default: {
+              const exhaustive: never = fault.kind;
+              throw new Error(`Unsupported soak fault: ${exhaustive}`);
+            }
+          }
+          faultEvidence.push(evidence);
+          if (evidence.status === 'passed') executedFaults.push(fault.kind);
+        }
+
+        await clock.advanceTo(startedAt + day * DAY_MS);
+        await createDailyNoiseMemory(personaId, day, clock.now());
+        const prePruneLeases = await listPersonaLeaseRecords(personaId);
+        observeLeaseAcquisitions(
+          prePruneLeases,
+          observedLeaseAcquisitions,
+          observedLeaseIdByFencingToken,
+          persistedLeaseOverlapPairs,
+        );
+        const leaseHistoryPruning = await compactRuntime(personaId, clock.now());
+
+        const recallSamples: number[] = [];
+        const recallObservations = [];
+        for (let sample = 0; sample < RECALL_SAMPLES_PER_DAY; sample += 1) {
+          const recallStarted = performance.now();
+          const recalled = await searchPersonaMemory(personaId, {
+            query: 'release branch sentinel orchid-489',
+            mode: 'lexical',
+            asOf: clock.now(),
+            limit: 1,
+          });
+          recallSamples.push(performance.now() - recallStarted);
+          recallObservations.push({
+            expectedId: groundTruth.id,
+            recalledIds: recalled.map((result) => result.item.id),
+          });
+        }
+
+        const appendSamples: number[] = [];
+        for (let sample = 0; sample < APPEND_SAMPLES_PER_DAY; sample += 1) {
+          const appendStarted = performance.now();
+          await appendPersonaRuntimeEvent(personaId, {
+            eventId: `soak.append.${day}.${sample}`,
+            type: 'recovery:completed',
+            changed: false,
+            remainingStuckCount: 0,
+          });
+          appendSamples.push(performance.now() - appendStarted);
+        }
+
+        const [storage, activities, mailboxItems, checkpointEvents] = await Promise.all([
+          getPersonaStorageStats(personaId),
+          listPersonaActivities(personaId),
+          listPersonaMailboxItems(personaId),
+          readPersonaRuntimeEvents(personaId),
+        ]);
+        const checkpointSequenceContinuous = checkpointEvents.every((event, index) => (
+          index === 0 || event.seq === checkpointEvents[index - 1].seq + 1
+        ));
+        debug(`day ${day} storage ${JSON.stringify(storage.kinds)} memory ${JSON.stringify(process.memoryUsage())} timers ${clock.pendingTimerCount()}`);
+        const checkpointEventIdsUnique = new Set(checkpointEvents.map(event => event.eventId)).size
+          === checkpointEvents.length;
+        const dailyReconciliation = reconcileWorkload({
+          workload: dailyWorkload,
+          personaId,
+          behaviorBindingId,
+          behaviorRevisionId,
+          activities,
+          mailboxItems,
+        });
+        const eventState = _getPersonaRuntimeEventLogStateForTests(personaId);
+        metrics.push({
+          day,
+          activitiesAttempted: dailyReconciliation.attempted,
+          activitiesAccepted: dailyReconciliation.accepted,
+          activitiesSucceeded: dailyReconciliation.completed,
+          activitiesFailed: dailyReconciliation.failed,
+          activitiesDuplicate: dailyReconciliation.duplicate,
+          activitiesUnresolved: dailyReconciliation.unresolved,
+          recallPrecision: scoreRecallPrecision(recallObservations),
+          recallP95Ms: percentile(recallSamples, 0.95),
+          residentMemoryBytes: process.memoryUsage().rss,
+          eventAppendP95Ms: percentile(appendSamples, 0.95),
+          eventLogSegments: eventState?.segmentCount ?? 0,
+          eventCount: checkpointEvents.length,
+          eventFirstSeq: checkpointEvents[0]?.seq ?? null,
+          eventLastSeq: checkpointEvents.at(-1)?.seq ?? null,
+          eventSequenceContinuous: checkpointSequenceContinuous,
+          eventIdsUnique: checkpointEventIdsUnique,
+          collectionCounts: Object.fromEntries(
+            Object.entries(storage.kinds).map(([key, value]) => [key, value.total]),
+          ),
+          collectionUncompactedCounts: Object.fromEntries(
+            Object.entries(storage.kinds).map(([key, value]) => [key, value.uncompacted]),
+          ),
+          leaseHistoryPruning: {
+            ...leaseHistoryPruning,
+            observedAcquisitionCount: observedLeaseAcquisitions.size,
+            observedFencingTokenCount: observedLeaseIdByFencingToken.size,
+          },
+          faultsScheduled: scheduledFaults.map((fault) => fault.kind),
+          faultsExecuted: executedFaults,
+          faultEvidenceIds: faultEvidence
+            .filter(item => item.day === day)
+            .map(item => item.id),
+        });
+        progressPhase = `day-${day}:checkpoint`;
+        await appendProgress({
+          recordType: 'day_completed',
+          runId,
+          commitSha,
+          day,
+          completedAt: new Date().toISOString(),
+          metric: metrics.at(-1),
+        });
+        debug(`day ${day} completed`);
+      }
+
+      progressPhase = 'learning-rollback';
+      _setPersonaRuntimeClockForTests(previousClock);
+      debug(`starting learning rollback=${Boolean(options.withLearning)}`);
+      const learningEvidence: LearningRollbackEvidence = options.withLearning
+        ? await exerciseLearningRollback(options.seed)
+        : {
+            evaluated: false,
+            baselineSamples: 0,
+            regressionSamples: 0,
+          };
+      const learning = learningEvidence.evaluated
+        && learningEvidence.metricVerdict === 'rolled_back'
+        && learningEvidence.finalRevisionId === learningEvidence.baseRevisionId
+        && learningEvidence.proposalStatus === 'rolled_back';
+      debug(`learning rollback completed=${learning}`);
+      _setPersonaRuntimeClockForTests(clock);
+
+      progressPhase = 'final-runtime-evidence';
+      const [activities, mailboxItems, leases, dispatches, runtime, memories] = await Promise.all([
+        listPersonaActivities(personaId),
+        listPersonaMailboxItems(personaId),
+        listPersonaLeaseRecords(personaId),
+        dispatcher.list(personaId),
+        inspectAndReconcilePersonaRuntime(personaId),
+        listMemoryItems(personaId),
+      ]);
+      const workloadReconciliation = reconcileWorkload({
+        workload,
+        personaId,
+        behaviorBindingId,
+        behaviorRevisionId,
+        activities,
+        mailboxItems,
+      });
+      observeLeaseAcquisitions(
+        leases,
+        observedLeaseAcquisitions,
+        observedLeaseIdByFencingToken,
+        persistedLeaseOverlapPairs,
+      );
+      const leaseAcquisitionProofSha256 = leaseAcquisitionProofDigest(observedLeaseAcquisitions);
+      const splitBrainCount = persistedLeaseOverlapPairs.size;
+      const strandedLeaseCount = leases.filter(lease => lease.status === 'active').length;
+      const stuckPersonaCount = runtime?.projection.stuck ? 1 : 0;
+      const firstMetric = metrics[0];
+      const lastMetric = metrics.at(-1)!;
+      const numericContracts = SOAK_ACCEPTANCE_NUMERIC_CONTRACTS;
+      const uncompactedCaps: Record<string, number> = {
+        ...numericContracts.detailedRuntimeState.maxUncompactedByKind,
+      };
+      const maxCollectionCounts = metrics.reduce<Record<string, number>>((maximums, metric) => {
+        for (const [kind, count] of Object.entries(metric.collectionCounts)) {
+          maximums[kind] = Math.max(maximums[kind] ?? 0, count);
+        }
+        return maximums;
+      }, {});
+      const maxUncompacted = metrics.reduce<Record<string, number>>((maximums, metric) => {
+        for (const [kind, count] of Object.entries(metric.collectionUncompactedCounts)) {
+          maximums[kind] = Math.max(maximums[kind] ?? 0, count);
+        }
+        return maximums;
+      }, {});
+      const requiredCollectionKinds = Object.keys(uncompactedCaps);
+      const missingCollectionKinds = requiredCollectionKinds.filter(kind => (
+        !(kind in maxCollectionCounts) || !(kind in maxUncompacted)
+      ));
+      const totalCollectionCap = workload.length
+        * numericContracts.detailedRuntimeState.maxRecordsPerGeneratedActivity
+        + numericContracts.detailedRuntimeState.collectionHeadroomRecords;
+      const collectionCountViolations = Object.fromEntries(
+        Object.entries(maxCollectionCounts).filter(([, count]) => count > totalCollectionCap),
+      );
+      const uncompactedCountViolations = Object.fromEntries(
+        Object.entries(maxUncompacted).filter(([kind, count]) => (
+          count > (uncompactedCaps[kind] ?? -1)
+        )),
+      );
+      const leaseHistoryPruningPassed = metrics.every(metric => (
+        metric.leaseHistoryPruning.afterCount <= LEASE_HISTORY_SOAK_CAP
+        && metric.leaseHistoryPruning.retainedUnverifiable === 0
+        && metric.leaseHistoryPruning.observedAcquisitionCount
+          === metric.leaseHistoryPruning.observedFencingTokenCount
+        && /^[0-9a-f]{64}$/.test(metric.leaseHistoryPruning.prePruneSnapshotSha256)
+      ));
+      const detailedRuntimeStatePassed = missingCollectionKinds.length === 0
+        && Object.keys(collectionCountViolations).length === 0
+        && Object.keys(uncompactedCountViolations).length === 0
+        && leaseHistoryPruningPassed;
+      const appendWindowDays = Math.min(
+        numericContracts.eventAppendCost.windowDays,
+        metrics.length,
+      );
+      const baselineAppendMedian = percentile(
+        metrics.slice(0, appendWindowDays).map(metric => metric.eventAppendP95Ms),
+        0.5,
+      );
+      const finalAppendMedian = percentile(
+        metrics.slice(-appendWindowDays).map(metric => metric.eventAppendP95Ms),
+        0.5,
+      );
+      const allowedFinalAppendMedian = Math.max(
+        numericContracts.eventAppendCost.finalMedianFloorMs,
+        baselineAppendMedian * numericContracts.eventAppendCost.maxFinalToBaselineMedianRatio,
+      );
+      const maxDailyAppendP95 = Math.max(...metrics.map(metric => metric.eventAppendP95Ms));
+      const eventAppendPassed = finalAppendMedian <= allowedFinalAppendMedian
+        && maxDailyAppendP95 < numericContracts.eventAppendCost.maxDailyP95Ms;
+      const residentGrowth = lastMetric.residentMemoryBytes - firstMetric.residentMemoryBytes;
+      const residentPeak = Math.max(...metrics.map(metric => metric.residentMemoryBytes));
+      const residentMemoryPassed = residentGrowth
+        <= numericContracts.residentMemory.maxFinalGrowthBytes
+        && residentPeak <= numericContracts.residentMemory.maxPeakBytes;
+      const runtimeEvents = await readPersonaRuntimeEvents(personaId);
+      const retainedEventSequenceContinuous = runtimeEvents.every((event, index) => (
+        index === 0 || event.seq === runtimeEvents[index - 1].seq + 1
+      ));
+      const eventIdsUnique = new Set(runtimeEvents.map(event => event.eventId)).size
+        === runtimeEvents.length;
+      const checkpointRangesContinuous = metrics.every((metric, index) => {
+        if (
+          !metric.eventSequenceContinuous
+          || !metric.eventIdsUnique
+          || metric.eventCount === 0
+          || metric.eventFirstSeq === null
+          || metric.eventLastSeq === null
+        ) {
+          return false;
+        }
+        if (index === 0) return true;
+        const previous = metrics[index - 1];
+        return previous.eventLastSeq !== null
+          && metric.eventFirstSeq <= previous.eventLastSeq + 1
+          && metric.eventLastSeq >= previous.eventLastSeq;
+      });
+      const eventSequencesContinuous = retainedEventSequenceContinuous
+        && checkpointRangesContinuous;
+      const actualFaultIds = faultEvidence.map(item => item.id);
+      const missingFaultIds = expectedFaultIds.filter(id => !actualFaultIds.includes(id));
+      const unexpectedFaultIds = actualFaultIds.filter(id => !expectedFaultIds.includes(id));
+      const allScheduledFaultsEvaluated = missingFaultIds.length === 0
+        && unexpectedFaultIds.length === 0;
+      const failedFaults = faultEvidence.filter(item => item.status === 'failed');
+      const unevaluatedFaults = faultEvidence.filter(item => item.status === 'not_evaluated');
+      const endedAt = Date.now();
+      const runIdentity: SoakRunIdentity = {
+        schemaVersion: PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+        runId,
+        mode: runMode,
+        authoritative: runMode === 'acceptance'
+          && exactAcceptanceConfiguration
+          && Boolean(options.withLearning)
+          && commitSha !== 'unreported',
+        commitSha,
+        seed: options.seed,
+        days: options.days,
+        activitiesPerDay: options.activitiesPerDay,
+        learningEnabled: Boolean(options.withLearning),
+        startedAt: new Date(wallStartedAt).toISOString(),
+        endedAt: new Date(endedAt).toISOString(),
+        runner: {
+          node: process.version,
+          platform: process.platform,
+          architecture: process.arch,
+          osRelease: release(),
+          cpuModel: cpus()[0]?.model ?? 'unknown',
+          logicalCpuCount: cpus().length,
+        },
+        configuration: {
+          gatingMode: options.gatingMode ?? 'report',
+          recallSamplesPerDay: RECALL_SAMPLES_PER_DAY,
+          eventAppendSamplesPerDay: APPEND_SAMPLES_PER_DAY,
+          wallClockBudgetMs,
+          percentileMethod: 'nearest-rank',
+          scheduledFaultIds: expectedFaultIds,
+        },
+      };
+      const workloadPassed = workloadReconciliation.accepted === workloadReconciliation.attempted
+        && workloadReconciliation.completed === workloadReconciliation.attempted
+        && workloadReconciliation.failed === 0
+        && workloadReconciliation.duplicate === 0
+        && workloadReconciliation.unresolved === 0;
+      const scheduledFaultCriterion = failedFaults.length > 0
+        ? criterion({
+            id: 'scheduled-fault-recovery',
+            mode: runMode,
+            passed: false,
+            summary: `${failedFaults.length} scheduled fault handlers failed.`,
+            observed: {
+              scheduled: faults.length,
+              evidenced: faultEvidence.length,
+              failedIds: failedFaults.map(item => item.id),
+              unevaluatedIds: unevaluatedFaults.map(item => item.id),
+              missingIds: missingFaultIds,
+              unexpectedIds: unexpectedFaultIds,
+            },
+            threshold: 'Every scheduled fault emits passed before/fault/after evidence.',
+            thresholdSource: 'Issue #489 required fix 3',
+            provenance: ['faultEvidence', 'production runtime snapshots'],
+          })
+        : unevaluatedFaults.length > 0 || !allScheduledFaultsEvaluated
+          ? notEvaluated({
+              id: 'scheduled-fault-recovery',
+              mode: runMode,
+              summary: 'One or more scheduled fault handlers were not evaluated.',
+              observed: {
+                scheduled: faults.length,
+                evidenced: faultEvidence.length,
+                unevaluatedIds: unevaluatedFaults.map(item => item.id),
+                missingIds: missingFaultIds,
+                unexpectedIds: unexpectedFaultIds,
+              },
+              threshold: 'Every scheduled fault emits passed before/fault/after evidence.',
+              thresholdSource: 'Issue #489 required fix 3',
+              provenance: ['faultEvidence', 'production runtime snapshots'],
+              failureReason: 'The complete scheduled fault matrix did not execute.',
+            })
+          : criterion({
+              id: 'scheduled-fault-recovery',
+              mode: runMode,
+              passed: true,
+              summary: `All ${faultEvidence.length} scheduled faults executed and recovered.`,
+              observed: {
+                scheduled: faults.length,
+                passedIds: faultEvidence.map(item => item.id),
+              },
+              threshold: 'Every scheduled fault emits passed before/fault/after evidence.',
+              thresholdSource: 'Issue #489 required fix 3',
+              provenance: ['faultEvidence', 'production runtime snapshots'],
+              recordIds: faultEvidence.map(item => item.id),
+            });
+      const criteria: SoakCriterionResult[] = [
+        criterion({
+          id: 'unattended-runtime-throughput',
+          mode: runMode,
+          passed: workloadPassed,
+          summary: `${workloadReconciliation.completed}/${workloadReconciliation.attempted} generated inputs became coherent terminal Activities.`,
+          observed: {
+            attempted: workloadReconciliation.attempted,
+            completed: workloadReconciliation.completed,
+          },
+          threshold: 'All generated inputs complete; acceptance uses exactly 28 days x 20 activities/day.',
+          thresholdSource: 'Issue #459 acceptance criterion 1',
+          provenance: ['generatePersonaSoakWorkload', 'listPersonaActivities'],
+        }),
+        criterion({
+          id: 'persisted-workload-reconciliation',
+          mode: runMode,
+          passed: workloadPassed,
+          summary: 'Generated source IDs were reconciled to the expected ingress mailbox records and one terminal Activity.',
+          observed: {
+            ...workloadReconciliation,
+          },
+          threshold: 'Every generated input is accepted; no missing, duplicate, nonterminal, false-success, mailbox-link, Persona, or revision mismatch.',
+          thresholdSource: 'Issue #489 required fix 1 and acceptance criterion 2',
+          provenance: ['listPersonaMailboxItems', 'listPersonaActivities', 'active Behavior binding'],
+        }),
+        scheduledFaultCriterion,
+        criterion({
+          id: 'recall-precision-stability',
+          mode: runMode,
+          passed: lastMetric.recallPrecision >= firstMetric.recallPrecision - 0.05,
+          summary: `Day 1=${firstMetric.recallPrecision.toFixed(4)}, day ${options.days}=${lastMetric.recallPrecision.toFixed(4)}.`,
+          observed: {
+            day1: firstMetric.recallPrecision,
+            final: lastMetric.recallPrecision,
+            allowedAbsoluteDrop: 0.05,
+          },
+          threshold: 'Final recall precision is within 5 percentage points of day 1.',
+          thresholdSource: 'Issue #459 acceptance criterion 2',
+          provenance: ['searchPersonaMemory lexical production path', 'deterministic ground-truth IDs'],
+        }),
+        criterion({
+          id: 'runtime-scale-recall-latency',
+          mode: runMode,
+          passed: lastMetric.recallP95Ms < 150,
+          summary: `Measured production search p95=${lastMetric.recallP95Ms.toFixed(2)} ms at soak scale; the controlled 50k gate runs separately.`,
+          observed: {
+            p95Ms: lastMetric.recallP95Ms,
+            samples: RECALL_SAMPLES_PER_DAY,
+            memoryItems: memories.length,
+          },
+          threshold: 'p95 is strictly less than 150 ms; the release-scale 50k fixture is validated by the controlled benchmark.',
+          thresholdSource: 'Issue #459 acceptance criterion 3 and issue #489 required fix 6',
+          provenance: ['performance.now', 'searchPersonaMemory', 'nearest-rank percentile'],
+        }),
+        criterion({
+          id: 'bounded-detailed-runtime-state',
+          mode: runMode,
+          passed: detailedRuntimeStatePassed,
+          summary: detailedRuntimeStatePassed
+            ? 'All detailed runtime collections stayed within their committed total and uncompacted-record caps.'
+            : 'One or more detailed runtime collections exceeded a committed cap or was not reported.',
+          observed: {
+            maxCollectionCounts,
+            maxUncompactedCounts: maxUncompacted,
+            totalCollectionCap,
+            maxUncompactedByKind: uncompactedCaps,
+            missingCollectionKinds,
+            collectionCountViolations,
+            uncompactedCountViolations,
+            leaseHistoryPruningPassed,
+            leaseHistoryPruning: metrics.map(metric => ({
+              day: metric.day,
+              ...metric.leaseHistoryPruning,
+            })),
+            finalEventLogSegments: lastMetric.eventLogSegments,
+          },
+          threshold: `Every reported collection has at most ${totalCollectionCap} total records; uncompacted maxima are mailboxItems<=500, activities<=200, flowDispatches<=200, leaseHistory<=50, behaviorCallPins<=200; missing or new uncontracted collections fail closed.`,
+          thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
+          provenance: ['getPersonaStorageStats daily observations', 'strict sharded Activity scan', 'production lease-history pruning', 'daily pre-pruning SHA-256 proofs'],
+        }),
+        criterion({
+          id: 'flat-event-append-cost',
+          mode: runMode,
+          passed: eventAppendPassed,
+          summary: `Baseline-window median p95=${baselineAppendMedian.toFixed(2)} ms, final-window median p95=${finalAppendMedian.toFixed(2)} ms, maximum daily p95=${maxDailyAppendP95.toFixed(2)} ms.`,
+          observed: {
+            windowDays: appendWindowDays,
+            baselineMedianP95Ms: baselineAppendMedian,
+            finalMedianP95Ms: finalAppendMedian,
+            allowedFinalMedianP95Ms: allowedFinalAppendMedian,
+            maxDailyP95Ms: maxDailyAppendP95,
+            absoluteDailyLimitMs: numericContracts.eventAppendCost.maxDailyP95Ms,
+            samplesPerDay: APPEND_SAMPLES_PER_DAY,
+          },
+          threshold: 'The final seven-day median append p95 is no more than 2x the first seven-day median (with a 20 ms noise floor), and every daily p95 is strictly below 150 ms.',
+          thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
+          provenance: ['performance.now', 'appendPersonaRuntimeEvent', 'nearest-rank percentile', 'daily-window median'],
+        }),
+        criterion({
+          id: 'runtime-event-continuity',
+          mode: runMode,
+          passed: eventSequencesContinuous && eventIdsUnique,
+          summary: `${runtimeEvents.length} retained production runtime events and all daily retention checkpoints had continuous sequence ranges and unique IDs.`,
+          observed: {
+            eventCount: runtimeEvents.length,
+            firstSeq: runtimeEvents[0]?.seq ?? null,
+            lastSeq: runtimeEvents.at(-1)?.seq ?? null,
+            retainedSequenceContinuous: retainedEventSequenceContinuous,
+            checkpointRangesContinuous,
+            eventIdsUnique,
+            dailyRanges: metrics.map(metric => ({
+              day: metric.day,
+              count: metric.eventCount,
+              firstSeq: metric.eventFirstSeq,
+              lastSeq: metric.eventLastSeq,
+              continuous: metric.eventSequenceContinuous,
+              idsUnique: metric.eventIdsUnique,
+            })),
+          },
+          threshold: 'Each retained range is internally continuous and every daily range overlaps or directly follows the prior checkpoint; event IDs are unique.',
+          thresholdSource: 'Issue #489 required fix 3',
+          provenance: ['readPersonaRuntimeEvents', 'persisted segmented JSONL event log'],
+        }),
+        criterion({
+          id: 'zero-split-brain',
+          mode: runMode,
+          passed: splitBrainCount === 0
+            && observedLeaseAcquisitions.size === observedLeaseIdByFencingToken.size,
+          summary: `${splitBrainCount} overlapping acquisitions were found across daily pre-pruning lease snapshots.`,
+          observed: {
+            splitBrainCount,
+            observedLeaseAcquisitions: observedLeaseAcquisitions.size,
+            observedFencingTokens: observedLeaseIdByFencingToken.size,
+            retainedLeaseRecords: leases.length,
+            leaseAcquisitionProofSha256,
+          },
+          threshold: 'Zero overlapping live lease intervals and one unique fencing token per observed acquisition for one Persona.',
+          thresholdSource: 'Issue #459 acceptance criterion 6',
+          provenance: ['listPersonaLeaseRecords', 'daily pre-pruning overlap observations', 'immutable acquisition proof digest'],
+        }),
+        criterion({
+          id: 'zero-stranded-or-stuck',
+          mode: runMode,
+          passed: strandedLeaseCount === 0 && stuckPersonaCount === 0,
+          summary: `Active leases=${strandedLeaseCount}; stuck Personas=${stuckPersonaCount}.`,
+          observed: { strandedLeaseCount, stuckPersonaCount },
+          threshold: 'Zero stranded leases and zero stuck Personas after the run.',
+          thresholdSource: 'Issue #459 acceptance criterion 7',
+          provenance: ['listPersonaLeaseRecords', 'inspectAndReconcilePersonaRuntime'],
+        }),
+        criterion({
+          id: 'resident-memory-bound',
+          mode: runMode,
+          passed: residentMemoryPassed,
+          summary: `Resident-memory final growth=${residentGrowth} bytes; peak=${residentPeak} bytes.`,
+          observed: {
+            day1Bytes: firstMetric.residentMemoryBytes,
+            finalBytes: lastMetric.residentMemoryBytes,
+            finalGrowthBytes: residentGrowth,
+            peakBytes: residentPeak,
+            maxFinalGrowthBytes: numericContracts.residentMemory.maxFinalGrowthBytes,
+            maxPeakBytes: numericContracts.residentMemory.maxPeakBytes,
+          },
+          threshold: 'Final RSS growth is at most 256 MiB from day 1 and peak RSS is at most 768 MiB.',
+          thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
+          provenance: ['process.memoryUsage().rss at daily checkpoints'],
+        }),
+        options.withLearning
+          ? criterion({
+              id: 'learning-auto-rollback',
+              mode: runMode,
+              passed: learning,
+              summary: learning
+                ? 'A persisted regression rolled the active Behavior binding back to its base revision.'
+                : 'The production outcome metric did not restore the base revision.',
+              observed: {
+                evaluated: learningEvidence.evaluated,
+                personaId: learningEvidence.personaId ?? null,
+                behaviorId: learningEvidence.behaviorId ?? null,
+                proposalId: learningEvidence.proposalId ?? null,
+                metricId: learningEvidence.metricId ?? null,
+                baseRevisionId: learningEvidence.baseRevisionId ?? null,
+                activatedRevisionId: learningEvidence.activatedRevisionId ?? null,
+                finalRevisionId: learningEvidence.finalRevisionId ?? null,
+                proposalStatus: learningEvidence.proposalStatus ?? null,
+                metricVerdict: learningEvidence.metricVerdict ?? null,
+                baselineSamples: learningEvidence.baselineSamples,
+                regressionSamples: learningEvidence.regressionSamples,
+                autoRollbackAt: learningEvidence.autoRollbackAt ?? null,
+              },
+              threshold: 'Regression verdict is rolled_back and the active binding returns to the base revision.',
+              thresholdSource: 'Issue #459 acceptance criterion 8',
+              provenance: ['behavior proposal store', 'outcome metric store', 'Behavior binding store'],
+            })
+          : notEvaluated({
+              id: 'learning-auto-rollback',
+              mode: runMode,
+              summary: 'Learning was disabled for this run.',
+              threshold: 'Acceptance runs must activate, regress, and automatically roll back a real proposal.',
+              thresholdSource: 'Issue #459 acceptance criterion 8',
+              provenance: ['run configuration'],
+              failureReason: 'Run with --with-learning to evaluate automatic rollback.',
+            }),
+        fullGate
+          ? criterion({
+              id: 'os-process-hard-crash-recovery',
+              mode: runMode,
+              passed: hardCrashExecuted,
+              summary: hardCrashExecuted
+                ? 'A killed child process safely terminalized uncertain work without replay or a stranded lease.'
+                : 'The process-boundary fault did not produce passed evidence.',
+              observed: {
+                hardCrashExecuted,
+                evidenceIds: faultEvidence
+                  .filter(item => item.kind === 'hard-crash')
+                  .map(item => item.id),
+              },
+              threshold: 'Killed-worker recovery fails closed without replay, duplicate completion, or a live lease.',
+              thresholdSource: 'Issue #489 required fix 3',
+              provenance: ['personaProcessBoundaryHarness', 'child-process persisted runtime snapshot'],
+            })
+          : notEvaluated({
+              id: 'os-process-hard-crash-recovery',
+              mode: runMode,
+              summary: 'The process-boundary crash is non-authoritative in smoke mode.',
+              threshold: 'Acceptance runs execute a real child-process kill and restart.',
+              thresholdSource: 'Issue #489 required fix 3',
+              provenance: ['run configuration'],
+              failureReason: 'Only the authoritative acceptance mode requires the OS-process scenario.',
+            }),
+      ];
+
+      return {
+        schemaVersion: PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+        runIdentity,
+        seed: options.seed,
+        days: options.days,
+        activities: workloadReconciliation.completed,
+        ingressLabels: [...new Set(workload.map(activity => activity.ingress.label))].sort(),
+        splitBrainCount,
+        strandedLeaseCount,
+        stuckPersonaCount,
+        learning: options.withLearning ? learning ? 'passed' : 'failed' : 'skipped',
+        runtimeEvidence: {
+          workspaceId,
+          personaId,
+          behaviorBindingId,
+          behaviorRevisionId,
+          persistedActivities: activities.length,
+          persistedMailboxItems: mailboxItems.length,
+          persistedLeaseAcquisitions: observedLeaseAcquisitions.size,
+          retainedLeaseRecords: leases.length,
+          observedFencingTokenCount: observedLeaseIdByFencingToken.size,
+          leaseAcquisitionProofSha256,
+          persistedDispatches: dispatches.length,
+          modelCalls,
+        },
+        workloadReconciliation,
+        faultEvidence,
+        learningEvidence,
+        criteria,
+        metrics,
+      } satisfies PersonaSoakSummary;
+      } finally {
+        await withWallClockTimeout(
+          dispatcher.quiesce(personaId),
+          SOAK_TEARDOWN_WALL_TIMEOUT_MS,
+          `Persona ${personaId} dispatcher teardown`,
+        );
+      }
+    });
+  } catch (error) {
+    const diagnostic = options.outputDirectory
+      ? await writePersonaSoakFailureDiagnostic({
+        outputDirectory: options.outputDirectory,
+        runId,
+        commitSha,
+        mode: runMode,
+        seed: options.seed,
+        days: options.days,
+        activitiesPerDay: options.activitiesPerDay,
+        learningEnabled: Boolean(options.withLearning),
+        startedAt: new Date(wallStartedAt).toISOString(),
+        phase: progressPhase,
+        day: progressDay,
+        lastActivityId: progressActivityId,
+        error,
+      })
+      : {
+        filename: undefined,
+        failedAt: new Date().toISOString(),
+        message: error instanceof Error ? error.message : String(error),
+      };
+    await appendProgress({
+      recordType: 'run_failed',
+      runId,
+      commitSha,
+      failedAt: diagnostic.failedAt,
+      phase: progressPhase,
+      day: progressDay,
+      lastActivityId: progressActivityId,
+      error: diagnostic.message,
+      diagnosticArtifact: diagnostic.filename,
+    });
+    throw error;
+  } finally {
+    _setPersonaRuntimeClockForTests(previousClock);
+    _setPersonaRuntimeEventLogConfigForTests(previousEventConfig);
+    restoreFeatures(features);
+  }
+
+  if (options.outputDirectory) {
+    await fs.mkdir(options.outputDirectory, { recursive: true });
+    const jsonlRecords = [
+      {
+        recordType: 'run',
+        schemaVersion: summary.schemaVersion,
+        runIdentity: summary.runIdentity,
+      },
+      ...summary.metrics.map(metric => ({ recordType: 'daily_metric', metric })),
+      {
+        recordType: 'workload_reconciliation',
+        reconciliation: summary.workloadReconciliation,
+      },
+      ...summary.faultEvidence.map(fault => ({ recordType: 'fault', fault })),
+      ...summary.criteria.map(criterionRecord => ({
+        recordType: 'criterion',
+        criterion: criterionRecord,
+      })),
+    ];
+    await fs.writeFile(
+      path.join(options.outputDirectory, 'persona-soak.json'),
+      `${stableJsonStringify(summary, 2)}\n`,
+    );
+    await fs.writeFile(
+      path.join(options.outputDirectory, 'persona-soak.jsonl'),
+      `${jsonlRecords.map(record => stableJsonStringify(record)).join('\n')}\n`,
+    );
+    await fs.writeFile(
+      path.join(options.outputDirectory, 'persona-soak.md'),
+      renderSoakReport(
+        summary.runIdentity,
+        summary.metrics,
+        summary.criteria,
+        summary.workloadReconciliation,
+      ),
+    );
+    await appendProgress({
+      recordType: 'run_completed',
+      runId,
+      commitSha,
+      completedAt: summary.runIdentity.endedAt,
+      daysCompleted: summary.metrics.length,
+      activitiesCompleted: summary.workloadReconciliation.completed,
+    });
+  }
+
+  const enforcementFailures = soakEnforcementFailures(summary);
+  if (options.gatingMode === 'enforce' && enforcementFailures.length > 0) {
+    throw new Error(
+      `Persona soak evidence gate failed:\n- ${enforcementFailures.join('\n- ')}`,
+    );
+  }
+  if (options.gatingMode === 'warn' && enforcementFailures.length > 0) {
+    process.stderr.write(
+      `[persona-soak] evidence warnings:\n- ${enforcementFailures.join('\n- ')}\n`,
+    );
+  }
+  return summary;
+}

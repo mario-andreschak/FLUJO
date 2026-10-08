@@ -3,8 +3,27 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { findBindings } from '@/utils/shared';
+import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import type { MCPNodeReference } from '@/backend/execution/flow/types';
+import type { Flow } from '@/shared/types/flow';
+import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('backend/utils/PromptRenderer');
+
+interface PromptNodeProperties {
+  promptTemplate?: unknown;
+  boundModel?: unknown;
+  excludeModelPrompt?: unknown;
+  excludeStartNodePrompt?: unknown;
+  excludeSystemPrompt?: unknown;
+}
+
+interface DescribedTool {
+  description?: string;
+  inputSchema?: {
+    properties?: Record<string, { description?: string }>;
+  };
+}
 
 export interface PromptRenderOptions {
   renderMode?: 'raw' | 'rendered'; // For tool pills: raw shows ${_-_-_server_-_-_name}, rendered shows descriptions
@@ -13,16 +32,72 @@ export interface PromptRenderOptions {
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
   excludeSystemPrompt?: boolean; // Override node's excludeSystemPrompt setting (hardcoded # GENERAL INFORMATION block)
   /**
+   * Immutable Flow definition supplied by a trusted execution boundary. Runtime
+   * prompt composition must read authored prompts and model bindings from the
+   * same snapshot as the graph being executed. Design-time callers omit this
+   * and continue to resolve the current stored Flow by ID.
+   */
+  flowSnapshot?: Flow;
+  /**
    * Called once per successfully resolved `${resource:...}` pill. The renderer
    * stays state-agnostic (no SharedState/EmitFn here); run-time callers
    * (ProcessNode.prep) forward this to the run's event stream as a
    * resource:read event, while design-time renders (the prompt-renderer API
    * route) pass nothing and stay silent.
    */
-  onResourceRead?: (info: { server: string; uri: string; mimeType?: string; size?: number }) => void;
+  onResourceRead?: (info: { server: string; uri: string; mimeType?: string; size?: number }) => void | Promise<void>;
 }
 
 export class PromptRenderer {
+  /**
+   * Resolve references in a chat message for the model-facing wire projection.
+   * The caller keeps the original serialized message in SharedState; this method
+   * only expands resources authorized for the current ProcessNode and non-secret
+   * globals. Tool references always remain literal and never invoke a tool.
+   * Unauthorized or unreadable references also remain literal.
+   */
+  async resolveChatMessageReferences(
+    message: string,
+    mcpNodes: MCPNodeReference[],
+    onResourceRead?: PromptRenderOptions['onResourceRead'],
+  ): Promise<string> {
+    const matches = findBindings(message);
+    let resolved = message;
+
+    if (matches.length > 0) {
+      let result = '';
+      let cursor = 0;
+      for (const match of matches) {
+        result += message.slice(cursor, match.index);
+        cursor = match.index + match.fullMatch.length;
+
+        if (match.kind === 'tool') {
+          // A tool pill is descriptive context only. It must never trigger a call.
+          result += match.fullMatch;
+          continue;
+        }
+
+        const authorized = mcpNodes.some((mcpNode) => {
+          if (mcpNode.properties.boundServer !== match.server) return false;
+          const enabled = mcpNode.properties.enabledResources;
+          return enabled === undefined || enabled === 'all' || enabled.includes(match.name);
+        });
+        result += authorized
+          ? await this.renderResourceBinding(
+              match.server,
+              match.name,
+              onResourceRead,
+              match.fullMatch,
+            )
+          : match.fullMatch;
+      }
+      result += message.slice(cursor);
+      resolved = result;
+    }
+
+    return await resolveNonSecretGlobalVars(resolved) as string;
+  }
+
   /**
    * Main method to render a complete prompt
    * 
@@ -43,7 +118,7 @@ export class PromptRenderer {
       excludeModelPrompt: nodeExcludeModelPrompt,
       excludeStartNodePrompt: nodeExcludeStartNodePrompt,
       excludeSystemPrompt: nodeExcludeSystemPrompt
-    } = await this.findNodePrompt(nodeId, flowId);
+    } = await this.findNodePrompt(nodeId, flowId, options?.flowSnapshot);
 
     // Use options to override node settings if provided
     const excludeModelPrompt = options?.excludeModelPrompt !== undefined
@@ -75,7 +150,7 @@ export class PromptRenderer {
 
     // 1. Start Node Prompt (if not excluded)
     if (!excludeStartNodePrompt) {
-      const startNodePrompt = await this.findStartNodePrompt(flowId);
+      const startNodePrompt = await this.findStartNodePrompt(flowId, options?.flowSnapshot);
       if (startNodePrompt) {
         log.debug('Adding start node prompt', { length: startNodePrompt.length });
         completePrompt += startNodePrompt + '\n\n';
@@ -84,7 +159,7 @@ export class PromptRenderer {
 
     // 2. Model Prompt (if not excluded)
     if (!excludeModelPrompt) {
-      const modelPromptResult = await this.findModelPrompt(nodeId, flowId);
+      const modelPromptResult = await this.findModelPrompt(nodeId, flowId, options?.flowSnapshot);
       if (modelPromptResult.prompt) {
         log.debug('Adding model prompt', { modelId: modelPromptResult.modelId, length: modelPromptResult.prompt.length });
         completePrompt += modelPromptResult.prompt + '\n\n';
@@ -153,11 +228,11 @@ export class PromptRenderer {
    * @param flowId - The ID of the flow
    * @returns The prompt template of the start node
    */
-  private async findStartNodePrompt(flowId: string): Promise<string> {
+  private async findStartNodePrompt(flowId: string, flowSnapshot?: Flow): Promise<string> {
     log.debug(`Finding start node prompt for flow ${flowId}`);
 
     // Get the flow
-    const flow = await flowService.getFlow(flowId);
+    const flow = flowSnapshot ?? await flowService.getFlow(flowId);
     if (!flow) {
       log.warn(`Flow not found: ${flowId}`);
       return '';
@@ -171,7 +246,10 @@ export class PromptRenderer {
     }
 
     // Return the prompt template
-    const promptTemplate = startNode.data.properties?.promptTemplate || '';
+    const properties = startNode.data.properties as PromptNodeProperties | undefined;
+    const promptTemplate = typeof properties?.promptTemplate === 'string'
+      ? properties.promptTemplate
+      : '';
     log.debug(`Found start node prompt`, {
       nodeId: startNode.id,
       length: promptTemplate.length
@@ -187,7 +265,7 @@ export class PromptRenderer {
    * @param flowId - The ID of the flow
    * @returns The prompt template of the model, the model ID, and the reasoning and function calling schemas
    */
-  private async findModelPrompt(nodeId: string, flowId: string): Promise<{
+  private async findModelPrompt(nodeId: string, flowId: string, flowSnapshot?: Flow): Promise<{
     prompt: string;
     modelId: string | null;
     reasoningSchema: string | null;
@@ -196,7 +274,7 @@ export class PromptRenderer {
     log.debug(`Finding model prompt for node ${nodeId} in flow ${flowId}`);
 
     // Get the flow
-    const flow = await flowService.getFlow(flowId);
+    const flow = flowSnapshot ?? await flowService.getFlow(flowId);
     if (!flow) {
       log.warn(`Flow not found: ${flowId}`);
       return { prompt: '', modelId: null, reasoningSchema: null, functionCallingSchema: null };
@@ -210,7 +288,8 @@ export class PromptRenderer {
     }
 
     // Check if the node has a bound model
-    const modelId = node.data.properties?.boundModel;
+    const properties = node.data.properties as PromptNodeProperties | undefined;
+    const modelId = typeof properties?.boundModel === 'string' ? properties.boundModel : undefined;
     if (!modelId) {
       log.debug(`No model bound to node ${nodeId}`);
       return { prompt: '', modelId: null, reasoningSchema: null, functionCallingSchema: null };
@@ -249,7 +328,7 @@ export class PromptRenderer {
    * @param flowId - The ID of the flow
    * @returns The node's prompt template and exclusion settings
    */
-  private async findNodePrompt(nodeId: string, flowId: string): Promise<{
+  private async findNodePrompt(nodeId: string, flowId: string, flowSnapshot?: Flow): Promise<{
     prompt: string;
     excludeModelPrompt: boolean;
     excludeStartNodePrompt: boolean;
@@ -258,7 +337,7 @@ export class PromptRenderer {
     log.debug(`Finding node prompt for node ${nodeId} in flow ${flowId}`);
 
     // Get the flow
-    const flow = await flowService.getFlow(flowId);
+    const flow = flowSnapshot ?? await flowService.getFlow(flowId);
     if (!flow) {
       log.warn(`Flow not found: ${flowId}`);
       return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false, excludeSystemPrompt: false };
@@ -272,10 +351,11 @@ export class PromptRenderer {
     }
 
     // Return the node's prompt template and exclusion settings
-    const promptTemplate = node.data.properties?.promptTemplate || '';
-    const excludeModelPrompt = node.data.properties?.excludeModelPrompt || false;
-    const excludeStartNodePrompt = node.data.properties?.excludeStartNodePrompt || false;
-    const excludeSystemPrompt = node.data.properties?.excludeSystemPrompt || false;
+    const properties = node.data.properties as PromptNodeProperties | undefined;
+    const promptTemplate = typeof properties?.promptTemplate === 'string' ? properties.promptTemplate : '';
+    const excludeModelPrompt = properties?.excludeModelPrompt === true;
+    const excludeStartNodePrompt = properties?.excludeStartNodePrompt === true;
+    const excludeSystemPrompt = properties?.excludeSystemPrompt === true;
 
     log.debug(`Found node prompt and settings`, {
       length: promptTemplate.length,
@@ -408,7 +488,8 @@ export class PromptRenderer {
   private async renderResourceBinding(
     serverName: string,
     uri: string,
-    onResourceRead?: PromptRenderOptions['onResourceRead']
+    onResourceRead?: PromptRenderOptions['onResourceRead'],
+    failureFallback?: string,
   ): Promise<string> {
     for (let retryCount = 0; retryCount < 3; retryCount++) {
       try {
@@ -418,7 +499,7 @@ export class PromptRenderer {
             const text = this.formatResourceContents(result.data);
             try {
               const first = (result.data as { contents?: Array<{ mimeType?: string; text?: string; blob?: string }> })?.contents?.[0];
-              onResourceRead?.({
+              await onResourceRead?.({
                 server: serverName,
                 uri,
                 mimeType: first?.mimeType,
@@ -426,30 +507,37 @@ export class PromptRenderer {
                   : typeof first?.blob === 'string' ? Math.floor(first.blob.length * 3 / 4)
                   : undefined,
               });
-            } catch { /* observers must never break rendering */ }
+            } catch (error) {
+              // Ordinary design-time observers remain best-effort.  A tagged
+              // execution-fence failure is a run-level stop and must not be
+              // swallowed after a remote resource read returns late.
+              if ((error as { code?: unknown })?.code === 'flow_execution_authority_lost') throw error;
+            }
             return `\n[Resource ${uri} (from ${serverName})]:\n${text}\n`;
           }
           log.warn(`Failed to read resource ${uri} from ${serverName}: ${result.error}`);
           // A genuine read error (bad uri, etc.) won't fix itself on retry — stop early.
-          return `[Resource ${uri} from ${serverName} could not be read: ${result.error || 'unknown error'}]`;
+          return failureFallback
+            ?? `[Resource ${uri} from ${serverName} could not be read: ${result.error || 'unknown error'}]`;
         }
         log.warn(`Server not connected for resource read: ${serverName}`);
       } catch (error) {
+        if ((error as { code?: unknown })?.code === 'flow_execution_authority_lost') throw error;
         log.warn(`Error resolving resource pill (attempt ${retryCount + 1}): ${uri}`, error);
       }
       await this.delay(Math.pow(2, retryCount + 1) * 100);
     }
-    return `[Resource ${uri} from ${serverName} is currently unavailable]`;
+    return failureFallback ?? `[Resource ${uri} from ${serverName} is currently unavailable]`;
   }
 
   /** Flatten an MCP ReadResourceResult into plain text for prompt inlining. */
-  private formatResourceContents(data: any): string {
-    const contents = data?.contents;
+  private formatResourceContents(data: ReadResourceResult): string {
+    const contents = data.contents;
     if (!Array.isArray(contents) || contents.length === 0) return '(empty resource)';
     return contents
-      .map((c: any) => {
-        if (typeof c.text === 'string') return c.text;
-        if (typeof c.blob === 'string') {
+      .map((c) => {
+        if ('text' in c && typeof c.text === 'string') return c.text;
+        if ('blob' in c && typeof c.blob === 'string') {
           // Don't inline base64, but keep the reference actionable: the model
           // can read the bytes back through MCP resources/read if it needs them.
           const kb = Math.round((c.blob.length * 3 / 4) / 1024);
@@ -463,7 +551,7 @@ export class PromptRenderer {
   /**
    * Format tool description in JSON format
    */
-  private formatToolDescriptionJSON(serverName: string, toolName: string, tool: any): string {
+  private formatToolDescriptionJSON(serverName: string, toolName: string, tool: DescribedTool): string {
     // Generate JSON format description with proper TypeScript typing
     const toolObj: {
       tool: string;
@@ -491,7 +579,7 @@ ${JSON.stringify(toolObj, null, 2)}]`;
   /**
    * Format tool description in XML format
    */
-  private formatToolDescriptionXML(serverName: string, toolName: string, tool: any): string {
+  private formatToolDescriptionXML(serverName: string, toolName: string, tool: DescribedTool): string {
     // Generate XML format description
     let xmlExample = `<${toolName}>\n`;
     
@@ -513,7 +601,7 @@ ${xmlExample}]`;
   }
 
   // Helper method to format tool parameters
-  private formatToolParameters(tool: any): string {
+  private formatToolParameters(tool: DescribedTool): string {
     if (!tool.inputSchema || !tool.inputSchema.properties) {
       return '';
     }

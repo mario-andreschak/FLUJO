@@ -16,11 +16,17 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (v: unknown) => v),
 }));
 
+const loadServerConfigsMock = jest.fn();
 jest.mock('@/backend/services/mcp/config', () => ({
-  loadServerConfigs: jest.fn(async () => [
-    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
-  ]),
+  loadServerConfigs: (...args: unknown[]) => loadServerConfigsMock(...args),
   saveConfig: jest.fn(async () => ({ success: true })),
+}));
+
+const stampTrustedTicketMock = jest.fn();
+jest.mock('@/backend/services/ticket', () => ({
+  ticketService: {
+    stampPersonaAttributionFromTrustedConversation: (...args: unknown[]) => stampTrustedTicketMock(...args),
+  },
 }));
 
 const callToolMock = jest.fn();
@@ -47,8 +53,14 @@ const makeClient = () => ({
 });
 
 beforeEach(() => {
+  loadServerConfigsMock.mockReset();
+  loadServerConfigsMock.mockResolvedValue([
+    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
+  ]);
   createNewClientMock.mockReset();
   callToolMock.mockReset();
+  stampTrustedTicketMock.mockReset();
+  stampTrustedTicketMock.mockResolvedValue(true);
   global.__mcp_clients?.clear();
 });
 
@@ -93,5 +105,45 @@ describe('MCPService.callTool', () => {
     expect(result.success).toBe(false);
     expect(callToolMock).toHaveBeenCalledTimes(1); // no retry -> no double execution
     expect(createNewClientMock).toHaveBeenCalledTimes(1); // only the seed -> no reconnect
+  });
+
+  it('stamps a created ticket only from the verified shipped model invocation', async () => {
+    loadServerConfigsMock.mockResolvedValue([{
+      name: 'renamed-control-plane',
+      transport: 'stdio',
+      command: 'node',
+      args: ['mcp-servers/flujo/dist/index.js'],
+      env: {},
+      disabled: false,
+      source: { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' },
+    }]);
+    createNewClientMock.mockReturnValue(makeClient());
+    const svc = new MCPService();
+    await svc.connectServer('renamed-control-plane');
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: JSON.stringify({ created: true, id: 'ticket-1' }) }],
+      },
+    });
+
+    await svc.callTool(
+      'renamed-control-plane',
+      'create_ticket_for_human',
+      { message: 'review', conversation_id: 'spoofed' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'model',
+      'conversation:conversation-current',
+      { conversationId: 'conversation-current' },
+    );
+
+    expect(callToolMock.mock.calls[0]?.[3]).toMatchObject({
+      message: 'review',
+      conversation_id: 'conversation-current',
+    });
+    expect(stampTrustedTicketMock).toHaveBeenCalledWith('ticket-1', 'conversation-current');
   });
 });

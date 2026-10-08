@@ -2,18 +2,46 @@
 // on end-user machines without TypeScript installed, and a next.config.ts would
 // make Next try to npm-install typescript there at runtime (which fails).
 import path from 'path';
+import { statSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   /* config options here */
+  // Production installs check application code; CI's root config still checks
+  // the test suite. Next otherwise checks tests before hiding their diagnostics.
+  typescript: {
+    tsconfigPath: 'tsconfig.build.json',
+  },
+  experimental: {
+    // This project needs a custom webpack hook for native modules/WASM, which
+    // makes Next opt out of its build worker by default. Keeping the whole
+    // production compilation in the CLI process pushes large builds past
+    // Node's normal heap limit. Re-enable the worker and Webpack's lower-memory
+    // graph representation instead of requiring users/CI to raise NODE_OPTIONS.
+    webpackBuildWorker: true,
+    webpackMemoryOptimizations: true,
+    // Every request crosses the local-origin proxy, which clones request bodies.
+    // Next otherwise clips that clone at 10 MiB and still forwards the partial
+    // body, leaving large chat-completion JSON unterminated. Normal follow-up
+    // turns are append-only, but edits, retries, and first sends can legitimately
+    // carry the full transcript, so retain enough headroom for those paths.
+    proxyClientMaxBodySize: '100mb',
+  },
   // Pin the workspace root to this project. Without this, a stray
   // package-lock.json in a parent dir (e.g. the user's home folder) makes
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
+  // Runtime workspace data can contain Windows junctions such as the legacy
+  // Content.IE5 cache link. It is never a deployable application dependency,
+  // so keep it out of Next's output traces.
+  outputFileTracingExcludes: {
+    '*': [WORKSPACES_TRACE_IGNORE],
+  },
   // CORS for `/api/*` is defense-in-depth secondary to the fail-closed origin
   // guard in `src/middleware.ts` (#142). We do NOT advertise a wildcard
   // `Access-Control-Allow-Origin: *` for the blanket `/api` surface: even if the
@@ -48,24 +76,43 @@ const nextConfig = {
       },
     ];
   },
-  typescript: {
-    // Ignore all TypeScript errors during build
-    ignoreBuildErrors: true,
-  },
-  eslint: {
-    // Ignore all ESLint errors during build
-    ignoreDuringBuilds: true,
-  },
   transpilePackages: [
     '@mui/material',
     '@mui/icons-material',
     '@mui/system',
     '@mui/utils',
     '@emotion/react',
-    '@emotion/styled'
+    '@emotion/styled',
+    'mcp-stdio-oauth',
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {
+    // Trusted build-time composition, not a runtime plugin loader. Ordinary
+    // builds keep the empty adapter and retain their existing behavior.
+    const adapterModule = process.env.FLUJO_EXECUTION_ADAPTER_MODULE;
+    if (adapterModule) {
+      if (!path.isAbsolute(adapterModule) || !statSync(adapterModule).isFile()) {
+        throw new Error('FLUJO_EXECUTION_ADAPTER_MODULE must name an existing absolute server module.');
+      }
+      config.resolve ??= {};
+      // Next's tsconfig paths plugin rewrites @/* before Webpack's alias hook.
+      // Match the rewritten source as well, including explicit .ts imports.
+      const defaultAdapterModule = path.join(__dirname, 'src/backend/execution/extensions/configuredAdapter');
+      config.resolve.alias = { ...config.resolve.alias,
+        '@/backend/execution/extensions/configuredAdapter$': adapterModule,
+        [`${defaultAdapterModule}$`]: adapterModule,
+        [`${defaultAdapterModule}.ts$`]: adapterModule,
+      };
+    }
+    // Failed/partial production compiles can leave multi-gigabyte filesystem
+    // caches (the workspace route fan-out once produced a 2.8 GB server cache).
+    // Loading that cache alone can exhaust Node's normal heap on the next build.
+    // Production builds favor deterministic bounded memory over incremental
+    // speed; development keeps Next's cache for fast HMR.
+    if (!dev) {
+      config.cache = false;
+    }
+
     // Only apply these settings in development mode
     if (dev && !isServer) {
       // Increase chunk loading timeout to 60 seconds (60000ms)

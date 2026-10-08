@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -27,7 +28,7 @@ const log = createLogger('app/api/flow/generate/route');
  * allowSubflows lets the generator author MULTI-LEVEL flows (issue #94): subflow nodes
  * that are themselves auto-generated, up to `maxDepth` levels deep.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -49,7 +50,11 @@ export async function POST(request: NextRequest) {
       modelId: body.modelId ?? '',
       maxRepairs: body.maxRepairs,
       allowInstall: body.allowInstall === true,
-      allowSubflows: body.allowSubflows === true,
+      // Multi-level generation is the safe/default authoring mode. A caller can
+      // still explicitly disable it; malformed truthy values do not enable it.
+      allowSubflows: body.allowSubflows === undefined
+        ? true
+        : body.allowSubflows === true,
       maxDepth: body.maxDepth,
     });
 
@@ -72,3 +77,5 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

@@ -6,7 +6,7 @@ import {
   clearPendingApprovals,
 } from '@/backend/execution/flow/toolApprovalRegistry';
 
-const mkCall = (id: string): OpenAI.ChatCompletionMessageToolCall => ({
+const mkCall = (id: string): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name: 'do_thing', arguments: '{}' },

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Filesystem MCP</title>
+  <defs>
+    <linearGradient id="bg" x1="7" y1="5" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6B84B"/>
+      <stop offset="1" stop-color="#D26C4B"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+  <path d="M10 23a6 6 0 0 1 6-6h12l5 6h15a6 6 0 0 1 6 6v17a6 6 0 0 1-6 6H16a6 6 0 0 1-6-6V23Z" fill="#FFF" fill-opacity=".22" stroke="#FFF" stroke-width="3"/>
+  <path d="M22 35h20M22 42h14" fill="none" stroke="#FFF" stroke-width="4" stroke-linecap="round"/>
+</svg>

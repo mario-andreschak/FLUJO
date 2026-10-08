@@ -11,6 +11,7 @@ import {
   detectOs,
   detectBrowser,
   sanitizePageUrl,
+  collectBugReportContext,
 } from '@/frontend/utils/bugReportContext';
 import { SAFE_BUG_CONTEXT_KEYS } from '@/shared/types/bugReport';
 
@@ -63,7 +64,6 @@ describe('buildBugReportContext', () => {
     const ctx = buildBugReportContext({
       appVersion: '3.21.0',
       installMode: 'git',
-      mcpServerNames: ['github', 'filesystem'],
       userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120 Safari/537.36',
       pageUrl: '/chat#thread',
       now: fixedNow,
@@ -73,7 +73,6 @@ describe('buildBugReportContext', () => {
       installMode: 'git',
       os: 'Windows',
       browser: 'Chrome',
-      mcpServerNames: ['github', 'filesystem'],
       pageUrl: '/chat#thread',
       timestamp: '2026-07-17T18:00:00.000Z',
     });
@@ -83,7 +82,6 @@ describe('buildBugReportContext', () => {
     const ctx = buildBugReportContext({ now: fixedNow });
     expect(ctx.appVersion).toBe('unknown');
     expect(ctx.installMode).toBe('unknown');
-    expect(ctx.mcpServerNames).toEqual([]);
     expect(ctx.pageUrl).toBe('unknown');
   });
 
@@ -92,7 +90,6 @@ describe('buildBugReportContext', () => {
       appVersion: '3.21.0',
       installMode: 'git',
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Firefox/121.0',
-      mcpServerNames: ['srv'],
       now: fixedNow,
       // Secrets that must NOT survive into the context:
       apiKey: 'sk-SECRET-123',
@@ -125,11 +122,27 @@ describe('buildBugReportContext', () => {
     ).toBe('/flows');
   });
 
-  it('filters non-string mcp server names', () => {
-    const ctx = buildBugReportContext({
-      mcpServerNames: ['ok', '', 42 as any, null as any, 'fine'],
-      now: fixedNow,
+});
+
+
+describe('collectBugReportContext', () => {
+  it('collects update metadata without requesting MCP servers', async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ currentVersion: '3.21.0', updateMode: 'git' }),
     });
-    expect(ctx.mcpServerNames).toEqual(['ok', 'fine']);
+    (global as any).fetch = fetchMock;
+
+    try {
+      const context = await collectBugReportContext();
+      expect(context.appVersion).toBe('3.21.0');
+      expect(context.installMode).toBe('git');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith('/api/update');
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/mcp/servers');
+    } finally {
+      (global as any).fetch = originalFetch;
+    }
   });
 });

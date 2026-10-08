@@ -15,7 +15,9 @@ export type McpSourceType = 'github' | 'registry' | 'marketplace' | 'remote';
 
 /**
  * Install instruction for one packaged MCP server.
- * - `github`: install from a GitHub repo (`ref` = owner/repo[@ref]).
+ * - `github`: install from a GitHub repo (`ref` = repository URL). A pinned
+ *   branch/tag/commit and monorepo working directory are carried separately so
+ *   they are never mistaken for part of the clone URL.
  * - `registry`: install from the public MCP registry (`ref` = registry name,
  *   e.g. "ai.keenable/web-search").
  * - `marketplace`: install a curated Spotlight/marketplace entry (`name`/`ref`).
@@ -23,8 +25,15 @@ export type McpSourceType = 'github' | 'registry' | 'marketplace' | 'remote';
  */
 export interface McpInstallOrigin {
   sourceType: McpSourceType;
-  /** Registry name / GitHub ref / marketplace id, as appropriate for the source. */
+  /** Registry name / GitHub repository URL / marketplace id, as appropriate. */
   ref?: string;
+  /** Git branch, tag, or commit for a GitHub source. */
+  gitRef?: string;
+  /** Repository-relative working directory for a GitHub monorepo server. */
+  subdirectory?: string;
+  /** Commands confirmed when the GitHub server was originally configured. */
+  installCommand?: string;
+  buildCommand?: string;
   /** http(s):// or ws(s):// endpoint for a `remote` server. */
   url?: string;
   /** Human-readable / marketplace display name. */
@@ -44,7 +53,23 @@ export interface EnvDeclaration {
   secretRef?: string;
   /** Host `${global:VAR}` name that supplies this value at runtime. */
   globalVar?: string;
+  /**
+   * A value containing one or more host-global references, for example
+   * `Bearer ${global:GITHUB_TOKEN}`. Unlike a literal config value, this is
+   * safe and portable because it contains references rather than their values.
+   */
+  globalTemplate?: string;
 }
 
 /** Declaration of ONE custom HTTP header (same shape/rules as EnvDeclaration). */
 export type HeaderDeclaration = EnvDeclaration;
+
+/**
+ * A portable override for one stdio argument that contains host-global
+ * references. The index preserves its position in the registry-provided
+ * argument list without packaging the command or unrelated arguments.
+ */
+export interface McpArgTemplate {
+  index: number;
+  value: string;
+}

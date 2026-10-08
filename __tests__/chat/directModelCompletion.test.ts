@@ -62,6 +62,26 @@ beforeEach(() => {
 });
 
 describe('model- routing on /v1/chat/completions', () => {
+  it('routes a policy alias directly and returns its selected-model receipt', async () => {
+    const completion = { ...completionFixture(), model: 'actual-provider-model', flujo_routing: {
+      policyId: 'p', selectedModelId: 'backup', attempts: [{ modelId: 'backup', outcome: 'completed' }],
+    } };
+    generateChatCompletion.mockResolvedValue({ success: true, completion });
+    const res = await processChatCompletion({ model: 'policy/prod', messages: [{ role: 'user', content: 'Hi' }] } as any, false, false, false);
+    expect(generateChatCompletion).toHaveBeenCalledWith(expect.objectContaining({ modelIdentifier: 'policy/prod' }));
+    expect(runFlowMock).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toEqual(completion);
+  });
+
+  it('includes policy routing metadata in emulated SSE', async () => {
+    generateChatCompletion.mockResolvedValue({ success: true, completion: {
+      ...completionFixture(), model: 'provider-backup', flujo_routing: { policyId: 'p', selectedModelId: 'b', attempts: [] },
+    } });
+    const res = await processChatCompletion({ model: 'policy/prod', messages: [], stream: true } as any, false, false, false);
+    const stream = await readAll(res);
+    expect(stream).toContain('"model":"provider-backup"');
+    expect(stream).toContain('"selectedModelId":"b"');
+  });
   it('routes a non-streaming model- request to ModelService and returns the completion', async () => {
     generateChatCompletion.mockResolvedValue({ success: true, completion: completionFixture() });
 
@@ -169,6 +189,22 @@ describe('model- routing on /v1/chat/completions', () => {
 });
 
 describe('flow- regression on /v1/chat/completions', () => {
+  it('uses unattended engine behavior only in worker mode', async () => {
+    const originalMode = process.env.FLUJO_WORKER_MODE;
+    try {
+      for (const [mode, source] of [['1', 'internal'], ['0', 'chat']]) {
+        process.env.FLUJO_WORKER_MODE = mode;
+        runFlowMock.mockResolvedValue({ flowNotFound: { name: 'Test' } });
+        await processChatCompletion({ model: 'flow-Test', messages: [{ role: 'user', content: 'Hi' }] } as any,
+          true, false, false, 'worker-conversation');
+        expect(runFlowMock).toHaveBeenLastCalledWith(expect.objectContaining({ source }));
+      }
+    } finally {
+      if (originalMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+      else process.env.FLUJO_WORKER_MODE = originalMode;
+    }
+  });
+
   it.each(['flow-Test', 'Test'])('still routes %s into runFlow with identical arguments', async (modelId) => {
     // flowNotFound is the cheapest complete runFlow result — the assertion is
     // about the arguments reaching runFlow, not about flow execution itself.
@@ -190,9 +226,47 @@ describe('flow- regression on /v1/chat/completions', () => {
       debug: true,
       continueDebug: false,
       userTurn: false,
-      source: 'api',
+      source: 'chat',
     });
     expect(generateChatCompletion).not.toHaveBeenCalled();
     expect(res.status).toBe(400); // flow_not_found behavior unchanged
+  });
+
+  it('appends only the new turn and does not echo the authoritative transcript', async () => {
+    runFlowMock.mockResolvedValue({
+      conversationId: 'conv-append',
+      messages: [
+        { id: 'user-old', role: 'user', content: 'old' },
+        { id: 'user-new', role: 'user', content: 'new' },
+        { id: 'assistant-new', role: 'assistant', content: 'answer' },
+      ],
+      outputText: 'answer',
+      toolCalls: undefined,
+      finalAction: 'FINAL_RESPONSE',
+      sharedState: { status: 'completed', pendingToolCalls: undefined },
+    });
+
+    const res = await processChatCompletion(
+      {
+        model: 'flow-Test',
+        messages: [{ id: 'user-new', role: 'user', content: 'new' }],
+        appendMessages: true,
+      } as any,
+      true,
+      false,
+      false,
+      'conv-append',
+      false,
+      true,
+    );
+
+    expect(runFlowMock).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-append',
+      messages: [{ id: 'user-new', role: 'user', content: 'new' }],
+      resumeAsNewTurn: true,
+    }));
+    const body = await res.json();
+    expect(body.status).toBe('completed');
+    expect(body).not.toHaveProperty('messages');
   });
 });

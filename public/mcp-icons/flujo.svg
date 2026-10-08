@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">FLUJO MCP</title>
+  <defs>
+    <linearGradient id="bg" x1="7" y1="5" x2="58" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B7CFF"/>
+      <stop offset="1" stop-color="#4D43D6"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="20" y1="16" x2="48" y2="50" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C6F7FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+  <circle cx="50" cy="13" r="15" fill="#32D5EA" opacity=".2"/>
+  <path d="M20 17h27v8H29v7h15v8H29v12h-9V17Z" fill="url(#glow)"/>
+</svg>

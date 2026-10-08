@@ -12,26 +12,42 @@ import type { NextRequest } from 'next/server';
 import JSZip from 'jszip';
 import { StorageKey } from '@/shared/types/storage';
 
+// Match the collection-backed fixture below at the authoring boundary as well.
+// Real filesystem locking/ownership is covered by personaOwnedFlows and its
+// process tests; this suite exercises the actual backup/restore route logic.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
+
 const loadItemMock = jest.fn();
 const saveItemMock = jest.fn();
 const saveCollectionItemMock = jest.fn();
+const loadCollectionItemMock = jest.fn();
 // Flows now live one-file-per-flow (db/flows/<id>.json); model that collection
 // in memory. Backup aggregates it back into the single array the zip expects,
 // and restore imports each flow through flowService (upsert).
 const flowFiles = new Map<string, unknown>();
+const conversationFiles = new Map<string, unknown>();
 
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => loadItemMock(...args),
   saveItem: (...args: unknown[]) => saveItemMock(...args),
   saveCollectionItem: (...args: unknown[]) => saveCollectionItemMock(...args),
-  loadCollectionItem: jest.fn(async (_c: string, id: string, fallback: unknown) =>
-    flowFiles.has(id) ? flowFiles.get(id) : fallback),
-  listCollectionItems: jest.fn(async () => Array.from(flowFiles.values())),
+  loadCollectionItem: (...args: unknown[]) => loadCollectionItemMock(...args),
+  listCollectionItems: jest.fn(async (collection: string) =>
+    Array.from((collection === 'conversations' ? conversationFiles : flowFiles).values())),
   // loadFlows backfills timestamps from file mtime (#108); model the stats API.
   listCollectionItemsWithStats: jest.fn(async () =>
     Array.from(flowFiles.values()).map((item) => ({ item, mtimeMs: 0 }))),
   deleteCollectionItem: jest.fn(async (_c: string, id: string) => { flowFiles.delete(id); }),
-  assertSafeCollectionId: jest.fn(),
+  assertSafeCollectionId: jest.fn((id: string) => {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('Unsafe collection item id');
+  }),
   migrateArrayFileToCollection: jest.fn(async () => 0),
 }));
 
@@ -48,6 +64,12 @@ const modelsData = [{ id: 'model-1', name: 'Test Model' }];
 // Flows now carry server-managed timestamps (#108); include them so loadFlows'
 // mtime backfill is a no-op and the backup zip round-trips exactly.
 const flowsData = [{ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000, updatedAt: 2000 }];
+const personaConversationMarkers = [
+  ['draft target', { personaTargetId: 'persona_draft' }],
+  ['archived evidence', { personaArchived: true }],
+  ['frozen instruction context', { personaInstructionContext: { personaId: 'persona_instruction' } }],
+  ['legacy Persona summary', { personaOwned: true }],
+] as const;
 
 const callBackup = (selections: unknown) => {
   const request = new Request('http://localhost:4200/api/backup', {
@@ -77,9 +99,15 @@ const callRestore = (zipBuffer: ArrayBuffer, selections: string[]) => {
 
 beforeEach(() => {
   saveItemMock.mockReset().mockResolvedValue(undefined);
-  saveCollectionItemMock.mockReset().mockImplementation(async (_c: string, id: string, val: unknown) => {
-    flowFiles.set(id, val);
+  saveCollectionItemMock.mockReset().mockImplementation(async (collection: string, id: string, val: unknown) => {
+    (collection === 'conversations' ? conversationFiles : flowFiles).set(id, val);
   });
+  loadCollectionItemMock.mockReset().mockImplementation(
+    async (collection: string, id: string, fallback: unknown) => {
+      const files = collection === 'conversations' ? conversationFiles : flowFiles;
+      return files.has(id) ? files.get(id) : fallback;
+    },
+  );
   loadItemMock.mockReset().mockImplementation(async (key: StorageKey) => {
     if (key === StorageKey.MODELS) return modelsData;
     return null; // flows are no longer read via loadItem
@@ -87,6 +115,9 @@ beforeEach(() => {
   // Seed the per-flow collection with the fixture flow(s).
   flowFiles.clear();
   for (const f of flowsData) flowFiles.set((f as { id: string }).id, f);
+  conversationFiles.clear();
+  conversationFiles.set('conversation-1', { conversationId: 'conversation-1', messages: [{ role: 'user', content: 'hello' }] });
+  conversationFiles.set('conversation-2', { conversationId: 'conversation-2', messages: [] });
   (global as unknown as { __flujo_flowsCache: unknown }).__flujo_flowsCache = null;
   (global as unknown as { __flujo_flowsMigration: unknown }).__flujo_flowsMigration = undefined;
 });
@@ -104,6 +135,10 @@ describe('backup route', () => {
 
     const zip = await JSZip.loadAsync(await response.arrayBuffer());
     expect(zip.file('backup-info.json')).toBeTruthy();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string'))).toMatchObject({
+      workspace: 'default-workspace',
+      workspaceLayoutVersion: 2,
+    });
 
     const models = zip.file(`storage/${StorageKey.MODELS}.json`);
     const flows = zip.file(`storage/${StorageKey.FLOWS}.json`);
@@ -142,6 +177,64 @@ describe('backup route', () => {
     expect(zip.file(`storage/${StorageKey.FLOWS}.json`)).toBeTruthy();
   });
 
+  it('backs up modern conversations alongside legacy history', async () => {
+    const legacyHistory = [{ id: 'legacy-chat' }];
+    loadItemMock.mockImplementation(async (key: StorageKey) =>
+      key === StorageKey.CHAT_HISTORY ? legacyHistory : null
+    );
+
+    const response = await callBackup(['chatHistory']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+
+    expect(JSON.parse(await zip.file('storage/history.json')!.async('string'))).toEqual(legacyHistory);
+    expect(JSON.parse(await zip.file('storage/conversations/conversation-1.json')!.async('string')))
+      .toEqual(conversationFiles.get('conversation-1'));
+    expect(zip.file('storage/conversations/conversation-2.json')).toBeTruthy();
+  });
+
+  it('requires strict loopback before backing up Persona-attributed chat history', async () => {
+    conversationFiles.set('persona-conversation', {
+      conversationId: 'persona-conversation',
+      messages: [],
+      personaAttribution: {
+        personaId: 'persona_backup',
+        activityId: 'activity_backup',
+        behaviorRevisionId: 'revision_backup',
+      },
+    });
+    const previousMode = process.env.FLUJO_EXPOSURE_MODE;
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    try {
+      const response = await callBackup(['chatHistory']);
+      expect(response.status).toBe(403);
+      expect(response.headers.get('Content-Type')).not.toBe('application/zip');
+    } finally {
+      if (previousMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+      else process.env.FLUJO_EXPOSURE_MODE = previousMode;
+    }
+  });
+
+  it.each(personaConversationMarkers)(
+    'requires strict loopback before backing up %s',
+    async (_label, marker) => {
+      conversationFiles.set('persona-conversation', {
+        conversationId: 'persona-conversation',
+        messages: [],
+        ...marker,
+      });
+      const previousMode = process.env.FLUJO_EXPOSURE_MODE;
+      process.env.FLUJO_EXPOSURE_MODE = 'network';
+      try {
+        const response = await callBackup(['chatHistory']);
+        expect(response.status).toBe(403);
+        expect(response.headers.get('Content-Type')).not.toBe('application/zip');
+      } finally {
+        if (previousMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+        else process.env.FLUJO_EXPOSURE_MODE = previousMode;
+      }
+    },
+  );
+
   it('rejects an empty selection list', async () => {
     expect((await callBackup([])).status).toBe(400);
     expect((await callBackup(undefined)).status).toBe(400);
@@ -170,6 +263,26 @@ describe('backup → restore round-trip', () => {
     );
   });
 
+  it('restores modern and legacy conversations independently and skips unsafe entries', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['chatHistory'] }));
+    zip.file('storage/history.json', JSON.stringify([{ id: 'legacy-chat' }]));
+    zip.file('storage/conversations/good-id.json', JSON.stringify({ conversationId: 'good-id', messages: [] }));
+    zip.file('storage/conversations/mismatch.json', JSON.stringify({ conversationId: 'other-id' }));
+    zip.file('storage/conversations/nested/bad.json', JSON.stringify({ conversationId: 'bad' }));
+    zip.file('storage/conversations/malformed.json', '{');
+
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['chatHistory']);
+    expect(response.status).toBe(200);
+    expect(saveItemMock).toHaveBeenCalledWith(StorageKey.CHAT_HISTORY, [{ id: 'legacy-chat' }]);
+    expect(saveCollectionItemMock).toHaveBeenCalledTimes(1);
+    expect(saveCollectionItemMock).toHaveBeenCalledWith(
+      'conversations',
+      'good-id',
+      { conversationId: 'good-id', messages: [] },
+    );
+  });
+
   it('skips keys missing from the zip without failing the restore', async () => {
     loadItemMock.mockImplementation(async (key: StorageKey) =>
       key === StorageKey.MODELS ? modelsData : null
@@ -182,5 +295,113 @@ describe('backup → restore round-trip', () => {
 
     expect(saveItemMock).toHaveBeenCalledTimes(1);
     expect(saveItemMock).toHaveBeenCalledWith(StorageKey.MODELS, modelsData);
+  });
+
+  it('rejects a later Persona snapshot before writing earlier selected entries', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['models', 'chatHistory'] }));
+    zip.file('storage/models.json', JSON.stringify([{ id: 'imported-model' }]));
+    zip.file('storage/conversations/normal-first.json', JSON.stringify({
+      conversationId: 'normal-first',
+      messages: [],
+    }));
+    zip.file('storage/conversations/persona-later.json', JSON.stringify({
+      conversationId: 'persona-later',
+      messages: [],
+      personaAttribution: {
+        personaId: 'persona_restore',
+        activityId: 'activity_restore',
+        behaviorRevisionId: 'revision_restore',
+      },
+    }));
+
+    const response = await callRestore(
+      await zip.generateAsync({ type: 'arraybuffer' }),
+      ['models', 'chatHistory'],
+    );
+    expect(response.status).toBe(400);
+    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(saveCollectionItemMock).not.toHaveBeenCalled();
+    expect(conversationFiles.has('normal-first')).toBe(false);
+  });
+
+  it.each(personaConversationMarkers)(
+    'rejects imported %s before writing any selected entry',
+    async (_label, marker) => {
+      const zip = new JSZip();
+      zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['models', 'chatHistory'] }));
+      zip.file('storage/models.json', JSON.stringify([{ id: 'must-not-write' }]));
+      zip.file('storage/conversations/persona-state.json', JSON.stringify({
+        conversationId: 'persona-state',
+        messages: [],
+        ...marker,
+      }));
+
+      const response = await callRestore(
+        await zip.generateAsync({ type: 'arraybuffer' }),
+        ['models', 'chatHistory'],
+      );
+      expect(response.status).toBe(400);
+      expect(saveItemMock).not.toHaveBeenCalled();
+      expect(saveCollectionItemMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses to overwrite an existing Persona conversation regardless of local access', async () => {
+    conversationFiles.set('protected-persona', {
+      conversationId: 'protected-persona',
+      messages: [{ role: 'assistant', content: 'authoritative' }],
+      personaAttribution: {
+        personaId: 'persona_existing',
+        activityId: 'activity_existing',
+        behaviorRevisionId: 'revision_existing',
+      },
+    });
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['models', 'chatHistory'] }));
+    zip.file('storage/models.json', JSON.stringify([{ id: 'must-not-write' }]));
+    zip.file('storage/conversations/protected-persona.json', JSON.stringify({
+      conversationId: 'protected-persona',
+      messages: [{ role: 'user', content: 'overwrite attempt' }],
+    }));
+
+    const response = await callRestore(
+      await zip.generateAsync({ type: 'arraybuffer' }),
+      ['models', 'chatHistory'],
+    );
+    expect(response.status).toBe(409);
+    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(saveCollectionItemMock).not.toHaveBeenCalled();
+    expect(conversationFiles.get('protected-persona')).toMatchObject({
+      personaAttribution: { personaId: 'persona_existing' },
+    });
+  });
+
+  it('rejects legacy history entries that collide with a modern Persona conversation', async () => {
+    conversationFiles.set('protected-persona', {
+      conversationId: 'protected-persona',
+      messages: [{ role: 'assistant', content: 'authoritative' }],
+      personaAttribution: {
+        personaId: 'persona_existing',
+        activityId: 'activity_existing',
+        behaviorRevisionId: 'revision_existing',
+      },
+    });
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['models', 'chatHistory'] }));
+    zip.file('storage/models.json', JSON.stringify([{ id: 'must-not-write' }]));
+    zip.file('storage/history.json', JSON.stringify([{
+      id: 'protected-persona',
+      messages: [{ role: 'user', content: 'legacy overwrite attempt' }],
+    }]));
+
+    const response = await callRestore(
+      await zip.generateAsync({ type: 'arraybuffer' }),
+      ['models', 'chatHistory'],
+    );
+
+    expect(response.status).toBe(409);
+    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(saveCollectionItemMock).not.toHaveBeenCalled();
   });
 });

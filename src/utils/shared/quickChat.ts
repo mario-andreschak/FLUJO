@@ -36,14 +36,21 @@ export interface QuickChatServerSelection {
 }
 
 export interface QuickChatSelection {
-  /** The conversation this quick chat belongs to (namespaces the flow id). */
-  conversationId: string;
+  /** The conversation this quick chat belongs to (namespaces an ephemeral flow id). */
+  conversationId?: string;
   /** Model id (preferred) — also resolvable by displayName/name. */
   modelId: string;
   /** MCP servers / tool subsets to make available to the chat. */
   servers?: QuickChatServerSelection[];
   /** Optional system-level prompt (lands on the Start node). */
   systemPrompt?: string;
+}
+
+export interface QuickChatFlowIdentity {
+  /** A normal persisted-flow UUID (never a quickchat-* snapshot id). */
+  flowId: string;
+  /** User-facing saved flow name. */
+  flowName: string;
 }
 
 export interface QuickChatSynthesisResult {
@@ -92,10 +99,14 @@ export function synthesizeQuickChatFlow(
     models: NonNullable<CompileContext['models']>;
     servers: Array<{ name: string }>;
     serverTools?: Record<string, string[]>;
-  }
+  },
+  identity?: QuickChatFlowIdentity
 ): QuickChatSynthesisResult {
-  if (!selection?.conversationId) {
+  if (!identity && !selection?.conversationId) {
     return { flow: null, error: 'A conversationId is required.' };
+  }
+  if (identity && (!identity.flowId || !identity.flowName)) {
+    return { flow: null, error: 'A flow id and name are required.' };
   }
   if (!selection.modelId || typeof selection.modelId !== 'string') {
     return { flow: null, error: 'A model is required for a quick chat.' };
@@ -136,7 +147,7 @@ export function synthesizeQuickChatFlow(
   }
 
   const spec: FlowSpec = {
-    name: 'Quick Chat',
+    name: identity?.flowName ?? 'Quick Chat',
     nodes: [
       {
         key: 'start',
@@ -173,9 +184,10 @@ export function synthesizeQuickChatFlow(
     return { flow: null, error: reason || 'Could not synthesize a quick-chat flow.' };
   }
 
-  // Namespace the id so the engine's compiled-flow cache can't collide with a
-  // stored flow, and give it a stable, readable name.
-  compiled.flow.id = quickChatFlowId(selection.conversationId);
-  compiled.flow.name = 'Quick Chat';
+  // Quick Chat keeps its namespaced snapshot identity. Saved-agent callers
+  // supply a normal UUID + user-facing name while reusing the exact same graph
+  // construction and model/MCP validation path.
+  compiled.flow.id = identity?.flowId ?? quickChatFlowId(selection.conversationId!);
+  compiled.flow.name = identity?.flowName ?? 'Quick Chat';
   return { flow: compiled.flow };
 }

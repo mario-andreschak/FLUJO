@@ -18,6 +18,11 @@ jest.mock('@/backend/services/model', () => ({
   modelService: { getModel: jest.fn(async () => null) },
 }));
 
+const resolveNonSecretGlobalVarsMock = jest.fn(async (value: unknown) => value);
+jest.mock('@/backend/utils/resolveGlobalVars', () => ({
+  resolveNonSecretGlobalVars: (value: unknown) => resolveNonSecretGlobalVarsMock(value),
+}));
+
 const getServerStatusMock = jest.fn();
 const readResourceMock = jest.fn();
 const listServerToolsMock = jest.fn();
@@ -57,6 +62,8 @@ beforeEach(() => {
   readResourceMock.mockReset();
   getServerStatusMock.mockReset();
   listServerToolsMock.mockReset();
+  resolveNonSecretGlobalVarsMock.mockReset();
+  resolveNonSecretGlobalVarsMock.mockImplementation(async (value: unknown) => value);
   getServerStatusMock.mockResolvedValue({ status: 'connected' });
   listServerToolsMock.mockResolvedValue({ tools: [] });
 });
@@ -150,6 +157,59 @@ describe('PromptRenderer binding resolution', () => {
     expect(result).toContain('image/png');
     expect(result).toContain('file:///img.png'); // the model can read it back via MCP
     expect(result).toContain('resources/read');
+  });
+});
+
+describe('PromptRenderer chat reference projection (#319)', () => {
+  const mcpNode = (enabledResources?: string[] | 'all') => ({
+    id: 'mcp-1',
+    properties: {
+      boundServer: 'files',
+      enabledTools: ['read'],
+      enabledResources,
+    },
+  });
+
+  it('resolves an authorized resource and non-secret globals while leaving tool pills literal', async () => {
+    readResourceMock.mockResolvedValue({
+      success: true,
+      data: { contents: [{ uri: 'file:///a.txt', text: 'FILE BODY' }] },
+    });
+    resolveNonSecretGlobalVarsMock.mockImplementation(async (value: unknown) =>
+      String(value).replace('${global:PUBLIC}', 'public-value')
+    );
+
+    const result = await promptRenderer.resolveChatMessageReferences(
+      'Use ${tool:files__read}, ${resource:files__file:///a.txt}, and ${global:PUBLIC}',
+      [mcpNode(['file:///a.txt'])],
+    );
+
+    expect(result).toContain('${tool:files__read}');
+    expect(result).toContain('FILE BODY');
+    expect(result).toContain('public-value');
+    expect(readResourceMock).toHaveBeenCalledWith('files', 'file:///a.txt');
+  });
+
+  it('leaves unauthorized, disabled, and unreadable resources literal', async () => {
+    readResourceMock.mockResolvedValue({ success: false, error: 'not found' });
+
+    const unauthorized = await promptRenderer.resolveChatMessageReferences(
+      '${resource:other__file:///a.txt}',
+      [mcpNode('all')],
+    );
+    const disabled = await promptRenderer.resolveChatMessageReferences(
+      '${resource:files__file:///disabled.txt}',
+      [mcpNode([])],
+    );
+    const unreadable = await promptRenderer.resolveChatMessageReferences(
+      '${resource:files__file:///missing.txt}',
+      [mcpNode(['file:///missing.txt'])],
+    );
+
+    expect(unauthorized).toBe('${resource:other__file:///a.txt}');
+    expect(disabled).toBe('${resource:files__file:///disabled.txt}');
+    expect(unreadable).toBe('${resource:files__file:///missing.txt}');
+    expect(readResourceMock).toHaveBeenCalledTimes(1);
   });
 });
 

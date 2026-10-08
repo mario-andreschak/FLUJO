@@ -26,6 +26,21 @@
  */
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 
+jest.mock('@/backend/utils/resolveDynamicReferences', () => ({
+  resolvePromptDynamicReferences: jest.fn(async (value: unknown) => value),
+  resolvePresetArguments: jest.fn(async (value: unknown) => value),
+  applyPresetArguments: jest.fn(async (value: unknown) => value),
+}));
+
+const migrateMcpServerReferences = jest.fn(async () => ({
+  success: true,
+  migratedFlows: 0,
+  migratedReferences: 0,
+}));
+jest.mock('@/backend/services/flow', () => ({
+  flowService: { migrateMcpServerReferences },
+}));
+
 // In-memory storage so the backend service never touches disk.
 const store: Record<string, unknown> = {};
 jest.mock('@/utils/storage/backend', () => ({
@@ -59,7 +74,6 @@ const serverFixture = (over: Partial<MCPStdioConfig> = {}): MCPServerConfig => (
   args: ['hello'],
   env: {},
   disabled: true,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',
@@ -68,21 +82,14 @@ const serverFixture = (over: Partial<MCPStdioConfig> = {}): MCPServerConfig => (
 
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
+  migrateMcpServerReferences.mockClear();
 });
 
-// The list always contains FLUJO's synthetic built-in server; these tests are
-// about the USER-configured servers, so assertions filter it out.
-const userServers = (list: MCPServerConfig[]) => list.filter((c) => !c.builtIn);
-
 describe('MCP REST API', () => {
-  it('GET /api/mcp/servers returns only the built-in servers initially', async () => {
+  it('GET /api/mcp/servers returns the persisted server list', async () => {
     const res = await listServers();
     expect(res.status).toBe(200);
-    const list = (await res.json()) as MCPServerConfig[];
-    expect(userServers(list)).toEqual([]);
-    // Issue #170: FLUJO now ships three built-in servers.
-    expect(list.map((c) => c.name)).toEqual(['flujo', 'filesystem', 'bash']);
-    expect(list.every((c) => c.builtIn)).toBe(true);
+    expect(await res.json()).toEqual([]);
   });
 
   it('POST /api/mcp/servers creates a server (201) and returns the config', async () => {
@@ -119,17 +126,17 @@ describe('MCP REST API', () => {
   it('PUT /api/mcp/servers/{name} merges a partial body onto the stored config', async () => {
     await createServer(req(serverFixture()));
 
-    const res = await updateServer(req({ autoApprove: ['toolX'] }), ctx('srv1'));
+    const res = await updateServer(req({ folder: 'updated' }), ctx('srv1'));
     expect(res.status).toBe(200);
     const updated = await res.json();
-    expect(updated.autoApprove).toEqual(['toolX']);
+    expect(updated.folder).toBe('updated');
     // Fields not present in the partial body are preserved.
     expect(updated.command).toBe('echo');
     expect(updated.disabled).toBe(true);
   });
 
   it('PUT /api/mcp/servers/{name} returns 404 for an unknown server', async () => {
-    const res = await updateServer(req({ autoApprove: [] }), ctx('ghost'));
+    const res = await updateServer(req({ disabled: false }), ctx('ghost'));
     expect(res.status).toBe(404);
   });
 
@@ -141,7 +148,7 @@ describe('MCP REST API', () => {
     await expect(del.json()).resolves.toEqual({ success: true });
 
     const afterList = (await (await listServers()).json()) as MCPServerConfig[];
-    expect(userServers(afterList)).toEqual([]);
+    expect(afterList).toEqual([]);
 
     const delAgain = await deleteServer(req(), ctx('srv1'));
     expect(delAgain.status).toBe(404);
@@ -176,40 +183,21 @@ describe('MCP REST API', () => {
     await expect(res.json()).resolves.toMatchObject({ success: false });
   });
 
-  // --- Built-in internal server: present, protected, reserved name ---
+  // --- Former shipped names use the ordinary CRUD lifecycle ---
 
-  it('protects the built-in server: no create under its name, no edit, no delete', async () => {
-    // POST under the reserved name collides with the synthetic entry -> 409.
+  it('creates, edits, renames, and deletes a server named flujo like any other server', async () => {
     const create = await createServer(req(serverFixture({ name: 'flujo' })));
-    expect(create.status).toBe(409);
+    expect(create.status).toBe(201);
 
-    // Editing non-toggle fields is refused as forbidden, and so is DELETE.
-    const put = await updateServer(req({ command: 'evil' }), ctx('flujo'));
-    expect(put.status).toBe(403);
-    const del = await deleteServer(req(), ctx('flujo'));
-    expect(del.status).toBe(403);
+    const put = await updateServer(req({ command: 'custom-flujo' }), ctx('flujo'));
+    expect(put.status).toBe(200);
+    await expect(put.json()).resolves.toMatchObject({ name: 'flujo', command: 'custom-flujo' });
 
-    // Issue #170: toggling only the `disabled` flag IS allowed (200).
-    const toggle = await updateServer(req({ disabled: true }), ctx('flujo'));
-    expect(toggle.status).toBe(200);
+    const rename = await updateServer(req({ name: 'renamed-flujo' }), ctx('flujo'));
+    expect(rename.status).toBe(200);
 
-    // Renaming another server onto the reserved name is a name collision.
-    await createServer(req(serverFixture({ name: 'victim' })));
-    const rename = await updateServer(req({ name: 'flujo' }), ctx('victim'));
-    expect(rename.status).toBe(409);
-  });
-
-  it('reports the built-in server as connected and lists its tools without a process', async () => {
-    const status = await getStatus(req(), ctx('flujo'));
-    expect(status.status).toBe(200);
-    await expect(status.json()).resolves.toMatchObject({ status: 'connected' });
-
-    const tools = await getTools(req(), ctx('flujo'));
-    expect(tools.status).toBe(200);
-    const body = await tools.json();
-    expect(body.error).toBeUndefined();
-    const names = (body.tools as Array<{ name: string }>).map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(['create_flow', 'execute_flow', 'list_mcp_servers']));
+    const del = await deleteServer(req(), ctx('renamed-flujo'));
+    expect(del.status).toBe(200);
   });
 
   // --- Name handling: the reason for the /servers nesting + validation ---
@@ -258,13 +246,14 @@ describe('MCP REST API', () => {
 
     // Exactly one user server remains, under the new name — the rename did not duplicate it.
     const list = await (await listServers()).json();
-    expect(userServers(list as MCPServerConfig[]).map((c) => c.name)).toEqual(['new']);
+    expect((list as MCPServerConfig[]).map((c) => c.name)).toEqual(['new']);
 
     // The old name is gone; the new name reads back the carried-over config.
     expect((await getServer(req(), ctx('old'))).status).toBe(404);
     const renamed = await getServer(req(), ctx('new'));
     expect(renamed.status).toBe(200);
     await expect(renamed.json()).resolves.toMatchObject({ name: 'new', command: 'echo' });
+    expect(migrateMcpServerReferences).toHaveBeenCalledWith('old', 'new');
   });
 
   it('PUT rejects a rename onto an existing name (409) and keeps both servers intact', async () => {
@@ -276,7 +265,7 @@ describe('MCP REST API', () => {
 
     // Neither server was lost or clobbered.
     const list = await (await listServers()).json();
-    expect(userServers(list as MCPServerConfig[]).map((c) => c.name).sort()).toEqual(['a', 'b']);
+    expect((list as MCPServerConfig[]).map((c) => c.name).sort()).toEqual(['a', 'b']);
     await expect(
       getServer(req(), ctx('b')).then((r) => r.json())
     ).resolves.toMatchObject({ command: 'bbb' });

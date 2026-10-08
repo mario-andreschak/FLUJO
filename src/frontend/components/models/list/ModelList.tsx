@@ -24,17 +24,23 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ModelCard from './ModelCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, CardGroup } from '@/utils/shared/cardGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import {
+  groupByFolder,
+  groupItems,
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+} from '@/utils/shared/cardGrouping';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   ModelSortOption,
-  MODEL_SORT_LABELS,
   deriveModelSortGroup,
   sortModelsFavoritesFirst,
 } from '@/utils/shared/modelGrouping';
 import { Model } from '@/shared/types';
 import { ModelResult } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 const log = createLogger('frontend/components/models/list/ModelList');
 
@@ -44,6 +50,8 @@ interface ModelListProps {
   onAdd: () => void;
   onUpdate: (model: Model) => Promise<ModelResult>;
   onDelete: (id: string) => Promise<void>;
+  /** Open the saved-agent conversion dialog for this model. */
+  onConvertToAgent?: (modelId: string) => void;
   /** Existing folders on the Models surface, for the "Move to folder…" picker. */
   folders?: string[];
   /** Assign/clear a model's organizing folder (#80). When omitted the action is hidden. */
@@ -55,16 +63,27 @@ interface ModelListProps {
 /** How cards are grouped into collapsible sections: none, by user folder, or by the active sort key. */
 type GroupMode = 'none' | 'folder' | 'sort';
 
-export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folders = [], onSetFolder, onToggleFavorite }: ModelListProps) => {
+export const ModelList = ({
+    models,
+    isLoading,
+    onAdd,
+    onUpdate,
+    onDelete,
+    onConvertToAgent,
+    folders = [],
+    onSetFolder,
+    onToggleFavorite,
+}: ModelListProps) => {
+    const { t, tp } = useI18n();
     const theme = useTheme();
     // Persisted view preferences (#93): retained across navigation.
-    const [sortOption, setSortOption] = useUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
-    const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:models:group', 'none');
+    const [sortOption, setSortOption] = useWorkspaceUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
+    const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:models:group', DEFAULT_CARD_GROUP_MODE);
     const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
     const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
     // Keys of the sections the user has collapsed; everything defaults to expanded.
     // Persisted as a string[] and re-derived into a Set for O(1) lookups.
-    const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:models:collapsed', []);
+    const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:models:collapsed', []);
     const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
     const handleSortChange = (option: ModelSortOption) => {
@@ -97,13 +116,32 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
     // Grouped view of the sorted models, driven by the active group mode.
     const groups = useMemo<CardGroup<Model>[]>(() => {
         if (groupMode === 'folder') {
-            return groupByFolder(sortedModels, (m) => m.folder);
+            return groupByFolder(sortedModels, (m) => m.folder, t('models.group.ungrouped'));
         }
         if (groupMode === 'sort') {
-            return groupItems(sortedModels, (m) => deriveModelSortGroup(m, sortOption));
+            return groupItems(sortedModels, (m) => {
+                const group = deriveModelSortGroup(m, sortOption);
+                const contextKeys: Record<string, TranslationKey> = {
+                    'ctx:unknown': 'models.group.unknownContext',
+                    'ctx:<=8k': 'models.group.context8k',
+                    'ctx:8k-32k': 'models.group.context32k',
+                    'ctx:32k-128k': 'models.group.context128k',
+                    'ctx:128k-1m': 'models.group.context1m',
+                    'ctx:>1m': 'models.group.contextOver1m',
+                };
+                return contextKeys[group.key] ? { ...group, label: t(contextKeys[group.key]) } : group;
+            });
         }
         return [];
-    }, [groupMode, sortedModels, sortOption]);
+    }, [groupMode, sortedModels, sortOption, t]);
+
+    const sortLabelKeys: Record<ModelSortOption, TranslationKey> = {
+        'name-asc': 'models.sort.nameAsc',
+        'name-desc': 'models.sort.nameDesc',
+        provider: 'models.sort.provider',
+        'context-desc': 'models.sort.contextLargest',
+        'context-asc': 'models.sort.contextSmallest',
+    };
 
     if (isLoading) {
         return (
@@ -115,13 +153,14 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
 
     // Render a grid of model cards for a given subset (whole list or one group).
     const renderModelGrid = (items: Model[]) => (
-        <Grid container spacing={2}>
+        <Grid container spacing={2.5}>
             {items.map((model) => (
                 <Grid item xs={12} sm={6} md={4} key={model.id}>
                     <ModelCard
                         model={model}
                         onEdit={() => handleUpdate(model)}
                         onDelete={() => onDelete(model.id)}
+                        onConvertToAgent={onConvertToAgent}
                         folder={model.folder}
                         folders={folders}
                         onSetFolder={onSetFolder ? (folder) => onSetFolder(model.id, folder) : undefined}
@@ -135,12 +174,16 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
     return (
         <Box>
             {/* Sort + group toolbar, mirroring the Flow dashboard */}
-            <Paper elevation={1} sx={{ mb: 2, p: 1 }}>
+            <Paper
+                elevation={0}
+                variant="outlined"
+                sx={{ mb: 2.5, p: 1.1, borderRadius: 3, bgcolor: 'transparent' }}
+            >
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
                     <Typography variant="body2" color="textSecondary">
-                        {models.length} model{models.length === 1 ? '' : 's'}
+                        {tp('models.connectionCount', models.length)}
                         <Box component="span" sx={{ mx: 1, opacity: 0.5 }}>·</Box>
-                        Sorted by: {MODEL_SORT_LABELS[sortOption]}
+                        {t('models.sortedBy', { sort: t(sortLabelKeys[sortOption]) })}
                     </Typography>
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                         <IconButton
@@ -148,7 +191,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
                             onClick={(e) => setGroupAnchorEl(e.currentTarget)}
                             color={groupMode !== 'none' ? 'primary' : 'default'}
                             sx={{ border: `1px solid ${theme.palette.divider}`, backgroundColor: theme.palette.background.default }}
-                            title="Group cards"
+                            title={t('models.groupCards')}
                         >
                             <LayersIcon fontSize="small" />
                         </IconButton>
@@ -156,7 +199,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
                             size="small"
                             onClick={(e) => setSortAnchorEl(e.currentTarget)}
                             sx={{ border: `1px solid ${theme.palette.divider}`, backgroundColor: theme.palette.background.default }}
-                            title="Sort models"
+                            title={t('models.sortModels')}
                         >
                             <SortIcon fontSize="small" />
                         </IconButton>
@@ -165,15 +208,38 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
             </Paper>
 
             {!models || models.length === 0 ? (
-                <Box textAlign="center" py={4}>
-                    No models found
-                </Box>
+                <Paper
+                    variant="outlined"
+                    sx={{
+                        display: 'grid',
+                        minHeight: 240,
+                        p: 4,
+                        placeItems: 'center',
+                        textAlign: 'center',
+                        borderStyle: 'dashed',
+                        bgcolor: 'transparent',
+                    }}
+                >
+                    <Box>
+                        <MemoryIcon sx={{ mb: 1.5, fontSize: 38, color: 'primary.light' }} />
+                        <Typography variant="h6">{t('models.emptyTitle')}</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.7, mb: 2 }}>
+                            {t('models.emptyDescription')}
+                        </Typography>
+                        <Box>
+                            <IconButton color="primary" onClick={onAdd} title={t('models.connectAi')}>
+                                <MemoryIcon />
+                            </IconButton>
+                        </Box>
+                    </Box>
+                </Paper>
             ) : groupMode === 'none' ? (
                 renderModelGrid(sortedModels)
             ) : (
                 groups.map((group) => (
                     <CollapsibleCardSection
                         key={group.key}
+                        groupKey={group.key}
                         label={group.label}
                         count={group.items.length}
                         expanded={!collapsedKeys.has(group.key)}
@@ -195,15 +261,15 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
             >
                 <MenuItem selected={groupMode === 'none'} onClick={() => handleGroupChange('none')}>
                     <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText primary="No grouping" />
+                    <ListItemText primary={t('models.group.none')} />
                 </MenuItem>
                 <MenuItem selected={groupMode === 'folder'} onClick={() => handleGroupChange('folder')}>
                     <ListItemIcon><FolderOutlinedIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText primary="By folder" />
+                    <ListItemText primary={t('models.group.folder')} />
                 </MenuItem>
                 <MenuItem selected={groupMode === 'sort'} onClick={() => handleGroupChange('sort')}>
                     <ListItemIcon><LayersIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText primary="By sort setting" />
+                    <ListItemText primary={t('models.group.sort')} />
                 </MenuItem>
             </Menu>
 
@@ -217,25 +283,25 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
             >
                 <MenuItem selected={sortOption === 'name-asc'} onClick={() => handleSortChange('name-asc')}>
                     <ListItemIcon><SortByAlphaIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText primary="Name (A-Z)" />
+                    <ListItemText primary={t('models.sort.nameAsc')} />
                 </MenuItem>
                 <MenuItem selected={sortOption === 'name-desc'} onClick={() => handleSortChange('name-desc')}>
                     <ListItemIcon><SortByAlphaIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} /></ListItemIcon>
-                    <ListItemText primary="Name (Z-A)" />
+                    <ListItemText primary={t('models.sort.nameDesc')} />
                 </MenuItem>
                 <Divider />
                 <MenuItem selected={sortOption === 'provider'} onClick={() => handleSortChange('provider')}>
                     <ListItemIcon><CategoryIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText primary="Provider" />
+                    <ListItemText primary={t('models.sort.provider')} />
                 </MenuItem>
                 <Divider />
                 <MenuItem selected={sortOption === 'context-desc'} onClick={() => handleSortChange('context-desc')}>
                     <ListItemIcon><MemoryIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText primary="Context (largest)" />
+                    <ListItemText primary={t('models.sort.contextLargest')} />
                 </MenuItem>
                 <MenuItem selected={sortOption === 'context-asc'} onClick={() => handleSortChange('context-asc')}>
                     <ListItemIcon><MemoryIcon fontSize="small" sx={{ transform: 'scaleY(-1)' }} /></ListItemIcon>
-                    <ListItemText primary="Context (smallest)" />
+                    <ListItemText primary={t('models.sort.contextSmallest')} />
                 </MenuItem>
             </Menu>
         </Box>

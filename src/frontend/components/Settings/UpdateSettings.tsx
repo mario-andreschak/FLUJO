@@ -13,11 +13,13 @@ import {
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Settings/UpdateSettings');
 
 export default function UpdateSettings() {
   const { settings, updateSettings } = useStorage();
+  const { t, tp } = useI18n();
 
   const updateConfig = settings?.update || { checkOnStartup: false };
 
@@ -30,7 +32,9 @@ export default function UpdateSettings() {
   // (self-update unavailable — the user pulls a new image / reinstalls the package).
   // Null until the first check; the in-app "Update now" action only applies to 'git'.
   const [updateMode, setUpdateMode] = useState<string | null>(null);
-  const canSelfUpdate = updateMode === null || updateMode === 'git';
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [source, setSource] = useState<{ ref: string; revision: string } | null>(null);
+  const canSelfUpdate = updateMode === 'git' && updateAvailable;
 
   const handleToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     updateSettings({
@@ -44,6 +48,7 @@ export default function UpdateSettings() {
 
   const handleCheck = async () => {
     setChecking(true);
+    setUpdateAvailable(false);
     setStatus(null);
     try {
       const res = await fetch('/api/update');
@@ -51,29 +56,45 @@ export default function UpdateSettings() {
       if (typeof data.updateMode === 'string') {
         setUpdateMode(data.updateMode);
       }
+      setSource(data.sourceRef && data.revision ? { ref: data.sourceRef, revision: data.revision.slice(0, 12) } : null);
       if (!res.ok || data.success === false) {
-        setStatus({ severity: 'error', message: data.error || 'Failed to check for updates.' });
+        setStatus({ severity: 'error', message: data.error || t('settings.update.checkFailed') });
+      } else if (data.updateMode === 'pinned') {
+        setStatus({ severity: 'info', message: t('settings.update.pinned') });
+      } else if (data.updateMode === 'blocked' || data.canApply === false && data.isGitRepo) {
+        setStatus({ severity: 'warning', message: data.message || t('settings.update.checkFailed') });
       } else if (data.isGitRepo === false) {
-        setStatus({ severity: 'info', message: data.message });
+        const mode = data.updateMode as string | undefined;
+        setStatus({
+          severity: 'info',
+          message: t(mode === 'container'
+            ? 'settings.update.container'
+            : mode === 'npm'
+              ? 'settings.update.npm'
+              : 'settings.update.notGit'),
+        });
       } else if (data.updateAvailable) {
+        setUpdateAvailable(true);
         setStatus({
           severity: 'warning',
-          message: `An update is available (${data.behindBy} new commit${data.behindBy === 1 ? '' : 's'} on ${data.branch}).`
+          message: tp('settings.update.available', data.behindBy, { branch: data.branch }),
         });
       } else {
-        setStatus({ severity: 'success', message: `FLUJO is up to date (v${data.currentVersion}).` });
+        setStatus({ severity: 'success', message: t('settings.update.current', { version: data.currentVersion }) });
       }
     } catch (error) {
       log.error('Update check failed', error);
-      setStatus({ severity: 'error', message: 'Failed to check for updates.' });
+      setStatus({ severity: 'error', message: t('settings.update.checkFailed') });
     } finally {
       setChecking(false);
     }
   };
 
   const handleApply = async () => {
+    if (!canSelfUpdate || checking || applying) return;
     setApplying(true);
-    setStatus({ severity: 'info', message: 'Updating FLUJO - this may take a few minutes...' });
+    setUpdateAvailable(false);
+    setStatus({ severity: 'info', message: t('settings.update.progress') });
     try {
       const res = await fetch('/api/update', {
         method: 'POST',
@@ -81,12 +102,13 @@ export default function UpdateSettings() {
         body: JSON.stringify({ action: 'apply' })
       });
       const data = await res.json();
+      if (typeof data.updateMode === 'string') setUpdateMode(data.updateMode);
       if (!res.ok || data.success === false) {
-        setStatus({ severity: 'error', message: data.error || 'Update failed.' });
+        setStatus({ severity: 'error', message: data.error || t('home.updateFailed') });
         setApplying(false);
         return;
       }
-      setStatus({ severity: 'success', message: data.message });
+      setStatus({ severity: 'success', message: data.message || t('settings.update.complete') });
       if (data.restarting) {
         // The server stops, rebuilds, and comes back up (can take minutes).
         // Poll until it goes DOWN and then UP again, then reload.
@@ -109,7 +131,7 @@ export default function UpdateSettings() {
       }
     } catch (error) {
       log.error('Update failed', error);
-      setStatus({ severity: 'error', message: 'Update failed.' });
+      setStatus({ severity: 'error', message: t('home.updateFailed') });
       setApplying(false);
     }
   };
@@ -125,21 +147,20 @@ export default function UpdateSettings() {
               name="checkOnStartup"
             />
           }
-          label="Check for updates on startup"
+          label={t('settings.update.checkStartup')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          When enabled, FLUJO checks GitHub for a newer version when the home page loads and shows
-          a one-click update banner if one is available. Updates run <code>git pull</code> +
-          rebuild in your install folder; your data is preserved.
+          {t('settings.update.checkDescription')}
         </Typography>
-        {!canSelfUpdate && (
+        {updateMode === null && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('settings.update.checkBeforeApply')}</Typography>}
+        {source && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('settings.update.source', source)}</Typography>}
+        {updateMode && ['container', 'npm', 'none'].includes(updateMode) && (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            This install can&apos;t update itself in place
-            {updateMode === 'container'
-              ? ' (running in Docker) — pull a newer image instead.'
+            {t(updateMode === 'container'
+              ? 'settings.update.container'
               : updateMode === 'npm'
-                ? ' (installed via npm) — rerun with the latest version instead.'
-                : ' — it is not running from a git clone.'}
+                ? 'settings.update.npm'
+                : 'settings.update.notGit')}
           </Typography>
         )}
       </FormControl>
@@ -147,12 +168,17 @@ export default function UpdateSettings() {
       <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
         <Button variant="outlined" onClick={handleCheck} disabled={checking || applying}>
           {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
-          Check now
+          {t('settings.update.checkNow')}
         </Button>
-        <Button variant="contained" onClick={handleApply} disabled={applying || !canSelfUpdate}>
+        <Button variant="contained" onClick={handleApply} disabled={checking || applying || !canSelfUpdate}>
           {applying ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
-          Update now
+          {t('home.updateNow')}
         </Button>
+        {updateMode === 'pinned' && (
+          <Button component="a" href="https://github.com/mario-andreschak/FLUJO/releases/latest" target="_blank" rel="noreferrer" variant="outlined">
+            {t('settings.update.downloadInstaller')}
+          </Button>
+        )}
       </Box>
 
       {status && (

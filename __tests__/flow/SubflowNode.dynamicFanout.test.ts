@@ -236,8 +236,8 @@ describe('SubflowNode agentic caller fan-out (issue #130 Phase 4)', () => {
     const prep = await node.prep(shared, params);
     await node.execCore(prep);
 
-    // No fan-out lanes; falls back to the single-child path on subflowId.
-    expect(prep.lanes).toBeUndefined();
+    // No legacy fan-out; falls back to the canonical one-item queue.
+    expect(prep.lanes).toHaveLength(1);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     expect(runFlowMock.mock.calls[0][0].flowId).toBe('solo');
   });
@@ -250,7 +250,7 @@ describe('SubflowNode agentic caller fan-out (issue #130 Phase 4)', () => {
     });
     const prep = await node.prep(shared, params);
 
-    expect(prep.lanes).toBeUndefined();
+    expect(prep.lanes).toHaveLength(1);
     expect(prep.subflowId).toBe('solo');
     // Not consumed: it targets another node, so it must remain for that node.
     expect(shared.handoffInput).toBeDefined();

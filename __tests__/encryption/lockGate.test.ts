@@ -16,12 +16,15 @@ import os from 'os';
 import path from 'path';
 import { makeLocalRequest } from '../utils/localRequest';
 
+// Each test drives the REAL crypto path, i.e. one-or-more PBKDF2(100k-iteration)
+// derivations, which is deliberately slow. Give generous headroom over the suite
+// default so CPU/CI variance doesn't flake these out (mirrors dekInvariant.test.ts).
+jest.setTimeout(60000);
+
 let tmpDir: string;
 
 function clearGlobalEncryptionState(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_server_dek = undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_encryption_sessions = undefined;
 }
 
@@ -149,6 +152,24 @@ describe('deny-by-default coverage guard', () => {
     [
       'src/app/api/encryption/secure/route.ts',
       'src/app/api/init/route.ts',
+      // Installation-wide namespace discovery contains no workspace content and
+      // must remain reachable so the locked shell can validate its active tab.
+      'src/app/api/workspaces/route.ts',
+      // Strict-loopback instance proof contains no workspace data or bearer and
+      // must permit discovery before storage migration/unlock has completed.
+      'src/app/api/cloud/instance/route.ts',
+      // Snapshot control has a separate strict-loopback + dedicated bearer
+      // boundary. Status/abort/finalize must remain usable during encryption
+      // transitions; USER snapshot capture itself refuses an unavailable DEK.
+      'src/app/api/snapshot/abort/route.ts',
+      'src/app/api/snapshot/begin/route.ts',
+      'src/app/api/snapshot/download/route.ts',
+      'src/app/api/snapshot/finalize/route.ts',
+      'src/app/api/snapshot/info/route.ts',
+      'src/app/api/snapshot/status/route.ts',
+      // Bearer-protected bootstrap health must report locked/error state even
+      // before workspace restoration or encryption initialization succeeds.
+      'src/app/api/worker/status/route.ts',
       // Local-models (Ollama) onboarding: capability probe, model pull, and model
       // suggestion are secret-free and must work on FIRST LAUNCH, before encryption
       // is even configured. Registering the pulled model (POST /api/model) is what

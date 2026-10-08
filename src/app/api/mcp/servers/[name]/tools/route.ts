@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -17,16 +18,22 @@ type RouteContext = { params: Promise<{ name: string }> };
  * list plus an `error` message rather than a non-2xx status, matching how the client
  * surfaces "server not connected yet".
  */
-export async function GET(_request: NextRequest, { params }: RouteContext) {
+async function GET_handler(_request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
     const { name } = await params;
-    const result = await mcpService.listServerTools(name);
+    // This endpoint is the host/control-plane inventory used by the MCP
+    // manager, flow builder, tool tester, and MCP App host. It must expose the
+    // server's complete definition set. Model-facing construction paths request
+    // the `model` audience directly from MCPService and remain filtered there.
+    const result = await mcpService.listServerTools(name, 'all');
     return json(result, 200);
   } catch (error) {
     log.error('Error handling GET request', error);
     return json({ tools: [], ...formatErrorResponse(error) }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

@@ -26,6 +26,14 @@ const model: Model = {
   ApiKey: 'encrypted:DEADBEEF', // must be stripped, never serialized
   provider: 'openai',
   baseUrl: 'https://api.openai.com/v1',
+  reasoningEffort: 'high',
+  serviceTier: 'priority',
+  supportsTools: true,
+  supportedParameters: ['tools', 'temperature'],
+  inputModalities: ['text', 'image'],
+  outputModalities: ['text'],
+  visionInputCapability: 'supported',
+  compactionThreshold: 96_000,
 };
 
 const flowMain: Flow = {
@@ -106,6 +114,22 @@ describe('serializePackage / parsePackage round-trip', () => {
     expect(json).not.toContain('DEADBEEF');
   });
 
+  it('preserves provider-specific model controls', () => {
+    const { package: pkg } = serializePackage(baseInput);
+    expect(pkg.models[0]).toEqual(
+      expect.objectContaining({
+        reasoningEffort: 'high',
+        serviceTier: 'priority',
+        supportsTools: true,
+        supportedParameters: ['tools', 'temperature'],
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+        visionInputCapability: 'supported',
+        compactionThreshold: 96_000,
+      }),
+    );
+  });
+
   it('strips the webhook token from serialized output', () => {
     const { json, package: pkg } = serializePackage(baseInput);
     expect(json).not.toContain('super-secret-token-123');
@@ -131,6 +155,46 @@ describe('collectFlowReferences', () => {
 });
 
 describe('security backstops', () => {
+  it('rejects workspace-local Persona targets in packaged planned executions', () => {
+    const pkg: any = {
+      schemaVersion: 1,
+      id: 'x',
+      name: 'x',
+      version: '1.0.0',
+      secrets: [],
+      models: [],
+      mcpServers: [],
+      flows: [{ flow: { id: 'f', name: 'f', nodes: [], edges: [] } }],
+      plannedExecutions: [{
+        id: 'pe',
+        name: 'pe',
+        enabled: false,
+        flowId: 'f',
+        prompt: '',
+        trigger: { type: 'schedule', cron: '0 0 * * *' },
+        personaId: 'persona_support',
+        behaviorSlotKey: 'primary',
+      }],
+    };
+
+    const res = validatePackage(pkg);
+    expect(res.success).toBe(false);
+    expect(res.errors!.join(' ')).toMatch(/personaId|behaviorSlotKey/);
+  });
+
+  it('refuses to serialize a Persona-targeted planned execution', () => {
+    const targeted: PlannedExecution = {
+      ...plannedWebhook,
+      personaId: 'persona_support',
+      behaviorSlotKey: 'primary',
+    };
+
+    expect(() => serializePackage({
+      ...baseInput,
+      plannedExecutions: [targeted],
+    })).toThrow(/Persona-targeted planned executions cannot be packaged/);
+  });
+
   it('rejects an encrypted: blob anywhere in the manifest', () => {
     const pkg: any = {
       schemaVersion: 1,
@@ -186,6 +250,36 @@ describe('security backstops', () => {
     };
     expect(validatePackage(pkg).success).toBe(false);
   });
+
+  it('accepts a reviewed GitHub install recipe without allowing a runtime command', () => {
+    const pkg = {
+      schemaVersion: 1,
+      id: 'x',
+      name: 'x',
+      version: '1.0.0',
+      secrets: [],
+      models: [],
+      mcpServers: [
+        {
+          name: 's',
+          transport: 'stdio',
+          installOrigin: {
+            sourceType: 'github',
+            ref: 'https://github.com/acme/server.git',
+            gitRef: 'v2.0.0',
+            subdirectory: 'packages/server',
+            installCommand: 'pnpm install --frozen-lockfile',
+            buildCommand: 'pnpm run build',
+          },
+          envDeclarations: [],
+        },
+      ],
+      flows: [],
+      plannedExecutions: [],
+    };
+    expect(validatePackage(pkg).success).toBe(true);
+  });
+
 });
 
 describe('reference resolution', () => {

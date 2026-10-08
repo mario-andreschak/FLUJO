@@ -2,7 +2,10 @@ import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
+import { applyToolRepeatGuard, TOOL_REPEAT_TEMPERATURE } from './toolRepeatGuard';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
 
@@ -32,10 +35,36 @@ export type ApprovalDecisionOutcome =
   /** Decision applied and the batch is drained; the run is ready to resume. */
   | { outcome: 'ready'; appendedMessages: FlujoChatMessage[] };
 
+async function cancelledUiForToolCall(
+  sharedState: SharedState,
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
+  reason: string,
+): Promise<FlujoChatMessage['ui']> {
+  const decoded = decodeToolName(toolCall.function.name, sharedState.toolNameMap);
+  if (!decoded) return undefined;
+  let invocationArgs: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(toolCall.function.arguments);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      invocationArgs = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // A malformed call has no safe downstream forwarding identity.
+  }
+  const link = await ModelHandler.resolveToolUiLink(
+    decoded.server,
+    decoded.tool,
+    undefined,
+    decoded.uiResourceUri,
+    invocationArgs,
+  );
+  return link ? { ...link, cancelledReason: reason, isError: true } : undefined;
+}
+
 export async function applyApprovalDecision(
   sharedState: SharedState,
   toolCallId: string,
-  action: 'approve' | 'reject'
+  action: 'approve' | 'reject',
 ): Promise<ApprovalDecisionOutcome> {
   const pending = sharedState.pendingToolCalls ?? [];
   const toolCallToProcess = pending.find(tc => tc.id === toolCallId);
@@ -53,6 +82,7 @@ export async function applyApprovalDecision(
     const toolProcessingResult = await ModelHandler.processToolCalls({
       toolCalls: [toolCallToProcess],
       toolNameMap: sharedState.toolNameMap,
+      mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
     });
 
     if (!toolProcessingResult.success) {
@@ -68,7 +98,7 @@ export async function applyApprovalDecision(
       };
       sharedState.messages.push(errorMessage);
       appendedMessages.push(errorMessage);
-      sharedState.pendingToolCalls = pending.filter(tc => tc.id !== toolCallId);
+      sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
     } else {
       log.info(
         `Adding ${toolProcessingResult.value.toolCallMessages.length} tool result message(s) after approval`
@@ -83,21 +113,52 @@ export async function applyApprovalDecision(
       );
       sharedState.messages.push(...toolResultMessages);
       appendedMessages.push(...toolResultMessages);
-      sharedState.pendingToolCalls = pending.filter(tc => tc.id !== toolCallId);
+      const logicalRunId = sharedState.logicalRunId ?? 'approval-resume';
+      const guardState = sharedState.toolRepeatGuard?.logicalRunId === logicalRunId
+        ? sharedState.toolRepeatGuard
+        : { logicalRunId, entries: [] };
+      sharedState.toolRepeatGuard = guardState;
+      const repeatDecision = applyToolRepeatGuard(
+        guardState,
+        toolProcessingResult.value.processedToolCalls,
+      );
+      if (repeatDecision.raiseTemperature) {
+        sharedState.temperatureOverrideOnce = TOOL_REPEAT_TEMPERATURE;
+      }
+      for (const content of repeatDecision.hints) {
+        const hint: FlujoChatMessage = {
+          role: 'user',
+          content,
+          id: uuidv4(),
+          timestamp: Date.now(),
+          processNodeId: sharedState.currentNodeId,
+          injected: true,
+        };
+        sharedState.messages.push(hint);
+        appendedMessages.push(hint);
+      }
+      sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
     }
   } else {
     // action === 'reject'
     log.info(`Rejecting tool call ${toolCallId} (${toolCallToProcess.function.name})`);
+    const rejectionReason = 'tool denied';
+    const ui = await cancelledUiForToolCall(
+      sharedState,
+      toolCallToProcess,
+      rejectionReason,
+    );
     const rejectionMessage: FlujoChatMessage = {
       role: 'tool',
       tool_call_id: toolCallId,
-      content: `User rejected tool call: ${toolCallToProcess.function.name}`,
+      content: rejectionReason,
       id: uuidv4(),
       timestamp: Date.now(),
+      ...(ui ? { ui } : {}),
     };
     sharedState.messages.push(rejectionMessage);
     appendedMessages.push(rejectionMessage);
-    sharedState.pendingToolCalls = pending.filter(tc => tc.id !== toolCallId);
+    sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
   }
 
   // Drain check: once every pending call in the batch is handled, flip back to

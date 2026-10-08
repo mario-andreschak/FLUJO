@@ -1,0 +1,46 @@
+name: persona-goal-acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'src/backend/services/enduringAgents/**'
+      - 'src/backend/execution/flow/**'
+      - 'src/shared/types/enduringAgent/**'
+      - '__tests__/enduringAgents/goalAcceptance.test.ts'
+      - 'scripts/persona-goal-acceptance/**'
+      - 'scripts/run-persona-goal-acceptance.mjs'
+      - 'scripts/validate-persona-goal-acceptance.mjs'
+      - '.github/workflows/persona-goal-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persona-goal-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-integration:
+    name: offline goal lifecycle (scripted model, real tools)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - run: npm run build:mcp
+      - name: Verify fixture and independent evidence checks
+        run: node --test scripts/persona-goal-acceptance/fixture.test.mjs scripts/persona-goal-acceptance/evidence.test.mjs scripts/persona-goal-acceptance/terminal-fixture.test.mjs
+      - name: Exercise automatic continuation and recovery
+        run: node scripts/run-persona-goal-acceptance.mjs --mode=offline --timeout-seconds=600
+      - name: Preserve goal lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: persona-goal-offline-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: goal-acceptance-artifacts/
+          if-no-files-found: warn

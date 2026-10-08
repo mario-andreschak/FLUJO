@@ -58,6 +58,8 @@ export interface CompactForWireOptions {
   toolResultHeadChars?: number;
   /** Drop assistant prose from old assistant turns that also have tool_calls. Default true. */
   dropOldAssistantProse?: boolean;
+  /** Whether this model can use the synthetic read_resource tool. Default true. */
+  canUseTools?: boolean;
   /**
    * Captured run resources keyed by producing tool_call_id (issue #168). When a
    * truncated tool result has a `.result` entry here, its URI is embedded so the
@@ -71,13 +73,26 @@ export interface CompactForWireOptions {
    * marker the result is left inline rather than silently losing data.
    */
   allowLossyTruncation?: boolean;
+  /**
+   * Emergency context-overflow fit: ALSO shrink oversized tool results in the
+   * RECENT tail, not just old ones (and bypass the "nothing old enough" fast
+   * path). Normally the recent tail is kept verbatim for prefix-cache
+   * stability, but when a request has already overflowed the model's context
+   * window the cache is moot — fitting the request is all that matters. Used
+   * by ModelHandler only on the retry after a context-length error. Default
+   * false. See ModelHandler.generateCompletion. Tier 1 (old assistant prose)
+   * is unaffected — it never touches the recent tail either way.
+   */
+  compactRecentToolResults?: boolean;
 }
 
 const DEFAULTS: Required<Omit<CompactForWireOptions, 'resourceMarkers'>> = {
   keepRecentMessages: 12,
   toolResultHeadChars: 2000,
   dropOldAssistantProse: true,
+  canUseTools: true,
   allowLossyTruncation: false,
+  compactRecentToolResults: false,
 };
 
 /** True when compaction could ever shrink this history; lets callers skip the copy. */
@@ -89,48 +104,83 @@ export function couldCompact(
   return messages.length > keep;
 }
 
-/** True when any message on the wire references a run-resource URI (arms read_resource). */
+const AUTO_HYDRATED_MEDIA_PARTS = new Set([
+  'image_url',
+  'audio_url',
+  'video_url',
+  'file',
+  'input_image',
+  'input_audio',
+  'input_video',
+  'input_file',
+]);
+
+/**
+ * Find a run-resource URI the model can actually see and pass to
+ * `read_resource`. Structured media references are transport handles that are
+ * hydrated into provider-native bytes before dispatch, so arming a tool for
+ * those alone is both unnecessary and misleading.
+ */
+function hasModelReadableRunResourceUri(value: unknown): boolean {
+  if (typeof value === 'string') return value.includes(RUN_RESOURCE_SCHEME);
+  if (Array.isArray(value)) return value.some(hasModelReadableRunResourceUri);
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.type === 'string' && AUTO_HYDRATED_MEDIA_PARTS.has(record.type)) {
+    return false;
+  }
+  return Object.values(record).some(hasModelReadableRunResourceUri);
+}
+
+/** True when any model-readable message field references a run-resource URI. */
 export function wireHasRunResourceUri(messages: OpenAI.ChatCompletionMessageParam[]): boolean {
-  return messages.some((m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME));
+  return messages.some(hasModelReadableRunResourceUri);
 }
 
 export function compactForWire(
   messages: OpenAI.ChatCompletionMessageParam[],
   opts?: CompactForWireOptions
 ): OpenAI.ChatCompletionMessageParam[] {
-  const { keepRecentMessages, toolResultHeadChars, dropOldAssistantProse, allowLossyTruncation } = {
+  const { keepRecentMessages, toolResultHeadChars, dropOldAssistantProse, canUseTools, allowLossyTruncation, compactRecentToolResults } = {
     ...DEFAULTS,
     ...opts,
   };
   const resourceMarkers = opts?.resourceMarkers;
 
   // Nothing old enough to compact: return the input untouched (identity — keeps
-  // the fast path allocation-free and the cache prefix byte-identical).
-  if (messages.length <= keepRecentMessages) return messages;
+  // the fast path allocation-free and the cache prefix byte-identical). Skipped
+  // in emergency mode, where even a short history can carry one fat NEW result.
+  if (!compactRecentToolResults && messages.length <= keepRecentMessages) return messages;
 
   const oldCount = messages.length - keepRecentMessages;
   let savedChars = 0;
 
   const out = messages.map((msg, i) => {
-    if (i >= oldCount) return msg; // recent tail — verbatim
+    const isRecent = i >= oldCount;
 
-    // Tier 0: oversized old tool results. Tool result content is a string in the
-    // OpenAI shape; only touch strings over the head threshold.
+    // Tier 0: oversized tool results. Tool result content is a string in the
+    // OpenAI shape; only touch strings over the head threshold. OLD results are
+    // always eligible; RECENT results only in emergency mode (context overflow).
     if (msg.role === 'tool' && typeof msg.content === 'string') {
       if (msg.content.length <= toolResultHeadChars) return msg;
+      if (isRecent && !compactRecentToolResults) return msg; // recent tail — verbatim
 
       const uri = resourceMarkers?.get(msg.tool_call_id)?.result?.uri;
       const head = msg.content.slice(0, toolResultHeadChars);
-      const dropped = msg.content.length - toolResultHeadChars;
+      const total = msg.content.length;
+      const dropped = total - toolResultHeadChars;
 
       if (uri) {
-        // Recoverable: point the model at the captured full content.
+        // Recoverable: point the model at the captured full content, naming the
+        // size so it can judge whether reading the rest back is worth it.
         savedChars += dropped;
         return {
           ...msg,
           content:
-            `${head}\n…\n[full content stored as run resource ${uri} — ` +
-            `call read_resource with this uri to read it]`,
+            canUseTools
+              ? `${head}\n…\n[tool result truncated for context — the full ${total}-character result ` +
+                `is stored as run resource ${uri}; call read_resource with this uri to read all of it]`
+              : `${head}\n…\n[tool result truncated for context — ${total} characters; full content is stored server-side]`,
         };
       }
       if (allowLossyTruncation) {
@@ -140,6 +190,8 @@ export function compactForWire(
       // No captured resource and lossy not allowed: keep it inline.
       return msg;
     }
+
+    if (isRecent) return msg; // recent tail — verbatim (Tier 1 never touches it)
 
     // Tier 1: old assistant turn that made tool call(s) — drop its prose, keep
     // the calls. An assistant message with no tool_calls is a real answer/

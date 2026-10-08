@@ -28,15 +28,19 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const executeStep = jest.fn(async (sharedState: any) => {
     // Simulate a Process node whose model produced a (non-handoff) tool call.
     sharedState.currentNodeId = P;
+    const toolCalls = [
+      { id: 'tc1', type: 'function', function: { name: 'get_weather', arguments: '{}' } },
+      ...(sharedState.__debugTestTwoTools
+        ? [{ id: 'tc2', type: 'function', function: { name: 'echo', arguments: '{"text":"again"}' } }]
+        : []),
+    ];
     sharedState.messages.push({
       role: 'assistant',
       content: '',
       id: `assistant-${sharedState.messages.length}`,
       timestamp: 1,
       processNodeId: P,
-      tool_calls: [
-        { id: 'tc1', type: 'function', function: { name: 'get_weather', arguments: '{}' } },
-      ],
+      tool_calls: toolCalls,
     });
     return { sharedState, action: TOOL_CALL };
   });
@@ -55,9 +59,15 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 // Observe tool execution without running anything real.
 jest.mock('@/backend/execution/flow/handlers/ModelHandler', () => ({
   ModelHandler: {
-    processToolCalls: jest.fn(async () => ({
+    processToolCalls: jest.fn(async ({ toolCalls }: any) => ({
       success: true,
-      value: { toolCallMessages: [{ role: 'tool', tool_call_id: 'tc1', content: 'sunny' }] },
+      value: {
+        toolCallMessages: toolCalls.map((call: any) => ({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: call.id === 'tc1' ? 'sunny' : 'again',
+        })),
+      },
     })),
   },
 }));
@@ -103,6 +113,7 @@ const request = { model: 'flow-TestFlow', messages: [{ role: 'user', content: 'w
 
 // A debug single-step: continueDebug=false, userTurn=false.
 const step = () => processChatCompletion(request, true, false, false, CONV_ID, false, false);
+const freshDebugTurn = () => processChatCompletion(request, true, false, true, CONV_ID, false, true);
 
 beforeEach(() => {
   conversationStates.clear();
@@ -111,6 +122,25 @@ beforeEach(() => {
 });
 
 describe('debug step granularity (#7b): model call and tool execution are separate steps', () => {
+  it('a fresh debugger turn pauses BEFORE the first node executes', async () => {
+    seedPausedAtProcess();
+
+    await freshDebugTurn();
+
+    const state = conversationStates.get(CONV_ID)!;
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    expect(state.status).toBe('paused_debug');
+    expect(state.debugBoundary).toMatchObject({
+      operation: 'node',
+      phase: 'before',
+      nodeId: PROCESS,
+      stateSnapshot: {
+        currentNodeId: PROCESS,
+        messageCount: 1,
+      },
+    });
+  });
+
   it('first step pauses BEFORE executing the tools', async () => {
     seedPausedAtProcess();
     await step();
@@ -120,6 +150,13 @@ describe('debug step granularity (#7b): model call and tool execution are separa
     expect(state.debugPendingToolCalls).toHaveLength(1);
     expect(processToolCalls).not.toHaveBeenCalled();
     expect(state.status).toBe('paused_debug');
+    expect(state.debugBoundary).toMatchObject({
+      operation: 'tool',
+      phase: 'before',
+      nodeId: PROCESS,
+      previousOperation: 'model',
+      toolCalls: [{ id: 'tc1' }],
+    });
   });
 
   it('next step executes the pending tools and pauses again before re-invoking the model', async () => {
@@ -138,5 +175,55 @@ describe('debug step granularity (#7b): model call and tool execution are separa
     // The tool result was appended.
     expect(state.messages.some(m => m.role === 'tool' && m.tool_call_id === 'tc1')).toBe(true);
     expect(state.status).toBe('paused_debug');
+    expect(state.debugBoundary).toMatchObject({
+      operation: 'tool',
+      phase: 'after',
+      nodeId: PROCESS,
+      nextOperation: 'model',
+      toolCalls: [{ id: 'tc1' }],
+    });
+  });
+
+  it('stops before and after every call in a multi-tool model turn', async () => {
+    const seeded = seedPausedAtProcess();
+    (seeded as any).__debugTestTwoTools = true;
+
+    await step(); // model -> before the batch
+    expect(conversationStates.get(CONV_ID)?.debugPendingToolCalls).toHaveLength(2);
+
+    await step(); // execute call 1 -> after call 1
+    let state = conversationStates.get(CONV_ID)!;
+    expect(processToolCalls).toHaveBeenCalledTimes(1);
+    expect(processToolCalls.mock.calls[0][0].toolCalls).toMatchObject([{ id: 'tc1' }]);
+    expect(state.debugPendingToolCalls).toMatchObject([{ id: 'tc2' }]);
+    expect(state.debugBoundary).toMatchObject({
+      operation: 'tool',
+      phase: 'after',
+      toolCalls: [{ id: 'tc1' }],
+    });
+    expect(state.debugBoundary?.nextOperation).toBeUndefined();
+
+    await step(); // expose call 2 -> before call 2
+    state = conversationStates.get(CONV_ID)!;
+    expect(processToolCalls).toHaveBeenCalledTimes(1);
+    expect(state.debugBoundary).toMatchObject({
+      operation: 'tool',
+      phase: 'before',
+      toolCalls: [{ id: 'tc2' }],
+    });
+
+    await step(); // execute call 2 -> after call 2
+    state = conversationStates.get(CONV_ID)!;
+    expect(processToolCalls).toHaveBeenCalledTimes(2);
+    expect(processToolCalls.mock.calls[1][0].toolCalls).toMatchObject([{ id: 'tc2' }]);
+    expect(state.debugPendingToolCalls).toBeUndefined();
+    expect(state.messages.some(m => m.role === 'tool' && m.tool_call_id === 'tc2')).toBe(true);
+    expect(state.debugBoundary).toMatchObject({
+      operation: 'tool',
+      phase: 'after',
+      nextOperation: 'model',
+      toolCalls: [{ id: 'tc2' }],
+    });
+    expect((FlowExecutor.executeStep as jest.Mock)).toHaveBeenCalledTimes(1);
   });
 });

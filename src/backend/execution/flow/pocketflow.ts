@@ -1,23 +1,35 @@
 import cloneDeep from "lodash/cloneDeep";
 import { createLogger } from '@/utils/logger';
+import type { BaseNodeParams } from './types';
+import type { EdgeCondition } from '@/utils/shared/edgeConditions';
 
 const log = createLogger('backend/execution/flow/pocketflow');
 
 export const DEFAULT_ACTION = "default"; // Default action for 
 
-export abstract class BaseNode {
-    public flow_params: any;
-    public node_params: any; // Add node_params
+interface RuntimeRoutingParams {
+    orderedOutgoingEdges?: string[];
+    edgeConditions?: Record<string, EdgeCondition>;
+}
+
+export abstract class BaseNode<
+    TNodeParams extends BaseNodeParams<object> = BaseNodeParams<object>,
+    TSharedState = unknown,
+    TPrepResult = unknown,
+    TExecResult = unknown,
+> {
+    public flow_params: Record<string, unknown>;
+    /** Assigned by FlowConverter immediately after construction. */
+    public node_params!: TNodeParams & RuntimeRoutingParams;
     public successors: Map<string, BaseNode>;
 
     constructor() {
         log.debug(`BaseNode constructor called`);
         this.flow_params = {};
-        this.node_params = {}; // Initialize node_params
         this.successors = new Map();
     }
 
-  public setParams(params: any, node_params?: any): void {
+  public setParams(params: Record<string, unknown>, node_params: TNodeParams): void {
     log.debug(`setParams called with params`, { params });
     
     // Add verbose logging of the input parameters
@@ -27,11 +39,12 @@ export abstract class BaseNode {
     });
     
     this.flow_params = params;
-    if (node_params) {
-        this.node_params = node_params;
-    }
+    this.node_params = node_params;
     
-    log.debug(`setParams finished. flow_params count`, { flow_params: this.flow_params?.length, node_params: this.node_params?.length });
+    log.debug(`setParams finished. parameter counts`, {
+      flowParams: Object.keys(this.flow_params).length,
+      nodeParams: Object.keys(this.node_params).length,
+    });
     
     // Add verbose logging of the updated state
     log.verbose('setParams result', {
@@ -81,7 +94,7 @@ export abstract class BaseNode {
         return successor;
     }
     
-  abstract prep(sharedState: any, node_params?: any): Promise<any>;
+  abstract prep(sharedState: TSharedState, node_params?: TNodeParams): Promise<TPrepResult>;
 
   /**
    * We allow you to implement custom wrappers over any core execution logic
@@ -91,7 +104,7 @@ export abstract class BaseNode {
    * @param prepResult 
    * @returns 
    */
-  public async execWrapper(prepResult: any, node_params?: any): Promise<any> {
+  public async execWrapper(prepResult: TPrepResult, node_params?: TNodeParams): Promise<TExecResult> {
       // Objects are passed as-is: the logger only serializes AFTER the level
       // check, so these cost nothing when suppressed. Never pre-stringify
       // conversation-sized payloads in log arguments (eager-arg CPU cost).
@@ -113,9 +126,9 @@ export abstract class BaseNode {
    * the core component of a node implementation
    * @param prepResult 
    */
-  abstract execCore(prepResult: any, node_params?: any): Promise<any>;
+  abstract execCore(prepResult: TPrepResult, node_params?: TNodeParams): Promise<TExecResult>;
 
-  abstract post(prepResult: any, execResult: any, sharedState: any, node_params?: any): Promise<string>;
+  abstract post(prepResult: TPrepResult, execResult: TExecResult, sharedState: TSharedState, node_params?: TNodeParams): Promise<string>;
 
     /**
      * Core run logic should not change from node to node implementation.
@@ -123,7 +136,7 @@ export abstract class BaseNode {
      * from the prep and execution phases for potential snapshotting.
      * @param sharedState Contextual state that is shared across nodes
      */
-  public async run(sharedState: any): Promise<{ action: string, prepResult: any, execResult: any }> {
+  public async run(sharedState: TSharedState): Promise<{ action: string, prepResult: TPrepResult, execResult: TExecResult }> {
     log.debug(`run called with sharedState`, { sharedState });
     log.debug(`Current flow_params at start of run`, { flow_params: this.flow_params });
 
@@ -155,7 +168,12 @@ export abstract class BaseNode {
   }
 }
 
-export abstract class RetryNode extends BaseNode {
+export abstract class RetryNode<
+    TNodeParams extends BaseNodeParams<object> = BaseNodeParams<object>,
+    TSharedState = unknown,
+    TPrepResult = unknown,
+    TExecResult = unknown,
+> extends BaseNode<TNodeParams, TSharedState, TPrepResult, TExecResult> {
     protected maxRetries: number;
     protected intervalMs: number;
 
@@ -166,7 +184,7 @@ export abstract class RetryNode extends BaseNode {
         this.intervalMs = intervalMs;
     }
 
-  public async execWrapper(prepResult: any, node_params?: any): Promise<any> {
+  public async execWrapper(prepResult: TPrepResult, node_params?: TNodeParams): Promise<TExecResult> {
     log.debug(`execWrapper called with prepResult`, { prepResult });
     
     // Add verbose logging of the input parameters
@@ -211,7 +229,7 @@ export abstract class RetryNode extends BaseNode {
   }
 }
 
-export class Flow extends BaseNode {
+export class Flow extends BaseNode<BaseNodeParams<Record<string, never>>> {
     private start: BaseNode;
 
     constructor(start: BaseNode) {
@@ -237,7 +255,7 @@ export class Flow extends BaseNode {
         return clonedStart;
     }
 
-  async execCore(prepResult: any): Promise<any> {
+  async execCore(prepResult: unknown): Promise<unknown> {
     log.error(`Flow node does not support direct execution`);
     
     // Add verbose logging of the error
@@ -248,7 +266,7 @@ export class Flow extends BaseNode {
     throw new Error("Flow node does not support direct execution");
   }
 
-  async prep(sharedState: any, node_params?: any): Promise<any> {
+  async prep(sharedState: unknown, node_params?: unknown): Promise<unknown> {
     log.debug(`Flow prep called with sharedState`, { sharedState });
     
     // Add verbose logging of the input parameters
@@ -265,7 +283,7 @@ export class Flow extends BaseNode {
     return {}; // Pass through the shared state to exec_core
   }
 
-  async post(prepResult: any, execResult: any, sharedState: any, node_params?: any): Promise<string> {
+  async post(prepResult: unknown, execResult: unknown, sharedState: unknown, node_params?: unknown): Promise<string> {
     log.debug(`Flow post called with prepResult, execResult, and sharedState`, { prepResult, execResult, sharedState });
     
     // Add verbose logging of the input parameters

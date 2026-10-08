@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { mcpService } from '@/frontend/services/mcp';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue } from '@/shared/types';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue, MCPStdioOAuthStatus } from '@/shared/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/hooks/useServerStatus');
@@ -29,13 +29,16 @@ function getServerPath(config: MCPServerConfig): string {
 
 // Define ServerState as an intersection type instead of extending MCPServerConfig 
 // but with the updated environment variable type
-type ServerState = Omit<MCPServerConfig, 'env'> & {
-  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting';
+type WithServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
+  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting' | 'initialization' | 'requires_authentication';
   path: string;
   error?: string;
   stderrOutput?: string;
+  stdioOAuth?: MCPStdioOAuthStatus;
   env: Record<string, EnvVarValue>;
-};
+} : never;
+
+export type ServerState = WithServerState<MCPServerConfig>;
 
 /**
  * Custom hook for managing server status
@@ -76,6 +79,7 @@ export function useServerStatus() {
           const status = typeof statusData === 'string' ? statusData : statusData.status;
           const errorMessage = typeof statusData === 'object' && statusData.message ? statusData.message : undefined;
           const stderrOutput = typeof statusData === 'object' && statusData.stderrOutput ? statusData.stderrOutput : undefined;
+          const stdioOAuth = typeof statusData === 'object' ? statusData.stdioOAuth : undefined;
 
           // Get the path based on the server type
           const path = getServerPath(config);
@@ -86,6 +90,7 @@ export function useServerStatus() {
             status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting',
             error: errorMessage,
             stderrOutput,
+            stdioOAuth,
           };
         })
       );
@@ -142,6 +147,7 @@ export function useServerStatus() {
         const status = typeof statusData === 'string' ? statusData : statusData.status;
         const errorMessage = typeof statusData === 'object' && statusData.message ? statusData.message : undefined;
         const stderrOutput = typeof statusData === 'object' && statusData.stderrOutput ? statusData.stderrOutput : undefined;
+        const stdioOAuth = typeof statusData === 'object' ? statusData.stdioOAuth : undefined;
 
         // Update the UI with the new status
         setServers((prev) =>
@@ -151,7 +157,8 @@ export function useServerStatus() {
                   ...s, 
                   status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                   error: errorMessage,
-                  stderrOutput
+                  stderrOutput,
+                  stdioOAuth,
                 }
               : s
           )
@@ -250,6 +257,7 @@ export function useServerStatus() {
         const status = typeof statusData === 'string' ? statusData : statusData.status;
         const errorMessage = typeof statusData === 'object' && statusData.message ? statusData.message : undefined;
         const stderrOutput = typeof statusData === 'object' && statusData.stderrOutput ? statusData.stderrOutput : undefined;
+        const stdioOAuth = typeof statusData === 'object' ? statusData.stdioOAuth : undefined;
         
         // Update the server with the latest status
         setServers((prev) =>
@@ -259,7 +267,8 @@ export function useServerStatus() {
                   ...s, 
                   status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                   error: errorMessage,
-                  stderrOutput
+                  stderrOutput,
+                  stdioOAuth,
                 }
               : s
           )
@@ -361,6 +370,7 @@ export function useServerStatus() {
         const status = typeof statusData === 'string' ? statusData : statusData.status;
         const errorMessage = typeof statusData === 'object' && statusData.message ? statusData.message : undefined;
         const stderrOutput = typeof statusData === 'object' && statusData.stderrOutput ? statusData.stderrOutput : undefined;
+        const stdioOAuth = typeof statusData === 'object' ? statusData.stdioOAuth : undefined;
   
         // Update the UI with the new status
         setServers((prev) =>
@@ -370,7 +380,8 @@ export function useServerStatus() {
                   ...server, 
                   status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                   error: errorMessage,
-                  stderrOutput
+                  stderrOutput,
+                  stdioOAuth,
                 }
               : server
           )
@@ -458,7 +469,7 @@ export function useServerStatus() {
     serverName: string, 
     env: Record<string, { value: string, metadata: { isSecret: boolean } } | string>
   ) => {
-    log.debug(`Saving environment variables for server: ${serverName}`, env);
+    log.debug(`Saving environment variables for server: ${serverName}`, { variableNames: Object.keys(env) });
     try {
       const server = servers.find((s) => s.name === serverName);
       if (!server) {
@@ -500,6 +511,7 @@ export function useServerStatus() {
       const status = typeof statusData === 'string' ? statusData : statusData.status;
       const errorMessage = typeof statusData === 'object' && statusData.message ? statusData.message : undefined;
       const stderrOutput = typeof statusData === 'object' && statusData.stderrOutput ? statusData.stderrOutput : undefined;
+      const stdioOAuth = typeof statusData === 'object' ? statusData.stdioOAuth : undefined;
       
       setServers((prev) =>
         prev.map((s) =>
@@ -508,7 +520,8 @@ export function useServerStatus() {
                 ...s, 
                 status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                 error: errorMessage,
-                stderrOutput
+                stderrOutput,
+                stdioOAuth,
               }
             : s
         )

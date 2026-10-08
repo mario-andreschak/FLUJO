@@ -22,6 +22,7 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
+import { verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 import {
   HandoffNodeSummary,
   HandoffServerSummary,
@@ -35,13 +36,20 @@ const log = createLogger('backend/execution/flow/buildHandoffDescription');
 // model/server/flow many times. These live only for the duration of one
 // build call (fresh instance per top-level target).
 interface BuildCaches {
+  immutableFlows: boolean;
   modelNames: Map<string, string>;
   serverConnected: Map<string, boolean>;
   flows: Map<string, Flow | null>;
 }
 
-function newCaches(): BuildCaches {
-  return { modelNames: new Map(), serverConnected: new Map(), flows: new Map() };
+function newCaches(pinnedParent?: Flow): BuildCaches {
+  const flows = new Map<string, Flow | null>();
+  if (pinnedParent) {
+    if (pinnedParent.executionDependencies) verifyBehaviorDependencies(pinnedParent);
+    flows.set(pinnedParent.id, pinnedParent);
+    for (const entry of pinnedParent.executionDependencies?.flows ?? []) flows.set(entry.flowId, entry.flowSnapshot);
+  }
+  return { modelNames: new Map(), serverConnected: new Map(), flows, immutableFlows: Boolean(pinnedParent) };
 }
 
 async function resolveModelName(modelId: string | undefined, caches: BuildCaches): Promise<string | undefined> {
@@ -75,6 +83,7 @@ async function isServerConnected(server: string, caches: BuildCaches): Promise<b
 
 async function loadFlow(flowId: string, caches: BuildCaches): Promise<Flow | null> {
   if (caches.flows.has(flowId)) return caches.flows.get(flowId)!;
+  if (caches.immutableFlows) return null;
   let flow: Flow | null = null;
   try {
     flow = await flowService.getFlow(flowId);
@@ -87,18 +96,25 @@ async function loadFlow(flowId: string, caches: BuildCaches): Promise<Flow | nul
 
 /** Build the MCP-server facets for a Process node from its bound MCP node references. */
 async function summariseServers(properties: Record<string, unknown>, caches: BuildCaches): Promise<HandoffServerSummary[]> {
-  const mcpNodes = Array.isArray((properties as any).mcpNodes) ? (properties as any).mcpNodes : [];
+  const mcpNodes = Array.isArray(properties.mcpNodes) ? properties.mcpNodes : [];
   const servers: HandoffServerSummary[] = [];
   const seen = new Set<string>();
   for (const mcpNode of mcpNodes) {
-    const boundServer: string | undefined = mcpNode?.properties?.boundServer;
+    if (!mcpNode || typeof mcpNode !== 'object') continue;
+    const nodeProperties = 'properties' in mcpNode
+      && mcpNode.properties && typeof mcpNode.properties === 'object'
+      ? mcpNode.properties as Record<string, unknown>
+      : {};
+    const boundServer = typeof nodeProperties.boundServer === 'string'
+      ? nodeProperties.boundServer
+      : undefined;
     if (!boundServer || seen.has(boundServer)) continue;
     seen.add(boundServer);
     const connected = await isServerConnected(boundServer, caches);
     // Tool names come from the node's own enabledTools — no server round-trip
     // (and therefore no spawn). We surface them only when the server is live.
-    const enabledTools: string[] = Array.isArray(mcpNode?.properties?.enabledTools)
-      ? mcpNode.properties.enabledTools
+    const enabledTools: string[] = Array.isArray(nodeProperties.enabledTools)
+      ? nodeProperties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
       : [];
     servers.push({
       name: boundServer,
@@ -131,7 +147,7 @@ async function summariseNode(
   if (userDescription && userDescription.trim()) return summary;
 
   if (type === 'subflow') {
-    const subflowId = (properties as any).subflowId as string | undefined;
+    const subflowId = typeof properties.subflowId === 'string' ? properties.subflowId : undefined;
     if (!subflowId) {
       summary.subflowMissing = true;
       return summary;
@@ -161,8 +177,9 @@ async function summariseNode(
   }
 
   // Process (or any model-bound) node.
-  summary.modelName = await resolveModelName((properties as any).boundModel as string | undefined, caches);
-  const promptTemplate = (properties as any).promptTemplate;
+  const boundModel = typeof properties.boundModel === 'string' ? properties.boundModel : undefined;
+  summary.modelName = await resolveModelName(boundModel, caches);
+  const promptTemplate = properties.promptTemplate;
   if (typeof promptTemplate === 'string' && promptTemplate.trim()) {
     summary.promptSummary = promptTemplate;
   }
@@ -175,9 +192,9 @@ async function summariseNode(
  * to the plain `Hand off execution to <label> (<type>)` header on any error so a
  * synthesis failure can never break tool generation.
  */
-export async function buildHandoffDescription(targetNode: FlowNode): Promise<string> {
+export async function buildHandoffDescription(targetNode: FlowNode, pinnedParent?: Flow): Promise<string> {
   try {
-    const summary = await summariseNode(targetNode, 0, newCaches(), new Set());
+    const summary = await summariseNode(targetNode, 0, newCaches(pinnedParent), new Set());
     return formatHandoffDescription(summary);
   } catch (err) {
     const label = targetNode.data?.label || 'Unknown Node';

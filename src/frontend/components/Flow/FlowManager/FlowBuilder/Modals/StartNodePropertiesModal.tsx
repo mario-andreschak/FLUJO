@@ -3,34 +3,34 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
   TextField,
   Typography,
   Box,
-  IconButton,
   Divider,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import PromptBuilder from '@/frontend/components/shared/PromptBuilder';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface StartNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
 export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartNodePropertiesModalProps) => {
+  const { t } = useI18n();
   // Clone node data to avoid direct mutation
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null>(null);
   
   const [promptTemplate, setPromptTemplate] = useState('');
@@ -43,7 +43,9 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       });
       
       // Load the prompt template from the node's properties
-      const savedPromptTemplate = node.data.properties?.promptTemplate || '';
+      const savedPromptTemplate = typeof node.data.properties?.promptTemplate === 'string'
+        ? node.data.properties.promptTemplate
+        : '';
       setPromptTemplate(savedPromptTemplate);
     }
   }, [node, open]);
@@ -97,23 +99,17 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
         }
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {nodeData.label || 'Start Node'} Properties
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={t('flows.modal.properties', { name: nodeData.label || t('flows.modal.startNode') })}
+        onClose={onClose}
+      />
       
       <Divider />
       
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 3, overflow: 'auto', height: 'calc(90vh - 130px)' }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Typography variant="h6" gutterBottom>
-            Prompt Template
+            {t('flows.modal.promptTemplate')}
           </Typography>
           <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 40px)' }}>
             <PromptBuilder 
@@ -127,9 +123,9 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       </DialogContent>
       
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
-          Save Changes
+          {t('flows.modal.saveChanges')}
         </Button>
       </DialogActions>
     </Dialog>

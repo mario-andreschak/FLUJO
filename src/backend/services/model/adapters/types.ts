@@ -1,7 +1,11 @@
 import OpenAI from 'openai';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
+import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 /**
  * Captured run resources for oversized PRIOR tool results/args, keyed by the
@@ -17,32 +21,136 @@ export interface ToolResourceMarker {
 }
 
 /**
+ * Provider-neutral live update for one assistant message. Text and function
+ * arguments are append-only deltas; `messageId` remains stable until the
+ * adapter returns its final CompletionResult, allowing the UI to replace the
+ * transient draft with the durable message instead of rendering a duplicate.
+ */
+export interface ModelStreamDelta {
+  messageId: string;
+  contentDelta?: string;
+  /** A complete media item discovered during a native provider stream. */
+  mediaPart?: ModelMediaPart;
+  toolCallDelta?: {
+    index: number;
+    id?: string;
+    nameDelta?: string;
+    argumentsDelta?: string;
+  };
+}
+
+/**
+ * Live progress from an MCP tool executed inside a self-orchestrating adapter.
+ * These adapters own their tool loop, so the normal ModelHandler tool-call
+ * path cannot observe the MCP SDK's progress callback directly.
+ */
+export interface ModelToolProgress {
+  toolCallId: string;
+  name: string;
+  progress: number;
+  total?: number;
+  message?: string;
+}
+
+export interface SdkRequestSnapshot {
+  /** Stable adapter id used by the inspector (openai, anthropic, gemini, ...). */
+  adapter: string;
+  /** SDK/CLI method being invoked, e.g. chat.completions.create. */
+  operation: string;
+  /** Exact request object after provider-native translation, without credentials. */
+  request: unknown;
+  /**
+   * Provider-neutral messages for this specific SDK dispatch. Self-orchestrating
+   * adapters may issue multiple native turns inside one FLUJO model call (for
+   * example after mid-run steering), so the caller's initial wire array is not
+   * necessarily the wire view for every observed request.
+   */
+  wireMessages?: OpenAI.ChatCompletionMessageParam[];
+}
+
+/**
  * Everything an adapter needs to perform a single chat completion. The caller
  * (ModelHandler) is responsible for resolving/decrypting the API key and
  * stripping FLUJO-internal fields (timestamps) from the messages first.
  */
+export interface SteeringDelivery {
+  messages: FlujoChatMessage[];
+  /** After recording the messages, flush their transcript and check the run fence. */
+  beforeSend(): Promise<void>;
+  /** The SDK accepted the input; complete its durable mailbox acknowledgement. */
+  acknowledge(): Promise<void>;
+  /** Return an unaccepted batch to the head of the inbox. Safe to call repeatedly. */
+  requeue(): void;
+}
+
+export interface ModelSteering {
+  take(): Promise<SteeringDelivery | undefined>;
+  subscribe(listener: () => void): () => void;
+}
+
 export interface CompletionInput {
+  directCompletion?: boolean;
+  temperatureOverride?: number;
+  /** Re-check execution authority immediately before every policy member. */
+  beforeModelDispatch?: () => Promise<void>;
+  /** Metadata only, used to attribute native dispatches and usage correctly. */
+  onRoutingModel?: (model: Model) => Promise<void>;
   /** The model record (used for name, baseUrl, provider, adapter, ...). */
   model: Model;
   /** The decrypted API key / OAuth token. Never log this. */
   apiKey: string;
+  /** Observes each real provider request, including transport retries. The
+   * callback is metadata-only and must never receive request payloads. */
+  onProviderAttempt?: (observation: {
+    attempt: number;
+    durationMs: number;
+    outcome: 'completed' | 'error' | 'cancelled';
+    result?: unknown;
+    error?: unknown;
+  }) => void;
+  /** Durable Chat model-turn capture at the final SDK request boundary. */
+  onSdkRequest?: (snapshot: SdkRequestSnapshot) => Promise<string | undefined>;
+  /** Completes the durable dispatch record created by onSdkRequest. */
+  onSdkRequestResult?: (observation: {
+    dispatchId: string;
+    outcome: 'completed' | 'error' | 'cancelled';
+  }) => Promise<void>;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
    * Optional identity of the conversation + process node this call belongs to.
-   * Self-orchestrating adapters (Claude subscription) use the pair to key a
-   * reusable Agent SDK session per `(conversationId, nodeId)` (issue #154), so
+   * Self-orchestrating adapters (Claude subscription and Codex) use the pair to
+   * key a reusable agent session per `(conversationId, nodeId)`, so
    * turns of the same single-node Flow can resume one session instead of
    * re-sending the whole flattened history each turn. Request/response adapters
    * ignore these (matching the existing pattern for `maxTurns` /
    * `localToolExecutors`). Omitted means session reuse is disabled for the call.
    */
   conversationId?: string;
+  /** Metadata-only logical run id for in-adapter tool attribution. */
+  runId?: string;
   nodeId?: string;
+  /**
+   * Opt-in to native session reuse for self-orchestrating adapters (Claude
+   * subscription and Codex). When true (and `conversationId`+`nodeId` are
+   * present and a reusable session exists for this node), the adapter resumes
+   * the persisted SDK session and sends only the per-turn delta instead of
+   * re-flattening the whole history. When false/omitted the adapter always
+   * re-flattens (the always-correct fallback). Claude reuse is gated by the
+   * experimental `claudeSessionResume` setting; Codex reuse is enabled by
+   * default. Both are only set for full-history nodes (a wire-scoped view can't
+   * be reconciled against the session's watermark).
+   * Request/response adapters ignore it.
+   */
+  sessionResume?: boolean;
+  /** Persisted Codex thread metadata supplied by the conversation owner. */
+  codexSession?: CodexSessionMetadata;
+  /** Replace or invalidate the durable Codex metadata after an adapter turn. */
+  onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
-  tools?: OpenAI.ChatCompletionTool[];
-  /** Sampling temperature. */
-  temperature: number;
+  tools?: OpenAI.ChatCompletionFunctionTool[];
+  /** Sampling temperature. Omitted when an invalid persisted value is ignored. */
+  temperature?: number;
   /**
    * Upper bound on tokens the provider may generate for this single completion.
    * Already resolved by the caller with precedence: explicit request
@@ -59,7 +167,18 @@ export interface CompletionInput {
    * `timeout` is the tool's per-call timeout in seconds (-1 = none; unset = the
    * 5-minute default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number }>;
+  toolNameMap?: Record<string, {
+    server: string;
+    tool: string;
+    timeout?: number;
+    nodeId?: string;
+    clientGeneration?: number;
+    schemaHash?: string;
+    annotations?: ToolAnnotations;
+    uiResourceUri?: string;
+    presetArgs?: Record<string, unknown>;
+    context?: ToolReferenceContext;
+  }>;
   /**
    * Executors for caller-defined "virtual" tools (entries in `tools` that are
    * neither handoffs nor MCP tools), keyed by function name — e.g. the flow
@@ -70,6 +189,13 @@ export interface CompletionInput {
    * the caller. Without an executor such tools are silently dropped there.
    */
   localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+  /**
+   * Cooperative successful-stop predicate for adapters that own an internal
+   * model/tool loop. Once true, no further tools may be dispatched and the
+   * adapter exits at its next safe event boundary. Meeting silence uses this to
+   * terminate one participant turn without reporting a user cancellation.
+   */
+  shouldEndAgenticTurn?: () => boolean;
   /**
    * Upper bound on agentic turns for adapters that orchestrate their own tool
    * loop (Claude subscription). Ignored by the request/response adapters, where
@@ -96,6 +222,15 @@ export interface CompletionInput {
    * onto the AbortController that owns its whole agentic loop.
    */
   signal?: AbortSignal;
+  /** Runtime-only lease/fence assertion immediately before a tool side effect. */
+  beforeToolDispatch?: () => Promise<void>;
+  executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+  /** Call-time authorization for Persona Core-injected MCP handles. */
+  authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
+  /** Runtime-only lease/generation assertion immediately after a long tool call. */
+  afterToolDispatch?: () => Promise<void>;
+  /** Hold the current execution fence across one durable resource mutation. */
+  commitDurableMutation?: <T>(task: () => Promise<T>) => Promise<T>;
   /**
    * Optional live sink for self-orchestrating adapters (Claude subscription)
    * that run their own agentic loop inside a single createCompletion call. It is
@@ -111,6 +246,30 @@ export interface CompletionInput {
    */
   onTranscriptMessage?: (message: FlujoChatMessage) => void;
   /**
+   * Drain user interventions accepted while a self-orchestrating adapter is
+   * still inside one long provider call. Request/response adapters return to
+   * runFlow after every model turn and do not need this hook; Claude and Codex
+   * poll it at their own safe turn boundaries.
+   *
+   * A consumed message must be added to the adapter transcript and passed to
+   * `onTranscriptMessage` before it is sent to the provider. That makes the
+   * accepted intervention durable and reconciles the optimistic UI bubble by id.
+   */
+  consumeSteeringMessages?: () => FlujoChatMessage[];
+  /** Live delivery with explicit ownership; an unaccepted batch must be requeued. */
+  steering?: ModelSteering;
+  /**
+   * Live token/tool-argument sink. Request/response adapters use it while
+   * consuming their native SDK stream; self-orchestrating adapters use it for
+   * partial assistant events. The callback is live-only and is never persisted.
+   */
+  onModelDelta?: (delta: ModelStreamDelta) => void;
+  /**
+   * Live MCP progress sink for self-orchestrating adapters. Request/response
+   * adapters execute tools in ModelHandler and therefore do not use this hook.
+   */
+  onToolProgress?: (progress: ModelToolProgress) => void;
+  /**
    * Captured run resources for oversized PRIOR tool results/args, keyed by the
    * producing `tool_call_id` (issue #168). Self-orchestrating adapters (Claude
    * subscription) use this to replace inline `…[truncated]` with a head excerpt
@@ -118,6 +277,23 @@ export interface CompletionInput {
    * tool. Request/response adapters ignore it. Omitted ⇒ plain truncation.
    */
   runResourceMarkers?: Map<string, ToolResourceMarker>;
+  /**
+   * Cache-routing hint for providers with a sharded automatic prompt cache
+   * (OpenAI's `prompt_cache_key`). Requests carrying the same key AND the same
+   * prefix are routed to the same machine, so a warm cache is actually found
+   * instead of missed on a cold shard. Derived from a hash of the tool block
+   * (see derivePromptCacheKey), so every request sharing that prefix shares the
+   * key. Adapters that don't support the parameter ignore it — the OpenAI
+   * adapter also drops it permanently for a provider that rejects it.
+   */
+  promptCacheKey?: string;
+  /**
+   * Request-level OpenAI prompt-cache policy. Present only after the execution
+   * layer has added compatible explicit breakpoints to the message content.
+   * The OpenAI adapter negotiates this option independently from
+   * `prompt_cache_key` and retries without it if an endpoint rejects it.
+   */
+  promptCacheMode?: 'explicit';
 }
 
 /**
@@ -129,7 +305,14 @@ export interface CompletionInput {
  * them in the conversation. Request/response adapters omit it.
  */
 export interface CompletionResult {
+  routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
   completion: OpenAI.Chat.Completions.ChatCompletion;
+  /** null means the adapter cannot report current context; usage is not a substitute. */
+  contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;
+  /** Direct model media normalized from the provider-native response. */
+  media?: ModelMediaPart[];
+  /** Stable id used by `onModelDelta` for the final assistant response. */
+  liveMessageId?: string;
   /**
    * Ordered assistant/tool messages produced by a self-orchestrating adapter's
    * internal agentic loop. Each carries a stable `id` (and timestamp) so it
@@ -147,4 +330,63 @@ export interface CompletionResult {
  */
 export interface CompletionAdapter {
   createCompletion(input: CompletionInput): Promise<CompletionResult>;
+  /**
+   * Optional native streaming variant. ModelHandler selects it whenever a live
+   * delta sink is available and falls back to createCompletion otherwise.
+   */
+  createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
+}
+
+/**
+ * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
+ * failures remain best-effort, except a lost execution fence: an obsolete
+ * Persona/meeting worker must not start or continue a provider request.
+ */
+export async function observeSdkRequest<T>(
+  input: Pick<CompletionInput, 'onSdkRequest' | 'onSdkRequestResult' | 'signal'>,
+  snapshot: SdkRequestSnapshot,
+  task: () => Promise<T>,
+): Promise<T> {
+  let dispatchId: string | undefined;
+  let finalized = false;
+  try {
+    dispatchId = await input.onSdkRequest?.(snapshot);
+  } catch (error) {
+    rethrowFlowExecutionAuthorityError(error);
+    dispatchId = undefined;
+  }
+  const finalize = async (outcome: 'completed' | 'error' | 'cancelled'): Promise<void> => {
+    if (!dispatchId || finalized) return;
+    finalized = true;
+    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(rethrowFlowExecutionAuthorityError);
+  };
+  try {
+    const result = await task();
+    const iterable = result as unknown as AsyncIterable<unknown> | null | undefined;
+    if (iterable && typeof iterable[Symbol.asyncIterator] === 'function') {
+      const asyncIterable = iterable;
+      async function* observedIterator(): AsyncGenerator<unknown> {
+        try {
+          for await (const item of asyncIterable) yield item;
+        } catch (error) {
+          await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+          throw error;
+        } finally {
+          await finalize(input.signal?.aborted ? 'cancelled' : 'completed');
+        }
+      }
+      return new Proxy(result as object, {
+        get(target, property) {
+          if (property === Symbol.asyncIterator) return observedIterator;
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as T;
+    }
+    await finalize('completed');
+    return result;
+  } catch (error) {
+    await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+    throw error;
+  }
 }

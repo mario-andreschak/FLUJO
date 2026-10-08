@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * Resend the registry email-confirmation link (issue #197).
  *
@@ -13,7 +14,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/registry/auth/resend/route');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -37,3 +38,5 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Failed to resend confirmation' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

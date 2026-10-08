@@ -18,6 +18,7 @@
  */
 
 import type { Wave, WaveChainEdge, WaveChainNode } from '@/shared/types/waves/waves';
+import type { Translator } from '@/frontend/i18n/core';
 import { buildWaveAdjacency } from '@/utils/shared/waveHierarchy';
 import { enumerateOccurrences, timelineFraction } from './waveTimeline';
 
@@ -28,13 +29,13 @@ import { enumerateOccurrences, timelineFraction } from './waveTimeline';
 export const CLOCK_X = 16;
 export const BASE_Y = 24;
 /** Vertical distance between chain levels. */
-export const LANE_H = 150;
+export const LANE_H = 220;
 /** Left edge of the timeline band (right of the clock). */
 export const TIMELINE_X0 = 160;
 /** Width of the timeline band the window is mapped across. */
 export const TIMELINE_W = 620;
 /** Horizontal spacing between sibling cards in an expanded level. */
-export const CHILD_SPACING = 250;
+export const CHILD_SPACING = 320;
 
 /* --------------------------------------------------------------------- */
 /* Public shapes                                                          */
@@ -134,15 +135,23 @@ export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
   const hoveredOcc = hoveredKey ? occOf(hoveredKey) : null;
 
   // Expanded base ids = hovered node + its spanning-tree ancestors (so the whole
-  // followed path stays open while descendants are revealed).
+  // followed path stays open while descendants are revealed). Walking to the top
+  // of the spanning tree also gives us the root that owns the active chain, which
+  // we use to hide every OTHER root card while a chain is being followed (#209).
   const expandedBase = new Set<string>();
+  let activeRootBase: string | null = null;
   if (hoveredBase) {
     let cur: string | undefined = hoveredBase;
     const guard = new Set<string>();
     while (cur && !guard.has(cur)) {
       guard.add(cur);
       expandedBase.add(cur);
-      cur = parentOf.get(cur);
+      const parent = parentOf.get(cur);
+      if (!parent) {
+        activeRootBase = cur;
+        break;
+      }
+      cur = parent;
     }
   }
 
@@ -196,6 +205,12 @@ export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
   };
 
   for (const inst of rootInstances) {
+    // While a chain is active (hovered or pinned), isolate it: render only the
+    // root instance that owns the followed chain and hide all off-chain roots
+    // (#209). With nothing active, every root card shows as before.
+    if (hoveredKey && !(inst.baseId === activeRootBase && inst.occ === hoveredOcc)) {
+      continue;
+    }
     const x = TIMELINE_X0 + rootFraction(inst) * TIMELINE_W;
     addNode(inst.baseId, inst.occ, 0, x, inst.runAt, true);
     descend(inst.baseId, inst.occ, 0, x);
@@ -227,9 +242,11 @@ export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
 
 /** Concrete, human-readable label for a chain edge (#144 — replaces the old
  *  unhelpful "on upstream completion"). */
-export function edgeLabel(edge: WaveChainEdge, fromName: string | undefined): string {
-  if (edge.via === 'signal') return `⚡ ${edge.topic ?? 'signal'}`;
-  const on = edge.on && edge.on.length > 0 ? edge.on.join(' / ') : 'completes';
+export function edgeLabel(edge: WaveChainEdge, fromName: string | undefined, t?: Translator): string {
+  if (edge.via === 'signal') return `⚡ ${edge.topic ?? (t ? t('waves.signalFallback') : 'signal')}`;
+  const on = edge.on && edge.on.length > 0
+    ? edge.on.map((status) => t ? t(status === 'completed' ? 'waves.edgeCompleted' : 'waves.edgeError') : status).join(' / ')
+    : (t ? t('waves.edgeCompleted') : 'completes');
   const who = fromName ? `${fromName} ` : '';
-  return `when ${who}${on}`;
+  return t ? t('waves.edgeWhen', { condition: `${who}${on}` }) : `when ${who}${on}`;
 }

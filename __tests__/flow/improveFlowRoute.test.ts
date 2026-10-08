@@ -68,6 +68,31 @@ describe('POST /api/flow/improve', () => {
     expect(improveFlowMock).toHaveBeenCalledWith(expect.objectContaining({ maxRepairs: 2 }));
   });
 
+  it('passes unsaved related flows through for draft-bundle revisions', async () => {
+    const child = { id: 'child-1', name: 'Child', nodes: [], edges: [] };
+    await POST(req({
+      flow,
+      relatedFlows: [child],
+      description: 'refine the parent',
+      modelId: 'm1',
+    }));
+    expect(improveFlowMock).toHaveBeenCalledWith(expect.objectContaining({
+      flow,
+      relatedFlows: [child],
+    }));
+  });
+
+  it('rejects malformed related flow bundles', async () => {
+    const res = await POST(req({
+      flow,
+      relatedFlows: [{ id: 'broken' }],
+      description: 'x',
+      modelId: 'm1',
+    }));
+    expect(res.status).toBe(400);
+    expect(improveFlowMock).not.toHaveBeenCalled();
+  });
+
   it('passes allowInstall through only as an explicit boolean true', async () => {
     await POST(req({ flow, description: 'x', modelId: 'm1', allowInstall: true }));
     expect(improveFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowInstall: true }));

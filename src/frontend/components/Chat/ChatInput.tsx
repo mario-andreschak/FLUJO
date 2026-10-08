@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
 import { transcribe } from '@/frontend/services/transcription';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { ticketDraftStorageKey } from '@/frontend/utils/workspaceContentKeys';
 
 const log = createLogger('frontend/components/Chat/ChatInput');
-import { 
+import {
   Box, 
   TextField, 
   IconButton, 
@@ -22,102 +23,345 @@ import {
   FormControlLabel, // Added for checkbox
   Checkbox, // Added for checkbox
   Chip,
-  Menu,
-  MenuItem,
-  ListItemIcon,
-  ListItemText,
-  Divider
+  Drawer,
+  alpha,
+  useTheme,
+  useMediaQuery,
 } from '@mui/material';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import MicIcon from '@mui/icons-material/Mic';
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CheckIcon from '@mui/icons-material/Check';
-import AutoModeIcon from '@mui/icons-material/AutoMode';
-// eslint-disable-next-line import/named
+import EditIcon from '@mui/icons-material/Edit';
+import TuneIcon from '@mui/icons-material/Tune';
+import BugReportIcon from '@mui/icons-material/BugReport';
+import FlowNodePicker from './FlowNodePicker';
 import { v4 as uuidv4 } from 'uuid';
-import { Attachment } from './index';
+import type { Attachment } from './chatApiContent';
+import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '@/frontend/components/shared/GlobalReferenceEditor';
+import { mcpService } from '@/frontend/services/mcp';
+import {
+  createPromptReferenceSuggestion,
+  PromptReferenceSuggestion,
+  encodeDynamicReference,
+} from '@/utils/shared/promptRefs';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
   disabled?: boolean;
+  placeholder?: string;
   // Add callback and state for the approval toggle
   requireApproval?: boolean;
   onRequireApprovalChange?: (checked: boolean) => void;
-  // Add callback and state for the debugger toggle
-  executeInDebugger?: boolean;
-  onExecuteInDebuggerChange?: (checked: boolean) => void;
+  /**
+   * THE debugger control (one button, not two).
+   *
+   * There used to be a "Run in debugger" checkbox here AND an "Attach debugger"
+   * button floating in the live-run indicator, which forced the user to pick
+   * the right one depending on whether a run happened to be in flight. This is
+   * now a single toggle: pressing it opens the debugger panel immediately and
+   * the chat container decides whether that means "arm the next run" or
+   * "attach to the running one". Pressing it again closes/detaches.
+   */
+  debuggerOpen?: boolean;
+  onToggleDebugger?: () => void;
   // Node picker: nodes of the conversation's flow, the node the next message
   // will resume on, whether that node is a manual pick, and the pick callback
   // (null = back to automatic).
   availableNodes?: { id: string; label: string }[];
+  /** Full flow definition, pre-rendered by the visual node picker. */
+  flow?: import('@/shared/types/flow').Flow | null;
   currentNodeId?: string | null;
   nodeOverrideActive?: boolean;
   onSelectNode?: (nodeId: string | null) => void;
+  // Edit mode: when set, the input edits an existing message (content + its
+  // process node) instead of composing a new one. Editing happens here rather
+  // than inline in the bubble.
+  editing?: { messageId: string; content: string; nodeId: string | null } | null;
+  onEditingContentChange?: (content: string) => void;
+  onEditingNodeChange?: (nodeId: string | null) => void;
+  onSaveEdit?: () => void;
+  onCancelEdit?: () => void;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   disabled = false,
+  placeholder,
   requireApproval = false,
   onRequireApprovalChange,
-  executeInDebugger = false, // Default to false
-  onExecuteInDebuggerChange,
+  debuggerOpen = false,
+  onToggleDebugger,
   availableNodes = [],
+  flow = null,
   currentNodeId = null,
   nodeOverrideActive = false,
-  onSelectNode
+  onSelectNode,
+  editing = null,
+  onEditingContentChange,
+  onEditingNodeChange,
+  onSaveEdit,
+  onCancelEdit
 }) => {
-  const { settings } = useStorage();
+  const { t } = useI18n();
+  const theme = useTheme();
+  const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
+  const { settings, globalEnvVars } = useStorage();
+  const globalNames = useMemo(
+    () => Object.entries(globalEnvVars)
+      .filter(([, entry]) => !entry.metadata?.isSecret)
+      .map(([name]) => name)
+      .sort((a, b) => a.localeCompare(b)),
+    [globalEnvVars],
+  );
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  // Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
+  // hands over a one-shot composer draft through sessionStorage. The draft is
+  // consumed (and cleared) exactly once so a later reload starts empty.
+  useEffect(() => {
+    try {
+      const key = ticketDraftStorageKey();
+      const draft = sessionStorage.getItem(key);
+      if (!draft) return;
+      sessionStorage.removeItem(key);
+      setMessage((current) => (current ? current : draft));
+    } catch (error) {
+      log.debug('Could not read ticket draft from sessionStorage', { error });
+    }
+  }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<GlobalReferenceEditorRef>(null);
+  const dragDepthRef = useRef(0);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
   // For audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
+  const pendingAudioBlobRef = useRef<Blob | null>(null);
+  const recordingAttemptRef = useRef(0);
+  const mountedRef = useRef(true);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      recordingAttemptRef.current += 1;
+
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
+      }
+
+      const recorder = mediaRecorderRef.current;
+      mediaRecorderRef.current = null;
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.onstop = null;
+        recorder.onerror = null;
+        try {
+          recorder.stop();
+        } catch (error) {
+          log.debug('Media recorder was already stopped', { error });
+        }
+      }
+
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = null;
+      pendingAudioBlobRef.current = null;
+
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+    };
+  }, []);
   
-  // Node picker menu state
-  const [nodeMenuAnchor, setNodeMenuAnchor] = useState<HTMLElement | null>(null);
-  const currentNodeLabel = availableNodes.find(n => n.id === currentNodeId)?.label
-    || (currentNodeId ? `${currentNodeId.substring(0, 6)}...` : 'Start');
+  // Visual node picker (modal) open state.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [mobileOptionsOpen, setMobileOptionsOpen] = useState(false);
+
+  // Editing an existing message vs. composing a new one. In edit mode the text
+  // and picked node come from the parent; otherwise from local state.
+  const isEditing = !!editing;
+  const pickerSelectedId = isEditing ? (editing?.nodeId ?? null) : currentNodeId;
+  const nodeLabelFor = (id: string | null) =>
+    availableNodes.find(n => n.id === id)?.label
+    || (id ? `${id.substring(0, 6)}...` : t('chat.input.startNode'));
+  const currentNodeLabel = nodeLabelFor(pickerSelectedId);
+  const hasRunOptions = !!onRequireApprovalChange || !!onToggleDebugger || ((!!onSelectNode || isEditing) && availableNodes.length > 0);
+  const hasActiveRunOption = requireApproval || debuggerOpen || nodeOverrideActive;
+  const handlePickNode = (nodeId: string | null) => {
+    if (isEditing) onEditingNodeChange?.(nodeId);
+    else onSelectNode?.(nodeId);
+  };
+
+  const [referenceSuggestions, setReferenceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+  const editorSuggestions = useMemo<PromptReferenceSuggestion[]>(() => [
+    ...referenceSuggestions,
+    ...(flow?.nodes ?? []).map(node => ({
+      kind: 'mention' as const, server: '', name: node.id,
+      label: node.data?.label || node.id, value: encodeDynamicReference('node', node.id),
+      description: node.data?.description || node.id, category: 'node' as const,
+    })),
+  ], [flow, referenceSuggestions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!flow) {
+      setReferenceSuggestions([]);
+      return () => { cancelled = true; };
+    }
+
+    const startNode = flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'start');
+    const startTargetId = startNode
+      ? flow.edges.find((edge) => edge.source === startNode.id && edge.data?.edgeType !== 'mcp')?.target
+      : undefined;
+    const processNodeId = pickerSelectedId
+      ?? startTargetId
+      ?? flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'process')?.id;
+    if (!processNodeId) {
+      setReferenceSuggestions([]);
+      return () => { cancelled = true; };
+    }
+
+    const mcpNodeIds = new Set(flow.edges
+      .filter((edge) => edge.data?.edgeType === 'mcp'
+        && (edge.source === processNodeId || edge.target === processNodeId))
+      .map((edge) => edge.source === processNodeId ? edge.target : edge.source));
+    const contexts = flow.nodes
+      .filter((candidate) => (candidate.data?.type ?? candidate.type) === 'mcp' && mcpNodeIds.has(candidate.id))
+      .map((candidate) => ({
+        server: candidate.data.properties?.boundServer as string | undefined,
+        enabledTools: new Set<string>(
+          Array.isArray(candidate.data.properties?.enabledTools)
+            ? candidate.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
+            : [],
+        ),
+        enabledResources: candidate.data.properties?.enabledResources as string[] | 'all' | undefined,
+      }))
+      .filter((context): context is {
+        server: string;
+        enabledTools: Set<string>;
+        enabledResources: string[] | 'all' | undefined;
+      } => !!context.server);
+
+    if (contexts.length === 0) {
+      setReferenceSuggestions([]);
+      return () => { cancelled = true; };
+    }
+
+    void Promise.all(contexts.map(async ({ server, enabledTools, enabledResources }) => {
+      const suggestions: PromptReferenceSuggestion[] = [];
+      try {
+        const result = await mcpService.listServerTools(server);
+        for (const tool of result.tools ?? []) {
+          if (!tool?.name || !enabledTools.has(tool.name)) continue;
+          suggestions.push(createPromptReferenceSuggestion(
+            { kind: 'tool', server, name: tool.name },
+            tool.name,
+            tool.description || server,
+          ));
+        }
+      } catch (error) {
+        log.warn(`Failed to load chat @ tool suggestions for ${server}`, error);
+      }
+      try {
+        const result = await mcpService.listServerResources(server);
+        const isResourceEnabled = (uri: string) => enabledResources === undefined
+          || enabledResources === 'all'
+          || enabledResources.includes(uri);
+        for (const resource of result.resources ?? []) {
+          if (!isResourceEnabled(resource.uri)) continue;
+          suggestions.push(createPromptReferenceSuggestion(
+            { kind: 'resource', server, name: resource.uri },
+            resource.name || resource.uri,
+            resource.description || `${server} · ${resource.uri}`,
+          ));
+        }
+        for (const resource of result.resourceTemplates ?? []) {
+          if (!isResourceEnabled(resource.uriTemplate)) continue;
+          suggestions.push(createPromptReferenceSuggestion(
+            { kind: 'resource', server, name: resource.uriTemplate },
+            resource.name || resource.uriTemplate,
+            resource.description || `${server} · ${resource.uriTemplate}`,
+          ));
+        }
+      } catch (error) {
+        log.warn(`Failed to load chat @ resource suggestions for ${server}`, error);
+      }
+      return suggestions;
+    })).then((groups) => {
+      if (!cancelled) setReferenceSuggestions(groups.flat());
+    });
+
+    return () => { cancelled = true; };
+  }, [flow, pickerSelectedId]);
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogContent, setDialogContent] = useState('');
   const [dialogTitle, setDialogTitle] = useState('');
   const [dialogType, setDialogType] = useState<'document' | 'audio'>('document');
+  const [pendingAudioDataUrl, setPendingAudioDataUrl] = useState<string | null>(null);
+  const [pendingAudioMimeType, setPendingAudioMimeType] = useState<string | undefined>();
   const [isProcessing, setIsProcessing] = useState(false);
   
   // Transcription state
   const [transcriptionProgress, setTranscriptionProgress] = useState(0);
   const [transcriptionStatus, setTranscriptionStatus] = useState('');
+  const [transcriptionState, setTranscriptionState] = useState<
+    'idle' | 'processing' | 'success' | 'empty' | 'error' | 'disabled' | 'cancelled'
+  >('idle');
   
-  // Handle text input change
-  const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setMessage(e.target.value);
+  // Handle text input change (routes to the parent while editing).
+  const handleMessageChange = (value: string) => {
+    if (isEditing) onEditingContentChange?.(value);
+    else setMessage(value);
   };
-  
+
+  // Save the in-progress edit (only when there's content).
+  const handleSaveEdit = () => {
+    if (editing && editing.content.trim()) onSaveEdit?.();
+  };
+
   // Handle sending a message
   const handleSend = () => {
+    // The textbox stays editable while `disabled` (so the user can type ahead while a
+    // conversation loads or a run is in flight), so sending is gated here instead.
+    if (disabled) return;
     if (message.trim() || attachments.length > 0) {
       log.debug('Sending message', { messageLength: message.length, attachmentsCount: attachments.length });
       onSendMessage(message, attachments);
       setMessage('');
       setAttachments([]);
+      // Keep the caret in the composer so the user can keep typing after a send.
+      editorRef.current?.focus();
     }
   };
-  
-  // Handle key press (Enter to send)
+
+  // Handle key press (Enter to send / save edit)
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      log.debug('Enter key pressed, sending message');
       e.preventDefault();
-      handleSend();
+      if (isEditing) {
+        handleSaveEdit();
+      } else {
+        log.debug('Enter key pressed, sending message');
+        handleSend();
+      }
+    } else if (e.key === 'Escape' && isEditing) {
+      e.preventDefault();
+      onCancelEdit?.();
     }
   };
 
@@ -162,6 +406,59 @@ const ChatInput: React.FC<ChatInputProps> = ({
     log.debug('File selection triggered');
     fileInputRef.current?.click();
   };
+
+  const isFileDrag = (dataTransfer: DataTransfer) =>
+    dataTransfer.files?.length > 0 || Array.from(dataTransfer.types ?? []).includes('Files');
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled || isEditing) return;
+    dragDepthRef.current += 1;
+    setIsDraggingFiles(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    // Without preventDefault, browsers treat files as navigation targets and
+    // never dispatch a usable drop event to the composer.
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = disabled || isEditing ? 'none' : 'copy';
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled || isEditing) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFiles(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    if (disabled || isEditing) return;
+
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    log.debug('Adding dropped attachment(s)', { count: files.length });
+
+    const results = await Promise.allSettled(files.map(fileToAttachment));
+    const nextAttachments = results.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [result.value];
+      log.error(`Failed to read dropped file: ${files[index]?.name ?? 'unknown'}`, result.reason);
+      return [];
+    });
+    if (nextAttachments.length > 0) {
+      setAttachments(prev => [...prev, ...nextAttachments]);
+    }
+  };
   
   // Process selected file
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -170,21 +467,39 @@ const ChatInput: React.FC<ChatInputProps> = ({
     
     const file = files[0];
     log.debug('File selected', { fileName: file.name, fileSize: file.size, fileType: file.type });
-    setDialogTitle(`Processing ${file.name}`);
-    setDialogType('document');
-    setDialogContent('');
-    setIsProcessing(true);
-    setDialogOpen(true);
-    
     try {
-      // Read file as text
-      const text = await readFileAsText(file);
-      log.debug('File read successfully', { contentLength: text.length });
-      setDialogContent(text);
-      setIsProcessing(false);
+      const mimeType = file.type || 'application/octet-stream';
+      const isText =
+        mimeType.startsWith('text/') ||
+        /\.(txt|md|json|csv|html?|xml|js|ts|jsx|tsx|css|scss)$/i.test(file.name);
+      if (!isText) {
+        const dataUrl = await readFileAsDataUrl(file);
+        const type: Attachment['type'] =
+          mimeType.startsWith('image/') ? 'image'
+            : mimeType.startsWith('audio/') ? 'audio'
+              : mimeType.startsWith('video/') ? 'video'
+                : 'document';
+        setAttachments(prev => [...prev, {
+          id: uuidv4(),
+          type,
+          content: dataUrl,
+          originalName: file.name,
+          mimeType,
+        }]);
+      } else {
+        setDialogTitle(t('chat.input.processingFile', { file: file.name }));
+        setDialogType('document');
+        setDialogContent('');
+        setIsProcessing(true);
+        setDialogOpen(true);
+        const text = await readFileAsText(file);
+        log.debug('File read successfully', { contentLength: text.length });
+        setDialogContent(text);
+        setIsProcessing(false);
+      }
     } catch (error) {
       log.error('Error reading file:', error);
-      setDialogContent('Error reading file. Please try again with a text file.');
+      setDialogContent(t('chat.input.readFailed'));
       setIsProcessing(false);
     }
     
@@ -200,7 +515,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       const reader = new FileReader();
       
       reader.onload = (event) => {
-        if (event.target?.result) {
+        if (typeof event.target?.result === 'string') {
           resolve(event.target.result as string);
         } else {
           reject(new Error('Failed to read file'));
@@ -214,125 +529,339 @@ const ChatInput: React.FC<ChatInputProps> = ({
       reader.readAsText(file);
     });
   };
+
+  const readFileAsDataUrl = (file: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () =>
+        typeof reader.result === 'string'
+          ? resolve(reader.result)
+          : reject(new Error('Failed to encode file'));
+      reader.onerror = () => reject(new Error('Error reading file'));
+      reader.readAsDataURL(file);
+    });
+
+  const fileToAttachment = async (file: File): Promise<Attachment> => {
+    const mimeType = file.type || 'application/octet-stream';
+    const isText =
+      mimeType.startsWith('text/') ||
+      /\.(txt|md|json|csv|html?|xml|js|ts|jsx|tsx|css|scss)$/i.test(file.name);
+    const content = isText
+      ? await readFileAsText(file)
+      : await readFileAsDataUrl(file);
+    const type: Attachment['type'] = isText
+      ? 'document'
+      : mimeType.startsWith('image/')
+        ? 'image'
+        : mimeType.startsWith('audio/')
+          ? 'audio'
+          : mimeType.startsWith('video/')
+            ? 'video'
+            : 'document';
+
+    return {
+      id: uuidv4(),
+      type,
+      content,
+      originalName: file.name,
+      mimeType,
+    };
+  };
   
+  const stopRecordingResources = () => {
+    const stream = recordingStreamRef.current;
+    recordingStreamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+  };
+
+  const transcribeRecording = async (audioBlob: Blob, attemptId: number) => {
+    const isCurrentAttempt = () =>
+      mountedRef.current && recordingAttemptRef.current === attemptId;
+
+    if (!isCurrentAttempt()) return;
+
+    if (settings?.speech?.enabled === false) {
+      setTranscriptionStatus(t('chat.input.speechDisabled'));
+      setTranscriptionState('disabled');
+      setIsProcessing(false);
+      return;
+    }
+
+    const modelId = settings?.speech?.transcriptionModelId;
+    if (!modelId) {
+      setTranscriptionStatus(t('chat.input.transcriptionModelMissing'));
+      setTranscriptionState('error');
+      setIsProcessing(false);
+      return;
+    }
+
+    transcriptionAbortRef.current?.abort();
+    const controller = new AbortController();
+    transcriptionAbortRef.current = controller;
+    setDialogContent('');
+    setTranscriptionProgress(0);
+    setTranscriptionStatus(t('chat.input.transcriptionUploading'));
+    setTranscriptionState('processing');
+    setIsProcessing(true);
+
+    try {
+      const result = await transcribe(audioBlob, {
+        modelId,
+        language: settings?.speech?.language || navigator.language,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (isCurrentAttempt()) setTranscriptionProgress(progress);
+        },
+      });
+      if (!isCurrentAttempt()) return;
+
+      const transcript = result.text.trim();
+      if (result.success && transcript) {
+        setDialogContent(transcript);
+        setTranscriptionProgress(100);
+        setTranscriptionStatus(t('chat.input.transcriptionCompleted'));
+        setTranscriptionState('success');
+        log.debug('Prerecorded audio transcription completed', {
+          textLength: transcript.length,
+        });
+      } else if (result.code === 'empty-transcript') {
+        setTranscriptionStatus(t('chat.input.noTranscript'));
+        setTranscriptionState('empty');
+        log.warn('The transcription provider returned no speech');
+      } else if (result.code === 'cancelled') {
+        setTranscriptionStatus('');
+        setTranscriptionState('cancelled');
+      } else {
+        setTranscriptionStatus(
+          t('chat.input.transcriptionFailed', {
+            error: result.error || t('chat.input.transcriptionUnavailable'),
+          }),
+        );
+        setTranscriptionState('error');
+      }
+    } catch (error) {
+      if (!isCurrentAttempt()) return;
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Error handling prerecorded audio transcription', { error });
+      setDialogContent('');
+      setTranscriptionStatus(
+        t('chat.input.transcriptionFailed', { error: message }),
+      );
+      setTranscriptionState('error');
+    } finally {
+      if (isCurrentAttempt()) {
+        if (transcriptionAbortRef.current === controller) {
+          transcriptionAbortRef.current = null;
+        }
+        setIsProcessing(false);
+      }
+    }
+  };
+
   // Start audio recording
   const startRecording = async () => {
+    if (
+      isProcessing ||
+      mediaRecorderRef.current ||
+      recordingStreamRef.current
+    ) {
+      log.debug('Ignoring recording request while audio is being finalized');
+      return;
+    }
+
     log.debug('Starting audio recording');
+    const attemptId = ++recordingAttemptRef.current;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current || recordingAttemptRef.current !== attemptId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       log.debug('Audio stream obtained successfully');
-      
-      // Reset audio chunks
+      recordingStreamRef.current = stream;
+      pendingAudioBlobRef.current = null;
       audioChunksRef.current = [];
-      
-      // Create media recorder
-      const mediaRecorder = new MediaRecorder(stream);
+
+      // Prefer formats accepted directly by OpenAI-compatible transcription
+      // endpoints. Chrome normally selects WebM/Opus; Safari can use MP4.
+      const supportedMimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+      ];
+      const recorderMimeType = typeof MediaRecorder.isTypeSupported === 'function'
+        ? supportedMimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType))
+        : undefined;
+
+      let mediaRecorder: MediaRecorder;
+      try {
+        mediaRecorder = recorderMimeType
+          ? new MediaRecorder(stream, { mimeType: recorderMimeType })
+          : new MediaRecorder(stream);
+      } catch (error) {
+        if (!recorderMimeType) throw error;
+        log.warn('Preferred recorder MIME type failed; using browser default', {
+          mimeType: recorderMimeType,
+          error,
+        });
+        mediaRecorder = new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = mediaRecorder;
-      
-      // Handle data available event
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
-      
-      // Handle recording stop
-      mediaRecorder.onstop = async () => {
-        // Create blob from chunks
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        
-        // Start the dialog with loading state
-        setDialogTitle('Audio Recording');
-        setDialogType('audio');
-        setDialogContent(''); // Clear any previous content
-        setIsProcessing(true);
-        setDialogOpen(true);
-        
-        try {
-          // Get speech settings from storage
-          const speechSettings = settings?.speech || {
-            enabled: true,
-            modelSize: 'base',
-            autoDownload: false
-          };
-          
-          if (speechSettings.enabled) {
-            // Use the new transcription service
-            setTranscriptionStatus('Initializing transcription...');
-            setTranscriptionProgress(0);
-            
-            const result = await transcribe(audioBlob, {
-              onProgress: setTranscriptionProgress,
-              onStatusChange: setTranscriptionStatus,
-              language: navigator.language
+
+      mediaRecorder.onerror = (event) => {
+        const recorderError = 'error' in event && event.error instanceof Error
+          ? event.error
+          : new Error('MediaRecorder failed');
+        stopRecordingResources();
+        mediaRecorder.onstop = null;
+        if (mediaRecorder.state !== 'inactive') {
+          try {
+            mediaRecorder.stop();
+          } catch (error) {
+            log.debug('Media recorder was already stopped after an error', {
+              error,
             });
-            
-            if (result.success) {
-              // Set transcription result
-              const resultText = result.text;
-              
-              // Add a note that it was transcribed using Web Speech API
-              // resultText += '\n\n(Transcribed using browser speech recognition)';
-              
-              setDialogContent(resultText);
-              log.debug('Transcription successful', {
-                textLength: result.text.length,
-                engine: result.engine
-              });
-            } else {
-              // Handle error
-              setDialogContent(`Error transcribing audio: ${result.error}.`);
-              log.error('Transcription failed', { error: result.error });
-            }
-          } else {
-            // Fallback message if speech recognition is disabled
-            setDialogContent('Speech recognition is disabled in settings. Enable it to get automatic transcriptions.');
           }
-        } catch (error) {
-          log.error('Error handling audio recording', { error });
-          setDialogContent(`Failed to process audio: ${error}`);
-        } finally {
+        }
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
+        if (
+          mountedRef.current &&
+          recordingAttemptRef.current === attemptId
+        ) {
+          recordingAttemptRef.current += 1;
+          if (recordingIntervalRef.current) {
+            clearInterval(recordingIntervalRef.current);
+            recordingIntervalRef.current = null;
+          }
+          setRecordingTime(0);
+          setIsRecording(false);
           setIsProcessing(false);
-          
-          // Stop all tracks
-          stream.getTracks().forEach(track => track.stop());
+          log.error('Media recorder failed', { error: recorderError });
+          alert(t('chat.input.audioFailed', {
+            error: recorderError.message,
+          }));
         }
       };
-      
-      // Start recording
+
+      mediaRecorder.onstop = async () => {
+        // Release the microphone before FileReader or any remote request starts.
+        stopRecordingResources();
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
+
+        const isCurrentAttempt = () =>
+          mountedRef.current && recordingAttemptRef.current === attemptId;
+        const recordedMime =
+          mediaRecorder.mimeType ||
+          audioChunksRef.current[0]?.type ||
+          recorderMimeType ||
+          'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: recordedMime });
+
+        if (!isCurrentAttempt()) return;
+
+        setDialogTitle(t('chat.input.audioRecording'));
+        setDialogType('audio');
+        setPendingAudioDataUrl(null);
+        setPendingAudioMimeType(recordedMime);
+        setDialogContent('');
+        setTranscriptionProgress(0);
+        setTranscriptionStatus(t('chat.input.initializingTranscription'));
+        setTranscriptionState('processing');
+        setIsProcessing(true);
+        setDialogOpen(true);
+
+        if (audioBlob.size === 0) {
+          pendingAudioBlobRef.current = null;
+          setPendingAudioMimeType(undefined);
+          setTranscriptionStatus(t('chat.input.noAudioData'));
+          setTranscriptionState('error');
+          setIsProcessing(false);
+          return;
+        }
+
+        pendingAudioBlobRef.current = audioBlob;
+
+        try {
+          const audioDataUrl = await readFileAsDataUrl(audioBlob);
+          if (!isCurrentAttempt()) return;
+          setPendingAudioDataUrl(audioDataUrl);
+          await transcribeRecording(audioBlob, attemptId);
+        } catch (error) {
+          if (!isCurrentAttempt()) return;
+          const message = error instanceof Error ? error.message : String(error);
+          log.error('Could not prepare the recorded audio', { error });
+          setTranscriptionStatus(
+            t('chat.input.audioFailed', { error: message }),
+          );
+          setTranscriptionState('error');
+          setIsProcessing(false);
+        }
+      };
+
       mediaRecorder.start();
       setIsRecording(true);
-      
-      // Start timer
-      const interval = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
+
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime((previous) => previous + 1);
       }, 1000);
-      
-      setRecordingInterval(interval);
-      
     } catch (error) {
+      if (!mountedRef.current || recordingAttemptRef.current !== attemptId) return;
+
+      recordingAttemptRef.current += 1;
+      stopRecordingResources();
+      mediaRecorderRef.current = null;
+      setIsRecording(false);
+      setIsProcessing(false);
       log.error('Error starting recording:', error);
-      alert('Could not access microphone. Please check permissions.');
+      alert(t('chat.input.microphoneFailed'));
     }
   };
-  
+
   // Stop audio recording
   const stopRecording = () => {
     log.debug('Stopping audio recording');
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      
-      // Clear timer
-      if (recordingInterval) {
-        clearInterval(recordingInterval);
-        setRecordingInterval(null);
+    const mediaRecorder = mediaRecorderRef.current;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      setIsProcessing(true);
+      try {
+        mediaRecorder.stop();
+      } catch (error) {
+        log.error('Could not stop media recorder', { error });
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
+        setIsProcessing(false);
+        alert(t('chat.input.audioFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      } finally {
+        stopRecordingResources();
+        setIsRecording(false);
+
+        if (recordingIntervalRef.current) {
+          clearInterval(recordingIntervalRef.current);
+          recordingIntervalRef.current = null;
+        }
+
+        setRecordingTime(0);
       }
-      
-      setRecordingTime(0);
     }
   };
   
+
   // Format recording time
   const formatRecordingTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -340,17 +869,55 @@ const ChatInput: React.FC<ChatInputProps> = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
+  const handleRetryTranscription = () => {
+    const audioBlob = pendingAudioBlobRef.current;
+    if (!audioBlob) return;
+
+    const attemptId = ++recordingAttemptRef.current;
+    void transcribeRecording(audioBlob, attemptId);
+  };
+
+  const handleCloseDialog = () => {
+    if (dialogType === 'audio') {
+      recordingAttemptRef.current += 1;
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = null;
+      pendingAudioBlobRef.current = null;
+      stopRecordingResources();
+      setIsProcessing(false);
+      setTranscriptionState('cancelled');
+      setPendingAudioDataUrl(null);
+      setPendingAudioMimeType(undefined);
+    }
+    setDialogOpen(false);
+  };
+
   // Add attachment from dialog
   const handleAddAttachment = () => {
     log.debug('Adding attachment', { type: dialogType, titleLength: dialogTitle.length });
+    const transcript = dialogContent.trim();
     const newAttachment: Attachment = {
       id: uuidv4(),
       type: dialogType,
-      content: dialogContent,
-      originalName: dialogTitle
+      content: dialogType === 'audio' && pendingAudioDataUrl
+        ? pendingAudioDataUrl
+        : dialogContent,
+      originalName: dialogTitle,
+      ...(dialogType === 'audio' && pendingAudioMimeType
+        ? {
+            mimeType: pendingAudioMimeType,
+            ...(transcript ? { transcript } : {}),
+          }
+        : {}),
     };
     
     setAttachments([...attachments, newAttachment]);
+    transcriptionAbortRef.current?.abort();
+    transcriptionAbortRef.current = null;
+    pendingAudioBlobRef.current = null;
+    setPendingAudioDataUrl(null);
+    setPendingAudioMimeType(undefined);
+    setTranscriptionState('idle');
     setDialogOpen(false);
   };
   
@@ -363,14 +930,53 @@ const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <>
       <Paper 
-        elevation={3} 
+        elevation={0}
+        data-testid="chat-input-dropzone"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         sx={{ 
-          p: 2, 
+          width: '100%',
+          maxWidth: 'none',
+          mx: 0,
+          p: { xs: 1, sm: 1.25 },
+          pb: { xs: 'max(8px, env(safe-area-inset-bottom))', sm: 1.25 },
           display: 'flex', 
           flexDirection: 'column',
-          borderRadius: 2
+          border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
+          borderRadius: 0,
+          bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === 'dark' ? 0.82 : 0.92),
+          boxShadow: `0 22px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.12)}, 0 0 0 1px ${alpha(theme.palette.common.white, 0.03)} inset`,
+          backdropFilter: 'blur(24px) saturate(145%)',
+          position: 'relative',
+          transition: theme.transitions.create(['border-color', 'background-color', 'box-shadow']),
+          ...(isDraggingFiles && {
+            borderColor: theme.palette.primary.main,
+            bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.18 : 0.08),
+            boxShadow: `0 0 0 2px ${alpha(theme.palette.primary.main, 0.3)} inset, 0 22px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.12)}`,
+          }),
         }}
       >
+        {isDraggingFiles && (
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              bgcolor: alpha(theme.palette.background.paper, 0.72),
+              color: 'primary.main',
+              fontWeight: 700,
+              letterSpacing: '0.02em',
+            }}
+          >
+            {t('chat.input.dropFiles')}
+          </Box>
+        )}
         {/* Attachments display */}
         {attachments.length > 0 && (
           <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
@@ -390,7 +996,13 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   <Box
                     component="img"
                     src={attachment.content}
-                    alt={attachment.originalName || 'pasted image'}
+                    alt={attachment.originalName || t('chat.input.pastedImage')}
+                    sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, mr: 1 }}
+                  />
+                ) : attachment.type === 'video' ? (
+                  <Box
+                    component="video"
+                    src={attachment.content}
                     sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, mr: 1 }}
                   />
                 ) : attachment.type === 'document' ? (
@@ -399,7 +1011,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   <MicIcon fontSize="small" sx={{ mr: 1 }} />
                 )}
                 <Typography variant="body2" noWrap sx={{ maxWidth: 150 }}>
-                  {attachment.originalName || `${attachment.type} attachment`}
+                  {attachment.originalName || t('chat.input.attachment', { type: attachment.type })}
                 </Typography>
                 <IconButton 
                   size="small" 
@@ -413,60 +1025,82 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </Box>
         )}
         
+        {/* Edit banner: shown while editing an existing message in the input. */}
+        {isEditing && (
+          <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip icon={<EditIcon />} label={t('chat.input.editing')} size="small" color="warning" variant="outlined" />
+            <Typography variant="caption" color="text.secondary">
+              {t('chat.input.editKeys')}
+            </Typography>
+          </Box>
+        )}
+
         {/* Input area */}
-        <Box sx={{ display: 'flex', alignItems: 'flex-end' }}>
-          <TextField
-            fullWidth
-            multiline
-            maxRows={4}
-            data-tour="chat-input"
-            placeholder="Type a message..."
-            value={message}
+        <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 0.35 }}>
+          <GlobalReferenceEditor
+            ref={editorRef}
+            value={isEditing ? (editing?.content ?? '') : message}
             onChange={handleMessageChange}
+            globalNames={globalNames}
+            suggestions={editorSuggestions}
+            enhancedHitlist
+            hitlistPlacement="top"
+            multiline
+            minRows={1}
+            maxRows={isEditing ? 12 : 4}
+            dataTour="chat-input"
+            ariaLabel={isEditing ? t('chat.input.editMessage') : t('chat.input.message')}
+            placeholder={isEditing ? t('chat.input.editPlaceholder') : (placeholder || t('chat.input.placeholder'))}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
-            disabled={disabled}
-            variant="outlined"
-            sx={{ mr: 1 }}
-            InputProps={{
-              sx: { borderRadius: 2 }
-            }}
+            // Never read-only: `disabled` flips to true on every conversation switch
+            // (details loading), while a run is in flight and while a tool approval is
+            // pending. Making the textbox contenteditable=false in those windows meant
+            // the first click was swallowed and the user had to click a second time.
+            // Sending is still blocked — see handleSend.
+            disabled={false}
+            autoFocus={isEditing}
+            containerSx={{ flex: 1 }}
           />
-          
+
+          {/* Compose-only controls (attachments, audio) are hidden while editing. */}
+          {!isEditing && (
+            <>
           {/* File attachment button */}
-          <Tooltip title="Attach document">
-            <IconButton 
-              color="primary" 
+          <Tooltip title={t('chat.input.attach')}>
+            <IconButton
+              color="primary"
               onClick={handleFileSelect}
               disabled={disabled || isRecording}
             >
               <AttachFileIcon />
             </IconButton>
           </Tooltip>
-          
+
           {/* Hidden file input */}
           <input
             type="file"
             ref={fileInputRef}
             onChange={handleFileChange}
             style={{ display: 'none' }}
-            accept=".txt,.md,.json,.csv,.html,.xml,.js,.ts,.jsx,.tsx,.css,.scss"
+            accept="image/*,audio/*,video/*,.pdf,.txt,.md,.json,.csv,.html,.xml,.js,.ts,.jsx,.tsx,.css,.scss"
           />
-          
+
           {/* Audio recording button */}
-          <Tooltip title={isRecording ? "Stop recording" : "Record audio"}>
-            <IconButton 
-              color={isRecording ? "error" : "primary"} 
+          <Tooltip title={isRecording ? t('chat.input.stopRecording') : t('chat.input.recordAudio')}>
+            <IconButton
+              color={isRecording ? "error" : "primary"}
               onClick={isRecording ? stopRecording : startRecording}
-              disabled={disabled}
+              disabled={disabled || isProcessing}
+              aria-label={isRecording ? t('chat.input.stopRecording') : t('chat.input.recordAudio')}
             >
               <MicIcon />
               {isRecording && (
-                <Typography 
-                  variant="caption" 
-                  sx={{ 
-                    position: 'absolute', 
-                    bottom: -15, 
+                <Typography
+                  variant="caption"
+                  sx={{
+                    position: 'absolute',
+                    bottom: -15,
                     fontSize: '0.7rem',
                     color: 'error.main'
                   }}
@@ -476,69 +1110,117 @@ const ChatInput: React.FC<ChatInputProps> = ({
               )}
             </IconButton>
           </Tooltip>
-          
-          {/* Send button */}
-          <Tooltip title="Send message">
-            <IconButton 
-              color="primary" 
-              onClick={handleSend}
-              disabled={disabled || (!message.trim() && attachments.length === 0)}
-            >
-              <SendIcon />
-            </IconButton>
-          </Tooltip>
+          {isPhoneLayout && hasRunOptions && (
+            <Tooltip title={t('chat.input.runOptions')}>
+              <IconButton
+                color={hasActiveRunOption ? 'primary' : 'default'}
+                onClick={() => setMobileOptionsOpen(true)}
+                aria-label={t('chat.input.runOptions')}
+                aria-haspopup="dialog"
+              >
+                <TuneIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+            </>
+          )}
+
+          {isEditing ? (
+            <>
+              {/* Save / cancel the edit */}
+              <Tooltip title={t('chat.input.saveEdit')}>
+                <span>
+                  <IconButton
+                    color="primary"
+                    aria-label={t('chat.input.saveEdit')}
+                    onClick={handleSaveEdit}
+                    disabled={!editing?.content.trim()}
+                  >
+                    <CheckIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title={t('chat.input.cancelEdit')}>
+                <IconButton color="default" aria-label={t('chat.input.cancelEdit')} onClick={() => onCancelEdit?.()}>
+                  <CloseIcon />
+                </IconButton>
+              </Tooltip>
+            </>
+          ) : (
+            /* Send button */
+            <Tooltip title={t('chat.input.send')}>
+              <span>
+                <IconButton
+                  color="primary"
+                  onClick={handleSend}
+                  disabled={disabled || (!message.trim() && attachments.length === 0)}
+                  aria-label={t('chat.input.send')}
+                  sx={{
+                    width: 44,
+                    height: 44,
+                    color: '#fff',
+                    background: `linear-gradient(135deg, ${theme.palette.primary.light}, ${theme.palette.primary.main} 58%, ${theme.palette.secondary.main})`,
+                    boxShadow: `0 10px 24px ${alpha(theme.palette.primary.main, 0.28)}`,
+                    '&:hover': {
+                      background: `linear-gradient(135deg, ${theme.palette.primary.light}, ${theme.palette.primary.main} 48%, ${theme.palette.secondary.main})`,
+                      boxShadow: `0 14px 30px ${alpha(theme.palette.primary.main, 0.38)}`,
+                    },
+                    '&.Mui-disabled': {
+                      color: 'text.disabled',
+                      background: alpha(theme.palette.text.disabled, 0.12),
+                      boxShadow: 'none',
+                    },
+                  }}
+                >
+                  <SendIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
         </Box> {/* End of Input area Box */}
 
         {/* Run options: current-node pill + tool approval + execute-in-debugger */}
-        {(onRequireApprovalChange || (onSelectNode && availableNodes.length > 0)) && (
-          <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-            {/* Node picker: shows the node the next message resumes on; click
-                to manually pick a different node (or go back to automatic). */}
-            {onSelectNode && availableNodes.length > 0 && (
+        {!isPhoneLayout && hasRunOptions && (
+          <Box
+            sx={{
+              mt: 1,
+              pt: 1,
+              display: 'flex',
+              justifyContent: 'flex-start',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 1,
+              borderTop: 1,
+              borderColor: 'divider',
+            }}
+          >
+            {/* Node picker: shows the node this turn runs on; click to open the
+                visual picker and choose a node from the pre-rendered flow. */}
+            {(onSelectNode || isEditing) && availableNodes.length > 0 && (
               <>
-                <Tooltip title={nodeOverrideActive
-                  ? 'Next message will run on this manually picked node — click to change'
-                  : 'Node the next message will run on — click to pick a different one'}>
+                <Tooltip title={isEditing
+                  ? t('chat.input.nodeEditing')
+                  : (nodeOverrideActive
+                    ? t('chat.input.nodeOverride')
+                    : t('chat.input.nodeAutomatic'))}>
                   <Chip
                     icon={<AccountTreeIcon />}
                     label={currentNodeLabel}
                     size="small"
-                    color={nodeOverrideActive ? 'primary' : 'default'}
-                    variant={nodeOverrideActive ? 'filled' : 'outlined'}
-                    onClick={(e) => setNodeMenuAnchor(e.currentTarget)}
-                    disabled={disabled}
+                    color={(isEditing || nodeOverrideActive) ? 'primary' : 'default'}
+                    variant={(isEditing || nodeOverrideActive) ? 'filled' : 'outlined'}
+                    onClick={() => setPickerOpen(true)}
+                    disabled={isEditing ? false : disabled}
                   />
                 </Tooltip>
-                <Menu
-                  anchorEl={nodeMenuAnchor}
-                  open={!!nodeMenuAnchor}
-                  onClose={() => setNodeMenuAnchor(null)}
-                >
-                  <MenuItem
-                    selected={!nodeOverrideActive}
-                    onClick={() => { onSelectNode(null); setNodeMenuAnchor(null); }}
-                  >
-                    <ListItemIcon><AutoModeIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText
-                      primary="Automatic"
-                      secondary="Follow the conversation"
-                      secondaryTypographyProps={{ variant: 'caption' }}
-                    />
-                  </MenuItem>
-                  <Divider />
-                  {availableNodes.map((node) => (
-                    <MenuItem
-                      key={node.id}
-                      selected={nodeOverrideActive && node.id === currentNodeId}
-                      onClick={() => { onSelectNode(node.id); setNodeMenuAnchor(null); }}
-                    >
-                      <ListItemIcon>
-                        {node.id === currentNodeId ? <CheckIcon fontSize="small" /> : null}
-                      </ListItemIcon>
-                      <ListItemText primary={node.label} />
-                    </MenuItem>
-                  ))}
-                </Menu>
+                <FlowNodePicker
+                  open={pickerOpen}
+                  flow={flow}
+                  selectedNodeId={pickerSelectedId}
+                  allowAutomatic={!isEditing}
+                  onSelect={handlePickNode}
+                  onClose={() => setPickerOpen(false)}
+                />
               </>
             )}
             {onRequireApprovalChange && (
@@ -551,50 +1233,134 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   disabled={disabled}
                 />
               }
-              label={<Typography variant="caption">Require Tool Approvals</Typography>}
+              label={<Typography variant="caption">{t('chat.input.requireApprovals')}</Typography>}
               sx={{ mr: 'auto' }} // Push to the left
             />
             )}
-            {/* Debugger Checkbox */}
-            {onExecuteInDebuggerChange && ( // Only show if callback is provided
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={executeInDebugger}
-                    onChange={(e) => onExecuteInDebuggerChange(e.target.checked)}
-                    size="small"
-                    disabled={disabled}
-                  />
-                }
-                label={<Typography variant="caption">Execute in Debugger</Typography>}
-                sx={{ ml: 2 }} // Add some margin to separate from the other checkbox
-              />
+            {/* THE Debugger button (replaces the old checkbox + the live-run
+                "attach debugger" floater). Never disabled by `disabled`: the
+                composer is disabled while a run is in flight or paused, which
+                is exactly when opening the debugger is most useful. */}
+            {onToggleDebugger && (
+              <Tooltip title={debuggerOpen ? t('chat.input.debuggerClose') : t('chat.input.debuggerOpen')}>
+                <Chip
+                  icon={<BugReportIcon />}
+                  label={t('chat.input.debugger')}
+                  size="small"
+                  color={debuggerOpen ? 'primary' : 'default'}
+                  variant={debuggerOpen ? 'filled' : 'outlined'}
+                  onClick={onToggleDebugger}
+                  aria-pressed={debuggerOpen}
+                  sx={{ ml: 1 }}
+                />
+              </Tooltip>
             )}
           </Box>
         )} {/* End of Checkboxes Box */}
       </Paper> {/* End of main Paper component */}
 
+      {/* Phone-only run settings: keep the composer to one row while preserving
+          every desktop option in a reachable, touch-friendly bottom sheet. */}
+      <Drawer
+        anchor="bottom"
+        open={isPhoneLayout && mobileOptionsOpen}
+        onClose={() => setMobileOptionsOpen(false)}
+        PaperProps={{
+          role: 'dialog',
+          'aria-label': t('chat.input.runOptions'),
+          sx: {
+            borderRadius: '18px 18px 0 0',
+            px: 2,
+            pt: 1.5,
+            pb: 'max(16px, env(safe-area-inset-bottom))',
+          },
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <TuneIcon color="primary" />
+          <Typography variant="h6" sx={{ flex: 1 }}>{t('chat.input.runOptions')}</Typography>
+          <IconButton onClick={() => setMobileOptionsOpen(false)} aria-label={t('common.close')}>
+            <CloseIcon />
+          </IconButton>
+        </Box>
+
+        {(onSelectNode || isEditing) && availableNodes.length > 0 && (
+          <>
+            <Typography variant="overline" color="text.secondary">{t('chat.nodePicker.title')}</Typography>
+            <Chip
+              icon={<AccountTreeIcon />}
+              label={currentNodeLabel}
+              color={(isEditing || nodeOverrideActive) ? 'primary' : 'default'}
+              variant={(isEditing || nodeOverrideActive) ? 'filled' : 'outlined'}
+              onClick={() => setPickerOpen(true)}
+              disabled={isEditing ? false : disabled}
+              sx={{ alignSelf: 'flex-start', mb: 1 }}
+            />
+            <FlowNodePicker
+              open={pickerOpen}
+              flow={flow}
+              selectedNodeId={pickerSelectedId}
+              allowAutomatic={!isEditing}
+              onSelect={handlePickNode}
+              onClose={() => setPickerOpen(false)}
+            />
+          </>
+        )}
+
+        {onRequireApprovalChange && (
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={requireApproval}
+                onChange={(e) => onRequireApprovalChange(e.target.checked)}
+                disabled={disabled}
+              />
+            }
+            label={t('chat.input.requireApprovals')}
+          />
+        )}
+        {onToggleDebugger && (
+          <Chip
+            icon={<BugReportIcon />}
+            label={debuggerOpen ? t('chat.input.debuggerClose') : t('chat.input.debuggerOpen')}
+            color={debuggerOpen ? 'primary' : 'default'}
+            variant={debuggerOpen ? 'filled' : 'outlined'}
+            onClick={() => { onToggleDebugger(); setMobileOptionsOpen(false); }}
+            aria-pressed={debuggerOpen}
+            sx={{ alignSelf: 'flex-start', mt: 1 }}
+          />
+        )}
+      </Drawer>
+
       {/* Dialog for attachment preview/editing */}
       <Dialog
         open={dialogOpen}
-        onClose={() => !isProcessing && setDialogOpen(false)}
+        onClose={handleCloseDialog}
         maxWidth="md"
         fullWidth
       >
         <DialogTitle>
           {dialogTitle}
           {!isProcessing && (
-            <IconButton
-              aria-label="close"
-              onClick={() => setDialogOpen(false)}
+            <Box
+              display="flex"
+              alignItems="center"
+              gap={0.5}
               sx={{
                 position: 'absolute',
                 right: 8,
                 top: 8,
               }}
             >
-              <CloseIcon />
-            </IconButton>
+              <AskFlujoButton />
+              <BugReportButton variant="icon" />
+              <IconButton
+                aria-label={t('common.close')}
+                onClick={handleCloseDialog}
+              >
+                <CloseIcon />
+              </IconButton>
+            </Box>
           )}
         </DialogTitle>
         <DialogContent dividers>
@@ -607,7 +1373,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               {dialogType === 'audio' && (
                 <Box sx={{ mt: 2, textAlign: 'center' }}>
                   <Typography variant="body2">
-                    {transcriptionStatus || 'Processing audio...'}
+                    {transcriptionStatus || t('chat.input.processingAudio')}
                   </Typography>
                   {transcriptionProgress > 0 && (
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -618,31 +1384,55 @@ const ChatInput: React.FC<ChatInputProps> = ({
               )}
             </Box>
           ) : (
-            <TextField
-              multiline
-              fullWidth
-              minRows={10}
-              maxRows={20}
-              value={dialogContent}
-              onChange={(e) => setDialogContent(e.target.value)}
-              variant="outlined"
-              placeholder={dialogType === 'document' ? 'Document content' : 'Audio transcription'}
-            />
+            <Box>
+              {dialogType === 'audio' &&
+                transcriptionState !== 'idle' &&
+                transcriptionState !== 'success' &&
+                transcriptionState !== 'cancelled' && (
+                  <Typography
+                    color={transcriptionState === 'error' ? 'error' : 'text.secondary'}
+                    sx={{ mb: 2 }}
+                  >
+                    {transcriptionStatus}
+                  </Typography>
+                )}
+              <TextField
+                multiline
+                fullWidth
+                minRows={10}
+                maxRows={20}
+                value={dialogContent}
+                onChange={(e) => setDialogContent(e.target.value)}
+                variant="outlined"
+                placeholder={dialogType === 'document' ? t('chat.input.documentContent') : t('chat.input.audioTranscription')}
+              />
+            </Box>
           )}
         </DialogContent>
         <DialogActions>
-          <Button 
-            onClick={() => setDialogOpen(false)} 
-            disabled={isProcessing}
-          >
-            Cancel
+          <Button onClick={handleCloseDialog}>
+            {t('common.cancel')}
           </Button>
+          {dialogType === 'audio' &&
+            !isProcessing &&
+            (transcriptionState === 'empty' || transcriptionState === 'error') &&
+            pendingAudioBlobRef.current !== null && (
+              <Button onClick={handleRetryTranscription}>
+                {t('chat.input.retryTranscription')}
+              </Button>
+            )}
           <Button 
             onClick={handleAddAttachment} 
             variant="contained" 
-            disabled={isProcessing || !dialogContent.trim()}
+            disabled={
+              isProcessing ||
+              (dialogType === 'audio'
+                ? !pendingAudioDataUrl ||
+                  (transcriptionState !== 'disabled' && !dialogContent.trim())
+                : !dialogContent.trim())
+            }
           >
-            Add to Message
+            {t('chat.input.addToMessage')}
           </Button>
         </DialogActions>
       </Dialog>

@@ -11,6 +11,7 @@ lerna-debug.log*
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Runtime data
+.flujo-detached-identity*/
 pids
 *.pid
 *.seed
@@ -131,8 +132,23 @@ dist
 
 node_modules
 dist
-mcp-servers
+# Standalone MCP package sources/manifests are tracked; their compiled dist
+# directories remain covered by the generic dist rule above.
+# Runtime-installed MCP servers are user data. Keep every clone/install private
+# to the local FLUJO instance while retaining only FLUJO's package workspaces.
+/mcp-servers/*
+!/mcp-servers/README.md
+!/mcp-servers/embed-shared.mjs
+!/mcp-servers/bash/
+!/mcp-servers/browser/
+!/mcp-servers/filesystem/
+!/mcp-servers/flujo/
+!/mcp-servers/shared/
 build
+# This App Router endpoint is source, not generated build output.
+!/src/app/api/packages/build/
+/src/app/api/packages/build/*
+!/src/app/api/packages/build/route.ts
 .vscode
 *.code-workspace
 
@@ -165,3 +181,39 @@ deprecation-report.md
 ISSUE_TRIAGE.md
 /.playwright-mcp
 /userdata
+/mcp-servers/browser/userdata/
+/short
+/output/
+/outputs/
+*.jpeg
+jest-output.txt
+# Machine-readable Jest results consumed by scripts/verify-test-baseline.cjs (#457)
+jest-results.json
+jest-results-isolated.json
+memory-experiment-results.json
+
+# Claude Code local settings and worktrees
+.claude/settings.local.json
+.claude/worktrees/
+/snapshots
+/mcp-servers/browser/snapshots/
+/mcp-servers/browser/bin/
+/mcp-servers/browser/outputs/
+/mcp-servers/browser/*-evidence-*/
+/workspaces
+.tmp-sandbox-harness/sandbox.html
+
+# Persona endurance test artifacts
+soak-artifacts/
+goal-acceptance-artifacts/
+/test-outputs
+/soak-smoke-artifacts
+/benchmark-artifacts
+fresh-memory-experiment-results.json
+next-env.d.ts
+/docs/outreach
+/docs/research
+/.tmp
+/test-results/
+/playwright-report/
+/persona-browser-artifacts/

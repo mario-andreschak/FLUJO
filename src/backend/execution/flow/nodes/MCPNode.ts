@@ -2,14 +2,18 @@
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import { MCPHandler } from '../handlers/MCPHandler';
-import { encodeToolName } from '../handlers/toolNamespace';
+import { encodeToolName, hashSchema } from '../handlers/toolNamespace';
+import { mcpService } from '@/backend/services/mcp';
+import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { SharedState, MCPNodeParams, MCPNodePrepResult, MCPNodeExecResult } from '../types';
 import { FEATURES } from '@/config/features'; // Import feature flags
+import { hidePresetParameters, mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
+import type { MCPServerConfig } from '@/shared/types/mcp';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/MCPNode');
 
-export class MCPNode extends BaseNode {
+export class MCPNode extends BaseNode<MCPNodeParams, SharedState, MCPNodePrepResult, MCPNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: MCPNodeParams): Promise<MCPNodePrepResult> {
     log.info('prep() started');
     
@@ -135,17 +139,44 @@ export class MCPNode extends BaseNode {
     // Store MCP context in shared state if execution was successful
     if (execResult.success && execResult.server && execResult.tools) {
       const toolTimeout = node_params?.properties?.toolTimeout;
+      let serverConfig: MCPServerConfig | undefined;
+      try {
+        const loadedConfigs = await mcpService.loadServerConfigs?.();
+        serverConfig = Array.isArray(loadedConfigs)
+          ? loadedConfigs.find((config) => config.name === execResult.server)
+          : undefined;
+      } catch (error) {
+        log.warn('Could not load server-wide tool parameter presets', error);
+      }
       // Filter available tools based on enabled tools
       const availableTools = execResult.tools
         .filter(tool => execResult.enabledTools?.includes(tool.name))
         .map(tool => {
+          const presetArgs = mergeToolParameterPresets(
+            serverConfig?.toolParameterPresets,
+            node_params?.properties?.toolParameterPresets,
+            tool.name,
+          );
           // Create a copy of the tool with the model-facing name encoded (#16).
+          // Issue #255: capture the advertise-time identity (client generation +
+          // schema hash) and record the current schema hash as the baseline.
+          const schemaHash = hashSchema((tool as { inputSchema?: unknown }).inputSchema);
+          mcpService.setToolSchemaHash(execResult.server!, tool.name, schemaHash);
           return {
             ...tool,
+            inputSchema: hidePresetParameters(
+              (tool as { inputSchema?: Record<string, unknown> }).inputSchema,
+              presetArgs,
+            ),
             originalName: tool.name,
             server: execResult.server,
+            nodeId: node_params?.id,
             name: encodeToolName(execResult.server!, tool.name),
-            timeout: toolTimeout
+            timeout: toolTimeout,
+            clientGeneration: mcpService.getClientGeneration(execResult.server!),
+            schemaHash,
+            uiResourceUri: extractUiResourceUri((tool as { _meta?: unknown })._meta),
+            ...(Object.keys(presetArgs).length > 0 ? { presetArgs } : {}),
           };
         });
       
@@ -174,7 +205,18 @@ export class MCPNode extends BaseNode {
       // be decoded later, including across a tool-approval resume (#16).
       sharedState.toolNameMap = sharedState.toolNameMap || {};
       for (const tool of availableTools) {
-        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName, timeout: tool.timeout };
+        // Issue #255: carry the advertise-time identity so a stale dispatch is rejected.
+        sharedState.toolNameMap[tool.name] = {
+          server: execResult.server!,
+          tool: tool.originalName,
+          timeout: tool.timeout,
+          nodeId: node_params?.id,
+          clientGeneration: tool.clientGeneration,
+          schemaHash: tool.schemaHash,
+          annotations: tool.annotations,
+          uiResourceUri: tool.uiResourceUri,
+          presetArgs: tool.presetArgs,
+        };
       }
 
       // Get tool names for logging

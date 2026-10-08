@@ -184,6 +184,8 @@ export interface InstallAuditEntry {
   command?: string;
   args?: string[];
   serverUrl?: string;
+  /** Exact multi-step execution plan when one command/argv pair is insufficient. */
+  steps?: Array<{ label: string; command: string; args?: string[]; cwd?: string }>;
   /** Env-var / header NAMES only — never values. */
   requiredEnvNames?: string[];
   verificationStatus?: string;
@@ -214,6 +216,7 @@ export function planToAuditEntry(
     ...(plan.command ? { command: plan.command } : {}),
     ...(plan.args ? { args: plan.args } : {}),
     ...(plan.serverUrl ? { serverUrl: plan.serverUrl } : {}),
+    ...(plan.steps ? { steps: plan.steps } : {}),
     requiredEnvNames: plan.requiredEnvNames,
     verificationStatus: plan.verificationStatus,
     consent: { allowed: decision.allowed, reason: decision.reason },

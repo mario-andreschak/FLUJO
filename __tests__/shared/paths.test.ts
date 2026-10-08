@@ -5,7 +5,8 @@
  * (#57) relocate user data and report the right self-update behavior, while a
  * plain git checkout is completely unchanged. Contract points covered:
  *  - getDataDir() defaults to the app dir (process.cwd()) so a git checkout keeps
- *    data in the repo, and honors FLUJO_DATA_DIR (resolved to absolute) otherwise
+ *    data in the repo, honors FLUJO_DATA_DIR otherwise, and lets the internal
+ *    FLUJO_PARENT_DATA_DIR marker recover the parent root at child boundaries
  *  - getInstallMode() maps FLUJO_CONTAINER -> 'container', FLUJO_NPM -> 'npm',
  *    and neither -> 'git', with container taking precedence
  */
@@ -14,14 +15,20 @@ import { getAppDir, getDataDir, getInstallMode } from '@/utils/paths';
 
 describe('utils/paths', () => {
   const ORIGINAL = {
+    parentDataDir: process.env.FLUJO_PARENT_DATA_DIR,
     dataDir: process.env.FLUJO_DATA_DIR,
     container: process.env.FLUJO_CONTAINER,
     npm: process.env.FLUJO_NPM,
   };
 
+  beforeEach(() => {
+    delete process.env.FLUJO_PARENT_DATA_DIR;
+  });
+
   afterEach(() => {
     // Restore so tests can't leak env into each other or the rest of the suite.
     for (const [key, value] of [
+      ['FLUJO_PARENT_DATA_DIR', ORIGINAL.parentDataDir],
       ['FLUJO_DATA_DIR', ORIGINAL.dataDir],
       ['FLUJO_CONTAINER', ORIGINAL.container],
       ['FLUJO_NPM', ORIGINAL.npm],
@@ -56,6 +63,18 @@ describe('utils/paths', () => {
       process.env.FLUJO_DATA_DIR = 'relative-data';
       expect(getDataDir()).toBe(path.resolve('relative-data'));
       expect(path.isAbsolute(getDataDir())).toBe(true);
+    });
+
+    it('prefers the parent marker when FLUJO_DATA_DIR names a selected workspace', () => {
+      process.env.FLUJO_PARENT_DATA_DIR = 'parent-data';
+      process.env.FLUJO_DATA_DIR = path.join('parent-data', 'workspaces', 'research');
+      expect(getDataDir()).toBe(path.resolve('parent-data'));
+    });
+
+    it('treats an empty parent marker as absent', () => {
+      process.env.FLUJO_PARENT_DATA_DIR = '   ';
+      process.env.FLUJO_DATA_DIR = 'configured-data';
+      expect(getDataDir()).toBe(path.resolve('configured-data'));
     });
   });
 

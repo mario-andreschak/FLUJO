@@ -12,7 +12,7 @@
  */
 import { FlowConverter } from '@/backend/execution/flow/FlowConverter';
 import { ProcessNode, FinishNode } from '@/backend/execution/flow/nodes';
-import { FINAL_RESPONSE_ACTION } from '@/backend/execution/flow/types';
+import { FINAL_RESPONSE_ACTION, TOOL_CALL_ACTION } from '@/backend/execution/flow/types';
 import type {
   SharedState,
   ProcessNodePrepResult,
@@ -197,6 +197,21 @@ describe('ProcessNode.post — deterministic conditioned routing', () => {
     ]);
     const action = await node.post(prep, exec, state, params);
     expect(action).toBe('e-handoff');
+    expect(state.handoffRequested?.edgeId).toBe('e-handoff');
+  });
+
+  it('stages a handoff behind ordinary calls from the same model turn', async () => {
+    const { node, params } = conditionedProcess();
+    node.addSuccessor(finishTarget('handoff-target'), 'e-handoff');
+    const state = makeState();
+    const exec = execWith('dispatch after reading', [
+      { name: 'handoff_to_handoff-target', args: {}, id: 'handoff-1', result: '' },
+      { name: 'mcp_read_issue', args: {}, id: 'ordinary-1', result: '' },
+    ]);
+
+    const action = await node.post(prep, exec, state, params);
+
+    expect(action).toBe(TOOL_CALL_ACTION);
     expect(state.handoffRequested?.edgeId).toBe('e-handoff');
   });
 

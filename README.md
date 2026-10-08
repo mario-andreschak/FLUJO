@@ -1,11 +1,41 @@
-<img width="720" height="405" alt="output" src="https://github.com/user-attachments/assets/87ff1b2c-fec2-4652-a049-98e5ee699e00" />
+<div align="center">
 
+# FLUJO
+
+### Build private AI agents visually. Run them your way.
+
+**Connect your AIs and apps, build an agent, then talk to it, automate it, or call it from other software.**
+
+FLUJO is open-source and local-first. Start with the guided setup, build agents as simple step-by-step recipes or expert visual flows, inspect every run, and expose the same agents through OpenAI-compatible and MCP endpoints — while your keys and data stay under your control.
+
+**Simple + visual builders** · **MCP-native** · **Multi-model** · **Built-in debugger** · **Automation**
+
+[**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
+
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-3.46.2-green.svg)](package.json)
+</div>
+
+
+>`FLUJO is too complicated? You are missing a feature or are stuck on something?`
+>Hop into the [Discord](https://discord.gg/KPyrjTSSat),
+>or create an [Issue on Github](https://github.com/mario-andreschak/FLUJO/issues)!
+>**We can only improve if we know what's wrong.** `It really helps a lot!`
+
+[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
+<p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
+
+<img width="1336" height="839" alt="image" src="https://github.com/user-attachments/assets/7adb5b58-bffa-48dc-82f3-bf1ac585db55" />
 
 ## ⚡ Quick Install (recommended)
 
-One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and sets up a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
+The installer sets up everything FLUJO needs (Git, Node.js, Python, uv, ripgrep), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
 
-**Windows** — press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
+**Windows installer (recommended)** — click below to download the latest `flujo-setup.exe`:
+
+[![Download Setup.exe — Windows Installer](docs/images/readme/download-setup.png)](https://github.com/mario-andreschak/FLUJO/releases/latest/download/flujo-setup.exe)
+
+**Windows PowerShell** — alternatively, press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
 
 ```powershell
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
@@ -25,54 +55,46 @@ npx flujo-ai
 
 Prefer to set it up manually? See [Getting Started](#-getting-started). To remove FLUJO later, see [Uninstalling](#uninstalling-windows).
 
-## A few words in advance
-
-For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
--> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
-
-### FLUJO animated Short #1 — "A sad song about MCP"
-
-[![FLUJO animated short: A sad song about MCP](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
-
-# FLUJO
-
-[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.27.0-green.svg)](package.json)
-
-FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
+> [!TIP]
+> Stuck on MCP installation, the app, or anything else? [Open a GitHub issue](https://github.com/mario-andreschak/FLUJO/issues) or [join the Discord](https://discord.gg/KPyrjTSSat). I read every message and will do my best to get back to you within a day.
 
 ![FLUJO Overview](docs/images/readme/home.png)
 
-FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code and a lot of LOVE.
+<p align="center"><em>The FLUJO home screen: connect once, then use your private AI workspace.</em></p>
+
+FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code, and a lot of love.
 
 ## 🌟 Key Features
 
-### 🔑 Secure Environment & API Key Management
+### 🔐 Local-first Security & Workspace Controls
 
+- **Local-first by default**: keep FLUJO on localhost, allow devices on your private network, or configure it for a public deployment
 - **Encrypted at rest**: API keys and other secrets are encrypted in local storage, with an optional custom encryption password for extra protection
 - **Never sent to the browser**: secrets stay server-side — the frontend only ever sees a masked placeholder, even in your own DevTools
-- **Global variables, bound anywhere**: define a key once (e.g. `openrouter_key`) and bind it into any model or MCP server config instead of pasting it repeatedly
-- **Backup & restore** your encrypted store from the Settings page
+- **Reusable global variables**: define a key once and bind it into any AI or connected-app configuration instead of pasting it repeatedly
+- **Backup & restore** your encrypted workspace from Settings
 
-![Settings — Global Environment Variables](docs/images/readme/settings.png)
+![Settings — Network Access](docs/images/readme/settings.png)
 
-### 🤖 Model Management
+### 🤖 AI Setup
 
-- **Multiple providers**: OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
+- **Multiple providers**: OpenAI, Azure OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, Codex, and local models via Ollama
+- **Guided or expert setup**: choose a gentle walkthrough, a faster guided path, or the complete configuration form
 - **Claude Subscription**: use your Claude Pro/Max plan directly (via the Claude Agent SDK) instead of a metered API key
-- **Per-model system prompts** and tunable parameters, reused across any flow
+- **Reusable connections**: organize configured AIs into folders, mark favorites, and reuse them across agents and conversations
 
-![Model Configuration](docs/images/readme/models.png)
-![Model Configuration Modal](docs/images/readme/model-edit.png)
+![AI Setup — Configured AI Connections](docs/images/readme/models.png)
+![AI Setup — Guided Connection Wizard](docs/images/readme/model-edit.png)
 
-### 🔌 MCP Server Integration
+### 🔌 Connected Apps (MCP)
 
-- **Install from anywhere**: the **Marketplace** tab searches the official [MCP Registry](https://registry.modelcontextprotocol.io) and installs with one click; **Spotlight** curates servers verified to work well with FLUJO; or install manually from a GitHub repo / local folder
+- **Guided connection**: let FLUJO research an app, choose from curated options, or enter a remote URL, GitHub repository, or local command yourself
+- **Install from anywhere**: search the official [MCP Registry](https://registry.modelcontextprotocol.io), use curated servers verified with FLUJO, or install manually from a GitHub repo / local folder
 - **Full MCP capability support**: tools, resources, prompts, roots (workspace folders), and sampling (let a server borrow one of your models under a trust policy you control)
 - **Tool inspection & testing**: browse and call a server's tools, resources, and prompts straight from its detail view
 - **FLUJO as an MCP proxy**: re-expose any server you've configured in FLUJO to other MCP clients (Claude Desktop, Cursor, Cline, …) over Streamable HTTP — configure a server once, use it everywhere
 
-![MCP Marketplace](docs/images/readme/mcp-marketplace.png)
+![Connected Apps — Guided Setup](docs/images/readme/mcp-marketplace.png)
 
 Configuring a server is a guided, three-step form (define it → install & build → define how to run it) with a one-click connection test before you save:
 
@@ -82,15 +104,16 @@ Every connected server gets a detail view to browse and test its tools, resource
 
 ![MCP Tool Tester](docs/images/readme/mcp-tool-tester.png)
 
-### 🔄 Visual Flow Builder
+### 🧩 Agent Builder
 
-- **Drag-and-drop orchestration**: connect Start, Process (LLM), MCP, Subflow, and Finish nodes into a graph
+- **Simple mode**: build an agent like a recipe, one plain-language step at a time, without touching a diagram
+- **Expert visual mode**: connect Start, AI, connected-app, subflow, and Finish nodes in a drag-and-drop graph
 - **Branching & handoff**: let a model hand off to another node/agent based on the conversation, build loops, or fan out into multiple specialists
 - **Subflows**: call another flow as a single step, with its own isolated state — reuse a flow like a function
 - **Per-node tool & prompt scoping**: decide exactly which tools, resources, and system-prompt fragments each node can see
 
-![Flow Builder](docs/images/readme/flow-builder.png)
-![Branching prompt configuration](docs/images/readme/flow-branching-config.png)
+![Agent Builder — Simple Setup](docs/images/readme/flow-builder.png)
+![Agent Builder — Expert Visual Mode](docs/images/readme/flow-branching-config.png)
 
 #### Branching & handoff
 
@@ -112,20 +135,21 @@ Combine multiple handoffs and loops to build an orchestrator, or drop in a **Sub
 ![Orchestration](https://github.com/user-attachments/assets/0a3abfe9-8e83-49ea-a8da-bede3bed31e3)
 ![Subflow configuration](docs/images/readme/flow-subflow-config.png)
 
-### 💬 Chat Interface
+### 💬 Talk
 
-- **Live execution view**: watch a run progress node-by-node in real time, with token usage and a context-window meter per conversation
+- **One place to talk to every agent**: select an agent and start a conversation from the Talk page
+- **Live execution view**: watch a run progress step-by-step in real time, with token usage and a context-window meter per conversation
 - **Visual debugger**: set breakpoints, step through a run node-by-node, and inspect state before/after each step
 - **Human-in-the-loop tool approval**: optionally require approval before any tool call executes, for any provider (including Claude Subscription's agentic tool use)
 - **File & audio attachments**, message editing, and conversation branching
 
-![Chat Interface](docs/images/readme/chat-handoff.png)
+![Talk Interface](docs/images/readme/chat-handoff.png)
 
 Step through a run node-by-node with the visual debugger, inspecting prep/exec state at every stop:
 
 ![Visual Debugger](docs/images/readme/chat-debugger.png)
 
-### ⏱️ Planned Executions (Automation)
+### ⏱️ Automations — Triggers
 
 Run your flows automatically — on a schedule or when something happens — without opening the chat. FLUJO just needs to be running for triggers to fire.
 
@@ -135,16 +159,24 @@ Run your flows automatically — on a schedule or when something happens — wit
 - **MCP tool polling**: periodically call a tool and fire on change, on new items, or let a model/checker-flow decide
 - **URL watch**: fire when a fetched page's content changes
 
-![Planned Executions](docs/images/readme/planned-executions.png)
-![New Planned Execution](docs/images/readme/planned-execution-new.png)
+![Automation Triggers](docs/images/readme/planned-executions.png)
+![New Automation Trigger — Schedule, Webhook, File, Tool, Website, or Flow](docs/images/readme/planned-execution-new.png)
 
 Run history is kept per trigger, with the full output of every run one click away:
 
-![Planned Execution Run Detail](docs/images/readme/planned-execution-detail.png)
+![Automation Trigger Run Detail](docs/images/readme/planned-execution-detail.png)
 
 As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn FLUJO into an autonomous auto-responder:
 
 ![WhatsApp auto-reply demo](docs/images/readme/whatsapp-demo.png)
+
+### Meetings
+- Put multiple Agents into a shared conversation, so they can work on a task together
+
+<img width="1056" height="457" alt="image" src="https://github.com/user-attachments/assets/7a254708-f9ad-41d8-bd6e-808887295f93" />
+
+<img width="1798" height="982" alt="image" src="https://github.com/user-attachments/assets/b70cf527-743e-4a71-a9a1-8ba9c36a2bf0" />
+
 
 ### 🔄 External Tool Integration
 
@@ -155,20 +187,23 @@ As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn F
 
 ### 📖 Built-in API Documentation
 
-A searchable `/docs` page inside the app documents every REST endpoint FLUJO exposes (chat, conversations, models, flows, MCP, planned executions, env/encryption, backups) — useful when integrating FLUJO into your own tooling.
+A searchable `/docs` page inside the app provides a curated HTTP reference for chat, conversations, models, flows, MCP, automations, and administration. See the [API guide](docs/api-reference/README.md) for integration boundaries and the generated route inventory.
 
-![API Documentation](docs/images/readme/docs.png)
+![Built-in API Documentation](docs/images/readme/docs.png)
 
 ## 🚀 Getting Started
+
+Start with the [first successful conversation guide](docs/getting-started/README.md). It covers installation choices, connecting and testing an AI, creating an agent, and recovering from common setup errors.
 
 ### Manual installation:
 ### Prerequisites
 
-- Node.js (v18 or higher)
+- Node.js (v22 or higher)
 - claude code (optional, if you want to use Anthropic Subscription) 
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
 - uv and/or yarn (optional, if you prefer these over npm or pip)
+- ripgrep (optional filesystem-search acceleration; the installer adds it automatically)
 
 ### Installation
 
@@ -180,16 +215,12 @@ A searchable `/docs` page inside the app documents every REST endpoint FLUJO exp
 
 2. Install dependencies:
    ```bash
-   npm install
-   # or
-   yarn install
+   npm ci
    ```
 
 3. Start the development server:
    ```bash
    npm run dev
-   # or
-   yarn dev
    ```
 
 4. Open your browser and navigate to:
@@ -219,9 +250,12 @@ Then open http://localhost:4200.
 > reuses the previously built image and runs the *old* version. `--build`
 > rebuilds when the source changed and is a fast no-op when it hasn't.
 
-- **Your data persists** in the named volumes `flujo-db` (flows, encrypted keys,
-  MCP configs, chat history) and `flujo-mcp-servers` (installed MCP server clones),
-  so it survives `docker compose down` / `up`.
+- **Your data persists** in `flujo-workspaces` (the workspace namespace and all
+  non-default workspace data), plus the existing `flujo-db` and
+  `flujo-mcp-servers` volumes mounted inside `default-workspace`. Reusing those
+  two established volume names makes an upgrade retain existing flows, models,
+  encrypted keys, chats, MCP configs, and installed server clones while every
+  newly created workspace also survives `docker compose down` / `up`.
 - **Updating**: use `git pull && docker compose up --build` instead of the
   in-app updater. FLUJO detects it is running in a container and shows this in
   the update settings. (`docker compose pull` only helps if you switched the
@@ -233,41 +267,45 @@ Then open http://localhost:4200.
   `claude setup-token` and pass it as `CLAUDE_CODE_OAUTH_TOKEN`.
 - **fileWatch triggers**: bind-mount the host folder you want to watch into the
   container (see the commented volume example in `docker-compose.yml`).
+- **MCP Apps**: Compose also publishes the shared sandbox listener on port
+  `4201`, loopback-only. Each App is loaded through its own
+  `http://<originKey>.localhost:4201` browser origin. Keep both port mappings
+  when using interactive MCP Apps.
 
 > ⚠️ **Security:** FLUJO has no authentication layer and its git API runs
 > commands on the server, so the port is bound to **localhost only** by default.
 > Do **not** expose it on `0.0.0.0` / publish it publicly unless it sits behind
 > your own authenticating reverse proxy on a trusted network.
 
-### Hosted deployments behind a trusted proxy (`FLUJO_EXTRA_LOCAL_HOSTS`)
+### Network exposure
 
-FLUJO's `/api/*` routes are guarded by a fail-closed **localhost origin check**
-(the defense against drive-by, cross-origin RCE on its command/secret sinks). By
-default only the localhost family (`localhost`, `127.0.0.1`, `::1`) counts as
-"local", so a request that arrives with any other Host — e.g. an internal DNS
-name like `http://<id>.vm.<tenants>.internal:4200` — gets a `403`. That is a
-problem only when FLUJO is deliberately run **one instance per tenant on a
-private network, reached exclusively by an authenticating reverse proxy /
-control plane** over an internal name. A standalone install never needs this.
+Use **Settings → Network access** to choose one deployment posture:
 
-For that hosted posture, set the opt-in env var `FLUJO_EXTRA_LOCAL_HOSTS` to
-extend what counts as "local" for **both** the Host and the Origin hostname
-checks:
+- **Localhost** (default) — only this computer; both listeners bind loopback.
+- **Local Network** — listen on all interfaces and accept private LAN addresses
+  and this machine's hostnames.
+- **Public** — accept any hostname. FLUJO has no built-in authentication, so use
+  this only behind an authenticating HTTPS reverse proxy.
 
-- **Format:** a comma-separated list. Each entry is either an **exact hostname**
-  (`flujo-box`) or, when it starts with a dot, a **domain suffix**
-  (`.vm.my-tenants.internal` matches any `<sub>.vm.my-tenants.internal`, but not
-  the bare apex and not `...internal.evil.com`). Entries are trimmed and
-  case-insensitive.
-- **Default:** **unset** — behavior is unchanged (localhost family only), so
-  every standalone install is unaffected.
-- **Example:** `FLUJO_EXTRA_LOCAL_HOSTS=.vm.my-tenants.internal`
+The one setting controls the UI, API, OpenAI/MCP endpoints, Host/Origin guard,
+and MCP Apps sandbox binding together. Restart FLUJO after changing it.
 
-> ⚠️ **Security precondition:** only set this when **nothing untrusted can reach
-> FLUJO's port at those names**. The DNS-rebinding protection is still enforced
-> — an attacker page's Origin never matches these entries — but widening the
-> trusted-host set is only safe on a private network fronted by your own
-> authenticating proxy.
+MCP Apps require no additional configuration on localhost or a plain-HTTP Local
+Network install. FLUJO discovers the browser-visible host automatically and uses
+port `4201` for the sandbox. Hosted HTTPS deployments can optionally configure
+`FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` with `{app}` as one complete hostname label,
+for example `https://{app}.sandbox.example.com/sandbox.html`, and proxy those
+wildcard hostnames to FLUJO's plain HTTP port `4201`. Without wildcard
+DNS/TLS, set the same variable to a single shared sandbox origin instead
+(for example `https://sandbox.example.com`); the App key then travels in the
+authenticated sandbox URL. Preserve the browser's
+`Host` and `Referer` headers through the proxy. Docker Compose publishes both
+listener ports to host loopback by default; change those mappings when other LAN
+devices or a reverse proxy need to reach them.
+
+See [MCP Apps host support](docs/features/mcp/apps.md) for protocol behavior,
+security guarantees, display modes, compatibility limits, and the versioned
+compliance matrix.
 
 ### Run via npx (npm package)
 
@@ -285,7 +323,7 @@ installed command is still `flujo`.)
 
 ### One-line install (Windows)
 
-On a fresh Windows machine you can install everything (Git, Node.js, Python, uv),
+On a fresh Windows machine you can install everything (Git, Node.js, Python, uv, ripgrep),
 clone FLUJO, build it, and optionally start it with a single PowerShell command:
 
 ```powershell
@@ -301,10 +339,82 @@ $env:FLUJO_DIR = "D:\Apps\FLUJO"; $env:FLUJO_START = "1"; irm https://raw.github
 
 See [`scripts/install.ps1`](scripts/install.ps1) for all options.
 
+Prefer a graphical installer? Download `flujo-setup.exe` from the
+[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) — it's a
+wizard around the same `install.ps1` script above (see
+[`installer/flujo-setup.iss`](installer/flujo-setup.iss)).
+
+The Windows installer is a networked bootstrapper, not an offline file-copy
+package. It requires Windows App Installer (`winget`) and access to GitHub, the
+winget catalog, npm, and Python package sources. Missing Git, Node.js, Python,
+uv, and ripgrep are installed through winget; Ollama is optional. The installer also
+installs the Claude Code CLI used by the optional Claude Subscription provider.
+Installer builds from the current source pin versioned Windows releases to their
+tag and commit. The one-line scripts default to the `main` development channel;
+their installed revision and channel are recorded in the installation manifest.
+Older released installers may still follow `main`; check their release notes.
+
+Reruns require an official FLUJO checkout with a clean working tree and no local
+commits that the update would discard. Dirty, diverged, unrelated, or wrong-branch
+targets stop with recovery guidance. Commit or back up your work before retrying.
+Development updates are fast-forward only. A stable detached-tag install is
+upgraded with a newer versioned installer; the in-app updater does not switch it
+to `main`.
+
+### Corporate proxy and custom CA
+
+Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22 or newer and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
+
+Prefer your organization's approved OS trust configuration. If that is unavailable, set an explicit proxy and readable PEM CA bundle for the installer session. The `FLUJO_*` aliases are mapped only into installer child processes; they do not change global npm/Git configuration, the certificate store, or persistent environment variables.
+
+Windows PowerShell:
+
+```powershell
+$env:FLUJO_HTTPS_PROXY = "https://proxy-user:proxy-password@proxy.example.test:8443"
+$env:FLUJO_NO_PROXY = "localhost,127.0.0.1,.example.test"
+$env:FLUJO_EXTRA_CA_CERTS = "C:\Certificates\corporate-root.pem"
+$env:FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT = "120000"
+irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
+```
+
+Linux/macOS:
+
+```bash
+export FLUJO_HTTPS_PROXY='https://proxy-user:proxy-password@proxy.example.test:8443'
+export FLUJO_NO_PROXY='localhost,127.0.0.1,.example.test'
+export FLUJO_EXTRA_CA_CERTS='/path/to/corporate-root.pem'
+export FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT='120000'
+curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash
+```
+
+The initial `irm`/`curl` request must itself be able to reach GitHub, so configure the shell or OS proxy first if required. Optional `FLUJO_HTTP_PROXY`, `FLUJO_PLAYWRIGHT_DOWNLOAD_HOST`, and standard `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`, `NODE_EXTRA_CA_CERTS`, `npm_config_cafile`, `PLAYWRIGHT_DOWNLOAD_HOST`, and `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT` values are also honored. Proxy URLs may contain credentials; do not paste them into issue reports. Installer logs redact known secret forms and are saved under the FLUJO CLI metadata directory.
+
+Managed Chromium is installed as the named `patchright-chromium` stage. After correcting a proxy, CA, DNS, or timeout problem, retry only that version-matched browser download from the FLUJO directory:
+
+```bash
+node mcp-servers/browser/scripts/install-browser.mjs
+```
+
+On Ubuntu/Debian, the Unix installer also installs Chromium's Linux libraries
+and fonts in the `patchright-system-dependencies` stage, then checks a real
+headless browser launch in `patchright-verification`. After updating FLUJO, retry
+a failed browser setup from the FLUJO directory:
+
+```bash
+sudo "$(command -v node)" mcp-servers/browser/scripts/install-browser.mjs --install-deps
+node mcp-servers/browser/scripts/install-browser.mjs --verify
+```
+
+The dependency step requires root (omit `sudo` when already root); browser
+verification runs as your regular user. Production builds use `tsconfig.build.json`
+to check application code; `npm run typecheck` still checks the full test suite.
+
+Never use `NODE_TLS_REJECT_UNAUTHORIZED=0`, `npm strict-ssl=false`, or another TLS-verification bypass. The installers ignore an inherited Node TLS bypass and direct you to secure proxy/CA configuration instead.
+
 ### One-line install (Linux / macOS)
 
 The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
-uv) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
+uv, ripgrep) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
 registers the `flujo` command:
 
 ```bash
@@ -334,13 +444,20 @@ or, from inside your install folder:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-It asks, per prerequisite (Git, Node.js, Python, uv), whether to remove it — defaulting
-to **yes** for ones FLUJO installed and **no** for ones that were already on your system
-— then removes the `flujo` command and the FLUJO folder.
+It asks, per prerequisite (Git, Node.js, Python, uv, ripgrep, and optional Ollama), whether
+to remove it — defaulting to **yes** for ones FLUJO installed and **no** for ones
+that were already on your system — then removes the `flujo` command and the FLUJO
+folder. These ownership decisions come from
+`%LOCALAPPDATA%\FLUJO-cli\install-manifest.json`; without a readable manifest,
+all detected prerequisites default to **keep**. The graphical bootstrapper is
+intentionally not registered in Windows Apps, so this direct PowerShell command
+is the supported uninstall entry point.
 
-> ⚠️ **This permanently deletes your data.** All flows, encrypted API keys, MCP server
-> configs and chat history live in `<install>\db\` and are removed with the folder. Use
-> FLUJO's built-in backup/export first if you want to keep them.
+> ⚠️ **This permanently deletes your data.** All workspace data—including flows,
+> encrypted API keys, MCP server configs, chat history, user files and runtime
+> artifacts—lives below `<data root>\workspaces\<workspace>\` and is removed with
+> the installation/data folder. Use FLUJO's built-in backup/export first if you
+> want to keep it.
 
 Installs created before this feature have no manifest; the uninstaller then defaults every
 prerequisite to **keep** (it can't tell which FLUJO installed). Re-running the installer
@@ -349,52 +466,49 @@ once writes the manifest for future uninstalls. See
 
 ## 📖 Usage
 
-### Setting up often used API keys
+### Saving API keys and shared values
 
-1. Navigate to Settings
-2. Save your API Keys globally to secure them
+1. Open **More → Settings → Global variables**
+2. Save the API key or shared value once
+3. Bind that variable when configuring an AI or connected app
 
-![Settings — Global Environment Variables](docs/images/readme/settings.png)
+### Connecting AI
 
-### Setting Up Models
+1. Open **AI Setup**
+2. Click **Connect AI**
+3. Choose the gentle guide, the faster guided path, or the expert form
+4. Select a provider, enter its credentials, and save the connection
+5. Use the model card's connection test before creating an agent. Saving alone does not verify credentials, provider access, or quota.
 
-1. Navigate to the Models page
-2. Click "Add Model" to create a new model configuration
-3. Configure your model with name, provider, API key, and system prompt
-4. Save your configuration
+### Connecting Apps and MCP Servers
 
-### Managing MCP Servers
+1. Open **Connected Apps**
+2. Click **Connect App**
+3. Let AI help, browse curated apps, or provide a remote URL, GitHub repository, or local command
+4. Configure any required environment variables and test the connection
+5. Open the connected app to browse and test its tools, resources, and prompts
 
-1. Go to the MCP page
-2. Click "Add Server"
-3. Pick a tab: **Spotlight** (curated, one click), **Marketplace** (search the official MCP Registry), **GitHub** (install from a repo), **Local Server**, **Remote**, or **Reference Servers**
-4. Configure server settings and environment variables
-5. Start and manage your server, or open its card to browse/test its tools, resources, and prompts
+### Building Agents
 
-### Creating Workflows
-
-1. Visit the Flows page
-2. Click "Create Flow" to start a new workflow
-3. Add processing nodes and connect them
-4. Configure each node with models and tools
-5. Save your flow
-
-![Flow Dashboard](docs/images/readme/flows-dashboard.png)
+1. Open **Agents** and create an agent
+2. Stay in **Simple** mode to add plain-language steps, or switch to **Expert** for the visual graph
+3. Connect an AI, apps, or other agents to each step
+4. Check the agent, save it, and click **Try it**
 
 For branching, loops, and subflows, see [Orchestration & Subflows](#orchestration--subflows) above.
 
-### Automating Flows (Planned Executions)
+### Automating Agents
 
-1. Go to the Executions page
-2. Click "Add" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
-3. Pick the flow to run and configure the trigger-specific options
-4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the same page
+1. Go to **More → Automations → Triggers**
+2. Click "Add trigger" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
+3. Pick the agent or flow to run and configure the trigger-specific options
+4. Save — FLUJO runs it in the background while the app is open and keeps the run history on the Triggers page
 
-### Using the Chat Interface
+### Talking to an Agent
 
-1. Go to the Chat page
-2. Select a flow to interact with
-3. Start chatting with your configured workflow — enable "Execute in Debugger" or "Require Tool Approvals" from the input bar if you want more control over the run
+1. Open **Talk**
+2. Select an agent
+3. Start chatting — enable the debugger or tool approvals from the input bar when you want more control over the run
 
 ## 📄 License
 
@@ -402,18 +516,30 @@ FLUJO is licensed under the [MIT License](LICENSE).
 
 ## 🚀 Roadmap
 
-Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Planned Executions (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
+| Capability | Current scope |
+| --- | --- |
+| Interactive agents and visual flows | Available, including branching, subflows, debugging, and tool approvals |
+| AI-assisted flow generation | Available; review the generated graph and tool access before running it |
+| MCP connections | Tools, resources, prompts, roots, sampling, and interactive Apps are available; servers have their own requirements |
+| Automation triggers | Available while the FLUJO server runs; provider and tool failures still need recovery |
+| Workspaces and portable workers | Available; workers use a separate authentication boundary and credential-transfer rules |
+| Personas and Roles | Experimental persistent agents with memory and goals; indefinite unattended reliability is not established |
+| MCP Skills and experimental generators | Opt-in; see the relevant feature flags and guides |
+
+See [project status](docs/project-status.md), [release history](CHANGELOG.md), and the [Persona endurance acceptance criteria](docs/performance/persona-goal-endurance-acceptance.md) for evidence and limitations.
 
 Beyond that, ideas we're keeping an eye on:
 - Real-time voice input/output
 - Deeper MCP roots support (checkpoints/restore)
 - Edge-device-friendly builds
 
-Have a feature request? Open a GitHub issue or drop it on Discord — see [above](#a-few-words-in-advance).
+Have a feature request? [Open a GitHub issue](https://github.com/mario-andreschak/FLUJO/issues) or [drop it on Discord](https://discord.gg/KPyrjTSSat).
 
 ## 🤝 Contributing
 
 Contributions are welcome! Feel free to open issues or submit pull requests.
+
+Maintainers can [publish a release through GitHub's npm connection](docs/npm-release.md) with `npm run release -- patch`.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -425,6 +551,22 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 - GitHub: [mario-andreschak](https://github.com/mario-andreschak)
 - LinkedIn: https://www.linkedin.com/in/mario-andreschak-674033299/
+
+### Bonus: “A sad song about MCP”
+
+[![FLUJO animated short: A sad song about MCP](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
+
+## Privacy & usage
+
+FLUJO stores workspace data locally. Requests to cloud models send prompts, selected context, and authentication to the provider you choose. Connected apps can send data to their configured services. A local Ollama model can keep inference on your computer; review the tools you enable as well. A custom encryption password protects stored credentials against access to the data files; the default password is public and is not a private vault.
+
+FLUJO shares one anonymous daily-active pulse by default. The payload is limited
+to the app version, platform, install method, UTC date, and a random identifier
+that changes every day; it contains no flows, prompts, models, keys, filenames,
+account details, or permanent installation identifier. A daily in-app notice
+discloses the check. Sharing and the notice can be controlled independently
+under **Settings → Privacy & Usage**. Set `FLUJO_TELEMETRY_URL` to point at a
+self-hosted compatible collector.
 
 ## Notes:
 - You can add ~FLUJO=HTML, ~FLUJO=MARKDOWN, ~FLUJO=JSON, ~FLUJO=TEXT in your message to format the response, this will give varying results in different tools where you integrate FLUJO.

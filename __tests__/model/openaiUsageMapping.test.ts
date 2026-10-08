@@ -63,6 +63,25 @@ describe('mapOpenAiUsage (#89)', () => {
     expect(result?.cacheReadTokens).toBe(0);
   });
 
+  it('surfaces GPT-5.6 cache writes as a separate prompt subset', () => {
+    const result = mapOpenAiUsage({
+      prompt_tokens: 2_000,
+      completion_tokens: 100,
+      total_tokens: 2_100,
+      prompt_tokens_details: {
+        cached_tokens: 1_200,
+        cache_write_tokens: 500,
+      },
+    });
+    expect(result).toEqual({
+      promptTokens: 2_000,
+      completionTokens: 100,
+      totalTokens: 2_100,
+      cacheReadTokens: 1_200,
+      cacheWriteTokens: 500,
+    });
+  });
+
   it('defaults missing numeric fields to 0', () => {
     expect(mapOpenAiUsage({})).toEqual({
       promptTokens: 0,

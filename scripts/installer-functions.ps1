@@ -1,0 +1,513 @@
+<#
+.SYNOPSIS
+    Side-effect-free decision helpers shared by the Windows installer and uninstaller.
+
+.DESCRIPTION
+    This file is safe to dot-source from Pester. Functions here calculate plans,
+    launcher content, and manifest payloads. They do not prompt, install packages,
+    change policy or PATH, write files, invoke Git/npm, or delete directories.
+#>
+
+function Test-CommandAvailable {
+    param(
+        [Parameter(Mandatory)] [string]$CommandName,
+        [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue }
+    )
+
+    return [bool](& $CommandResolver $CommandName)
+}
+
+function Test-WingetAvailable {
+    param(
+        [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue }
+    )
+
+    return Test-CommandAvailable -CommandName 'winget' -CommandResolver $CommandResolver
+}
+
+function Get-DefaultInstallDirectory {
+    param(
+        [AllowEmptyString()] [string]$LocalAppData,
+        [Parameter(Mandatory)] [string]$HomeDirectory
+    )
+
+    $root = if ([string]::IsNullOrWhiteSpace($LocalAppData)) { $HomeDirectory } else { $LocalAppData }
+    return Join-Path $root 'FLUJO'
+}
+
+function Resolve-InstallDirectory {
+    param(
+        [AllowEmptyString()] [string]$RequestedPath,
+        [Parameter(Mandatory)] [string]$DefaultPath
+    )
+
+    $selected = if ([string]::IsNullOrWhiteSpace($RequestedPath)) { $DefaultPath } else { $RequestedPath.Trim() }
+    return [Environment]::ExpandEnvironmentVariables($selected)
+}
+
+function Get-InstallIntent {
+    param(
+        [Parameter(Mandatory)] [string]$InstallDirectory,
+        [Parameter(Mandatory)] [bool]$PathExists,
+        [Parameter(Mandatory)] [bool]$GitDirectoryExists,
+        [bool]$DirectoryIsEmpty = $false,
+        [bool]$RepositoryVerified = $false
+    )
+
+    if ($GitDirectoryExists) {
+        return [PSCustomObject]@{
+            InstallDirectory = $InstallDirectory
+            Action           = if ($RepositoryVerified) { 'Update' } else { 'Reject' }
+            CanProceed       = $RepositoryVerified
+            Reason           = if ($RepositoryVerified) { 'Verified clean FLUJO Git checkout' } else { 'Existing Git target has not passed repository safety checks' }
+        }
+    }
+
+    if ($PathExists -and -not $DirectoryIsEmpty) {
+        return [PSCustomObject]@{
+            InstallDirectory = $InstallDirectory
+            Action           = 'Reject'
+            CanProceed       = $false
+            Reason           = 'Target exists, is not empty, and is not a Git checkout'
+        }
+    }
+
+    return [PSCustomObject]@{
+        InstallDirectory = $InstallDirectory
+        Action           = 'Install'
+        CanProceed       = $true
+        Reason           = if ($PathExists) { 'Existing empty install target' } else { 'New install target' }
+    }
+}
+
+function Get-RepositoryUpdateDecision {
+    param(
+        [AllowEmptyString()] [string]$OriginUrl,
+        [AllowEmptyString()] [string]$WorkingTreeStatus,
+        [AllowEmptyString()] [string]$PackageName,
+        [AllowEmptyString()] [string]$CurrentBranch,
+        [Parameter(Mandatory)] [string]$RequestedRef
+    )
+
+    $reason = $null
+    if ($OriginUrl -notmatch '^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)mario-andreschak/flujo(?:\.git)?/?$' -or $PackageName -ne 'flujo-ai') {
+        $reason = 'Target is not the official FLUJO repository. Choose a new installation directory.'
+    } elseif (-not [string]::IsNullOrWhiteSpace($WorkingTreeStatus)) {
+        $reason = 'Checkout contains local changes or untracked files. Commit or back them up before updating; the installer never discards them.'
+    } elseif ($RequestedRef -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$' -and $CurrentBranch -cne $RequestedRef) {
+        $reason = 'Checkout is on a different branch. Select the intended branch yourself before updating.'
+    }
+    return [PSCustomObject]@{ CanProceed = ($null -eq $reason); Reason = $reason }
+}
+
+function New-PrerequisiteRecord {
+    param(
+        [Parameter(Mandatory)] [string]$CommandName,
+        [Parameter(Mandatory)] [string]$WingetId,
+        [Parameter(Mandatory)] [string]$DisplayName,
+        [Parameter(Mandatory)] [bool]$Preexisting
+    )
+
+    return [PSCustomObject]@{
+        Command     = $CommandName
+        WingetId    = $WingetId
+        DisplayName = $DisplayName
+        Preexisting = $Preexisting
+    }
+}
+
+function Get-PrerequisitePlan {
+    param(
+        [Parameter(Mandatory)] [object[]]$Prerequisites,
+        [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue }
+    )
+
+    $wingetAvailable = Test-WingetAvailable -CommandResolver $CommandResolver
+    $items = foreach ($prerequisite in $Prerequisites) {
+        $preexisting = Test-CommandAvailable -CommandName $prerequisite.Command -CommandResolver $CommandResolver
+        $action = if ($preexisting) { 'Keep' } elseif ($wingetAvailable) { 'Install' } else { 'Blocked' }
+        [PSCustomObject]@{
+            Command     = [string]$prerequisite.Command
+            WingetId    = [string]$prerequisite.WingetId
+            DisplayName = [string]$prerequisite.DisplayName
+            Preexisting = $preexisting
+            Action      = $action
+        }
+    }
+
+    return [PSCustomObject]@{
+        WingetAvailable = $wingetAvailable
+        CanInstall      = $wingetAvailable -or -not ($items | Where-Object { -not $_.Preexisting })
+        Prerequisites   = @($items)
+    }
+}
+
+function Get-LauncherContent {
+    param([Parameter(Mandatory)] [string]$AppDir)
+
+    return @"
+@echo off
+REM FLUJO launcher - generated by install.ps1
+set "FLUJO_HOME=$AppDir"
+if not exist "%FLUJO_HOME%\package.json" (
+  echo FLUJO was not found at "%FLUJO_HOME%". Please re-run the installer.
+  exit /b 1
+)
+cd /d "%FLUJO_HOME%"
+echo Starting FLUJO ... opening http://localhost:4200
+start "" http://localhost:4200
+npm start %*
+"@
+}
+
+function ConvertTo-InstallManifest {
+    param(
+        [Parameter(Mandatory)] [string]$AppDir,
+        [Parameter(Mandatory)] [string]$BinDir,
+        [Parameter(Mandatory)] [string]$Branch,
+        [Parameter(Mandatory)] [string]$RepoUrl,
+        [string]$Revision = '',
+        [object[]]$Prerequisites = @(),
+        [Parameter(Mandatory)] [bool]$DesktopShortcut,
+        [Parameter(Mandatory)] [bool]$ExecutionPolicyChanged,
+        [AllowNull()] [object]$ClaudeCli
+    )
+
+    return [PSCustomObject]@{
+        schema                 = 1
+        installDir             = $AppDir
+        binDir                 = $BinDir
+        branch                 = $Branch
+        channel                = if ($Branch -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { 'stable' } else { 'development' }
+        revision               = $Revision
+        repoUrl                = $RepoUrl
+        desktopShortcut        = $DesktopShortcut
+        executionPolicyChanged = $ExecutionPolicyChanged
+        claudeCli              = if ($ClaudeCli) {
+            [PSCustomObject]@{
+                installed   = [bool]$ClaudeCli.Installed
+                preexisting = [bool]$ClaudeCli.Preexisting
+                npmPackage  = [string]$ClaudeCli.NpmPackage
+            }
+        } else { $null }
+        prerequisites          = @($Prerequisites | Where-Object { $_ } | ForEach-Object {
+            [PSCustomObject]@{
+                command     = [string]$_.Command
+                wingetId    = [string]$_.WingetId
+                displayName = [string]$_.DisplayName
+                preexisting = [bool]$_.Preexisting
+            }
+        })
+    }
+}
+
+function Get-KnownInstallerPrerequisites {
+    return @(
+        [PSCustomObject]@{ command = 'git';    wingetId = 'Git.Git';            displayName = 'Git' }
+        [PSCustomObject]@{ command = 'node';   wingetId = 'OpenJS.NodeJS';      displayName = 'Node.js (includes npm)' }
+        [PSCustomObject]@{ command = 'python'; wingetId = 'Python.Python.3.12'; displayName = 'Python 3.12' }
+        [PSCustomObject]@{ command = 'uv';     wingetId = 'astral-sh.uv';       displayName = 'uv' }
+        [PSCustomObject]@{ command = 'rg';     wingetId = 'BurntSushi.ripgrep.MSVC'; displayName = 'ripgrep' }
+        [PSCustomObject]@{ command = 'ollama'; wingetId = 'Ollama.Ollama';      displayName = 'Ollama' }
+    )
+}
+
+function Test-NodeVersion {
+    param(
+        [string]$CommandName = 'node',
+        [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue },
+        [scriptblock]$VersionResolver = {
+            param($Cmd)
+            $resolvedOutput = & $Cmd.Source --version 2>&1
+            [PSCustomObject]@{
+                Output   = $resolvedOutput
+                ExitCode = $LASTEXITCODE
+            }
+        },
+        [int]$MinMajor = 22,
+        [int]$MinMinor = 0
+    )
+
+    # Resolve the command
+    $cmd = & $CommandResolver $CommandName
+    if (-not $cmd) {
+        return [PSCustomObject]@{
+            Status = 'Missing'
+            Version = $null
+            ExitCode = $null
+            Message = "Command '$CommandName' not found"
+        }
+    }
+
+    # Invoke with --version, capture output and exit code
+    $probeResult = & $VersionResolver $cmd
+    $probeProperties = if ($null -eq $probeResult) { @() } else { @($probeResult.PSObject.Properties.Name) }
+    if ($probeProperties -contains 'Output' -and $probeProperties -contains 'ExitCode') {
+        $output = $probeResult.Output
+        $exitCode = $probeResult.ExitCode
+    } else {
+        # Simple injected resolvers return only stdout and represent a successful probe.
+        $output = $probeResult
+        $exitCode = 0
+    }
+
+    # Distinguish missing command from command that failed
+    if ($exitCode -ne 0) {
+        if ([string]::IsNullOrWhiteSpace($output)) {
+            return [PSCustomObject]@{
+                Status = 'ProbeFailed'
+                Version = $null
+                ExitCode = $exitCode
+                Message = "Command '$CommandName' exited with code $exitCode and produced no output"
+            }
+        } else {
+            return [PSCustomObject]@{
+                Status = 'ProbeFailed'
+                Version = $null
+                ExitCode = $exitCode
+                Message = "Command '$CommandName' exited with code $exitCode"
+            }
+        }
+    }
+
+    # Normalize output - accept optional leading 'v'
+    $version = $output.Trim()
+    if ($version -match '^v(.+)$') {
+        $version = $matches[1]
+    }
+
+    # Require complete numeric version shape (major.minor.patch)
+    if (-not ($version -match '^[0-9]+\.[0-9]+\.[0-9]+$')) {
+        return [PSCustomObject]@{
+            Status = 'Malformed'
+            Version = $version
+            ExitCode = $exitCode
+            Message = "Version output '$version' is not a valid semantic version"
+        }
+    }
+
+    # Parse version components
+    $parts = $version.Split('.')
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    $patch = [int]$parts[2]
+
+    # Compare against minimum
+    if ($major -gt $MinMajor -or ($major -eq $MinMajor -and $minor -ge $MinMinor)) {
+        return [PSCustomObject]@{
+            Status = 'Supported'
+            Version = $version
+            ExitCode = $exitCode
+            Message = "Node.js $version meets minimum requirement (>= $MinMajor.$MinMinor)"
+        }
+    } else {
+        return [PSCustomObject]@{
+            Status = 'Outdated'
+            Version = $version
+            ExitCode = $exitCode
+            Message = "Node.js $version is below minimum requirement (>= $MinMajor.$MinMinor)"
+        }
+    }
+}
+
+function Get-UninstallPrerequisiteDecisions {
+    param(
+        [AllowNull()] [object]$Manifest,
+        [object[]]$KnownPrerequisites = (Get-KnownInstallerPrerequisites),
+        [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue },
+        [scriptblock]$AnswerResolver = { param($Candidate) $Candidate.DefaultRemove }
+    )
+
+    $hasManifestRecords = $null -ne $Manifest -and `
+        (@($Manifest.PSObject.Properties.Name) -contains 'prerequisites')
+    $prerequisites = if ($hasManifestRecords) { @($Manifest.prerequisites) } else { @($KnownPrerequisites) }
+
+    $decisions = foreach ($prerequisite in $prerequisites) {
+        $present = Test-CommandAvailable -CommandName ([string]$prerequisite.command) -CommandResolver $CommandResolver
+        $preexisting = if ($hasManifestRecords) { [bool]$prerequisite.preexisting } else { $true }
+        $defaultRemove = $present -and -not $preexisting
+        $candidate = [PSCustomObject]@{
+            Command       = [string]$prerequisite.command
+            WingetId      = [string]$prerequisite.wingetId
+            DisplayName   = [string]$prerequisite.displayName
+            Present       = $present
+            Preexisting   = $preexisting
+            DefaultRemove = $defaultRemove
+            HasManifest   = $hasManifestRecords
+        }
+        $remove = if ($present) { [bool](& $AnswerResolver $candidate) } else { $false }
+        [PSCustomObject]@{
+            Command       = $candidate.Command
+            WingetId      = $candidate.WingetId
+            DisplayName   = $candidate.DisplayName
+            Present       = $present
+            Preexisting   = $preexisting
+            DefaultRemove = $defaultRemove
+            HasManifest   = $hasManifestRecords
+            Remove        = $remove
+        }
+    }
+
+    return @($decisions)
+}
+
+
+# Corporate-network configuration is deliberately installer-scoped. These helpers
+# validate and translate FLUJO_* aliases without changing npm, Git, the OS trust
+# store, or persistent user/machine environment settings.
+function Test-InstallerProxyUri {
+    param([AllowEmptyString()] [string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Value.Trim(), [UriKind]::Absolute, [ref]$uri)) {
+        return $false
+    }
+
+    return $uri.Scheme -in @('http', 'https') -and -not [string]::IsNullOrWhiteSpace($uri.Host)
+}
+
+function Test-InstallerPemCertificateFile {
+    param(
+        [AllowEmptyString()] [string]$Path,
+        [scriptblock]$FileReader = { param($FilePath) Get-Content -LiteralPath $FilePath -Raw -ErrorAction Stop },
+        [scriptblock]$CertificateValidator = {
+            param([byte[]]$CertificateBytes)
+            $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @(,$CertificateBytes)
+            try { return $certificate.Handle -ne [IntPtr]::Zero } finally { $certificate.Dispose() }
+        }
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+
+    try {
+        $content = [string](& $FileReader $Path)
+        $matches = [regex]::Matches(
+            $content,
+            '-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END CERTIFICATE-----'
+        )
+        if ($matches.Count -eq 0) { return $false }
+
+        foreach ($match in $matches) {
+            $base64 = $match.Groups[1].Value -replace '\s', ''
+            $bytes = [Convert]::FromBase64String($base64)
+            if ($bytes.Length -eq 0 -or -not [bool](& $CertificateValidator $bytes)) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Add-InstallerNodeOption {
+    param(
+        [AllowEmptyString()] [string]$Existing,
+        [Parameter(Mandatory)] [string]$Option
+    )
+
+    if (($Existing -split '\s+') -contains $Option) { return $Existing }
+    return (@($Existing, $Option) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' '
+}
+
+function Get-FlujoInstallerEnvironment {
+    param(
+        [System.Collections.IDictionary]$ProcessEnvironment = ([Environment]::GetEnvironmentVariables()),
+        [bool]$SupportsSystemCa = $false,
+        [scriptblock]$CertificateValidator = $null
+    )
+
+    $result = @{}
+    $proxyMappings = @(
+        @{ Alias = 'FLUJO_HTTP_PROXY'; Standard = 'HTTP_PROXY' },
+        @{ Alias = 'FLUJO_HTTPS_PROXY'; Standard = 'HTTPS_PROXY' },
+        @{ Alias = 'FLUJO_NO_PROXY'; Standard = 'NO_PROXY' }
+    )
+
+    foreach ($mapping in $proxyMappings) {
+        $aliasValue = [string]$ProcessEnvironment[$mapping.Alias]
+        $standardValue = [string]$ProcessEnvironment[$mapping.Standard]
+        $value = if (-not [string]::IsNullOrWhiteSpace($aliasValue)) { $aliasValue.Trim() } else { $standardValue }
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if ($mapping.Standard -ne 'NO_PROXY' -and -not (Test-InstallerProxyUri $value)) {
+            throw "$($mapping.Alias) must be an absolute http:// or https:// URI."
+        }
+        $result[$mapping.Standard] = $value
+    }
+
+    $caPath = [string]$ProcessEnvironment['FLUJO_EXTRA_CA_CERTS']
+    if ([string]::IsNullOrWhiteSpace($caPath)) {
+        $caPath = [string]$ProcessEnvironment['NODE_EXTRA_CA_CERTS']
+    }
+    if (-not [string]::IsNullOrWhiteSpace($caPath)) {
+        $caPath = [Environment]::ExpandEnvironmentVariables($caPath.Trim())
+        $validCa = if ($CertificateValidator) {
+            Test-InstallerPemCertificateFile -Path $caPath -CertificateValidator $CertificateValidator
+        } else {
+            Test-InstallerPemCertificateFile -Path $caPath
+        }
+        if (-not $validCa) {
+            throw 'FLUJO_EXTRA_CA_CERTS/NODE_EXTRA_CA_CERTS must point to a readable, parseable PEM certificate file.'
+        }
+        $result['NODE_EXTRA_CA_CERTS'] = $caPath
+        $npmCaFile = [string]$ProcessEnvironment['npm_config_cafile']
+        $result['npm_config_cafile'] = if ([string]::IsNullOrWhiteSpace($npmCaFile)) { $caPath } else { $npmCaFile }
+    }
+
+    $downloadHost = [string]$ProcessEnvironment['FLUJO_PLAYWRIGHT_DOWNLOAD_HOST']
+    if ([string]::IsNullOrWhiteSpace($downloadHost)) {
+        $downloadHost = [string]$ProcessEnvironment['PLAYWRIGHT_DOWNLOAD_HOST']
+    }
+    if (-not [string]::IsNullOrWhiteSpace($downloadHost)) {
+        if (-not (Test-InstallerProxyUri $downloadHost)) {
+            throw 'FLUJO_PLAYWRIGHT_DOWNLOAD_HOST must be an absolute http:// or https:// URI.'
+        }
+        $result['PLAYWRIGHT_DOWNLOAD_HOST'] = $downloadHost.TrimEnd('/')
+    }
+
+    $timeout = [string]$ProcessEnvironment['FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT']
+    if ([string]::IsNullOrWhiteSpace($timeout)) {
+        $timeout = [string]$ProcessEnvironment['PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT']
+    }
+    $timeoutValue = 0
+    if (-not [string]::IsNullOrWhiteSpace($timeout)) {
+        if (-not [int]::TryParse($timeout, [ref]$timeoutValue) -or $timeoutValue -le 0) {
+            throw 'FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT must be a positive number of milliseconds.'
+        }
+        $result['PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT'] = [string]$timeoutValue
+    }
+
+    if ($SupportsSystemCa) {
+        $result['NODE_OPTIONS'] = Add-InstallerNodeOption -Existing ([string]$ProcessEnvironment['NODE_OPTIONS']) -Option '--use-system-ca'
+    }
+
+    return $result
+}
+
+function Protect-InstallerDiagnostic {
+    param(
+        [AllowEmptyString()] [string]$Text,
+        [string[]]$SensitiveValues = @(),
+        [int]$MaximumLength = 4000
+    )
+
+    if ($null -eq $Text) { return '' }
+    $safe = [string]$Text
+    $safe = [regex]::Replace($safe, '(?i)(https?://)[^/@\s]+@', '$1[REDACTED]@')
+    $safe = [regex]::Replace($safe, '(?i)(authorization\s*:\s*(?:bearer|basic)\s+)\S+', '$1[REDACTED]')
+    $safe = [regex]::Replace($safe, '(?i)(//[^\s:=]+(?::\d+)?/:_authToken=)[^\s]+', '$1[REDACTED]')
+    $safe = [regex]::Replace($safe, '(?i)([?&](?:access_token|auth|key|password|secret|token)=)[^&\s]+', '$1[REDACTED]')
+    $safe = [regex]::Replace($safe, '(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY))=([^\s]+)', '$1=[REDACTED]')
+
+    foreach ($value in $SensitiveValues) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $safe = [regex]::Replace($safe, [regex]::Escape($value), '[REDACTED]')
+        }
+    }
+
+    if ($safe.Length -gt $MaximumLength) {
+        return $safe.Substring($safe.Length - $MaximumLength)
+    }
+    return $safe
+}

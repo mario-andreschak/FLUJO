@@ -1,7 +1,8 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * OAuth provider callback for registry-account sign-in (issue #207).
  *
- *   GET ?code=...&state=...  (or ?error=...)  =>  302 /settings?registry_oauth=...
+ *   GET ?code=...&state=...  (or ?error=...)  =>  302 /packages?registry_oauth=...
  *
  * This is the browser's top-level redirect target after the hosted registry
  * (#196) finishes the GitHub/Google round-trip, so it arrives CROSS-ORIGIN and
@@ -11,36 +12,60 @@
  *
  * Security: the `state` is validated + consumed server-side (single-use) by the
  * service. No token value is ever returned in the response body — on success the
- * browser is redirected back to Settings, which re-fetches masked status.
+ * browser is redirected back to Packages, which re-fetches masked status.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
-import { completeOAuth } from '@/backend/services/registry';
+import { completeOAuth, pendingOAuthWorkspace } from '@/backend/services/registry';
 import { createLogger } from '@/utils/logger';
+import { ensureWorkspaceDirs, runWithWorkspace, workspaceExists } from '@/utils/workspace';
 
 const log = createLogger('app/api/registry/oauth/callback/route');
 
-function redirectToSettings(request: NextRequest, outcome: 'success' | 'error'): NextResponse {
-  return NextResponse.redirect(new URL(`/settings?registry_oauth=${outcome}`, request.url));
+function redirectToPackages(
+  request: NextRequest,
+  outcome: 'success' | 'error',
+  workspace?: string,
+): NextResponse {
+  const url = new URL('/packages', request.url);
+  url.searchParams.set('registry_oauth', outcome);
+  if (workspace) url.searchParams.set('workspace', workspace);
+  return NextResponse.redirect(url);
 }
 
-export async function GET(request: NextRequest) {
-  const lock = await assertUnlocked();
-  if (lock) return lock;
-
+async function GET_handler(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    if (searchParams.get('error')) {
-      log.warn('Registry OAuth provider returned an error.');
-      return redirectToSettings(request, 'error');
-    }
-
-    const code = searchParams.get('code') || '';
     const state = searchParams.get('state') || '';
-    const result = await completeOAuth(code, state);
-    return redirectToSettings(request, result.status === 'authenticated' ? 'success' : 'error');
+    const workspace = pendingOAuthWorkspace(state);
+    if (!workspace || !(await workspaceExists(workspace))) {
+      return redirectToPackages(request, 'error');
+    }
+    // The state, not the outer callback URL, selects where credentials are
+    // persisted. Revalidate every owned subtree immediately before entering
+    // that context so a replaced symlink/junction cannot cross workspaces.
+    await ensureWorkspaceDirs(workspace);
+
+    return runWithWorkspace(workspace, async () => {
+      const lock = await assertUnlocked();
+      if (lock) return lock as NextResponse;
+      if (searchParams.get('error')) {
+        log.warn('Registry OAuth provider returned an error.');
+        return redirectToPackages(request, 'error', workspace);
+      }
+
+      const code = searchParams.get('code') || '';
+      const result = await completeOAuth(code, state);
+      return redirectToPackages(
+        request,
+        result.status === 'authenticated' ? 'success' : 'error',
+        workspace,
+      );
+    });
   } catch (err) {
     log.error('Unexpected error in registry OAuth callback', err);
-    return redirectToSettings(request, 'error');
+    return redirectToPackages(request, 'error');
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

@@ -14,6 +14,9 @@
  *
  * Both settings propagate to every Node child process Next spawns (including the server),
  * because NODE_OPTIONS / NODE_EXTRA_CA_CERTS are read at process startup.
+ * The launcher also forces npm's `include=dev` config into that process tree. Production
+ * Next sets NODE_ENV=production, which otherwise makes a plain `npm install` omit the
+ * devDependencies that source-built MCP servers need (TypeScript, bundlers, etc.).
  *
  * The TLS/CA logic is exported as `buildLaunchEnv()` so the npm-package bin wrapper
  * (bin/flujo.mjs, issue #59) reuses it verbatim instead of duplicating it.
@@ -22,17 +25,36 @@ import { spawn } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import nextEnv from '@next/env';
+import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.mjs';
+import { prepareLocalInstance, withLocalInstanceHostname } from './local-instance.mjs';
 
 const require = createRequire(import.meta.url);
+const { loadEnvConfig } = nextEnv;
+
+/** Load standard Next.js dotenv files before FLUJO reads launcher-level values. */
+export function loadLaunchEnvironment(directory, dev = false) {
+  return loadEnvConfig(directory, dev);
+}
 
 /**
- * Return a copy of `baseEnv` with FLUJO's TLS/CA settings applied:
+ * Return a copy of `baseEnv` with FLUJO's child-process settings applied:
  *  - NODE_OPTIONS gains `--use-system-ca` on Node versions that support it.
  *  - FLUJO_EXTRA_CA_CERTS is mirrored to NODE_EXTRA_CA_CERTS.
+ *  - npm is configured to include devDependencies for source-built MCP servers.
  * Pure apart from a one-time informational log on older Node builds.
  */
 export function buildLaunchEnv(baseEnv = process.env) {
   const env = { ...baseEnv };
+
+  // npm reads configuration from npm_config_* environment variables. `include=dev`
+  // takes precedence over NODE_ENV=production's implicit `omit=dev`, making `npm start`
+  // behave like `npm run dev` when FLUJO installs/builds an MCP server. Remove all case
+  // variants first because Windows child-process environments are case-insensitive.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'npm_config_include') delete env[key];
+  }
+  env.npm_config_include = 'dev';
 
   // Detect support empirically instead of sniffing the version number. This Set is the
   // authoritative list of flags THIS Node binary accepts inside NODE_OPTIONS, so it is
@@ -61,15 +83,75 @@ export function buildLaunchEnv(baseEnv = process.env) {
   return env;
 }
 
+function portFromNextArgs(args) {
+  const index = args.findIndex((arg) => arg === '--port' || arg === '-p');
+  if (index !== -1 && args[index + 1]) return args[index + 1];
+  const inline = args.find((arg) => arg.startsWith('--port='));
+  return inline?.slice('--port='.length) || process.env.FLUJO_PORT || '4200';
+}
+
+function withPort(args) {
+  const hasPort = args.some((arg, index) =>
+    arg === '--port'
+    || arg === '-p'
+    || arg.startsWith('--port=')
+    || (index > 0 && (args[index - 1] === '--port' || args[index - 1] === '-p')),
+  );
+  return hasPort ? [...args] : [...args, '-p', portFromNextArgs(args)];
+}
+
+/** Forward native launcher shutdown and remove only this launch's registration. */
+export function forwardNextShutdown(child, instance, registered, { parent = process, graceMs = 10_000 } = {}) {
+  let requestedSignal;
+  let forceKillTimer;
+  const forwardShutdown = (signal) => {
+    requestedSignal ??= signal;
+    instance.cleanup();
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { child.kill(signal); } catch { child.kill(); }
+    forceKillTimer ??= setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }, graceMs);
+    forceKillTimer.unref();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) parent.on(signal, () => forwardShutdown(signal));
+  parent.once('exit', instance.cleanup);
+  child.on('exit', async (code, signal) => {
+    await registered;
+    instance.cleanup();
+    if (forceKillTimer) clearTimeout(forceKillTimer);
+    const exitSignal = requestedSignal ?? signal;
+    if (exitSignal && parent.platform !== 'win32') {
+      parent.removeAllListeners(exitSignal);
+      parent.kill(parent.pid, exitSignal);
+      return;
+    }
+    parent.exit(code ?? (exitSignal ? 1 : 0));
+  });
+}
+
 /** Spawn `next <passthroughArgs>` with the TLS-configured env and forward its exit. */
-function launchNext(passthroughArgs) {
-  const env = buildLaunchEnv();
+async function launchNext(passthroughArgs) {
+  const runtimeEnvDirectory = process.env.FLUJO_CONTAINER ? '/app/data' : process.cwd();
+  process.env.FLUJO_RUNTIME_ENV_DIR = runtimeEnvDirectory;
+  loadLaunchEnvironment(runtimeEnvDirectory, passthroughArgs[0] === 'dev');
+  const baseEnv = {
+    ...process.env,
+    FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),
+    FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
+  };
+  const env = applyExposureRuntimeEnv(buildLaunchEnv(baseEnv), process.cwd());
+  const nextArgs = withLocalInstanceHostname(withExposureHostname(withPort(passthroughArgs), env), env);
+  const instance = await prepareLocalInstance({ env, args: nextArgs });
 
   const tlsSummary = [
     env.NODE_OPTIONS ? `NODE_OPTIONS="${env.NODE_OPTIONS}"` : null,
     env.NODE_EXTRA_CA_CERTS ? `NODE_EXTRA_CA_CERTS="${env.NODE_EXTRA_CA_CERTS}"` : null,
   ].filter(Boolean).join(', ');
-  console.log(`[FLUJO] Starting next ${passthroughArgs.join(' ')}${tlsSummary ? ` (${tlsSummary})` : ''}`);
+  console.log(
+    `[FLUJO] Starting next ${nextArgs.join(' ')} [exposure: ${env.FLUJO_EXPOSURE_MODE}]`
+    + `${tlsSummary ? ` (${tlsSummary})` : ''}`
+  );
 
   // Resolve Next's own CLI from node_modules and run it with the current Node binary.
   // Never rely on a `next` on PATH: npm injects node_modules/.bin into PATH for `npm run`
@@ -84,23 +166,20 @@ function launchNext(passthroughArgs) {
     process.exit(1);
   }
 
-  const child = spawn(process.execPath, [nextBin, ...passthroughArgs], {
+  const child = spawn(process.execPath, [nextBin, ...nextArgs], {
     stdio: 'inherit',
-    env,
+    env: instance.env,
   });
+  const registered = instance.register(child.pid).catch(() => {
+    console.error('[FLUJO] Could not register private local instance discovery.');
+  });
+  forwardNextShutdown(child, instance, registered);
 
   child.on('error', error => {
     console.error('[FLUJO] Failed to launch next:', error);
     process.exit(1);
   });
 
-  child.on('exit', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-    } else {
-      process.exit(code ?? 0);
-    }
-  });
 }
 
 // Only launch when run directly (`node scripts/launch-next.mjs start -p 4200`), not when
@@ -108,5 +187,8 @@ function launchNext(passthroughArgs) {
 // Next.js command, e.g. ["start", "-p", "4200"].
 const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
 if (isMain) {
-  launchNext(process.argv.slice(2));
+  launchNext(process.argv.slice(2)).catch(() => {
+    console.error('[FLUJO] Could not prepare a private local instance.');
+    process.exitCode = 1;
+  });
 }

@@ -89,6 +89,73 @@ describe('SchedulerService', () => {
     expect(runFlowMock).not.toHaveBeenCalled();
   });
 
+  it('normalizes legacy restrictions and lets canonical patches take precedence', async () => {
+    const created = await scheduler.create(scheduleInput({ exclusive: true }));
+    expect(created.error).toBeUndefined();
+    expect(created.execution).toMatchObject({
+      exclusive: true,
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: false,
+    });
+
+    const updated = await scheduler.update(created.execution!.id, {
+      startRestriction: 'unrestricted',
+      superExclusive: false,
+    });
+    expect(updated.error).toBeUndefined();
+    expect(updated.execution).toMatchObject({
+      exclusive: true,
+      startRestriction: 'unrestricted',
+      superExclusive: false,
+      emergency: false,
+    });
+  });
+
+  it('rejects Singleton with parallel overlap after create and patch merging', async () => {
+    const invalidCreate = await scheduler.create(scheduleInput({
+      startRestriction: 'singleton',
+      overlapStrategy: 'parallel',
+    }));
+    expect(invalidCreate.error).toMatch(/Singleton.*parallel/i);
+    expect(readFile()).toBeUndefined();
+
+    const created = await scheduler.create(scheduleInput({ overlapStrategy: 'parallel' }));
+    const invalidPatch = await scheduler.update(created.execution!.id, {
+      startRestriction: 'singleton',
+    });
+    expect(invalidPatch.error).toMatch(/Singleton.*parallel/i);
+    expect((await scheduler.get(created.execution!.id))?.startRestriction).toBe('unrestricted');
+  });
+
+  it.each([
+    [{ startRestriction: 'invalid' }, /Start restriction/i],
+    [{ superExclusive: 'yes' }, /Super-Exclusive/i],
+    [{ emergency: 'yes' }, /Emergency/i],
+  ])('rejects malformed canonical restriction fields %#', async (overrides, expectedError) => {
+    const result = await scheduler.create(scheduleInput(overrides));
+
+    expect(result.execution).toBeUndefined();
+    expect(result.error).toMatch(expectedError);
+    expect(readFile()).toBeUndefined();
+  });
+
+  it('persists folder organization without re-arming runtime triggers', async () => {
+    const { execution } = await scheduler.create(scheduleInput({ folder: '  Operations  ' }));
+    expect(execution?.folder).toBe('Operations');
+
+    const reconcile = jest.spyOn(scheduler, 'reconcile');
+    const moved = await scheduler.update(execution!.id, { folder: '  Reporting  ' });
+    expect(moved.execution?.folder).toBe('Reporting');
+    expect(readFile()?.executions[0].folder).toBe('Reporting');
+    expect(reconcile).not.toHaveBeenCalled();
+
+    const cleared = await scheduler.update(execution!.id, { folder: '' });
+    expect(cleared.execution?.folder).toBeUndefined();
+    expect(readFile()?.executions[0].folder).toBeUndefined();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
   it('rejects an invalid cron pattern', async () => {
     const { error } = await scheduler.create(
       scheduleInput({ trigger: { type: 'schedule', cron: 'not a cron' } })
@@ -141,6 +208,7 @@ describe('SchedulerService', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     const input = runFlowMock.mock.calls[0][0];
     expect(input.flowId).toBe('flow-1');
+    expect(input.source).toBe('schedule');
     expect(input.mode).toBe('ephemeral');
     expect(input.requireApproval).toBe(false);
     expect(input.userTurn).toBe(true);
@@ -469,3 +537,9 @@ describe('SchedulerService', () => {
     expect(readRuns('exec-x')).toHaveLength(10);
   });
 });
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (
+    _id: string,
+    task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+  ) => task({ assertOwned: async () => undefined }),
+}));

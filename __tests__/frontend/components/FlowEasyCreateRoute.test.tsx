@@ -1,0 +1,293 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  WORKSPACE_STORAGE_KEY,
+  workspaceLocalStorageKey,
+} from '@/frontend/utils/workspaceSelection';
+
+const mockReplace = jest.fn();
+const mockPush = jest.fn();
+const mockLoadFlows = jest.fn();
+const mockCreateNewFlow = jest.fn();
+const mockNavigateWorkspaceRoute = jest.fn(
+  (router: { push: (url: string) => void }, target: string) => router.push(target),
+);
+
+jest.mock('next/navigation', () => ({
+  // `isEditing` is now derived from the URL (#374), so push/replace must
+  // actually move `window.location` for the component to observe the
+  // change on its next render — mirroring what next/navigation's real
+  // client-side router does.
+  useRouter: () => ({
+    push: (url: string) => { window.history.pushState({}, '', url); mockPush(url); },
+    replace: (url: string) => { window.history.replaceState({}, '', url); mockReplace(url); },
+    back: jest.fn(() => window.history.back()),
+  }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
+jest.mock('@/frontend/services/flow', () => ({
+  flowService: {
+    loadFlows: (...args: unknown[]) => mockLoadFlows(...args),
+    createNewFlow: (...args: unknown[]) => mockCreateNewFlow(...args),
+    addFlow: jest.fn(),
+    updateFlow: jest.fn(),
+    deleteFlow: jest.fn(),
+  },
+}));
+
+jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  return {
+    __esModule: true,
+    default: React.forwardRef(function MockFlowBuilder(
+      props: { initialFlow?: { name?: string }; initialAuthoringMode?: string },
+      _ref: React.ForwardedRef<unknown>,
+    ) {
+      return (
+        <div data-testid="flow-builder" data-authoring-mode={props.initialAuthoringMode}>
+          {props.initialFlow?.name}
+        </div>
+      );
+    }),
+  };
+});
+
+jest.mock('@/frontend/components/Flow/FlowDashboard', () => ({
+  __esModule: true,
+  default: ({ onSelectFlow }: { onSelectFlow: (flowId: string) => void }) => (
+    <div data-testid="flow-dashboard">
+      <button type="button" onClick={() => onSelectFlow('saved-flow')}>Edit saved agent</button>
+    </div>
+  ),
+}));
+
+jest.mock('@/frontend/utils/workspaceNavigation', () => ({
+  navigateWorkspaceRoute: (...args: unknown[]) => mockNavigateWorkspaceRoute(...args as [
+    { push: (url: string) => void },
+    string,
+  ]),
+}));
+
+jest.mock('@/frontend/components/Flow/FlowManager/GenerateFlowDialog', () => ({
+  __esModule: true,
+  default: ({
+    open,
+    onGenerated,
+  }: {
+    open: boolean;
+    onGenerated: (result: Record<string, unknown>) => void;
+  }) => (
+    <div data-testid="ai-generator">
+      {String(open)}
+      {open && (
+        <button
+          type="button"
+          onClick={() => onGenerated({
+            flow: {
+              id: 'generated-flow',
+              name: 'Generated agent',
+              nodes: [{
+                id: 'trigger',
+                type: 'trigger',
+                position: { x: 0, y: 0 },
+                data: { label: 'Schedule', type: 'trigger' },
+              }],
+              edges: [],
+            },
+            flows: [],
+            rootFlowId: 'generated-flow',
+            errorCount: 0,
+            warningCount: 0,
+            attempts: 1,
+            installedServers: [],
+          })}
+        >
+          Continue to simple builder
+        </button>
+      )}
+    </div>
+  ),
+}));
+
+jest.mock('@/frontend/components/shared/PageHeader', () => ({
+  __esModule: true,
+  default: ({ title, actions }: { title: string; actions?: React.ReactNode }) => (
+    <header><h1>{title}</h1>{actions}</header>
+  ),
+}));
+
+jest.mock('@/frontend/utils/navigationGuard', () => ({
+  setNavigationGuard: jest.fn(),
+  clearNavigationGuard: jest.fn(),
+}));
+
+jest.mock('@/utils/logger', () => ({
+  createLogger: () => ({
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  }),
+}));
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujoPage: jest.fn(),
+}));
+
+import FlowsPage from '@/app/flows/page';
+
+describe('easy agent creation deep link', () => {
+  beforeEach(() => {
+    mockReplace.mockReset();
+    mockPush.mockReset();
+    mockNavigateWorkspaceRoute.mockClear();
+    mockLoadFlows.mockReset().mockResolvedValue([]);
+    mockCreateNewFlow.mockReset().mockReturnValue({
+      id: 'draft-assistant',
+      name: 'Untitled agent',
+      nodes: [],
+      edges: [],
+    });
+    window.localStorage.clear();
+    window.history.replaceState({}, '', '/flows?create=assistant');
+  });
+
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('opens a blank draft in simple mode without showing the AI generator', async () => {
+    render(<FlowsPage />);
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(mockCreateNewFlow).toHaveBeenCalledWith('Untitled agent');
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
+    expect(screen.getByTestId('ai-generator')).toHaveTextContent('false');
+    // The editor is now a real history entry (#374): entering it pushes
+    // `?flow=<id>&mode=edit` rather than a bare replace to `/flows`.
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
+      '/flows?flow=draft-assistant&mode=edit&workspace=default-workspace',
+    ));
+  });
+
+  it('opens a dashboard draft in Simple view using the canonical editor route', async () => {
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start simple' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'guided');
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(
+        '/flows?flow=draft-assistant&mode=edit&workspace=default-workspace',
+      );
+    });
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=draft-assistant&mode=edit&workspace=default-workspace');
+    expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your new agent is ready. Give it a name, add a task, then try it.',
+    );
+  });
+
+  it('opens a dashboard draft in Expert view using the canonical editor route', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'team-b');
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    expect(await screen.findByRole('button', { name: 'Create with AI' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start simple' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start expert' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'advanced');
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('advanced'));
+    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBeNull();
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(
+        '/flows?flow=draft-assistant&mode=edit&workspace=team-b',
+      );
+    });
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=draft-assistant&mode=edit&workspace=team-b');
+    expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your new agent is ready in Expert view. Add and connect the nodes you need.',
+    );
+  });
+
+  it('opens an AI-generated draft in the simple builder even when it has expert features', async () => {
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create with AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to simple builder' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Generated agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'guided');
+  });
+
+  it('preserves a non-default workspace when a saved agent is opened for editing', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'game-dev');
+    window.history.replaceState({}, '', '/flows?workspace=game-dev');
+    mockLoadFlows.mockResolvedValue([{
+      id: 'saved-flow',
+      name: 'FLUJO',
+      nodes: [],
+      edges: [],
+    }]);
+
+    render(<FlowsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit saved agent' }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
+      '/flows?flow=saved-flow&mode=edit&workspace=game-dev',
+    ));
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('FLUJO');
+  });
+
+  it('preserves explicit advanced mode while resolving a saved-flow deep link', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'game-dev');
+    window.history.replaceState(
+      {},
+      '',
+      '/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev',
+    );
+    mockLoadFlows.mockResolvedValue([{
+      id: 'saved-flow',
+      name: 'Converted agent',
+      nodes: [],
+      edges: [],
+    }]);
+
+    render(<FlowsPage />);
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Converted agent');
+    expect(screen.getByTestId('flow-builder'))
+      .toHaveAttribute('data-authoring-mode', 'advanced');
+    expect(mockNavigateWorkspaceRoute).not.toHaveBeenCalled();
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev');
+  });
+
+  it('refreshes a stale gallery before opening a new Persona Core and preserves the return link', async () => {
+    const returnTo = '/personas/frederik?area=setup&section=behaviors&workspace=default-workspace';
+    const url = '/flows?flow=new-persona-core&mode=edit&returnTo=' + encodeURIComponent(returnTo);
+    window.history.replaceState({}, '', url);
+    mockLoadFlows.mockImplementation((options?: { refresh?: boolean }) => Promise.resolve(
+      options?.refresh ? [{ id: 'new-persona-core', name: 'Frederik Core', nodes: [], edges: [] }] : [],
+    ));
+    render(<FlowsPage />);
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Frederik Core');
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(window.location.search).toContain('returnTo=');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Persona Setup' }));
+    expect(mockPush).toHaveBeenCalledWith(returnTo);
+  });
+});

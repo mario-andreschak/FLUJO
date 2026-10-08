@@ -1,12 +1,13 @@
 /**
  * Public `/api/*` allow-list for the fail-closed origin guard middleware (#142).
  *
- * `src/middleware.ts` runs the localhost / DNS-rebinding check against EVERY
- * `/api/:path*` request and returns 403 by default (secure-by-default). The only
- * routes that must stay reachable from a non-local origin are enumerated here.
+ * `src/proxy.ts` runs the exposure Host boundary against every `/api/:path*`
+ * request, then applies the same-Origin / DNS-rebinding check by default. The
+ * only routes that must stay reachable from another origin are enumerated here.
  *
- * This list is the central review artifact: adding an entry makes a route
- * publicly reachable, so every addition must be a deliberate, reviewed diff.
+ * This list is the central review artifact: adding an entry exempts a route
+ * from the same-Origin half (never the selected exposure Host scope), so every
+ * addition must be a deliberate, reviewed diff.
  * `__tests__/security/routeGuardDrift.test.ts` snapshots this set and asserts
  * every entry maps to a real route file, so a new sensitive route can never be
  * made public by accident (and a stale entry can never silently open nothing).
@@ -61,7 +62,8 @@ function normalizePath(pathname: string): string {
 
 /**
  * Whether `pathname` is an intentionally-public `/api` route that the origin
- * guard middleware must let through regardless of Host/Origin.
+ * guard middleware must let through regardless of Origin, after Host exposure
+ * policy has passed.
  */
 export function isPublicApiPath(pathname: string): boolean {
   const p = normalizePath(pathname);
@@ -90,7 +92,8 @@ export const PUBLIC_OPENAI_EXACT_PATHS: readonly string[] = [
 
 /**
  * Whether `pathname` is an intentionally-public OpenAI-compatible `/v1` endpoint
- * that the origin guard middleware must let through regardless of Host/Origin.
+ * that the origin guard middleware must let through regardless of Origin,
+ * after Host exposure policy has passed.
  */
 export function isPublicOpenAiPath(pathname: string): boolean {
   return PUBLIC_OPENAI_EXACT_PATHS.includes(normalizePath(pathname));

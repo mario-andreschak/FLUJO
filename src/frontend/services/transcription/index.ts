@@ -1,108 +1,82 @@
-import { createLogger } from '@/utils/logger';
-import { transcribeWithWebSpeech, checkWebSpeechSupport } from './webSpeech';
+import { checkWebSpeechSupport } from './webSpeech';
+import {
+  createTranscriptionFile,
+  transcribeFile,
+  type FileTranscriptionResult,
+  type TranscriptionFailureCode,
+} from './fileTranscription';
 
-const log = createLogger('frontend/services/transcription');
+export {
+  startLiveTranscription,
+  type LiveTranscriptionSession,
+  type LiveTranscriptionOptions,
+} from './webSpeech';
+
+export {
+  createTranscriptionFile,
+  transcribeFile,
+  type FileTranscriptionOptions,
+  type FileTranscriptionResult,
+  type TranscriptionFailureCode,
+} from './fileTranscription';
 
 export interface TranscriptionOptions {
+  modelId?: string;
   onProgress?: (progress: number) => void;
   onStatusChange?: (status: string) => void;
   language?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
-export interface TranscriptionResult {
-  text: string;
-  success: boolean;
-  error?: string;
-  engine?: 'webspeech';
-}
+export type TranscriptionResult = FileTranscriptionResult;
 
-/**
- * Transcribes audio data to text using Web Speech API
- */
-// Check if Web Speech API is supported
 export const isSpeechSupported = checkWebSpeechSupport;
 
-/**
- * Use this function to check if speech recognition is available
- * on the current browser before attempting transcription
- */
 export function checkSpeechSupport() {
   return checkWebSpeechSupport();
 }
 
+/**
+ * Transcribe a prerecorded Blob through the configured file-capable provider.
+ * Browser Web Speech remains available only through startLiveTranscription().
+ */
 export async function transcribe(
   audioBlob: Blob,
-  options: TranscriptionOptions = {}
+  options: TranscriptionOptions = {},
 ): Promise<TranscriptionResult> {
-  // Check if we're in a browser environment
-  if (typeof window === 'undefined') {
+  if (!options.modelId?.trim()) {
     return {
-      text: 'Speech recognition is only available in browser environments',
+      text: '',
       success: false,
-      error: 'Server-side transcription is not supported'
+      error: 'A transcription model is not configured',
+      code: 'missing-model',
+      engine: 'provider',
     };
   }
 
-  const {
-    onProgress,
-    onStatusChange,
-    language
-  } = options;
-  
-  try {
-    log.debug('Starting transcription service');
-    
-    if (onStatusChange) {
-      onStatusChange('Initializing transcription...');
-    }
-    
-    // Check if Web Speech API is supported
-    const webSpeechStatus = checkWebSpeechSupport();
-    if (!webSpeechStatus.supported) {
-      throw new Error('Web Speech API is not supported in this browser');
-    }
-    
-    if (onStatusChange) {
-      onStatusChange('Using browser speech recognition...');
-    }
-    
-    // Using Web Speech API
-    const text = await transcribeWithWebSpeech(audioBlob, {
-      language,
-      onInterimResult: (interim) => {
-        if (onStatusChange) {
-          onStatusChange(`Transcribing: ${interim}`);
-        }
-        
-        if (onProgress) {
-          // Simulate progress for Web Speech API (doesn't have real progress)
-          onProgress(50);
-        }
-      }
-    });
-    
-    if (onStatusChange) {
-      onStatusChange('Transcription completed');
-    }
-    
-    log.debug('Web Speech API transcription completed successfully', { textLength: text.length });
-    
+  const file = createTranscriptionFile(audioBlob);
+  if (!file) {
+    const code: TranscriptionFailureCode = audioBlob.type
+      ? 'unsupported-format'
+      : 'request-failed';
     return {
-      text,
-      success: true,
-      engine: 'webspeech'
-    };
-  } catch (error) {
-    log.error('Transcription failed', { error });
-    
-    if (onStatusChange) {
-      onStatusChange('Transcription failed');
-    }
-    
-    return {
-      text: 'Transcription failed. Please check if your browser supports speech recognition.',
+      text: '',
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: audioBlob.type
+        ? 'The recording format is not supported by the transcription provider'
+        : 'This browser cannot prepare the recording for transcription',
+      code,
+      engine: 'provider',
     };
   }
+
+  return transcribeFile(file, {
+    modelId: options.modelId,
+    language: options.language,
+    onProgress: options.onProgress,
+    onStatusChange: options.onStatusChange,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
 }

@@ -21,10 +21,14 @@ jest.mock('@/backend/services/mcp', () => ({
   },
 }));
 
-import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { searchRegistry, installRegistryServer, prepareRegistryServerRuntime } from '@/backend/services/mcp/registryInstall';
+import type { RegistryServerResult } from '@/utils/mcp/registry';
 
 /** A registry entry with an npm stdio package (installable, no required env). */
-const npmEntry = (name: string, extras: Record<string, unknown> = {}) => ({
+const npmEntry = (
+  name: string,
+  extras: Record<string, unknown> = {}
+): RegistryServerResult => ({
   server: {
     name,
     description: `The ${name} server`,
@@ -75,6 +79,88 @@ describe('searchRegistry', () => {
 });
 
 describe('installRegistryServer', () => {
+  it('prepares a runtime even for an existing server without adopting, saving or connecting it', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    loadServerConfigsMock.mockResolvedValue([{ name: 'custom-voice', rootPath: 'C:\\old-path' }]);
+    const result = await prepareRegistryServerRuntime('io.github.acme/voice', undefined, { serverName: 'custom-voice' });
+    expect(result.config).toMatchObject({ name: 'custom-voice', command: 'npx', rootPath: 'mcp-servers/custom-voice' });
+    expect(result.alreadyExisted).toBeUndefined();
+    expect(loadServerConfigsMock).not.toHaveBeenCalled();
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+    expect(listServerToolsMock).not.toHaveBeenCalled();
+  });
+
+  it('restores an exported remote transport even when a local package is listed first', async () => {
+    const entry = npmEntry('io.github.github/github-mcp-server');
+    entry.server.remotes = [
+      {
+        type: 'streamable-http',
+        url: 'https://api.githubcopilot.com/mcp/',
+        headers: [{ name: 'Authorization', isRequired: true, isSecret: true }],
+      },
+    ];
+    registryGetJsonMock.mockResolvedValue({ servers: [entry] });
+
+    const result = await installRegistryServer(entry.server.name, undefined, {
+      preferredTransport: 'streamable',
+      headerOverrides: {
+        Authorization: { value: 'Bearer ${global:GITHUB_TOKEN}', metadata: { isSecret: true } },
+      },
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.transport).toBe('streamable');
+    expect(config.serverUrl).toBe('https://api.githubcopilot.com/mcp/');
+    expect(config.headers.Authorization).toEqual({
+      value: 'Bearer ${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
+  });
+
+  it('lets OAuth DCR own Authorization while preserving other required headers and the reviewed name', async () => {
+    const entry = npmEntry('com.paypal.mcp/mcp');
+    entry.server.remotes = [{
+      type: 'streamable-http',
+      url: 'https://mcp.paypal.com/mcp',
+      headers: [
+        { name: 'Authorization', isRequired: true, isSecret: true },
+        { name: 'X-Tenant', isRequired: true },
+      ],
+    }];
+    registryGetJsonMock.mockResolvedValue({ servers: [entry] });
+
+    const result = await installRegistryServer(entry.server.name, undefined, {
+      preferredTransport: 'streamable',
+      serverName: 'paypal',
+      oauthDynamicClientRegistration: true,
+      headerOverrides: { 'X-Tenant': 'merchant-1' },
+      worksGate: false,
+    });
+
+    expect(result.installed).toBe(true);
+    expect(result.serverName).toBe('paypal');
+    expect(result.plan).toEqual(expect.objectContaining({
+      serverName: 'paypal',
+      requiredEnvNames: ['X-Tenant'],
+    }));
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.name).toBe('paypal');
+    expect(config.rootPath).toBe('mcp-servers/paypal');
+    expect(config.headers).toEqual({ 'X-Tenant': 'merchant-1' });
+    expect(config.headers.Authorization).toBeUndefined();
+  });
+
+  it('does not silently fall back from an exported remote server to local execution', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      preferredTransport: 'streamable',
+    });
+    expect(result.installed).toBe(false);
+    expect(result.error).toContain('Confirm local execution');
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
   it('installs an npm package end-to-end: config saved (which connects), tools returned', async () => {
     registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
     const result = await installRegistryServer('io.github.acme/voice');
@@ -88,9 +174,22 @@ describe('installRegistryServer', () => {
         transport: 'stdio',
         command: 'npx',
         args: expect.arrayContaining(['-y', '@example/voice@1.0.0']),
+        rootPath: 'mcp-servers/voice',
         disabled: false,
       })
     );
+  });
+
+  it('keeps a requested package-server name and its managed root in sync', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      serverName: 'custom-voice',
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.name).toBe('custom-voice');
+    expect(config.rootPath).toBe('mcp-servers/custom-voice');
   });
 
   it('refuses to install when required env is missing, reporting needsEnv', async () => {
@@ -108,6 +207,17 @@ describe('installRegistryServer', () => {
     const config = updateServerConfigMock.mock.calls[0][1];
     // Secret shape is preserved so the encrypted env handling applies on save.
     expect(config.env.THE_API_KEY).toEqual({ value: 'sk-123', metadata: { isSecret: true } });
+  });
+
+  it('applies portable global templates to existing stdio argument positions', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      argTemplates: [{ index: 2, value: '--token=${global:API_TOKEN}' }],
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.args).toEqual(['-y', '@example/voice@1.0.0', '--token=${global:API_TOKEN}']);
   });
 
   it('resolveOnly returns the resolved plan WITHOUT spawning (no updateServerConfig)', async () => {
@@ -175,5 +285,15 @@ describe('installRegistryServer', () => {
     const failed = await installRegistryServer('x/y');
     expect(failed.installed).toBe(false);
     expect(failed.error).toContain('registry down');
+  });
+
+  it('never substitutes the first fuzzy result for a requested exact name', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('ai.example/similar')] });
+    const result = await installRegistryServer('ai.example/exact');
+    expect(result).toEqual(expect.objectContaining({
+      installed: false,
+      error: 'No registry entry found for "ai.example/exact"',
+    }));
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
   });
 });

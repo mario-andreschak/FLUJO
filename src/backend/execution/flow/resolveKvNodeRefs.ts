@@ -8,6 +8,10 @@ import {
   type KvRefScope,
 } from '@/utils/shared/resolveKvRefs';
 import { kvGet, kvSet, type KvSetResult } from '@/backend/services/kvStore';
+import {
+  commitFlowDurableMutation,
+  type FlowDurableMutationContext,
+} from './executionAuthority';
 
 /**
  * `${kv:NAME}` — inject a PERSISTENT (cross-run) value into prompt text, and the
@@ -26,7 +30,7 @@ import { kvGet, kvSet, type KvSetResult } from '@/backend/services/kvStore';
 
 const log = createLogger('backend/flow/execution/resolveKvNodeRefs');
 
-export interface KvFlowContext {
+export interface KvFlowContext extends FlowDurableMutationContext {
   flowId?: string;
   /** The flow's optional user-assigned folder (Flow.folder). */
   folder?: string;
@@ -45,7 +49,10 @@ export function kvScopeId(scope: KvRefScope, ctx: KvFlowContext): string {
 
   if (scope === 'flow') return flowBoard();
 
-  // folder (default): a package of flows sharing one folder shares a board.
+  // folder (default): all executions of flows sharing one folder use the same
+  // board, including Persona-attributed execution. Callers resolve the current
+  // Flow.folder before reads and captures; flows without one retain the
+  // historical per-flow fallback below.
   const folder = ctx.folder?.trim();
   if (folder) {
     const hash = createHash('sha256').update(folder).digest('hex').slice(0, 32);
@@ -87,8 +94,10 @@ export type CaptureKvResult = KvSetResult | { skipped: 'invalid-name' };
 
 /**
  * The write side of `captureKv: "NAME"` (or `"folder/NAME"`, `"flow/NAME"`,
- * `"global/NAME"`). Persists `value` to the resolved board. Never throws; a bad
- * name / cap refusal comes back as a `{ skipped }` marker the caller logs.
+ * `"global/NAME"`). Persists `value` to the resolved board. A bad name / cap
+ * refusal comes back as a `{ skipped }` marker the caller logs. Persona and
+ * meeting writes are lock-coupled to their execution authority; losing that
+ * authority throws so a best-effort capture catch cannot let stale work run on.
  */
 export async function captureKvValue(
   captureToken: string,
@@ -97,5 +106,8 @@ export async function captureKvValue(
 ): Promise<CaptureKvResult> {
   const { scope, key } = parseKvRef(captureToken);
   if (!isValidKvName(key)) return { skipped: 'invalid-name' };
-  return kvSet(kvScopeId(scope, ctx), key, value ?? '');
+  return commitFlowDurableMutation(
+    ctx,
+    () => kvSet(kvScopeId(scope, ctx), key, value ?? ''),
+  );
 }

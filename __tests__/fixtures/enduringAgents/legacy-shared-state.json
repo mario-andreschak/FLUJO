@@ -1,0 +1,38 @@
+{
+  "trackingInfo": {
+    "executionId": "legacy-execution",
+    "startTime": 1700000000000,
+    "nodeExecutionTracker": []
+  },
+  "messages": [
+    {
+      "id": "legacy-user-message",
+      "timestamp": 1700000000000,
+      "role": "user",
+      "content": "Read the legacy specification."
+    },
+    {
+      "id": "legacy-assistant-message",
+      "timestamp": 1700000001000,
+      "role": "assistant",
+      "content": "The legacy specification is available."
+    }
+  ],
+  "flowId": "legacy-tool-flow",
+  "currentNodeId": "finish",
+  "conversationId": "legacy-conversation",
+  "status": "completed",
+  "title": "Legacy conversation",
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000001000,
+  "requireApproval": true,
+  "source": "chat",
+  "toolNameMap": {
+    "mcp_filesystem_read_file": {
+      "server": "filesystem",
+      "tool": "read_file",
+      "timeout": 45,
+      "nodeId": "filesystem-tools"
+    }
+  }
+}

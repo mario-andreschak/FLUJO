@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * POST /api/packages/resolve (issue #194).
  *
@@ -15,6 +16,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import {
   previewPackageSecrets,
+  previewPackageGlobals,
   resolvePackageSelection,
   validateMcpSelection,
   type PackageSelection,
@@ -27,7 +29,7 @@ function sanitizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -52,6 +54,7 @@ export async function POST(request: NextRequest) {
     const { resolved, entities } = await resolvePackageSelection(selection);
     const mcp = validateMcpSelection(resolved.mcpServerNames, entities.mcpServers);
     const secrets = previewPackageSecrets(resolved, entities);
+    const globals = previewPackageGlobals(resolved, entities);
     return NextResponse.json({
       resolved,
       mcp: {
@@ -60,6 +63,7 @@ export async function POST(request: NextRequest) {
         servers: mcp.packaged.map((s) => ({ name: s.name, sourceType: s.installOrigin.sourceType })),
       },
       secrets,
+      globals,
     });
   } catch (err) {
     log.error('Failed to resolve package selection', err);
@@ -69,3 +73,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

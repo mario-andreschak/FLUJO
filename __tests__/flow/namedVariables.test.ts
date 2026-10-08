@@ -11,15 +11,21 @@
  */
 
 jest.mock('@/backend/utils/PromptRenderer', () => ({
-  promptRenderer: { renderPrompt: jest.fn() },
+  promptRenderer: { renderPrompt: jest.fn(), resolveChatMessageReferences: jest.fn(async (value: string) => value) },
 }));
 jest.mock('@/backend/services/flow/index', () => ({
   flowService: { getFlow: jest.fn(async () => ({ id: 'flow-1', name: 'f', nodes: [], edges: [] })) },
+}));
+jest.mock('@/backend/services/model', () => ({
+  modelService: { getModel: jest.fn() },
 }));
 
 import { ProcessNode } from '@/backend/execution/flow/nodes/ProcessNode';
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
+import { flowService } from '@/backend/services/flow/index';
+import { modelService } from '@/backend/services/model';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import type {
   SharedState,
   ProcessNodeParams,
@@ -50,9 +56,24 @@ function procParams(properties: Record<string, unknown>): ProcessNodeParams {
 
 beforeEach(() => {
   renderPromptMock.mockReset();
+  (flowService.getFlow as jest.Mock).mockResolvedValue({ id: 'flow-1', name: 'f', nodes: [], edges: [] });
+  (modelService.getModel as jest.Mock).mockReset();
+  jest.restoreAllMocks();
 });
 
 describe('ProcessNode.prep — ${var:NAME} resolution', () => {
+  it('substitutes current chat/flow/node/model commands on the model wire for ordinary chat and Slack IDs', async () => {
+    renderPromptMock.mockResolvedValue('SYS');
+    const content = 'chat=@current.conversation.id flow=@current.flow.id node=@current.node.id model=@current.model.id';
+    for (const conversationId of ['chat-1', 'slack-team-thread-1']) {
+      const state = makeState({ conversationId, messages: [{ id: 'user-current', role: 'user', content, timestamp: 1 }] });
+      const prep = await new ProcessNode().prep(state, procParams({}));
+      expect((prep.wireMessages ?? prep.messages).find(message => message.role === 'user')?.content)
+        .toBe(`chat=${conversationId} flow=flow-1 node=proc model=m`);
+      expect(state.messages[0].content).toBe(content);
+    }
+  });
+
   it('resolves vars in the rendered system prompt (currentPrompt)', async () => {
     renderPromptMock.mockResolvedValue('Follow the plan: ${var:plan}');
     const node = new ProcessNode();
@@ -82,6 +103,36 @@ describe('ProcessNode.prep — ${var:NAME} resolution', () => {
     const prep = await node.prep(makeState({ variables: {} }), procParams({}));
     expect(prep.currentPrompt).toBe('x=');
     warn.mockRestore();
+  });
+});
+
+describe('ProcessNode.prep — Claude session resume and output folding (#294)', () => {
+  it('keeps full history when another node folds output and Claude resume is enabled', async () => {
+    renderPromptMock.mockResolvedValue('SYS');
+    (modelService.getModel as jest.Mock).mockResolvedValue({ adapter: 'claude-cli' });
+    jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(true);
+    (flowService.getFlow as jest.Mock).mockResolvedValue({
+      id: 'flow-1',
+      name: 'f',
+      nodes: [
+        { id: 'upstream', type: 'process', data: { properties: { outputMode: 'latest-message' } } },
+        { id: 'proc', type: 'process', data: { properties: {} } },
+      ],
+      edges: [],
+    });
+
+    const node = new ProcessNode();
+    const prep = await node.prep(makeState({
+      messages: [
+        { role: 'user', content: 'question', id: 'u1', timestamp: 1 },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }], id: 'a1', timestamp: 2, processNodeId: 'upstream' },
+        { role: 'tool', tool_call_id: 'call-1', content: 'result', id: 't1', timestamp: 3, processNodeId: 'upstream' },
+        { role: 'assistant', content: 'upstream answer', id: 'a2', timestamp: 4, processNodeId: 'upstream' },
+      ],
+    }), procParams({ inputMode: 'full-history' }));
+
+    expect(prep.wireMessages).toBeUndefined();
+    expect(prep.messages.some((message) => message.role === 'tool' && message.tool_call_id === 'call-1')).toBe(true);
   });
 });
 

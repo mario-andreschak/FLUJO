@@ -227,6 +227,23 @@ describe('resolveWaves', () => {
     expect(wave.hasCycle).toBe(true);
   });
 
+  test('default chain traversal includes 100 hops and stops before hop 101', () => {
+    const flows = Array.from({ length: 102 }, (_, index) => flow(`f${index}`, `Flow ${index}`));
+    const executions = [
+      exec('e0', 'f0', schedule()),
+      ...Array.from({ length: 101 }, (_, index) =>
+        exec(`e${index + 1}`, `f${index + 1}`, onExecution(`e${index}`)),
+      ),
+    ];
+
+    const res = resolveWaves({ executions, flows, now: NOW });
+    const wave = res.waves.find((candidate) => candidate.id === 'e0')!;
+
+    expect(wave.nodes).toHaveLength(101);
+    expect(wave.nodes.map((entry) => entry.executionId)).toContain('e100');
+    expect(wave.nodes.map((entry) => entry.executionId)).not.toContain('e101');
+  });
+
   test('orphan: a flow-event source matching nothing is reported, not charted', () => {
     const flows = [flow('fA', 'A')];
     const executions = [

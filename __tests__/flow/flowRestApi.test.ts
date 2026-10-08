@@ -16,6 +16,16 @@
  * path id wins on PUT, and the 404/409 edge cases.
  */
 import type { Flow } from '@/shared/types/flow';
+// Keep this collection-backed route fixture in memory. The real filesystem
+// authoring boundary is exercised by personaOwnedFlows and its process suite.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
 
 // In-memory storage so the backend service never touches disk.
 const store: Record<string, unknown> = {};
@@ -88,6 +98,26 @@ describe('Flow REST API', () => {
 
     const afterList = await listFlows();
     await expect(afterList.json()).resolves.toHaveLength(1);
+  });
+
+  it('strips legacy unattended input from create and update responses/storage', async () => {
+    const legacyCreate = {
+      ...flowFixture(),
+      unattended: true,
+    } as Flow & { unattended?: boolean };
+
+    const createRes = await createFlow(req(legacyCreate));
+    expect(createRes.status).toBe(201);
+    await expect(createRes.json()).resolves.not.toHaveProperty('unattended');
+    expect(collections.flows.f1).not.toHaveProperty('unattended');
+
+    const updateRes = await putFlow(req({
+      ...flowFixture({ name: 'Updated' }),
+      unattended: false,
+    }), ctx('f1'));
+    expect(updateRes.status).toBe(200);
+    await expect(updateRes.json()).resolves.not.toHaveProperty('unattended');
+    expect(collections.flows.f1).not.toHaveProperty('unattended');
   });
 
   it('POST /api/flow rejects a missing id with 400', async () => {

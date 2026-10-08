@@ -1,0 +1,271 @@
+import { promises as fs } from 'fs';
+import path from 'path';
+
+import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import { getMemoryIndex, saveIndexedCollectionItem } from '@/backend/services/enduringAgents/indexing';
+import { invalidatePersonaRecordCache } from '@/backend/services/enduringAgents/personaRecordCache';
+import {
+  listMemoryItems,
+  listPersonaLeaseRecords,
+  listPersonaMailboxItems,
+  listPersonaSummaryRecords,
+} from '@/backend/services/enduringAgents/store';
+import {
+  ENDURING_AGENT_SCHEMA_VERSION,
+  MemoryItemSchema,
+  PersonaLeaseSchema,
+  PersonaMailboxItemSchema,
+  type MemoryItem,
+  type PersonaLease,
+  type PersonaMailboxItem,
+} from '@/shared/types/enduringAgent';
+import { getShardedCollectionItemPath } from '@/utils/storage/backend';
+import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
+
+let workspaceSequence = 0;
+
+function inFreshWorkspace<T>(task: () => T | Promise<T>): Promise<T> {
+  workspaceSequence += 1;
+  return runWithWorkspace(
+    `collection-scan-isolation-${process.pid}-${workspaceSequence}`,
+    async () => await task(),
+  );
+}
+
+function memory(id: string, personaId: string): MemoryItem {
+  return MemoryItemSchema.parse({
+    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    id,
+    personaId,
+    kind: 'semantic',
+    scope: 'persona',
+    status: 'active',
+    content: `Memory ${id}`,
+    confidence: 1,
+    importance: 1,
+    sourceRefs: [{ kind: 'user_statement', id: `source-${id}` }],
+    trust: 'explicit_user',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+}
+
+function mailbox(id: string, personaId: string, sequence: number): PersonaMailboxItem {
+  return PersonaMailboxItemSchema.parse({
+    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    id,
+    personaId,
+    idempotencyKey: String(sequence).padStart(64, '0'),
+    sequence,
+    kind: 'assignment',
+    priority: 'normal',
+    status: 'queued',
+    source: { kind: 'assignment', sourceId: `source-${id}` },
+    createdAt: 1,
+    updatedAt: 1,
+  });
+}
+
+function lease(id: string, personaId: string, renewedAt: number): PersonaLease {
+  return PersonaLeaseSchema.parse({
+    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    id,
+    workspaceId: getCurrentWorkspace(),
+    personaId,
+    activityId: `activity_${id}`,
+    holderId: `holder_${id}`,
+    status: 'active',
+    fencingToken: 1,
+    acquiredAt: 1,
+    renewedAt,
+    expiresAt: renewedAt + 100,
+  });
+}
+
+function recordPath(collection: string, id: string): string {
+  return path.resolve(getWorkspaceDataDir(), 'db', collection, `${id}.json`);
+}
+
+describe('indexed collection scan isolation', () => {
+  it('does not open foreign memory or mailbox records on warm reads', async () => {
+    await inFreshWorkspace(async () => {
+      const records = [
+        memory('memory_a', 'persona_a'),
+        memory('memory_b', 'persona_b'),
+        memory('memory_c', 'persona_c'),
+      ];
+      const mailboxItems = [
+        mailbox('mailbox_a', 'persona_a', 1),
+        mailbox('mailbox_b', 'persona_b', 1),
+        mailbox('mailbox_c', 'persona_c', 1),
+      ];
+      for (const record of records) {
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
+      }
+      for (const record of mailboxItems) {
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
+      }
+
+      await listMemoryItems('persona_a');
+      await listPersonaMailboxItems('persona_a');
+
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        expect((await listMemoryItems('persona_a')).map(item => item.id)).toEqual(['memory_a']);
+        expect((await listPersonaMailboxItems('persona_a')).map(item => item.id))
+          .toEqual(['mailbox_a']);
+
+        const opened = new Set(readSpy.mock.calls.map(([value]) => path.resolve(String(value))));
+        expect(opened).not.toContain(recordPath(
+          ENDURING_AGENT_COLLECTIONS.memoryItems,
+          'memory_b',
+        ));
+        expect(opened).not.toContain(recordPath(
+          ENDURING_AGENT_COLLECTIONS.memoryItems,
+          'memory_c',
+        ));
+        expect(opened).not.toContain(recordPath(
+          ENDURING_AGENT_COLLECTIONS.mailboxItems,
+          'mailbox_b',
+        ));
+        expect(opened).not.toContain(recordPath(
+          ENDURING_AGENT_COLLECTIONS.mailboxItems,
+          'mailbox_c',
+        ));
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  it('bounds Persona gallery source reads to the requested page', async () => {
+    await inFreshWorkspace(async () => {
+      const ownMemory = memory('memory_a', 'persona_a');
+      const foreignMemory = memory('memory_b', 'persona_b');
+      const ownMailbox = mailbox('mailbox_a', 'persona_a', 1);
+      const foreignMailbox = mailbox('mailbox_b', 'persona_b', 1);
+      for (const record of [ownMemory, foreignMemory]) {
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
+      }
+      for (const record of [ownMailbox, foreignMailbox]) {
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
+      }
+      await listPersonaSummaryRecords(['persona_a']);
+
+      const foreignPaths = [
+        getShardedCollectionItemPath(
+          ENDURING_AGENT_COLLECTIONS.memoryItems,
+          foreignMemory.personaId,
+          foreignMemory.id,
+        ),
+        getShardedCollectionItemPath(
+          ENDURING_AGENT_COLLECTIONS.mailboxItems,
+          foreignMailbox.personaId,
+          foreignMailbox.id,
+        ),
+      ].map((value) => path.resolve(value));
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        await expect(listPersonaSummaryRecords(['persona_a'])).resolves.toMatchObject({
+          memoryItems: [expect.objectContaining({ id: ownMemory.id })],
+          mailboxItems: [expect.objectContaining({ id: ownMailbox.id })],
+        });
+        const opened = new Set(readSpy.mock.calls.map(([value]) => path.resolve(String(value))));
+        foreignPaths.forEach((foreignPath) => expect(opened).not.toContain(foreignPath));
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  it('does not open foreign lease-history records on warm reads', async () => {
+    await inFreshWorkspace(async () => {
+      const own = lease('lease_a', 'persona_a', 10);
+      const foreign = lease('lease_b', 'persona_b', 20);
+      await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, own);
+      await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, foreign);
+      await listPersonaLeaseRecords('persona_a');
+
+      const foreignPath = getShardedCollectionItemPath(
+        ENDURING_AGENT_COLLECTIONS.leaseHistory,
+        foreign.personaId,
+        foreign.id,
+      );
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        await expect(listPersonaLeaseRecords('persona_a')).resolves.toEqual([
+          expect.objectContaining({ id: own.id, personaId: own.personaId }),
+        ]);
+        const opened = new Set(readSpy.mock.calls.map(([value]) => path.resolve(String(value))));
+        expect(opened).not.toContain(path.resolve(foreignPath));
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  it('counts gallery Memories from current index metadata without opening private payloads', async () => {
+    await inFreshWorkspace(async () => {
+      const own = memory('memory_summary', 'persona_a');
+      const forgotten = { ...memory('memory_forgotten', 'persona_a'), status: 'forgotten' as const };
+      const foreign = memory('memory_foreign', 'persona_b');
+      for (const record of [own, forgotten, foreign]) {
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
+      }
+      await getMemoryIndex();
+      invalidatePersonaRecordCache(ENDURING_AGENT_COLLECTIONS.memoryItems, own.personaId);
+      const payloadPaths = [own, forgotten, foreign].map(record => path.resolve(
+        getShardedCollectionItemPath(ENDURING_AGENT_COLLECTIONS.memoryItems, record.personaId, record.id),
+      ));
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        const result = await listPersonaSummaryRecords(['persona_a']);
+        expect(result.memoryItems).toEqual(expect.arrayContaining([
+          { id: own.id, personaId: own.personaId, status: 'active' },
+          { id: forgotten.id, personaId: forgotten.personaId, status: 'forgotten' },
+        ]));
+        expect(result.memoryItems).toHaveLength(2);
+        const opened = new Set(readSpy.mock.calls.map(([value]) => path.resolve(String(value))));
+        payloadPaths.forEach(payloadPath => expect(opened).not.toContain(payloadPath));
+      } finally {
+        readSpy.mockRestore();
+      }
+      await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, {
+        ...own, status: 'forgotten', updatedAt: 2,
+      });
+      const updated = await listPersonaSummaryRecords(['persona_a']);
+      expect(updated.memoryItems.find(record => record.id === own.id)?.status).toBe('forgotten');
+    });
+  });
+
+  it('keeps a malformed foreign mailbox record outside Persona A read scope', async () => {
+    await inFreshWorkspace(async () => {
+      await saveIndexedCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.mailboxItems,
+        mailbox('mailbox_a', 'persona_a', 1),
+      );
+      await saveIndexedCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.mailboxItems,
+        mailbox('mailbox_b', 'persona_b', 1),
+      );
+      await listPersonaMailboxItems('persona_a');
+
+      const foreignPath = recordPath(
+        ENDURING_AGENT_COLLECTIONS.mailboxItems,
+        'mailbox_b',
+      );
+      await fs.writeFile(foreignPath, '{ deliberately malformed');
+
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        await expect(listPersonaMailboxItems('persona_a')).resolves.toEqual([
+          expect.objectContaining({ id: 'mailbox_a', personaId: 'persona_a' }),
+        ]);
+        const opened = new Set(readSpy.mock.calls.map(([value]) => path.resolve(String(value))));
+        expect(opened).not.toContain(foreignPath);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+});

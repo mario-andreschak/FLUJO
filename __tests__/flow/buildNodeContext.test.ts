@@ -166,10 +166,31 @@ describe('scopeMessagesForInput (process node inputMode — WIRE view only)', ()
     expect(scopeMessagesForInput(messages, undefined)).toBe(messages);
   });
 
-  it("'latest-message' keeps the system message plus everything from the last user message on", () => {
+  it("'latest-message' keeps the system message plus the last user message (nothing after it)", () => {
     const messages = [sys('NODE', 'node-sys'), user('old', 'u1'), assistant('done', 'a1'), user('current', 'u2')];
     const out = scopeMessagesForInput(messages, 'latest-message');
     expect(out.map((m) => m.id)).toEqual(['node-sys', 'u2']);
+  });
+
+  it("'latest-message' keeps the last user message AND the last assistant response", () => {
+    const messages = [sys('NODE', 'node-sys'), user('old', 'u1'), assistant('done', 'a1'), user('current', 'u2'), assistant('reply', 'a2')];
+    const out = scopeMessagesForInput(messages, 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u2', 'a2']);
+  });
+
+  it("'latest-message' compresses several settled turns since the last user message to just the LAST assistant", () => {
+    // A single user turn followed by several nodes each appending their output
+    // (orchestrator → worker chain). Only the latest assistant survives; the
+    // intermediate ones are dropped.
+    const messages = [
+      sys('NODE', 'node-sys'),
+      user('task', 'u1'),
+      assistant('A output', 'a1'),
+      assistant('B output', 'a2'),
+      assistant('C output', 'a3'),
+    ];
+    const out = scopeMessagesForInput(messages, 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a3']);
   });
 
   it("'latest-message' includes the in-flight tool exchange that follows the last user message", () => {
@@ -458,6 +479,138 @@ describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => 
     expect(m.id).toBe('a1');
     expect(m.usage).toEqual({ promptTokens: 1, completionTokens: 1, totalTokens: 2 });
   });
+
+  it('moves generated assistant media onto a user turn for the next provider', () => {
+    const generated = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Here it is.' },
+        { type: 'image_url', image_url: { url: '/resource/image' } },
+      ],
+      media: [{
+        type: 'image',
+        url: '/resource/image',
+        resourceUri: 'flujo://run/conv-1/image-1',
+        localPath: 'C:\\artifacts\\image-1.png',
+        mimeType: 'image/png',
+      }],
+      id: 'a-media',
+      timestamp: 1,
+    } as unknown as FlujoChatMessage;
+
+    expect(toApiMessages([generated])).toEqual([
+      { role: 'assistant', content: 'Here it is.' },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              '[Media produced in the preceding turn]\n\n' +
+              '[Available generated artifacts]\n- image 1 (image/png): C:\\artifacts\\image-1.png',
+          },
+          {
+            type: 'image_url',
+            image_url: { url: 'flujo://run/conv-1/image-1' },
+          },
+        ],
+      },
+    ]);
+    expect(generated.media).toHaveLength(1);
+    expect(Array.isArray(generated.content)).toBe(true);
+  });
+
+  it('moves tool-produced media through a synthetic user input before the reacting assistant', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call-image',
+          type: 'function',
+          function: { name: 'screenshot', arguments: '{}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call-image',
+        content: '[image stored as flujo://run/conv-1/tool-image]',
+        media: [{
+          type: 'image',
+          mimeType: 'image/png',
+          resourceUri: 'flujo://run/conv-1/tool-image',
+          localPath: 'C:\\artifacts\\tool-image.png',
+        }],
+      },
+      { role: 'assistant', content: 'I can see the screenshot.' },
+    ] as unknown as FlujoChatMessage[];
+
+    const out = toApiMessages(messages);
+
+    expect(out.map(message => message.role)).toEqual(['assistant', 'tool', 'user', 'assistant']);
+    expect(out[1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call-image',
+      content: '[image stored as flujo://run/conv-1/tool-image]',
+    });
+    expect(out[2]).toEqual({
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text:
+            '[Media produced in the preceding turn]\n\n' +
+            '[Available generated artifacts]\n- image 1 (image/png): C:\\artifacts\\tool-image.png',
+        },
+        {
+          type: 'image_url',
+          image_url: { url: 'flujo://run/conv-1/tool-image' },
+        },
+      ],
+    });
+    expect(out[3]).toEqual({ role: 'assistant', content: 'I can see the screenshot.' });
+  });
+
+  it('attaches generated video to the next real user turn without duplicating display content', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: null,
+        media: [{
+          type: 'video',
+          resourceUri: 'flujo://run/conv-1/video-1',
+          localPath: 'C:\\artifacts\\video-1.mp4',
+          url: '/resource/video',
+          mimeType: 'video/mp4',
+        }],
+        id: 'a-video',
+        timestamp: 1,
+      },
+      user('What happens in this clip?', 'u-video'),
+    ] as FlujoChatMessage[];
+
+    expect(toApiMessages(messages)).toEqual([
+      { role: 'assistant', content: null },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              'What happens in this clip?\n\n' +
+              '[Available generated artifacts]\n- video 1 (video/mp4): C:\\artifacts\\video-1.mp4',
+          },
+          {
+            type: 'video_url',
+            video_url: {
+              url: 'flujo://run/conv-1/video-1',
+              mime_type: 'video/mp4',
+            },
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('deriveModelInputView (debugger model-input explanation — issue #153)', () => {
@@ -599,5 +752,81 @@ describe('deriveModelInputView (debugger model-input explanation — issue #153)
     expect(snap.systemMessage).toBeNull();
     const serialized = JSON.stringify(snap);
     expect(serialized).not.toMatch(/apiKey|api_key|Authorization/i);
+  });
+});
+
+// --- Mid-run steering ---------------------------------------------------------
+// A user message injected into a run that is already in flight must reach the
+// model that is currently working, whatever that node's inputMode is: dropping a
+// correction because the node happens to be `isolated` would make steering
+// silently do nothing. It must also not disturb the node's in-flight tool loop —
+// the injected message lands at the END of the history, which is exactly where
+// currentToolTail looks for the unresolved exchange.
+const injected = (content: string, id = content): FlujoChatMessage =>
+  ({ role: 'user', content, id, timestamp: 1, injected: true } as FlujoChatMessage);
+
+describe('scopeMessagesForInput (mid-run steering injections)', () => {
+  it('appends the injection under `isolated`, where the prior conversation is dropped', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('S', 's'),
+      user('original task', 'u1'),
+      assistant('working on it', 'a1'),
+      injected('stop, do X instead', 'i1'),
+    ];
+
+    const out = scopeMessagesForInput(messages, 'isolated', 'the isolated prompt');
+
+    expect(out.map((m) => m.id)).toEqual(['s', 'isolated-input', 'i1']);
+  });
+
+  it('appends the injection under `latest-message`', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('S', 's'),
+      user('u', 'u1'),
+      assistant('a', 'a1'),
+      injected('correction', 'i1'),
+    ];
+
+    const out = scopeMessagesForInput(messages, 'latest-message');
+
+    expect(out.map((m) => m.id)).toEqual(['s', 'u1', 'a1', 'i1']);
+  });
+
+  it('does not let a trailing injection hide an in-flight tool exchange', () => {
+    // Mid tool loop: the node has called a tool and has its result, and a
+    // steering message arrives. The node must still see its own loop — without
+    // peeling the injection first, currentToolTail reads the trailing user
+    // message as "settled" and the exchange disappears from the wire.
+    const messages: FlujoChatMessage[] = [
+      sys('S', 's'),
+      user('u', 'u1'),
+      toolCallAssistant('a-call', 'call-1'),
+      toolResult('t-1', 'call-1'),
+      injected('actually search for Y', 'i1'),
+    ];
+
+    const out = scopeMessagesForInput(messages, 'latest-message');
+
+    expect(out.map((m) => m.id)).toEqual(['s', 'u1', 'a-call', 't-1', 'i1']);
+  });
+
+  it('keeps a collapsed node from folding away a live exchange under an injection', () => {
+    const messages: FlujoChatMessage[] = [
+      user('u', 'u1'),
+      { ...toolCallAssistant('a-call', 'call-1'), processNodeId: 'node-A' } as FlujoChatMessage,
+      { ...toolResult('t-1', 'call-1'), processNodeId: 'node-A' } as FlujoChatMessage,
+      injected('correction', 'i1'),
+    ];
+
+    // node-A's exchange is still in flight, so it must survive the fold.
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+
+    expect(out.map((m) => m.id)).toEqual(['u1', 'a-call', 't-1', 'i1']);
+  });
+
+  it('strips the internal `injected` flag at the provider boundary', () => {
+    const out = toApiMessages([injected('correction', 'i1')]);
+
+    expect(out).toEqual([{ role: 'user', content: 'correction' }]);
   });
 });

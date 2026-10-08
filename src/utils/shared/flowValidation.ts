@@ -21,6 +21,10 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -43,6 +47,23 @@ export interface FlowValidationResult {
   isRunnable: boolean;
 }
 
+export const PROCESS_FILEPATH_MCP_UNAVAILABLE = 'process-filepath-mcp-unavailable';
+export const PROCESS_FILEPATH_MCP_ROOTS_MISSING = 'process-filepath-mcp-roots-missing';
+
+export type FileAccessMcpUsability = 'usable' | 'unavailable' | 'unknown';
+
+export interface FileAccessMcpServerSnapshot {
+  /** Whether this capability-bearing server was present in a successfully loaded config list. */
+  configured: boolean;
+  disabled: boolean;
+  /** A live tool-list result proves usability; a load failure remains unknown. */
+  usability: FileAccessMcpUsability;
+  roots?: unknown[];
+  rootPath?: unknown;
+}
+
+export type FileAccessMcpSnapshot = Record<string, FileAccessMcpServerSnapshot>;
+
 export interface FlowValidationContext {
   /** Known models, for detecting a deleted/renamed bound model. Omit to skip those checks. */
   models?: Array<{ id: string; name?: string; displayName?: string }>;
@@ -53,6 +74,11 @@ export interface FlowValidationContext {
    * checked against actual availability. Omit to skip the per-tool availability check.
    */
   serverTools?: Record<string, string[]>;
+  /**
+   * Design-time snapshot for capability-bearing file-access servers. Omit when MCP
+   * configuration could not be loaded so uncertainty never becomes a false warning.
+   */
+  fileAccessMcp?: FileAccessMcpSnapshot;
 }
 
 // --- Minimal structural shapes (avoid a hard dependency on @xyflow/react types) ---
@@ -60,7 +86,7 @@ export interface FlowValidationContext {
 interface VNodeData {
   label?: string;
   type?: string;
-  properties?: Record<string, any> | null;
+  properties?: Record<string, unknown> | null;
 }
 export interface VNode {
   id: string;
@@ -187,6 +213,26 @@ function buildControlAdjacency(edges: VEdge[]): Map<string, string[]> {
   return adj;
 }
 
+/** `${var:NAME}` / `${res:NAME}` references inside authored static-node text. Their
+ *  values are only known at run time, so text containing them cannot be JSON-parsed
+ *  at authoring time (issue #381). No /g flag: this is used with `.test()`. */
+const STATIC_PLACEHOLDER_PATTERN = /\$\{(?:var|res):[^}]*\}/;
+
+/** True when a node lies on a control-flow cycle, i.e. it can reach itself again.
+ *  Used to tell whether a node can ever be re-entered within one run. */
+function isOnControlCycle(nodeId: string, adj: Map<string, string[]>): boolean {
+  const seen = new Set<string>();
+  const queue = [...(adj.get(nodeId) ?? [])];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (id === nodeId) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    queue.push(...(adj.get(id) ?? []));
+  }
+  return false;
+}
+
 /** Node ids reachable from the given start ids over flow-control edges. */
 function reachableFrom(startIds: string[], adj: Map<string, string[]>): Set<string> {
   const seen = new Set<string>(startIds);
@@ -201,6 +247,77 @@ function reachableFrom(startIds: string[], adj: Map<string, string[]>): Set<stri
     }
   }
   return seen;
+}
+
+/** Prompt fields that can actually reach a Process model for its current input mode. */
+function processPromptTexts(node: VNode): string[] {
+  const props = node.data?.properties ?? {};
+  const texts: string[] = [];
+  if (typeof props.promptTemplate === 'string' && props.promptTemplate) {
+    texts.push(props.promptTemplate);
+  }
+  if (props.inputMode === 'isolated' && typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) {
+    texts.push(props.isolatedPrompt);
+  }
+  return texts;
+}
+
+/** Remove an entire whitespace-delimited token when any part is runtime interpolation. */
+function stripDynamicPathTokens(text: string): string {
+  return text.replace(/\S*\$\{[^}]*\}\S*/g, ' ');
+}
+
+/** Conservative literal detector: file:// URIs plus absolute POSIX, drive, and UNC paths. */
+function containsLiteralFilepath(text: string): boolean {
+  const literal = stripDynamicPathTokens(text);
+  const fileUri = /(?:^|[\s("'`])file:\/\/(?:\/|[^/\s]+\/)[^\s<>"'`]+/i;
+  const windows = /(?:^|[\s("'`])(?:[A-Za-z]:[\\/][^\s<>"'`]*|\\\\[^\\\s<>"'`]+\\[^\\\s<>"'`]+(?:\\[^\s<>"'`]*)?)/;
+  const posix = /(?:^|[\s("'`])\/(?!\/)[^\s<>"'`]+/;
+  return fileUri.test(literal) || windows.test(literal) || posix.test(literal);
+}
+
+/**
+ * Browser-side roots stay intentionally syntactic. `${global:...}` roots and environment
+ * ceilings (FLUJO_FS_ROOTS / FLUJO_BASH_ROOTS) resolve only at runtime, so a configured
+ * global token counts as meaningful and environment ceilings are not guessed here.
+ */
+function isMeaningfulFileAccessRoot(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const root = value.trim();
+  if (!root) return false;
+  if (/^\$\{global:[^{}]+\}$/.test(root)) return true;
+  if (root.includes('${')) return false;
+  if (/^file:/i.test(root)) {
+    try {
+      const uri = new URL(root);
+      if (uri.protocol !== 'file:') return false;
+      // A bare "file://" normalises to "file:///" (pathname "/"), which points at
+      // nothing the runtime can use as a root — treat it as malformed/blank.
+      const hasPath = uri.pathname.replace(/\/+$/, '') !== '';
+      return !!uri.hostname || hasPath;
+    } catch {
+      return false;
+    }
+  }
+  // Literal absolute and relative roots are both supported by the runtime.
+  return !root.includes('\0');
+}
+
+function fileAccessServerHasEffectiveRoot(
+  name: string,
+  server: FileAccessMcpServerSnapshot,
+  mcpNodes: VNode[]
+): boolean {
+  const serverRoots = Array.isArray(server.roots) ? server.roots : [];
+  const nodeRoots = mcpNodes
+    .filter((node) => node.data?.properties?.boundServer === name)
+    .flatMap((node) => {
+      const roots = node.data?.properties?.roots;
+      return Array.isArray(roots) ? roots : [];
+    });
+  if ([...serverRoots, ...nodeRoots].some(isMeaningfulFileAccessRoot)) return true;
+  // Runtime roots/list falls back to rootPath only when the additive roots union is empty.
+  return isMeaningfulFileAccessRoot(server.rootPath);
 }
 
 /**
@@ -295,12 +412,55 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       }
     }
 
-    // An MCP node wired to no Process node contributes nothing to the flow.
-    const wiredToProcess = edges.some(
+    // An MCP node wired to no executable tool consumer contributes nothing.
+    const wiredToConsumer = edges.some(
       (e) => isMcpEdge(e) && (e.source === node.id || e.target === node.id)
     );
-    if (!wiredToProcess) {
-      add('warning', 'mcp-node-unconnected', `MCP node "${getNodeLabel(node)}" is not connected to any Process node.`, node);
+    if (!wiredToConsumer) {
+      add('warning', 'mcp-node-unconnected', `MCP node "${getNodeLabel(node)}" is not connected to any Process or Static node.`, node);
+    }
+  }
+
+  // --- Process prompts: literal filepath support (issue #321) ---
+  // One warning per node, never per candidate path/server. Missing context means MCP config
+  // loading failed, so the check is skipped instead of presenting uncertainty as absence.
+  if (context.fileAccessMcp) {
+    const snapshot = context.fileAccessMcp;
+    const available = Object.entries(snapshot)
+      .filter(([, server]) => server.configured && !server.disabled && server.usability === 'usable')
+      .map(([name]) => name);
+    const availabilityUnknown = Object.values(snapshot).some((server) => (
+      server.configured && !server.disabled && server.usability === 'unknown'
+    ));
+
+    for (const node of processNodes) {
+      if (!processPromptTexts(node).some(containsLiteralFilepath)) continue;
+
+      if (available.length === 0) {
+        if (!availabilityUnknown) {
+          add(
+            'warning',
+            PROCESS_FILEPATH_MCP_UNAVAILABLE,
+            `Process node "${getNodeLabel(node)}" contains a literal filepath, but no configured file-access MCP server is currently available. Enable or reconnect one so this flow can access the path.`,
+            node
+          );
+        }
+        continue;
+      }
+
+      // A failed status/tool load could hide another usable server with roots. Suppress the
+      // roots warning until every enabled file-access server has a known availability result.
+      if (
+        !availabilityUnknown &&
+        available.every((name) => !fileAccessServerHasEffectiveRoot(name, snapshot[name], mcpNodes))
+      ) {
+        add(
+          'warning',
+          PROCESS_FILEPATH_MCP_ROOTS_MISSING,
+          `Process node "${getNodeLabel(node)}" contains a literal filepath, but the available file-access MCP servers have no effective roots configured. Add roots globally or on the corresponding MCP node in this flow.`,
+          node
+        );
+      }
     }
   }
 
@@ -407,6 +567,133 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
+  }
+
+  // --- Static nodes (issue #358: pre-authored conversation injection) ---
+  // A static node with no entries injects nothing (inert); a tool-call entry
+  // must be well-formed or provider adapters reject the resulting history, so
+  // missing tool names / invalid JSON arguments are hard errors at authoring time.
+  const staticNodes = nodes.filter((n) => getNodeType(n) === 'static');
+  // Built lazily: only `injectOnce` nodes need the graph shape (issue #381).
+  let staticAdjacency: Map<string, string[]> | null = null;
+  for (const node of staticNodes) {
+    const props = node.data?.properties ?? {};
+    const entries = Array.isArray(props.entries) ? props.entries : [];
+
+    // `injectOnce` only ever changes behaviour on a *repeat* traversal, which can only
+    // happen when the node sits on a loop. On an acyclic path the toggle is a no-op and
+    // usually signals a misunderstanding of "once per run" — advisory only, never blocking.
+    if (props.injectOnce === true) {
+      staticAdjacency = staticAdjacency ?? buildControlAdjacency(edges);
+      if (!isOnControlCycle(node.id, staticAdjacency)) {
+        add(
+          'warning',
+          'static-injectonce-without-loop',
+          `Static node "${getNodeLabel(node)}" has "inject once" enabled but is never re-entered (it is not on a loop), so the setting has no effect.`,
+          node
+        );
+      }
+    }
+
+    if (entries.length === 0) {
+      add(
+        'warning',
+        'static-no-entries',
+        `Static node "${getNodeLabel(node)}" has no entries; it injects nothing into the conversation.`,
+        node
+      );
+      continue;
+    }
+    entries.forEach((entry: unknown, index: number) => {
+      if (!entry || typeof entry !== 'object' || !('kind' in entry) || entry.kind !== 'toolCall') return;
+      const toolEntry = entry as {
+        toolName?: unknown;
+        executionMode?: unknown;
+        serverName?: unknown;
+        argumentsJson?: unknown;
+        captureVariable?: unknown;
+        resultFormat?: unknown;
+        onError?: unknown;
+      };
+      if (toolEntry.captureVariable !== undefined && toolEntry.captureVariable !== ''
+        && (typeof toolEntry.captureVariable !== 'string' || !isValidRunVarName(toolEntry.captureVariable.trim()))) {
+        add('error', 'static-capture-var-name', `Static node "${getNodeLabel(node)}": entry #${index + 1} has an invalid capture variable.`, node);
+      }
+      if (toolEntry.resultFormat !== undefined && toolEntry.resultFormat !== 'text' && toolEntry.resultFormat !== 'json') {
+        add('error', 'static-invalid-result-format', `Static node "${getNodeLabel(node)}": resultFormat must be text or json.`, node);
+      }
+      if (toolEntry.onError !== undefined && toolEntry.onError !== 'continue' && toolEntry.onError !== 'fail') {
+        add('error', 'static-invalid-onerror', `Static node "${getNodeLabel(node)}": onError must be continue or fail.`, node);
+      }
+      if (toolEntry.onError === 'fail' && toolEntry.executionMode !== 'real') {
+        add('error', 'static-mock-fail-policy', `Static node "${getNodeLabel(node)}": fail policy requires a real tool call.`, node);
+      }
+      const toolName = typeof toolEntry.toolName === 'string' ? toolEntry.toolName.trim() : '';
+      if (!toolName) {
+        add(
+          'error',
+          'static-toolcall-missing-name',
+          `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} has no tool name.`,
+          node
+        );
+      }
+      if (toolEntry.executionMode === 'real') {
+        const serverName = typeof toolEntry.serverName === 'string' ? toolEntry.serverName.trim() : '';
+        if (!serverName) {
+          add(
+            'error',
+            'static-real-toolcall-missing-server',
+            `Static node "${getNodeLabel(node)}": real tool-call entry #${index + 1} has no MCP server.`,
+            node,
+          );
+        } else if (
+          serverName !== PERSONA_MEMORY_GATEWAY_SERVER
+          || toolName !== PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL
+        ) {
+          const matchingMcp = edges.flatMap((edge) => {
+            if (!isMcpEdge(edge)) return [];
+            const otherId = edge.source === node.id ? edge.target : edge.target === node.id ? edge.source : null;
+            if (!otherId) return [];
+            const candidate = nodes.find((flowNode) => flowNode.id === otherId && getNodeType(flowNode) === 'mcp');
+            return candidate ? [candidate] : [];
+          }).find((candidate) => candidate.data?.properties?.boundServer === serverName);
+          const enabledTools = Array.isArray(matchingMcp?.data?.properties?.enabledTools)
+            ? matchingMcp.data.properties.enabledTools
+            : [];
+          if (!matchingMcp || (toolName && !enabledTools.includes(toolName))) {
+            add(
+              'error',
+              'static-real-toolcall-not-wired',
+              `Static node "${getNodeLabel(node)}": real tool-call entry #${index + 1} is not connected to server "${serverName}" with tool "${toolName || '(missing)'}" enabled.`,
+              node,
+            );
+          }
+        }
+      }
+      const args = typeof toolEntry.argumentsJson === 'string' ? toolEntry.argumentsJson.trim() : '';
+      if (args && STATIC_PLACEHOLDER_PATTERN.test(args)) {
+        // `${var:…}` / `${res:…}` are substituted at injection time and may legitimately
+        // sit in a non-string position (e.g. {"n": ${var:COUNT}}), so the authored text
+        // is not valid JSON yet. Parsing it here would block a valid flow: advise instead.
+        add(
+          'warning',
+          'static-toolcall-unverifiable-json',
+          `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} contains runtime placeholders, so its JSON arguments can only be validated when the flow runs.`,
+          node
+        );
+      } else if (args) {
+        try {
+          JSON.parse(args);
+        } catch {
+          add(
+            'error',
+            'static-toolcall-invalid-json',
+            `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} has invalid JSON arguments.`,
+            node
+          );
+        }
+      }
+    });
   }
 
   // --- Connectivity / runnability ---
@@ -576,16 +863,15 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
-    if (parallelIds.length > 0 || spawnBriefs.length > 0) {
-      const limit = props.concurrencyLimit;
-      if (typeof limit === 'number' && limit < 1) {
-        add(
-          'warning',
-          'subflow-concurrency-limit',
-          `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
-          node
-        );
-      }
+    // Every Subflow uses the bounded queue, even when it runs one child once.
+    const limit = props.concurrencyLimit;
+    if (typeof limit === 'number' && limit < 1) {
+      add(
+        'warning',
+        'subflow-concurrency-limit',
+        `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
+        node
+      );
     }
   }
 
@@ -678,6 +964,13 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     // Every variable name some node captures via captureVariable.
     const capturedNames = new Set<string>();
     for (const node of nodes) {
+      if (getNodeType(node) === 'static' && Array.isArray(node.data?.properties?.entries)) {
+        for (const entry of node.data.properties.entries) {
+          if (entry.kind === 'toolCall' && typeof entry.captureVariable === 'string' && entry.captureVariable.trim()) {
+            capturedNames.add(entry.captureVariable.trim());
+          }
+        }
+      }
       const capture = node.data?.properties?.captureVariable;
       if (typeof capture === 'string' && capture.trim()) {
         const name = capture.trim();
@@ -694,7 +987,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     }
 
     // Any ${var:NAME} reference to a name nothing in the flow captures.
-    const referenceFields = ['promptTemplate', 'isolatedPrompt'] as const;
+    const referenceFields = ['promptTemplate', 'isolatedPrompt', 'outputTemplate'] as const;
     const warnedRefs = new Set<string>();
     for (const node of nodes) {
       const props = node.data?.properties ?? {};
@@ -770,6 +1063,9 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     // Built lazily (only if a handoff pill actually appears) so nodes without
     // handoff pills pay nothing.
     let handoffNames: Set<string> | null = null;
+    // Handoff tool names the prompt actually references. Used by the reverse check
+    // below to spot outgoing handoff targets the model is never told to route to.
+    const referencedHandoffNames = new Set<string>();
     const seen = new Set<string>();
     for (const binding of findBindings(promptTemplate)) {
       // Handoff pills aren't server-bound: their validity is whether the named
@@ -780,6 +1076,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         const hkey = `handoff:${binding.name}`;
         if (seen.has(hkey)) continue;
         seen.add(hkey);
+        referencedHandoffNames.add(binding.name);
         if (!handoffNames) handoffNames = handoffToolNamesForNode(node.id, nodes, edges);
         if (!handoffNames.has(binding.name)) {
           add(
@@ -811,9 +1108,29 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         add(
           'warning',
           'tool-unavailable',
-          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" no longer provides.`,
+          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" does not currently expose.`,
           node
         );
+      }
+    }
+
+    // --- Reverse handoff check (issue #219): outgoing handoff targets the prompt
+    // never references, so the model may never route there. Only run on nodes that
+    // already use >=1 handoff pill (i.e. handoff-routing nodes); a node with no
+    // handoff pills may route via edge-conditions/post-routing or be mid-authoring,
+    // so flagging every successor would be pure noise. Report-only, never blocks.
+    if (referencedHandoffNames.size > 0) {
+      const validHandoffNames =
+        handoffNames ?? handoffToolNamesForNode(node.id, nodes, edges);
+      for (const toolName of validHandoffNames) {
+        if (!referencedHandoffNames.has(toolName)) {
+          add(
+            'warning',
+            'handoff-target-unreferenced',
+            `Process node "${getNodeLabel(node)}" can hand off to "${toolName}" but its prompt never references \${tool:handoff__${toolName}}, so the model may never route there.`,
+            node
+          );
+        }
       }
     }
   }
@@ -827,6 +1144,9 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   if (context.serverTools) {
     for (const node of processNodes) {
       const connected = mcpServersConnectedToProcess(node.id, nodes, edges);
+      // Track tool-unavailable issues already emitted for this node (dedup across
+      // prompt-pill checks above and enabledTools checks below).
+      const warnedTools = new Set<string>();
       for (const server of connected) {
         const tools = context.serverTools[server];
         if (Array.isArray(tools) && tools.length === 0) {
@@ -836,6 +1156,29 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
             `Process node "${getNodeLabel(node)}" is connected to MCP server "${server}", which currently exposes 0 tools. The connection has no effect until the server provides tools.`,
             node
           );
+        }
+        // --- enabledTools cross-check: tools explicitly enabled on the node ---
+        // The prompt-pill check above only covers pills in the template string.
+        // A node can also have an explicit enabledTools allow-list that restricts
+        // which server tools are offered; if a tool there is gone from the live
+        // list, flag it (same severity as prompt-pill: warning, not error).
+        if (Array.isArray(tools)) {
+          const enabledTools: string[] = Array.isArray(node.data?.properties?.enabledTools)
+            ? (node.data!.properties!.enabledTools as string[])
+            : [];
+          for (const toolName of enabledTools) {
+            const dedupeKey = `enabledTool:${server}:${toolName}`;
+            if (warnedTools.has(dedupeKey)) continue;
+            if (!tools.includes(toolName)) {
+              warnedTools.add(dedupeKey);
+              add(
+                'warning',
+                'tool-unavailable',
+                `Process node "${getNodeLabel(node)}" has enabledTool "${toolName}" which server "${server}" does not currently expose.`,
+                node
+              );
+            }
+          }
         }
       }
     }

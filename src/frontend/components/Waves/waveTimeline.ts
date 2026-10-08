@@ -11,7 +11,9 @@
  * scheduler) and is safe to bundle in the browser.
  */
 
+import type { Wave } from '@/shared/types/waves/waves';
 import { Cron } from 'croner';
+import type { Translator } from '@/frontend/i18n/core';
 
 /** Selectable look-ahead windows for the timeline. */
 export type WaveWindowKey = '1h' | '6h' | '1d';
@@ -83,15 +85,107 @@ export function timelineFraction(runAt: number | null, now: number, windowMs: nu
 }
 
 /** Compact "in 2h 05m" / "due now" label for a future timestamp. */
-export function formatIn(runAt: number | null, now: number): string {
-  if (runAt == null || !Number.isFinite(runAt)) return 'no scheduled run';
+export function formatIn(runAt: number | null, now: number, t?: Translator): string {
+  if (runAt == null || !Number.isFinite(runAt)) return t ? t('waves.noScheduledRun') : 'no scheduled run';
   const diff = runAt - now;
-  if (diff <= 0) return 'due now';
+  if (diff <= 0) return t ? t('waves.dueNow') : 'due now';
   const totalMinutes = Math.floor(diff / 60000);
   const days = Math.floor(totalMinutes / 1440);
   const hours = Math.floor((totalMinutes % 1440) / 60);
   const minutes = totalMinutes % 60;
-  if (days > 0) return `in ${days}d ${hours}h`;
-  if (hours > 0) return `in ${hours}h ${String(minutes).padStart(2, '0')}m`;
-  return `in ${minutes}m`;
+  if (days > 0) return t ? t('waves.inDaysHours', { days, hours }) : `in ${days}d ${hours}h`;
+  if (hours > 0) {
+    const paddedMinutes = String(minutes).padStart(2, '0');
+    return t ? t('waves.inHoursMinutes', { hours, minutes: paddedMinutes }) : `in ${hours}h ${paddedMinutes}m`;
+  }
+  return t ? t('waves.inMinutes', { minutes }) : `in ${minutes}m`;
+}
+
+/* --------------------------------------------------------------------- */
+/* Time axis ticks (#209)                                                 */
+/* --------------------------------------------------------------------- */
+
+export interface TimelineTick {
+  /** Absolute timestamp (ms) the tick marks. */
+  atMs: number;
+  /** Horizontal fraction across the window `[0,1]` (0 = now, 1 = a window away). */
+  fraction: number;
+  /** Compact offset-from-now label, e.g. "now", "10m", "1h", "1h 30m". */
+  label: string;
+}
+
+/** Hard cap on rendered ticks so a pathological window can never explode them. */
+const MAX_TICKS = 200;
+
+/**
+ * Choose a sensible tick step (ms) for the bottom time axis given the window.
+ * Mirrors the card placement so ticks read naturally:
+ *   - 1h  → every 10 minutes
+ *   - 6h  → every 1 hour
+ *   - 1d  → every 4 hours
+ * Any other window falls back to ~six evenly spaced ticks.
+ */
+export function timelineTickStep(windowMs: number): number {
+  if (windowMs <= WAVE_WINDOWS['1h']) return 10 * 60 * 1000;
+  if (windowMs <= WAVE_WINDOWS['6h']) return 60 * 60 * 1000;
+  if (windowMs <= WAVE_WINDOWS['1d']) return 4 * 60 * 60 * 1000;
+  return Math.max(60 * 1000, Math.round(windowMs / 6));
+}
+
+/** Human-readable offset-from-now label for a tick. */
+function tickLabel(offsetMs: number, t?: Translator): string {
+  if (offsetMs <= 0) return t ? t('waves.now') : 'now';
+  const totalMinutes = Math.round(offsetMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+/**
+ * Build the tick marks for the bottom time axis, from `now` (fraction 0, left,
+ * next to the clock) out to `now + windowMs` (fraction 1, far right). Each tick's
+ * `fraction` is computed the same way as {@link timelineFraction}, so a tick and
+ * a card scheduled at the same instant land at exactly the same x. Pure and
+ * deterministic for a fixed `now`.
+ */
+export function timelineTicks(now: number, windowMs: number, step?: number, t?: Translator): TimelineTick[] {
+  if (!Number.isFinite(now) || !Number.isFinite(windowMs) || windowMs <= 0) return [];
+  const s = step && step > 0 ? step : timelineTickStep(windowMs);
+  const out: TimelineTick[] = [];
+  for (let offset = 0; offset <= windowMs + 1 && out.length < MAX_TICKS; offset += s) {
+    out.push({
+      atMs: now + offset,
+      fraction: Math.min(1, offset / windowMs),
+      label: tickLabel(offset, t),
+    });
+  }
+  return out;
+}
+
+/**
+ * Choose the most readable WaveWindowKey for a given wave by estimating the
+ * shortest cron interval among its timeline-mode roots. Targets showing roughly
+ * 4–6 occurrences (interval × 6). Falls back to DEFAULT_WAVE_WINDOW when no
+ * cron pattern is present.
+ */
+export function autoWindowForWave(wave: Wave, now: number): WaveWindowKey {
+  let minIntervalMs = Infinity;
+  for (const node of wave.nodes) {
+    if (node.timing.mode !== 'timeline') continue;
+    const cron = (node.timing as { cron?: string }).cron;
+    if (!cron) continue;
+    // Sample 3 occurrences within a 1-day window to derive the interval.
+    const occs = enumerateOccurrences(cron, now, 24 * 60 * 60 * 1000, 3);
+    if (occs.length >= 2) {
+      const interval = occs[1] - occs[0];
+      if (interval < minIntervalMs) minIntervalMs = interval;
+    }
+  }
+  if (!Number.isFinite(minIntervalMs)) return DEFAULT_WAVE_WINDOW;
+  const targetWindow = minIntervalMs * 6;
+  if (targetWindow <= WAVE_WINDOWS['1h']) return '1h';
+  if (targetWindow <= WAVE_WINDOWS['6h']) return '6h';
+  return '1d';
 }

@@ -28,11 +28,26 @@ export type RunResourceKind = 'text' | 'image' | 'audio' | 'blob' | 'link';
  *  - 'mcp-link': a native MCP resource_link a tool returned.
  *  - 'tool-args': oversized tool-call PARAMETERS captured for later dereference
  *    (issue #168), keyed by the producing `toolCallId`.
+ *  - 'snapshot': a bounded before/after filesystem change artifact.
+ *  - 'model-output': binary media returned directly by a model.
+ *  - 'user-input': a file attached by a human to a chat or meeting turn.
+ *  - 'compaction-artifact': immutable projected-source/summary wire artifact.
  */
-export type RunResourceSource = 'tool-result' | 'capture' | 'mcp-link' | 'tool-args';
+export type RunResourceSource =
+  | 'tool-result'
+  | 'capture'
+  | 'mcp-link'
+  | 'tool-args'
+  | 'snapshot'
+  | 'model-output'
+  | 'user-input'
+  | 'visual-archive'
+  | 'compaction-artifact';
 
 export interface RunResourceProducer {
   source: RunResourceSource;
+  /** Exact transcript payload represented by this resource, when applicable. */
+  payloadRole?: 'tool-arguments' | 'tool-message';
   /** Flow node that was executing when the resource was produced. */
   nodeId?: string;
   nodeName?: string;
@@ -45,6 +60,10 @@ export interface RunResourceProducer {
    * must never be used here.
    */
   toolCallId?: string;
+  /** Immutable summarizing-compaction artifact lineage. */
+  artifactId?: string;
+  sourceDigest?: string;
+  projectionDigest?: string;
 }
 
 export interface RunResourceAccess {
@@ -54,6 +73,15 @@ export interface RunResourceAccess {
    * (pills read via the MCP layer and arrive here as 'mcp-read'). 'tool-read'
    * is a model-initiated read via the synthetic `read_resource` tool (#168). */
   source: 'res-ref' | 'node' | 'mcp-read' | 'tool-read';
+  nodeId?: string;
+}
+
+export interface RunResourceVerification {
+  at: number;
+  expectedSha256: string;
+  actualSha256: string;
+  ok: boolean;
+  source: RunResourceAccess['source'];
   nodeId?: string;
 }
 
@@ -72,11 +100,17 @@ export interface RunResourceEntry {
   mimeType?: string;
   /** Bytes stored on disk (0 for kind 'link' — no payload). */
   size: number;
+  /** SHA-256 of the immutable stored payload, when one exists. */
+  sha256?: string;
   kind: RunResourceKind;
   /** How the payload file is encoded on disk. */
   encoding: 'utf8' | 'base64';
   createdAt: number;
   producedBy: RunResourceProducer;
+  /** Visual archive lineage shared by its exact-source sidecar and PNG pages. */
+  archive?: import('./visualArchive').VisualArchiveResourceMetadata;
+  /** Integrity checks performed through bounded run-resource reads. */
+  verifications?: RunResourceVerification[];
   /**
    * Native MCP identity when the artifact originated on another server
    * (resource_link / embedded resource): where it can also be read directly.
@@ -104,7 +138,33 @@ export interface RunResourceSettings {
    * items are always stubbed regardless (base64 in a message helps nobody).
    */
   replaceLargeTextWithStub: boolean;
+  /**
+   * Master switch for tool-result truncation/conversion to resource-URI.
+   * When disabled (default), tool results are never truncated or converted
+   * to resource URIs at the tool boundary, regardless of size limits.
+   * When enabled, tool results exceeding toolResultMaxLines or toolResultMaxBytes
+   * are truncated to a head+tail preview with a resource URI.
+   */
+  toolResultTruncationEnabled: boolean;
+  /**
+   * Tool-boundary bound (issue #251). Every tool result whose text form exceeds
+   * EITHER of these limits is truncated to a head+tail preview and the full
+   * content is spilled unconditionally to a run resource on the very turn it is
+   * produced — so a 5 MB result never reaches the wire in full, even on the
+   * first turn, and both ends of a long log survive. Set a limit to 0 to
+   * disable that dimension of the bound.
+   */
+  toolResultMaxLines?: number; // default 10,000
+  toolResultMaxBytes?: number; // default 256 * 1024 (256 KiB)
+  /**
+   * Retention sweep (issue #251): spilled run resources older than this many
+   * days are deleted on an hourly background sweep. 0 disables the sweep.
+   */
+  retentionAgeDays?: number; // default 7 (0 = disable)
 }
+
+export const DEFAULT_TOOL_RESULT_MAX_LINES = 10_000;
+export const DEFAULT_TOOL_RESULT_MAX_BYTES = 256 * 1024;
 
 export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
   autoCaptureEnabled: true,
@@ -112,4 +172,8 @@ export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
   maxResourceBytes: 50 * 1024 * 1024,
   maxConversationBytes: 256 * 1024 * 1024,
   replaceLargeTextWithStub: false,
+  toolResultTruncationEnabled: false,
+  toolResultMaxLines: DEFAULT_TOOL_RESULT_MAX_LINES,
+  toolResultMaxBytes: DEFAULT_TOOL_RESULT_MAX_BYTES,
+  retentionAgeDays: 7,
 };

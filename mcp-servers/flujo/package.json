@@ -1,0 +1,35 @@
+{
+  "name": "@mario.andreschak/mcp-flujo",
+  "version": "3.46.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mario-andreschak/FLUJO.git",
+    "directory": "mcp-servers/flujo"
+  },
+  "description": "FLUJO's standalone application MCP server",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "flujo-mcp-flujo": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^6.0.3"
+  }
+}

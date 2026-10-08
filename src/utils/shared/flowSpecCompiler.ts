@@ -39,6 +39,7 @@ import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
+import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
@@ -50,6 +51,8 @@ export const MAX_SUBFLOW_DEPTH = 3;
 export const MAX_GENERATED_FLOWS = 8;
 /** Sanity ceiling for a process node's `maxTurns` override (no hard runtime cap exists). */
 export const MAX_PROCESS_MAX_TURNS = 1000;
+/** Cap on a static node's `entries` array so a generated spec cannot balloon a flow definition. */
+export const MAX_STATIC_ENTRIES = 200;
 
 function clamp(value: number | undefined, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
@@ -59,6 +62,31 @@ function clamp(value: number | undefined, min: number, max: number, fallback: nu
 // ---------------------------------------------------------------------------
 // FlowSpec — the DSL the generator model emits
 // ---------------------------------------------------------------------------
+
+/**
+ * Static node (issue #358/#380) entry shape for FlowSpec authoring. Structurally mirrors
+ * the runtime `StaticEntry` (src/backend/execution/flow/types.ts) — duplicated rather than
+ * imported because this module is shared with the browser and must not import from
+ * `src/backend/**`. Keep the two definitions in sync if the runtime shape changes.
+ */
+export type FlowSpecStaticEntry =
+  | {
+      kind: 'message';
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      attachments?: Array<Record<string, unknown>>;
+    }
+  | {
+      kind: 'toolCall';
+      toolName: string;
+      argumentsJson: string;
+      result: string;
+      executionMode?: 'mock' | 'real';
+      serverName?: string;
+      captureVariable?: string;
+      resultFormat?: 'text' | 'json';
+      onError?: 'continue' | 'fail';
+    };
 
 /** An MCP server a process step may call tools on. */
 export interface FlowSpecServerRef {
@@ -71,11 +99,28 @@ export interface FlowSpecServerRef {
 export interface FlowSpecNode {
   /** Spec-local handle other nodes' edges refer to. Must be unique. */
   key: string;
-  /** 'mcp' is deliberately NOT accepted — servers are attached via `servers`.
-   *  'resource' (Tier 3) is a data artifact: an edge resource→process means the
-   *  step READS it; process→resource means the step's output is SAVED to it
-   *  (run artifacts only). */
-  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal';
+  /**
+   * Inclusion policy (issue #380 decision record:
+   * docs/architecture/flowspec-node-inclusion-policy.md) — a node type is in this union
+   * when it is a graph-visible control node reached by ordinary edges, its full semantics
+   * are expressible as declarative serializable properties, and an author could reasonably
+   * choose it when describing intent.
+   *
+   * 'mcp' is deliberately NOT accepted — it is an ATTACHMENT configured through a process
+   * node's `servers` list, not a step an author places on the graph. 'trigger' is likewise
+   * excluded — it is an externally-triggered entry point configured outside the flow graph.
+   * Both stay out by design; see the policy doc for the full exclusion rationale.
+   *
+   * 'resource' (Tier 3) is a data artifact: an edge resource→process means the
+   * step READS it; process→resource means the step's output is SAVED to it
+   * (run artifacts only).
+   *
+   * 'static' (issue #358/#380) is an ordinary pass-through control node whose entire
+   * semantics fit in serializable `entries`/`injectOnce` properties, so it IS included —
+   * omitting it silently dropped static nodes on flowToSpec (AI-Improve data loss), the
+   * same class of bug previously fixed for 'signal' (#117) and 'resource'.
+   */
+  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal' | 'static';
   label?: string;
   /** Free-text description; lands on FlowNode.data.description (wins verbatim in handoff synthesis). */
   description?: string;
@@ -83,12 +128,12 @@ export interface FlowSpecNode {
   prompt?: string;
   /** process only: model id OR displayName/name — resolved against the context. */
   model?: string;
-  /** process only: MCP servers this step may use (each becomes an MCP node + mcp edge). */
+  /** process/static: MCP servers this node may use (each becomes an MCP node + mcp edge). */
   servers?: FlowSpecServerRef[];
   /**
    * process only: per-node cap on agentic turns (self-orchestrating tool loop). Clamped to
    * [1, {@link MAX_PROCESS_MAX_TURNS}]. Unset ⇒ inherit the model's setting, then the system
-   * default (50). Exposing it is the pragmatic "retry until it passes" loop: one process node
+   * default (255). Exposing it is the pragmatic "retry until it passes" loop: one process node
    * + a tool + a bounded maxTurns loops internally without a multi-node loop construct.
    */
   maxTurns?: number;
@@ -120,52 +165,47 @@ export interface FlowSpecNode {
   /** signal only (issue #117): the payload template emitted with the signal;
    *  \${var:NAME} is resolved from run variables at emit time. */
   payloadTemplate?: string;
+  /**
+   * static only (issue #358/#380): pre-authored entries injected onto the conversation
+   * when the node is traversed — either a plain message or a synthetic tool-call + result
+   * pair. Mirrors the runtime `StaticEntry` shape (src/backend/execution/flow/types.ts).
+   * Untrusted input: sanitised field-by-field at compile time, never spread verbatim.
+   */
+  entries?: FlowSpecStaticEntry[];
+  /** static only (issue #358/#380): inject only the first time the node is traversed in a run. */
+  injectOnce?: boolean;
+  /** static only: deterministic output template, resolved after the entries. */
+  outputTemplate?: string;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
-   * subflow only (issue #102): fan out to SEVERAL existing child flows CONCURRENTLY (by
-   * name or id). The same resolved input (per `inputMode`) is fanned to every lane and the
-   * outputs are joined. Mutually exclusive with the single-child sources; precedence is
-   * flow > subflowSpec > parallelFlows > parallelSubflowSpecs > generateSubflow. This is
-   * about multiple CHILDREN, not multiple successors — a subflow node still has ONE
-   * outgoing edge.
+   * @deprecated Saved-spec compatibility only. New Subflow nodes reference one
+   * child with `flow`/`subflowSpec`; repeated handoff calls create the job queue.
    */
   parallelFlows?: string[];
   /**
-   * subflow only (issue #102): fan out to several INLINE child FlowSpecs concurrently. Each
-   * is compiled into its own flow (honouring the depth/flow caps, like `subflowSpec`) and
-   * its id is added to the lane list. Prefer `parallelFlows` for large fan-outs to avoid the
-   * MAX_GENERATED_FLOWS / MAX_SUBFLOW_DEPTH caps.
+   * @deprecated Saved-spec compatibility only. New Subflow nodes reference one
+   * inline child with `subflowSpec`.
    */
   parallelSubflowSpecs?: FlowSpec[];
   /**
-   * subflow only (issue #130): DYNAMIC fan-out. The NAME of a run-scoped variable
-   * (captured upstream via `captureVariable`, referenced elsewhere as ${var:NAME})
-   * whose value — a JSON array of flow ids/names, or a newline list — selects the
-   * fan-out target flows AT RUNTIME. Lets a running step decide WHICH (and how
-   * many) flows fan out. May stand ALONE as the sole target source, or decorate a
-   * static `parallelFlows` base that it overrides when it resolves non-empty.
-   * Mutually exclusive with `mapOverList`. Compiles to `properties.parallelSubflowIdsVar`.
+   * @deprecated Saved-spec compatibility only. Dynamic work is expressed by
+   * repeated handoff calls to the node's one child flow.
    */
   parallelFlowsVariable?: string;
-  /** subflow parallel: max lanes run at once (bounded pool). Clamped ≥1. Default runtime 4. */
+  /** Subflow: maximum active child jobs. Clamped ≥1; default 4. Does not cap queued jobs. */
   concurrencyLimit?: number;
-  /** subflow parallel: string placed between joined lane outputs (child order). Default "\n\n". */
+  /** @deprecated Saved-spec compatibility only; new queues use the standard result fold. */
   joinSeparator?: string;
-  /** subflow parallel: 'collect-all' (default; every lane runs, partials surfaced) | 'fail-fast'. */
+  /** @deprecated Saved-spec compatibility only; new queues always drain. */
   errorStrategy?: 'fail-fast' | 'collect-all';
   /**
-   * subflow only (Tier 2a): run the SINGLE child flow (`flow` / `subflowSpec`) ONCE PER ITEM
-   * parsed from the resolved input, instead of once. Mutually exclusive with the parallel
-   * fan-out sources (`parallelFlows`/`parallelSubflowSpecs`). The per-item runs reuse the same
-   * bounded pool and joining, so `concurrencyLimit`/`joinSeparator`/`errorStrategy` apply.
+   * @deprecated Saved-spec compatibility only. Queue work with repeated handoff calls.
    */
   mapOverList?: boolean;
-  /** subflow map-over-list: how to split the input into items — 'json-array' (default; parse a
-   *  JSON array, each element one item) or 'lines' (split on newlines, blank lines dropped). */
+  /** @deprecated Saved-spec compatibility only. */
   itemSplit?: 'json-array' | 'lines';
-  /** subflow map-over-list: run items one at a time in order (pool size 1) instead of
-   *  concurrently. Default false. */
+  /** @deprecated Saved-spec compatibility only; use `concurrencyLimit: 1`. */
   sequential?: boolean;
   /**
    * subflow only (issue #94): an INLINE child FlowSpec. The compiler compiles it into its
@@ -184,29 +224,17 @@ export interface FlowSpecNode {
    *  'latest-message' — the latter hides its tool calls/results from later
    *  model calls, keeping only its final response). */
   outputMode?: 'steps' | 'final-only' | 'full-conversation' | 'latest-message';
-  /** subflow only, inputMode 'isolated' (issue #96): when true, a step that hands
-   *  off to this subflow may pass a `prompt` argument that overrides `prompt`
-   *  (the authored default). Defaults to false. */
+  /** subflow OR process, inputMode 'isolated' (issue #96): controls whether a
+   *  step that hands off to this node may pass a `prompt` argument that overrides
+   *  the node's authored isolated message (`prompt`/`promptTemplate` for a
+   *  subflow, `isolatedPrompt` for a process node). Defaults to true; set false
+   *  to forbid it. */
   allowCallerPrompt?: boolean;
-  /** subflow only (issue #156 spawn-with-brief; supersedes the #130 Phase 4
-   *  `parallelFlows` handoff argument): when true, this node is a SPAWNABLE
-   *  sub-agent — a step that hands off to it may call the handoff tool SEVERAL
-   *  TIMES in one turn, each call carrying a `task` brief, and each call runs
-   *  one parallel instance of the child flow briefed with that task. Results
-   *  join in call order and the flow continues after all instances finish.
-   *  Caller briefs override `spawnBriefs` / `parallelFlows` /
-   *  `parallelFlowsVariable`. Compiles to `properties.allowCallerFanout`.
-   *  Defaults false. */
+  /** @deprecated No-op compatibility field. Every Subflow handoff is queue-backed. */
   allowCallerFanout?: boolean;
   /**
-   * subflow only (issue #156): AUTHOR-DEFINED spawn briefs. When non-empty, every
-   * visit runs the SINGLE child flow (`flow` / `subflowSpec`) once per brief, in
-   * parallel through the bounded pool (`concurrencyLimit` / `joinSeparator` /
-   * `errorStrategy` apply). Each brief supports `${var:}` / `${res:}` / `${kv:}`.
-   * In isolated inputMode a brief is the lane's whole prompt; in history modes it
-   * is appended to the shared conversation as that lane's closing instruction.
-   * Requires a single child; mutually exclusive with `parallelFlows` /
-   * `parallelSubflowSpecs` / `mapOverList`. Compiles to `properties.spawnBriefs`.
+   * @deprecated Saved-spec compatibility only. A model creates jobs with repeated
+   * handoff calls and supplies each job's brief through `task`.
    */
   spawnBriefs?: string[];
   /**
@@ -218,11 +246,10 @@ export interface FlowSpecNode {
    */
   captureVariable?: string;
   /**
-   * process/subflow only (Tier 3 — resource-tracked data flow): ALSO save this
-   * step's final output as a named run-scoped RESOURCE (flujo://run/… with
-   * producedBy/readBy lineage, readable via the internal "flujo" MCP server).
-   * Later steps inject it with `${res:NAME}`. Use `captureVariable` for short
-   * strings; `captureResource` for big/structured artifacts worth tracking.
+   * subflow only (Tier 3 — resource-tracked data flow): save the folded child
+   * output as a named run-scoped resource. Process nodes must instead connect
+   * to an explicit Resource node and call the supplied `write_resource` tool.
+   * The property remains in the type for reading legacy specifications.
    */
   captureResource?: string;
   /**
@@ -235,6 +262,24 @@ export interface FlowSpecNode {
    * secrets (distinct from `${global:VAR}`).
    */
   captureKv?: string;
+  /**
+   * subflow only (issue #359): result presentation mode for parallel subflows.
+   * - 'separate': each lane produces its own framed assistant message in the
+   *   parent conversation, carrying structured lane metadata (index, title, status).
+   * - 'joined': one framed message with joined outputs and failure summary.
+   * The low-level runtime keeps 'joined' when absent for backward compatibility;
+   * new-flow authoring surfaces persist 'separate' when this field is omitted.
+   * Only affects runs that actually produce more than one lane.
+   */
+  resultPresentation?: 'separate' | 'joined';
+  /** Subflow child-conversation memory. `per-key` exposes a `sessionKey`
+   *  argument on incoming handoff tools when the experiment is enabled. New-flow
+   *  authoring surfaces persist `per-key` when omitted; the low-level runtime
+   *  still treats absence as `per-visit` for saved-flow compatibility. */
+  sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+  /** Optional authored key/template for `per-key`; when absent the caller may
+   *  choose the key on each handoff. */
+  sessionKey?: string;
 }
 
 export interface FlowSpecEdge {
@@ -288,6 +333,21 @@ export interface CompileOptions {
    * exactly where the user left them. Applied at depth 0 only.
    */
   positions?: Record<string, { x: number; y: number }>;
+  /**
+   * When true, binding pills (${tool:server__name}) that resolve against the node's wired
+   * servers or outgoing handoff edges are preserved intact in the compiled output instead of
+   * being stripped to the bare tool name. Pills that cannot be resolved are still stripped
+   * with a 'pill-unresolved' warning. Default: false (strip all pills — generator-safe
+   * behaviour used by the LLM flow-generation path).
+   */
+  keepPills?: boolean;
+  /**
+   * Defaults newly authored Subflow nodes to one message per lane and one child
+   * conversation per session key. Kept opt-in at the low-level compiler so
+   * round-tripping an existing flow with legacy/absent properties cannot change
+   * its behavior. Public new-flow authoring surfaces enable this option.
+   */
+  newSubflowDefaults?: boolean;
 }
 
 export interface CompileIssue {
@@ -355,22 +415,88 @@ export function sanitizeFlowName(raw: string | undefined, existingNames: string[
   }
 }
 
+interface ProcessPillsOptions {
+  keepPills?: boolean;
+  /** Server names wired to this node via its `servers` list. */
+  wiredServers?: Set<string>;
+  /** Handoff tool names (e.g. 'handoff_to_finish_node') for outgoing edges. */
+  validHandoffNames?: Set<string>;
+}
+
+interface ProcessPillsResult {
+  text: string;
+  /** True when at least one pill was stripped (replaced by bare tool name). */
+  stripped: boolean;
+  /** Pills that the caller asked to keep (keepPills) but could not resolve — stripped anyway. */
+  unresolved: string[];
+}
+
 /**
- * v1 generated prompts carry no binding pills — tools reach the model via MCP edges +
- * enabledTools, and pills are a whole codec/validation error class we skip. Any pill the
- * model emitted anyway is replaced by its plain tool/uri name.
+ * Process binding pills in a prompt template.
+ *
+ * Default (keepPills false): strips every pill unconditionally — v1 generator-safe
+ * behaviour. Any pill the LLM emitted is replaced by its bare tool name.
+ *
+ * keepPills true: preserves pills that resolve against the node's wired servers or
+ * outgoing handoff edges; strips any pill that cannot be resolved and records it in
+ * `unresolved` so the caller can emit a 'pill-unresolved' warning.
  */
-function stripPills(text: string): { text: string; stripped: boolean } {
+function processPills(text: string, opts: ProcessPillsOptions = {}): ProcessPillsResult {
+  const { keepPills = false, wiredServers = new Set(), validHandoffNames = new Set() } = opts;
   const bindings = findBindings(text);
-  if (bindings.length === 0) return { text, stripped: false };
+  if (bindings.length === 0) return { text, stripped: false, unresolved: [] };
+
   let out = '';
   let cursor = 0;
+  let anyStripped = false;
+  const unresolved: string[] = [];
+
   for (const b of bindings) {
-    out += text.slice(cursor, b.index) + b.name;
+    out += text.slice(cursor, b.index);
     cursor = b.index + b.fullMatch.length;
+
+    let keep = false;
+    if (keepPills) {
+      if (b.server === 'handoff') {
+        keep = validHandoffNames.has(b.name);
+      } else {
+        keep = wiredServers.has(b.server);
+      }
+    }
+
+    if (keep) {
+      out += b.fullMatch;      // preserve the full pill unchanged
+    } else {
+      out += b.name;           // strip to bare tool/resource name
+      anyStripped = true;
+      if (keepPills) {
+        unresolved.push(b.fullMatch);
+      }
+    }
   }
   out += text.slice(cursor);
-  return { text: out, stripped: true };
+  return { text: out, stripped: anyStripped, unresolved };
+}
+
+/**
+ * Build the set of valid handoff tool names for a spec node's outgoing control edges.
+ * Used by `processPills` under `keepPills` to decide whether a handoff pill resolves.
+ */
+function buildHandoffNamesForNode(
+  specKey: string,
+  specEdges: FlowSpecEdge[],
+  specNodesByKey: Map<string, FlowSpecNode>
+): Set<string> {
+  const outgoing = specEdges
+    .filter((e) => e.from === specKey)
+    .map((e) => specNodesByKey.get(e.to))
+    .filter(Boolean) as FlowSpecNode[];
+  const targets: HandoffTargetRef[] = outgoing.map((t) => ({
+    id: t.key ?? '',
+    label: t.label,
+    type: t.type,
+  }));
+  return new Set(buildHandoffToolNameMap(targets).values());
 }
 
 function defaultLabel(type: string): string {
@@ -461,12 +587,12 @@ function resourceEdge(source: FlowNode, target: FlowNode): Edge {
 }
 
 /** An MCP tool-wiring edge, shaped exactly like `createEdgeFromConnection`'s MCP branch. */
-function mcpEdge(processNode: FlowNode, mcpNode: FlowNode): Edge {
-  const sourceHandle = 'process-right-mcp';
+function mcpEdge(consumerNode: FlowNode, mcpNode: FlowNode): Edge {
+  const sourceHandle = consumerNode.type === 'static' ? 'static-right-mcp' : 'process-right-mcp';
   const targetHandle = 'mcp-left';
   return {
-    id: `${processNode.id}:${sourceHandle}->${mcpNode.id}:${targetHandle}`,
-    source: processNode.id,
+    id: `${consumerNode.id}:${sourceHandle}->${mcpNode.id}:${targetHandle}`,
+    source: consumerNode.id,
     sourceHandle,
     target: mcpNode.id,
     targetHandle,
@@ -541,7 +667,11 @@ export function compileFlowSpec(
     // --- Pass 1: nodes -------------------------------------------------------
     const nodesByKey = new Map<string, FlowNode>();
     const flowNodes: FlowNode[] = [];
-    const mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }> = [];
+    const mcpAttachments: Array<{ consumerKey: string; mcpNode: FlowNode }> = [];
+    // Spec-node-by-key map used for handoff pill resolution under keepPills.
+    const specNodesByKey = new Map<string, FlowSpecNode>(
+      specNodes.filter((n) => n?.key && typeof n.key === 'string').map((n) => [n.key, n])
+    );
 
     for (const specNode of specNodes) {
       const key = specNode?.key;
@@ -562,22 +692,34 @@ export function compileFlowSpec(
         );
         continue;
       }
-      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') {
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') {
         error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
         continue;
       }
 
-      const properties: Record<string, any> = {};
+      const properties: Record<string, unknown> = {};
       const prompt = typeof specNode.prompt === 'string' ? specNode.prompt : undefined;
 
       if (type === 'start') {
-        const { text, stripped } = stripPills(prompt ?? '');
-        if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-        properties.promptTemplate = text;
+        const { text: startText, stripped: startStripped, unresolved: startUnresolved } = processPills(
+          prompt ?? '',
+          options.keepPills
+            ? { keepPills: true, wiredServers: new Set((specNode.servers ?? []).map((s) => s.name)), validHandoffNames: buildHandoffNamesForNode(key, specEdges, specNodesByKey) }
+            : {}
+        );
+        if (startStripped && !options.keepPills) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+        for (const u of startUnresolved) warn('pill-unresolved', `Node "${key}": pill "${u}" not resolved against wired servers — stripped.`, key);
+        properties.promptTemplate = startText;
       } else if (type === 'process') {
-        const { text, stripped } = stripPills(prompt ?? '');
-        if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-        properties.promptTemplate = text;
+        const { text: procText, stripped: procStripped, unresolved: procUnresolved } = processPills(
+          prompt ?? '',
+          options.keepPills
+            ? { keepPills: true, wiredServers: new Set((specNode.servers ?? []).map((s) => s.name)), validHandoffNames: buildHandoffNamesForNode(key, specEdges, specNodesByKey) }
+            : {}
+        );
+        if (procStripped && !options.keepPills) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+        for (const u of procUnresolved) warn('pill-unresolved', `Node "${key}": pill "${u}" not resolved against wired servers — stripped.`, key);
+        properties.promptTemplate = procText;
 
         if (specNode.model) {
           const resolved = resolveModel(specNode.model, models);
@@ -602,6 +744,12 @@ export function compileFlowSpec(
           }
         }
 
+        // Opt-out caller prompt (issue #96): only meaningful in isolated mode. When
+        // absent (default ON) an upstream routing model may hand this isolated step
+        // a `prompt` through the handoff tool that overrides its isolatedPrompt.
+        if (typeof specNode.allowCallerPrompt === 'boolean') {
+          properties.allowCallerPrompt = specNode.allowCallerPrompt;
+        }
         if (specNode.outputMode !== undefined) {
           if (VALID_PROCESS_OUTPUT_MODES.has(specNode.outputMode)) {
             properties.outputMode = specNode.outputMode;
@@ -633,9 +781,14 @@ export function compileFlowSpec(
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
           properties.captureVariable = specNode.captureVariable.trim();
         }
-        // captureResource (Tier 3): save this step's output as a named run resource.
+        // ProcessNode has no passive resource-capture seam. Keep this advisory
+        // rather than compiling a property the runtime intentionally ignores.
         if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
-          properties.captureResource = specNode.captureResource.trim();
+          warn(
+            'process-capture-resource-unsupported',
+            `Node "${key}": process captureResource is not supported; connect the process to a Resource node so it can call write_resource.`,
+            key
+          );
         }
         // captureKv (Tier 4): also persist this step's output to a cross-run kv key.
         if (typeof specNode.captureKv === 'string' && specNode.captureKv.trim()) {
@@ -659,10 +812,16 @@ export function compileFlowSpec(
         }
         // A prompt on a subflow is its isolated-mode input (runtime back-compat treats a
         // promptTemplate with no inputMode as isolated).
+        // Note: subflow spec nodes have no `servers` array, so keepPills treats all their
+        // pills as unresolvable (they are stripped with a 'pill-unresolved' warning).
         if (prompt !== undefined) {
-          const { text, stripped } = stripPills(prompt);
-          if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-          properties.promptTemplate = text;
+          const { text: subText, stripped: subStripped, unresolved: subUnresolved } = processPills(
+            prompt,
+            options.keepPills ? { keepPills: true } : {}
+          );
+          if (subStripped && !options.keepPills) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+          for (const u of subUnresolved) warn('pill-unresolved', `Node "${key}": pill "${u}" not resolved against wired servers — stripped.`, key);
+          properties.promptTemplate = subText;
         }
         // Opt-in caller prompt (issue #96): only meaningful in isolated mode.
         if (typeof specNode.allowCallerPrompt === 'boolean') {
@@ -672,6 +831,30 @@ export function compileFlowSpec(
         // the parallel target set via the handoff tool.
         if (typeof specNode.allowCallerFanout === 'boolean') {
           properties.allowCallerFanout = specNode.allowCallerFanout;
+        }
+        const sessionScope = specNode.sessionScope
+          ?? (options.newSubflowDefaults ? 'per-key' : undefined);
+        if (
+          sessionScope === 'per-visit'
+          || sessionScope === 'per-run'
+          || sessionScope === 'per-key'
+        ) {
+          // Keep the legacy runtime default implicit when an author explicitly
+          // opts out with per-visit. The new-flow default is persisted as per-key.
+          if (sessionScope !== 'per-visit') properties.sessionScope = sessionScope;
+        } else if (specNode.sessionScope !== undefined) {
+          warn('invalid-session-scope', `Node "${key}": sessionScope "${String(specNode.sessionScope)}" is not valid (per-visit | per-run | per-key); omitted.`, key);
+        }
+        if (typeof specNode.sessionKey === 'string' && specNode.sessionKey.trim()) {
+          properties.sessionKey = specNode.sessionKey.trim();
+        }
+        // A single-child Subflow can still produce multiple lanes when its
+        // incoming Process queues repeated handoffs, so presentation belongs
+        // to every Subflow node rather than only legacy fan-out shapes.
+        // Per requirements: 'separate' is now the only/default behavior.
+        const resultPresentation = specNode.resultPresentation ?? 'separate';
+        if (resultPresentation === 'separate') {
+          properties.resultPresentation = 'separate';
         }
         // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
@@ -721,6 +904,107 @@ export function compileFlowSpec(
           // Back-compat authoring convenience: `prompt` doubles as the payload.
           properties.payloadTemplate = prompt;
         }
+      } else if (type === 'static') {
+        // Static node (issue #358/#380): pre-authored conversation injection; a pass-through
+        // control node whose payload is fully declarative. Sanitise field-by-field — `entries`
+        // is untrusted spec input and must never be spread verbatim into node properties.
+        const rawEntries = Array.isArray(specNode.entries) ? specNode.entries : [];
+        const clean: FlowSpecStaticEntry[] = [];
+        for (let i = 0; i < rawEntries.length && clean.length < MAX_STATIC_ENTRIES; i++) {
+          const entry = rawEntries[i] as Record<string, unknown> | null | undefined;
+          if (!entry || typeof entry !== 'object') {
+            warn('static-invalid-entry', `Node "${key}": entry #${i + 1} is not an object; dropped.`, key);
+            continue;
+          }
+          if (entry.kind === 'message') {
+            const role = entry.role;
+            const content = entry.content;
+            if ((role === 'system' || role === 'user' || role === 'assistant') && typeof content === 'string') {
+              const attachments = Array.isArray(entry.attachments)
+                ? entry.attachments.flatMap((candidate) => {
+                    if (!candidate || typeof candidate !== 'object') return [];
+                    const item = candidate as Record<string, unknown>;
+                    if (
+                      (item.type !== 'document' && item.type !== 'audio' && item.type !== 'image' && item.type !== 'video')
+                      || typeof item.content !== 'string'
+                    ) return [];
+                    return [{
+                      type: item.type,
+                      content: item.content,
+                      ...(typeof item.id === 'string' ? { id: item.id } : {}),
+                      ...(typeof item.originalName === 'string' ? { originalName: item.originalName } : {}),
+                      ...(typeof item.mimeType === 'string' ? { mimeType: item.mimeType } : {}),
+                      ...(typeof item.transcript === 'string' ? { transcript: item.transcript } : {}),
+                    }];
+                  })
+                : [];
+              clean.push({ kind: 'message', role, content, ...(attachments.length > 0 ? { attachments } : {}) });
+            } else {
+              warn('static-invalid-entry', `Node "${key}": message entry #${i + 1} has an invalid role/content; dropped.`, key);
+            }
+          } else if (entry.kind === 'toolCall') {
+            const toolName = entry.toolName;
+            const argumentsJson = entry.argumentsJson;
+            const result = entry.result;
+            if (typeof toolName === 'string' && toolName.trim() && typeof argumentsJson === 'string' && typeof result === 'string') {
+              const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
+              const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
+              const captureOptions: Pick<Extract<FlowSpecStaticEntry, { kind: 'toolCall' }>, 'captureVariable' | 'resultFormat' | 'onError'> = {
+                ...(typeof entry.captureVariable === 'string' && entry.captureVariable.trim() ? { captureVariable: entry.captureVariable.trim() } : {}),
+                ...(entry.resultFormat === 'text' || entry.resultFormat === 'json' ? { resultFormat: entry.resultFormat } : {}),
+                ...(entry.onError === 'continue' || entry.onError === 'fail' ? { onError: entry.onError } : {}),
+              };
+              if (entry.onError !== undefined && entry.onError !== 'continue' && entry.onError !== 'fail') {
+                issues.push({ severity: 'error', code: 'static-invalid-onerror', message: `Node "${key}": onError must be continue or fail.`, nodeKey: key });
+              }
+              if (entry.onError === 'fail' && (executionMode !== 'real' || !serverName)) {
+                issues.push({ severity: 'error', code: 'static-mock-fail-policy', message: `Node "${key}": fail policy requires a real call with an MCP server.`, nodeKey: key });
+              }
+              if (entry.resultFormat !== undefined && entry.resultFormat !== 'text' && entry.resultFormat !== 'json') {
+                issues.push({ severity: 'error', code: 'static-invalid-result-format', message: `Node "${key}": resultFormat must be text or json.`, nodeKey: key });
+              }
+              if (executionMode === 'real' && !serverName) {
+                warn('static-real-toolcall-missing-server', `Node "${key}": real tool-call entry #${i + 1} needs a serverName; kept as a mock.`, key);
+                clean.push({ kind: 'toolCall', toolName, argumentsJson, result, executionMode: 'mock', ...captureOptions });
+              } else {
+                clean.push({
+                  kind: 'toolCall',
+                  toolName,
+                  argumentsJson,
+                  result,
+                  ...(entry.executionMode === 'real' || entry.executionMode === 'mock' ? { executionMode } : {}),
+                  ...(serverName ? { serverName } : {}),
+                  ...captureOptions,
+                });
+              }
+              if (argumentsJson.trim()) {
+                try {
+                  JSON.parse(argumentsJson);
+                } catch {
+                  warn('static-toolcall-invalid-json', `Node "${key}": tool-call entry #${i + 1} has invalid JSON arguments.`, key);
+                }
+              }
+            } else {
+              warn('static-invalid-entry', `Node "${key}": tool-call entry #${i + 1} is missing toolName/argumentsJson/result; dropped.`, key);
+            }
+          } else {
+            warn('static-invalid-entry', `Node "${key}": entry #${i + 1} has unknown kind "${String((entry as { kind?: unknown }).kind)}"; dropped.`, key);
+          }
+        }
+        if (rawEntries.length > MAX_STATIC_ENTRIES) {
+          warn('static-too-many-entries', `Node "${key}": only the first ${MAX_STATIC_ENTRIES} entries were kept.`, key);
+        }
+        if (clean.length > 0) {
+          properties.entries = clean;
+        } else {
+          warn('static-no-entries', `Node "${key}": a static node has no entries; it injects nothing.`, key);
+        }
+        if (specNode.injectOnce === true) {
+          properties.injectOnce = true;
+        } else if (specNode.injectOnce !== undefined && typeof specNode.injectOnce !== 'boolean') {
+          warn('static-invalid-injectonce', `Node \"${key}\": injectOnce must be a boolean; value ignored.`, key);
+        }
+        if (typeof specNode.outputTemplate === 'string') properties.outputTemplate = specNode.outputTemplate;
       }
       // finish: no properties.
 
@@ -738,10 +1022,28 @@ export function compileFlowSpec(
       nodesByKey.set(key, node);
       flowNodes.push(node);
 
-      // --- MCP attachments (process only) ---
-      if (type === 'process' && Array.isArray(specNode.servers)) {
+      // --- MCP attachments (Process tool access or Static real tool calls) ---
+      const attachmentRefs: FlowSpecServerRef[] = Array.isArray(specNode.servers)
+        ? specNode.servers.map((ref) => ({ ...ref, ...(Array.isArray(ref.tools) ? { tools: [...ref.tools] } : {}) }))
+        : [];
+      if (type === 'static') {
+        for (const staticEntry of (properties.entries ?? []) as FlowSpecStaticEntry[]) {
+          if (staticEntry.kind !== 'toolCall' || staticEntry.executionMode !== 'real' || !staticEntry.serverName) continue;
+          const existing = attachmentRefs.find((ref) => ref.name === staticEntry.serverName);
+          if (!existing) {
+            attachmentRefs.push({ name: staticEntry.serverName, tools: [staticEntry.toolName] });
+          } else if (!Array.isArray(existing.tools)) {
+            // Static real calls must remain runnable even when the server is
+            // currently offline and the compiler cannot expand "all tools".
+            existing.tools = [staticEntry.toolName];
+          } else if (!existing.tools.includes(staticEntry.toolName)) {
+            existing.tools.push(staticEntry.toolName);
+          }
+        }
+      }
+      if ((type === 'process' || type === 'static') && attachmentRefs.length > 0) {
         const seenServers = new Set<string>();
-        for (const ref of specNode.servers) {
+        for (const ref of attachmentRefs) {
           const serverName = ref?.name;
           if (!serverName || typeof serverName !== 'string') {
             warn('server-missing-name', `Node "${key}": a server reference is missing its "name"; skipped.`, key);
@@ -778,10 +1080,10 @@ export function compileFlowSpec(
             },
           };
           flowNodes.push(mcpNode);
-          mcpAttachments.push({ processKey: key, mcpNode });
+          mcpAttachments.push({ consumerKey: key, mcpNode });
         }
-      } else if (type !== 'process' && Array.isArray(specNode.servers) && specNode.servers.length > 0) {
-        warn('servers-on-non-process', `Node "${key}": only process nodes can have "servers"; ignored.`, key);
+      } else if (type !== 'process' && type !== 'static' && attachmentRefs.length > 0) {
+        warn('servers-on-unsupported-node', `Node "${key}": only process and static nodes can have "servers"; ignored.`, key);
       }
     }
 
@@ -908,9 +1210,9 @@ export function compileFlowSpec(
     }
 
     // MCP edges after control edges (order is cosmetic; grouping aids debugging).
-    for (const { processKey, mcpNode } of mcpAttachments) {
-      const processNode = nodesByKey.get(processKey)!;
-      edges.push(mcpEdge(processNode, mcpNode));
+    for (const { consumerKey, mcpNode } of mcpAttachments) {
+      const consumerNode = nodesByKey.get(consumerKey)!;
+      edges.push(mcpEdge(consumerNode, mcpNode));
     }
 
     // --- Pass 3: layout ------------------------------------------------------
@@ -944,7 +1246,7 @@ export function compileFlowSpec(
     key: string,
     depth: number,
     ancestorNames: string[],
-    properties: Record<string, any>
+    properties: Record<string, unknown>
   ): void {
     const hasParallelFlows = Array.isArray(specNode.parallelFlows) && specNode.parallelFlows.length > 0;
     const hasParallelSpecs = Array.isArray(specNode.parallelSubflowSpecs) && specNode.parallelSubflowSpecs.length > 0;
@@ -1173,7 +1475,7 @@ export function compileFlowSpec(
   }
 
   /** Map the parallel tuning fields onto the subflow node's properties (issue #102). */
-  function applyParallelTuning(specNode: FlowSpecNode, properties: Record<string, any>): void {
+  function applyParallelTuning(specNode: FlowSpecNode, properties: Record<string, unknown>): void {
     if (specNode.concurrencyLimit !== undefined) {
       if (typeof specNode.concurrencyLimit === 'number' && !Number.isNaN(specNode.concurrencyLimit)) {
         properties.concurrencyLimit = Math.max(1, Math.floor(specNode.concurrencyLimit));
@@ -1218,12 +1520,13 @@ export function flowToSpec(flow: Flow): FlowSpec {
   const mcpById = new Map<string, FlowNode>();
   for (const n of nodes) if (n.type === 'mcp') mcpById.set(n.id, n);
 
-  // process node id → server refs, reconstructed from the MCP edges leaving it.
-  const serversByProcess = new Map<string, FlowSpecServerRef[]>();
+  // Tool-consumer node id → server refs, independent of authored edge direction.
+  const serversByConsumer = new Map<string, FlowSpecServerRef[]>();
   for (const e of edges) {
     if ((e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp') continue;
-    const mcp = mcpById.get(e.target);
+    const mcp = mcpById.get(e.target) ?? mcpById.get(e.source);
     if (!mcp) continue;
+    const consumerId = mcp.id === e.target ? e.source : e.target;
     const props = (mcp.data?.properties ?? {}) as Record<string, unknown>;
     const name =
       typeof props.boundServer === 'string' && props.boundServer ? props.boundServer : mcp.data?.label;
@@ -1231,17 +1534,17 @@ export function flowToSpec(flow: Flow): FlowSpec {
     const tools = Array.isArray(props.enabledTools)
       ? (props.enabledTools.filter((t): t is string => typeof t === 'string' && !!t))
       : undefined;
-    const list = serversByProcess.get(e.source) ?? [];
+    const list = serversByConsumer.get(consumerId) ?? [];
     list.push({ name, ...(tools ? { tools } : {}) });
-    serversByProcess.set(e.source, list);
+    serversByConsumer.set(consumerId, list);
   }
 
   const specNodes: FlowSpecNode[] = [];
   for (const node of nodes) {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') continue;
-    const props = (node.data?.properties ?? {}) as Record<string, any>;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') continue;
+    const props = (node.data?.properties ?? {}) as Record<string, unknown>;
     const specNode: FlowSpecNode = {
       key: node.id,
       type,
@@ -1256,6 +1559,9 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.boundModel === 'string' && props.boundModel) specNode.model = props.boundModel;
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) specNode.isolatedPrompt = props.isolatedPrompt;
+      // Opt-out caller prompt (issue #96): round-trip only the explicit false
+      // (true is the default and stays implicit, like the subflow side).
+      if (props.allowCallerPrompt === false) specNode.allowCallerPrompt = false;
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.maxTurns === 'number' && props.maxTurns > 0) specNode.maxTurns = props.maxTurns;
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
@@ -1267,7 +1573,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
-      const servers = serversByProcess.get(node.id);
+      const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
       // Parallel fan-out (issue #102) takes precedence over the single-child target.
@@ -1314,9 +1620,14 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
       if (props.allowCallerFanout === true) specNode.allowCallerFanout = true;
+      if (props.sessionScope === 'per-run' || props.sessionScope === 'per-key') specNode.sessionScope = props.sessionScope;
+      if (typeof props.sessionKey === 'string' && props.sessionKey.trim()) specNode.sessionKey = props.sessionKey.trim();
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
+      // Result presentation mode (issue #359): round-trip only the explicit 'separate'
+      // ('joined' is the default and stays implicit).
+      if (props.resultPresentation === 'separate') specNode.resultPresentation = 'separate';
     } else if (type === 'resource') {
       // Tier 3: round-trip the binding so AI-Improve never drops resource nodes.
       if (props.scope === 'run' && typeof props.runName === 'string' && props.runName) {
@@ -1329,6 +1640,13 @@ export function flowToSpec(flow: Flow): FlowSpec {
       // Issue #117: round-trip topic/payload so AI-Improve never drops signal nodes.
       if (typeof props.topic === 'string' && props.topic) specNode.topic = props.topic;
       if (typeof props.payloadTemplate === 'string' && props.payloadTemplate) specNode.payloadTemplate = props.payloadTemplate;
+    } else if (type === 'static') {
+      // Issue #358/#380: round-trip entries so AI-Improve never drops static nodes.
+      if (Array.isArray(props.entries) && props.entries.length > 0) specNode.entries = props.entries;
+      if (props.injectOnce === true) specNode.injectOnce = true;
+      if (typeof props.outputTemplate === 'string') specNode.outputTemplate = props.outputTemplate;
+      const servers = serversByConsumer.get(node.id);
+      if (servers && servers.length > 0) specNode.servers = servers;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);
@@ -1363,11 +1681,11 @@ export function flowToSpec(flow: Flow): FlowSpec {
  * compile API and MCP authoring tools keep the runtime defaults — full-history /
  * full-conversation — so hand-authored specs behave exactly as documented).
  *
- * Auto-generated flows default every process node the spec left unset to
- * inputMode 'latest-message' and outputMode 'latest-message': each step runs
- * scoped to the current task and stops re-sending its tool calls/results to
- * every later step. The generator's system prompt tells the model about these
- * defaults so it can opt back into full-history/full-conversation explicitly.
+ * Auto-generated flows always give process nodes the full conversation as
+ * input. An omitted or explicitly generated 'latest-message' inputMode is
+ * normalized to 'full-history'; advanced 'isolated' inputs remain explicit.
+ * Output still defaults to 'latest-message' so later steps do not re-receive
+ * this node's tool calls/results unless the spec opts into full-conversation.
  */
 export function applyGenerationDefaults(flow: Flow): void {
   for (const node of flow.nodes) {
@@ -1381,7 +1699,9 @@ export function applyGenerationDefaults(flow: Flow): void {
 
     if (node.type !== 'process') continue;
     const properties = (node.data.properties ?? {}) as Record<string, unknown>;
-    if (properties.inputMode === undefined) properties.inputMode = 'latest-message';
+    if (properties.inputMode === undefined || properties.inputMode === 'latest-message') {
+      properties.inputMode = 'full-history';
+    }
     if (properties.outputMode === undefined) properties.outputMode = 'latest-message';
     node.data.properties = properties;
   }
@@ -1394,7 +1714,7 @@ function layout(
   flowNodes: FlowNode[],
   nodesByKey: Map<string, FlowNode>,
   edges: Edge[],
-  mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }>,
+  mcpAttachments: Array<{ consumerKey: string; mcpNode: FlowNode }>,
   positions?: Record<string, { x: number; y: number }>
 ): void {
   const controlAdj = new Map<string, string[]>();
@@ -1452,10 +1772,10 @@ function layout(
 
   // MCP nodes: to the right of their process node, stacked.
   const mcpCounters = new Map<string, number>();
-  for (const { processKey, mcpNode } of mcpAttachments) {
-    const processNode = nodesByKey.get(processKey)!;
-    const idx = mcpCounters.get(processKey) ?? 0;
-    mcpCounters.set(processKey, idx + 1);
+  for (const { consumerKey, mcpNode } of mcpAttachments) {
+    const processNode = nodesByKey.get(consumerKey)!;
+    const idx = mcpCounters.get(consumerKey) ?? 0;
+    mcpCounters.set(consumerKey, idx + 1);
     mcpNode.position = {
       x: processNode.position.x + MCP_X_OFFSET,
       y: processNode.position.y + idx * MCP_Y_SPACING,

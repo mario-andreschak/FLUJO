@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * Publish a package manifest to the hosted registry (issue #197).
  *
@@ -35,7 +36,7 @@ function statusForResult(result: RegistryPublishResult): number {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -61,3 +62,5 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Failed to publish package' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

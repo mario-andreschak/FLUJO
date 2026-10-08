@@ -1,5 +1,7 @@
 "use client";
 
+import { workspaceSessionKey } from '@/frontend/utils/workspaceSelection';
+
 /**
  * Frontend side of issue #77 (Stage 2/4 of the #16 custom-encryption fix).
  *
@@ -21,13 +23,19 @@ export const ENCRYPTION_LOCKED_EVENT = 'flujo:encryption-locked';
 export const ENCRYPTION_UNLOCKED_EVENT = 'flujo:encryption-unlocked';
 export const LOCKED_ERROR_CODE = 'encryption_locked';
 
+export function encryptionSessionStorageKey(
+  key: 'encryption_authenticated' | 'encryption_token' | 'encryption_key',
+): string {
+  return workspaceSessionKey(key);
+}
+
 let installed = false;
 
 /** Clear the UI auth flags and signal the lock screen to re-open. */
 function handleLocked(): void {
   try {
-    sessionStorage.removeItem('encryption_authenticated');
-    sessionStorage.removeItem('encryption_token');
+    sessionStorage.removeItem(encryptionSessionStorageKey('encryption_authenticated'));
+    sessionStorage.removeItem(encryptionSessionStorageKey('encryption_token'));
   } catch {
     /* sessionStorage may be unavailable; ignore */
   }

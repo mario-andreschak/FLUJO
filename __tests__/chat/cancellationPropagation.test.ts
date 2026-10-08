@@ -50,6 +50,7 @@ jest.mock('@/utils/storage/backend', () => ({
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   reconcileConversationLog: jest.fn(async () => {}),
   recoverMessagesFromLog: jest.fn(async () => {}),
+  appendRawForState: jest.fn(async () => {}),
 }));
 // Pre-run validation always passes; the tests exercise the loop guard, not
 // flow validation.
@@ -58,8 +59,11 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowObjectForRun: jest.fn(async () => ({ isRunnable: true, issues: [] })),
 }));
 
-import { runFlow } from '@/backend/execution/flow/runFlow';
+import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+
+const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
+  runFlowWithContext({ ...input, source: 'subflow' });
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 const noopEmit = jest.fn();

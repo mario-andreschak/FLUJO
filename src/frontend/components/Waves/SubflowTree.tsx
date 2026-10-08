@@ -4,6 +4,7 @@ import React from 'react';
 import { Box, Typography } from '@mui/material';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import type { WaveSubflowRef } from '@/shared/types/waves/waves';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface SubflowTreeProps {
   subflows: WaveSubflowRef[];
@@ -15,6 +16,7 @@ interface SubflowTreeProps {
  * references are annotated so the picture stays truthful.
  */
 export default function SubflowTree({ subflows, depth = 0 }: SubflowTreeProps) {
+  const { t } = useI18n();
   if (!subflows || subflows.length === 0) return null;
   return (
     <Box sx={{ pl: depth === 0 ? 0 : 1.5, mt: 0.25 }}>
@@ -24,7 +26,7 @@ export default function SubflowTree({ subflows, depth = 0 }: SubflowTreeProps) {
             <AccountTreeIcon sx={{ fontSize: 12, opacity: 0.6 }} />
             <Typography variant="caption" sx={{ opacity: ref.missing ? 0.6 : 0.85, fontStyle: ref.missing ? 'italic' : 'normal' }}>
               {ref.flowName ?? ref.flowId}
-              {ref.missing ? ' (missing)' : ''}
+              {ref.missing ? ` (${t('waves.missing')})` : ''}
               {ref.truncated ? ' …' : ''}
             </Typography>
           </Box>

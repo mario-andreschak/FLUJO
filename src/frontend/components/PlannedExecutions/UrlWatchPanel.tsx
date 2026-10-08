@@ -4,6 +4,7 @@ import React from 'react';
 import { Alert, Box, TextField, Typography } from '@mui/material';
 import { UrlWatchTriggerConfig } from '@/shared/types/plannedExecution';
 import SchedulePanel from './SchedulePanel';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface UrlWatchPanelProps {
   config: UrlWatchTriggerConfig;
@@ -14,36 +15,33 @@ interface UrlWatchPanelProps {
  * URL-watch trigger editor: fetch a URL on a schedule, run the flow when the
  * content changes (hash comparison on the backend).
  */
-const UrlWatchPanel = ({ config, onChange }: UrlWatchPanelProps) => (
-  <Box sx={{ mt: 1 }}>
+const UrlWatchPanel = ({ config, onChange }: UrlWatchPanelProps) => {
+  const { t } = useI18n();
+  return <Box sx={{ mt: 1 }}>
     <TextField
       fullWidth
-      label="URL to watch"
+      label={t('automations.url.label')}
       value={config.url}
       onChange={(e) => onChange({ ...config, url: e.target.value })}
-      placeholder="https://example.com/status or an API/feed URL"
+      placeholder={t('automations.url.placeholder')}
       margin="normal"
       type="url"
     />
 
     <Typography variant="subtitle2" sx={{ mt: 1 }}>
-      How often to check
+      {t('automations.howOften')}
     </Typography>
     <SchedulePanel
-      verb="Check"
+      verb={t('automations.checkVerb')}
       cron={config.cron}
       timezone={config.timezone}
       onChange={({ cron, timezone }) => onChange({ ...config, cron, timezone })}
     />
 
     <Alert severity="info" sx={{ mt: 1 }}>
-      The first check only takes a snapshot; the flow runs when a later check
-      finds different content, and the fetched content is handed to the flow.
-      Pages that embed ever-changing bits (timestamps, session tokens) look
-      &ldquo;changed&rdquo; on every check — plain APIs, feeds, and raw files
-      work best.
+      {t('automations.url.info')}
     </Alert>
-  </Box>
-);
+  </Box>;
+};
 
 export default UrlWatchPanel;

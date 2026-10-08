@@ -35,10 +35,8 @@ export async function encryptApiKey(value: string, key?: string): Promise<string
     
     return result;
   } catch (error) {
-    log.error('encryptApiKey: Failed to encrypt API key:', error);
-    // Instead of returning plain text, prefix with 'encrypted:' to indicate it should be encrypted
-    // This will help identify values that failed encryption but should be encrypted
-    return `encrypted_failed:${value}`;
+    log.error('encryptApiKey: Credential was not saved because encryption failed');
+    throw new Error('Credential encryption failed. Unlock this workspace and retry.', { cause: error });
   }
 }
 

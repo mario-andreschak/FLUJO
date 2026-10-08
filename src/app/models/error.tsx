@@ -3,6 +3,7 @@
 import { Box, Typography, Button } from '@mui/material';
 import { useEffect } from 'react';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('app/models/error');
 
@@ -13,6 +14,7 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     log.error('Error in models page:', { error: error.message, digest: error.digest });
   }, [error]);
@@ -27,17 +29,17 @@ export default function Error({
       p={4}
     >
       <Typography variant="h6" color="error" gutterBottom>
-        Error loading models
+        {t('models.error.title')}
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 2 }}>
-        {error.message || 'Something went wrong while loading the models.'}
+        {error.message || t('models.error.description')}
       </Typography>
       <Box sx={{ display: 'flex', gap: 2 }}>
         <Button 
           variant="contained" 
           onClick={reset}
         >
-          Try again
+          {t('common.tryAgain')}
         </Button>
       </Box>
     </Box>

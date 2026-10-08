@@ -1,6 +1,7 @@
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { Model as SharedModel } from '@/shared/types/model';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 // Re-export the shared Model type
 export type Model = SharedModel;
@@ -20,13 +21,37 @@ export interface ProcessNodePropertiesModalProps {
      * tools.
      */
     onConnectMcpServer?: (serverName: string) => void;
+    /** Guided hides runtime plumbing while preserving every stored property. */
+    authoringMode?: FlowAuthoringMode;
+    /** Whether the caller is configuring a freshly-created draft or editing an existing node. */
+    mode?: 'create' | 'edit';
 }
 
 export interface ProcessNodeData {
+    id?: string;
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, unknown>;
+    properties: ProcessNodeProperties;
+}
+
+export interface ProcessNodeProperties extends Record<string, unknown> {
+    boundModel?: string;
+    modelName?: string;
+    nameIsCustom?: boolean;
+    promptTemplate?: string;
+    excludeModelPrompt?: boolean;
+    excludeStartNodePrompt?: boolean;
+    excludeSystemPrompt?: boolean;
+    inputMode?: 'full-history' | 'latest-message' | 'isolated';
+    isolatedPrompt?: string;
+    allowCallerPrompt?: boolean;
+    outputMode?: 'full-conversation' | 'latest-message';
+    enableTodoTool?: boolean;
+    personaTools?: unknown;
+    captureVariable?: string;
+    captureResource?: string;
+    captureKv?: string;
 }
 
 export interface PropertyDefinition {

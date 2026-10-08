@@ -38,7 +38,6 @@ export interface LocalRequestOptions {
  * Returns `any` so it can stand in for `NextRequest`/`Request` in the existing
  * (already `as any`-cast) handler-unit fixtures without type friction.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function makeLocalRequest(options: LocalRequestOptions = {}): any {
   const {
     body,
@@ -54,6 +53,9 @@ export function makeLocalRequest(options: LocalRequestOptions = {}): any {
 
   return {
     url,
+    // Real Request/NextRequest objects always expose a signal. Including one
+    // keeps route tests honest when handlers propagate client disconnects.
+    signal: new AbortController().signal,
     headers: {
       get(name: string): string | null {
         const key = String(name).toLowerCase();

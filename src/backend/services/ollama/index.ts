@@ -110,6 +110,36 @@ export async function pull(
 }
 
 /**
+ * Unload a model from Ollama VRAM by sending `keep_alive: 0` to the native
+ * `/api/generate` endpoint. Non-fatal: if the server is unreachable or returns
+ * a non-2xx the error is logged but NOT re-thrown, so the caller's completion
+ * attempt can still proceed.
+ *
+ * @param ollamaRoot  Normalised Ollama server root URL (no /v1 suffix).
+ * @param modelName   Technical model name (e.g. "llama3.2:3b").
+ */
+export async function unloadModel(ollamaRoot: string, modelName: string): Promise<void> {
+  const url = `${ollamaRoot}/api/generate`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelName, keep_alive: 0 }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) {
+      log.info(`[ollama] Unloaded model "${modelName}" from VRAM on ${ollamaRoot}`);
+    } else {
+      log.warn(`[ollama] Failed to unload model "${modelName}" from ${ollamaRoot}: HTTP ${res.status}`);
+    }
+    // Drain the body to avoid keep-alive socket leaks
+    await res.text().catch(() => {});
+  } catch (err) {
+    log.warn(`[ollama] unloadModel fetch error for "${modelName}" on ${ollamaRoot}`, { err });
+  }
+}
+
+/**
  * Render one Ollama pull-progress line as a human-readable console line, matching
  * the stdout the streaming console already knows how to display. Pure + exported
  * so it can be unit-tested.

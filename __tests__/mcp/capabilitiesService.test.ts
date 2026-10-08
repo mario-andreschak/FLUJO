@@ -10,10 +10,19 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (v: unknown) => v),
 }));
 
+const loadServerConfigsMock = jest.fn(async () => [
+  {
+    name: 'srv',
+    transport: 'stdio',
+    command: 'x',
+    args: [],
+    env: {},
+    disabled: false,
+    enableMcpApps: true,
+  },
+]);
 jest.mock('@/backend/services/mcp/config', () => ({
-  loadServerConfigs: jest.fn(async () => [
-    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
-  ]),
+  loadServerConfigs: (...args: unknown[]) => loadServerConfigsMock(...(args as [])),
   saveConfig: jest.fn(async () => ({ success: true })),
 }));
 
@@ -63,6 +72,18 @@ beforeEach(() => {
   readResourceMock.mockReset();
   listPromptsMock.mockReset();
   getPromptMock.mockReset();
+  loadServerConfigsMock.mockReset();
+  loadServerConfigsMock.mockResolvedValue([
+    {
+      name: 'srv',
+      transport: 'stdio',
+      command: 'x',
+      args: [],
+      env: {},
+      disabled: false,
+      enableMcpApps: true,
+    },
+  ]);
   global.__mcp_clients?.clear();
 });
 
@@ -149,5 +170,42 @@ describe('MCPService.readResource / getPrompt pass-through', () => {
     const result = await svc.getPrompt('srv', 'greet', { who: 'world' });
     expect(result.success).toBe(true);
     expect(getPromptMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-checks enableMcpApps for every app-originated resource read', async () => {
+    loadServerConfigsMock.mockResolvedValue([
+      {
+        name: 'srv',
+        transport: 'stdio',
+        command: 'x',
+        args: [],
+        env: {},
+        disabled: false,
+        enableMcpApps: false,
+      },
+    ]);
+    const svc = new MCPService();
+
+    const result = await svc.readResourceFromApp('srv', 'ui://dashboard');
+
+    expect(result).toMatchObject({ success: false, statusCode: 403 });
+    expect(readResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('does not exempt a stored server merely because it shadows a built-in name', async () => {
+    loadServerConfigsMock.mockResolvedValue([
+      {
+        name: 'filesystem',
+        transport: 'stdio',
+        command: 'x',
+        args: [],
+        env: {},
+        disabled: false,
+        enableMcpApps: false,
+      },
+    ]);
+    const svc = new MCPService();
+
+    await expect(svc.isMcpAppAccessEnabled('filesystem')).resolves.toBe(false);
   });
 });

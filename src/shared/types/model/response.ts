@@ -1,5 +1,6 @@
 import { Model } from './model';
 import OpenAI from 'openai';
+import type { ModelMediaPart } from './media';
 
 /**
  * Base response interface for model service operations
@@ -29,6 +30,7 @@ export interface ModelOperationResponse extends ModelServiceResponse {
  */
 export interface CompletionResponse extends ModelServiceResponse {
   content?: string;
+  media?: ModelMediaPart[];
   fullResponse?: OpenAI.ChatCompletion;  // Use OpenAI type instead of any
   toolCalls?: Array<{
     name: string;
@@ -53,6 +55,8 @@ export interface CompletionResponse extends ModelServiceResponse {
  */
 export interface ModelTestAttempt {
   ok: boolean;
+  /** Check was not run; content explains why. Never presented as a pass. */
+  skipped?: boolean;
   /** HTTP status code, when one was received. */
   status?: number;
   /** Wall-clock duration of the attempt in milliseconds. */
@@ -78,6 +82,16 @@ export interface ModelTestAttempt {
   };
 }
 
+/** Which adapter/endpoint the flow engine will actually use for this model. */
+export interface ModelAdapterRoute {
+  /** 'openai' | 'openai-responses' | 'azure' | 'anthropic' | 'gemini' | 'claude-cli' | 'codex-cli' | 'openrouter-media' */
+  adapterId: string;
+  /** '/chat/completions' | '/images' | '/videos' | 'native SDK' | 'local CLI' | '/responses' */
+  endpoint: string;
+  reason: string;
+  outputModalities?: string[];
+}
+
 /**
  * Verbose result of a direct (no flow engine) model connectivity test, used by
  * the "Test" button on the Models page. Runs the request through the hardened
@@ -95,6 +109,12 @@ export interface ModelTestResult {
   axios: ModelTestAttempt;
   /** Human-readable summary of what the two attempts imply. */
   diagnosis: string;
+  /** Optional: adapter the execution engine resolves for this model. */
+  adapterRoute?: ModelAdapterRoute;
+  /** Optional: result of exercising exactly the resolved adapter. */
+  adapter?: ModelTestAttempt;
+  /** Synthetic FLUJO tool using the production schema/adapter conversion path. */
+  tool?: ModelTestAttempt;
 }
 
 /**
@@ -104,4 +124,21 @@ export interface NormalizedModel {
   id: string;
   name: string;
   description?: string;
+  /** Provider-advertised input context limit, in tokens. */
+  contextWindow?: number;
+  /** Provider-advertised maximum completion size, in tokens. */
+  maxTokens?: number;
+  /**
+   * Whether the provider explicitly advertises function/tool calling.
+   * Undefined means the provider's model-list endpoint did not expose enough
+   * metadata to decide.
+   */
+  supportsTools?: boolean;
+  /** Raw provider capability names, when advertised. */
+  supportedParameters?: string[];
+  /** Provider-advertised input/output modalities. */
+  inputModalities?: string[];
+  outputModalities?: string[];
+  /** Explicit provider-derived image-input capability. */
+  visionInputCapability?: 'supported' | 'unsupported' | 'unknown';
 }

@@ -1,6 +1,5 @@
 /**
- * Tests for the multi-call handoff capture in runFlow (issue #156,
- * spawn-with-brief).
+ * Tests for queued Subflow handoff capture in runFlow.
  *
  * When the routing model calls the SAME handoff tool several times in one
  * assistant turn (each call carrying a `task` brief), the handoff transition
@@ -26,6 +25,8 @@ const EDGE = `${START}->${WORKER}`;
 
 // Configured per test: the tool_calls the start step's assistant turn carries.
 let assistantToolCalls: any[] = [];
+let targetType: string | undefined;
+let mixedBatch = false;
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const S = 'aaaaaaaa-start';
@@ -43,6 +44,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
         if (nodeId === S) {
           // The routing step: the model answered with handoff tool calls.
           sharedState.handoffNameMap = { handoff_to_worker: W, handoff_to_other: 'cccccccc-other' };
+          sharedState.handoffTargetTypes = targetType ? { [W]: targetType } : {};
           sharedState.messages.push({
             role: 'assistant',
             content: 'Dispatching workers.',
@@ -51,6 +53,10 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
             timestamp: 1,
             processNodeId: S,
           });
+          if (mixedBatch) {
+            sharedState.handoffRequested = { edgeId: E, targetNodeId: W };
+            return { sharedState, action: 'TOOL_CALL' };
+          }
           return { sharedState, action: E };
         }
         sharedState.lastResponse = 'joined results';
@@ -89,10 +95,30 @@ jest.mock('@/backend/services/flow/index', () => ({
 
 jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
+  validateFlowObjectForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
-import { runFlow } from '@/backend/execution/flow/runFlow';
+jest.mock('@/backend/execution/flow/handlers/ModelHandler', () => ({
+  ModelHandler: {
+    processToolCalls: jest.fn(async ({ toolCalls }: any) => ({
+      success: true,
+      value: {
+        toolCallMessages: toolCalls.map((call: any) => ({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: `result:${call.id}`,
+        })),
+      },
+    })),
+  },
+}));
+
+import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+
+const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
+  runFlowWithContext({ ...input, source: 'api' });
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -103,9 +129,12 @@ function spawnCall(id: string, task: string) {
 beforeEach(() => {
   conversationStates.clear();
   assistantToolCalls = [];
+  targetType = undefined;
+  mixedBatch = false;
+  jest.clearAllMocks();
 });
 
-describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
+describe('runFlow handoff capture — queued Subflow jobs', () => {
   it('captures one brief per matching call, in call order, and answers every call', async () => {
     assistantToolCalls = [
       spawnCall('c1', 'audit security'),
@@ -186,6 +215,36 @@ describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
     expect(toolResults.map((m: any) => m.tool_call_id)).toEqual(['c1', 'c2']);
   });
 
+  it('captures a Process-to-Signal body in target-scoped handoff state', async () => {
+    targetType = 'signal';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ body: 'signal payload' }) } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      targetNodeId: WORKER,
+      fromHandoffTool: true,
+      signalBody: 'signal payload',
+    });
+  });
+
+  it('marks a parameterless Signal handoff so SignalNode can reject it defensively', async () => {
+    targetType = 'signal';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: '{}' } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      targetNodeId: WORKER,
+      fromHandoffTool: true,
+    });
+    expect(result.sharedState.handoffInput?.signalBody).toBeUndefined();
+  });
+
   it('a plain (no-args) single handoff captures nothing (unchanged behavior)', async () => {
     assistantToolCalls = [
       { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: '{}' } },
@@ -198,6 +257,64 @@ describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
     expect(JSON.parse(toolResult!.content as string)).toEqual({
       status: 'Handoff processed',
       targetNodeId: WORKER,
+    });
+  });
+
+  it('captures a parameterless Subflow handoff as one default-input job', async () => {
+    targetType = 'subflow';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: '{}' } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      targetNodeId: WORKER,
+      tasks: [''],
+    });
+  });
+
+  it('executes ordinary calls before committing a handoff from the same assistant turn', async () => {
+    mixedBatch = true;
+    assistantToolCalls = [
+      { id: 'ordinary-1', type: 'function', function: { name: 'mcp_read_issue', arguments: '{}' } },
+      spawnCall('handoff-1', 'continue after reading'),
+      { id: 'ordinary-2', type: 'function', function: { name: 'mcp_read_comments', arguments: '{}' } },
+    ];
+
+    const result = await runFlow({
+      flowId: 'flow-1',
+      prompt: 'go',
+      mode: 'conversation',
+      flujo: true,
+      requireApproval: false,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(ModelHandler.processToolCalls).toHaveBeenCalledTimes(1);
+    expect((ModelHandler.processToolCalls as jest.Mock).mock.calls[0][0].toolCalls.map((call: any) => call.id))
+      .toEqual(['ordinary-1', 'ordinary-2']);
+
+    const resultIds = result.messages
+      .filter((message: any) => message.role === 'tool')
+      .map((message: any) => message.tool_call_id);
+    expect(resultIds).toEqual(['ordinary-1', 'ordinary-2', 'handoff-1']);
+    expect(result.sharedState.currentNodeId).toBe(WORKER);
+  });
+
+  it('keeps caller session keys aligned with their queued Subflow tasks', async () => {
+    targetType = 'subflow';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ task: 'draft', sessionKey: 'writer-a' }) } },
+      { id: 'c2', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ task: 'review' }) } },
+      { id: 'c3', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ task: 'revise', sessionKey: 'writer-a' }) } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      tasks: ['draft', 'review', 'revise'],
+      sessionKeys: ['writer-a', null, 'writer-a'],
     });
   });
 });

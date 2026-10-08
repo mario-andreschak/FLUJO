@@ -1,13 +1,29 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
+import { openOAuthPopup, reserveOAuthPopup } from '@/frontend/utils/oauth';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
-import { SaveAndAuthenticateResult } from './Modals/ServerModal/types';
+import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
+import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
+import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
+import McpAppsDashboard, { type McpAppsDashboardSelection } from '../McpAppsDashboard';
+import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
+import {
+  MCP_APP_PARAM,
+  MCP_APP_TOKEN_PARAM,
+  MCP_APP_URI_PARAM,
+  consumeQuickActionToken,
+  subscribeOpenMcpApp,
+  type McpAppQuickAction,
+} from '@/frontend/utils/quickActions';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
-import { useServerStatus } from '@/frontend/hooks/useServerStatus';
+import { useServerStatus, type ServerState } from '@/frontend/hooks/useServerStatus';
 import { MCP_FORMATS, getMcpFormat, McpFormatId } from '@/utils/mcp/mcpFormats';
 import { createLogger } from '@/utils/logger';
 import {
@@ -28,7 +44,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogContentText,
-  DialogActions
+  DialogActions,
+  Tooltip
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
@@ -46,12 +63,25 @@ import SelectAllIcon from '@mui/icons-material/SelectAll';
 import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import AppsIcon from '@mui/icons-material/Apps';
+import HubRoundedIcon from '@mui/icons-material/HubRounded';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import PageHeader from '@/frontend/components/shared/PageHeader';
+import {
+  groupByFolder,
+  groupItems,
+  collectFolders,
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+} from '@/utils/shared/cardGrouping';
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
@@ -65,6 +95,8 @@ interface ServerManagerProps {
 }
 
 const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) => {
+  const router = useRouter();
+  const { t, tp, formatNumber } = useI18n();
   const {
     servers,
     isLoading,
@@ -81,6 +113,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   } = useServerStatus();
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showConnectionWizard, setShowConnectionWizard] = useState(false);
+  const [initialSetupTab, setInitialSetupTab] = useState<ServerSetupTab>('spotlight');
   const [editingServer, setEditingServer] = useState<MCPServerConfig | null>(null);
   // Import/export dialog + format-dropdown state.
   const [showImportModal, setShowImportModal] = useState(false);
@@ -92,6 +126,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [importMenuAnchor, setImportMenuAnchor] = useState<null | HTMLElement>(null);
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
+  // #374: whether THIS instance pushed the `?server=` history entry (vs. it
+  // being present on initial load from a deep link) — see handleOpenDetails.
+  const detailsPushedByUsRef = useRef(false);
+  const [toolPrefill, setToolPrefill] = useState<ToolTesterPrefill | undefined>();
+  const [showAppsDashboard, setShowAppsDashboard] = useState(false);
+  // #396: app the MCP Apps dashboard should preview when opened from the
+  // navigation quick-actions menu (held in state so its identity is stable).
+  const [appsSelection, setAppsSelection] = useState<McpAppsDashboardSelection | null>(null);
   // Git update status per repository rootPath (locally cloned stdio servers).
   const [updates, setUpdates] = useState<Record<string, ServerUpdateInfo>>({});
 
@@ -144,11 +186,104 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       return;
     }
     setDetailsServerName(serverName);
+    // #374: opening the modal is a real history entry, so Back closes it
+    // instead of leaving the page. `detailsPushedByUsRef` remembers whether
+    // this instance pushed the entry (vs. it being the initial deep-linked
+    // URL) so handleCloseDetails knows whether router.back() is safe.
+    detailsPushedByUsRef.current = true;
+    router.push(magicLinkPath({ kind: 'mcp-server', id: serverName }));
   };
+
+  // While the details modal is open, a browser Back should close it (and only
+  // it) rather than leaving `/mcp` entirely — mirrors the FlowBuilder's
+  // history-guarded editor (#374).
+  useEffect(() => {
+    if (typeof window === 'undefined' || !detailsServerName) return;
+    const handlePopState = () => {
+      const query = new URLSearchParams(window.location.search);
+      if (!query.get('server')) {
+        detailsPushedByUsRef.current = false;
+        setDetailsServerName(null);
+        setToolPrefill(undefined);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [detailsServerName]);
+
+  // `?server=<id>` alone is the magic link (#374): opens the details modal and
+  // stays in the URL (durable) so Back/Forward and refresh keep it in sync,
+  // cleared on close. `?server=<id>&tool=<name>[&args=<json>]` is the older,
+  // one-shot tool-tester deep link — it still consumes/clears immediately.
+  useEffect(() => {
+    if (typeof window === 'undefined' || servers.length === 0) return;
+    const query = new URLSearchParams(window.location.search);
+    const serverName = query.get('server');
+    if (!serverName) return;
+    const toolName = query.get('tool');
+    const server = servers.find((candidate) => candidate.name === serverName);
+    if (!server || server.disabled) return;
+    if (toolName) {
+      let argumentsPrefill: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(query.get('args') || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
+      } catch { /* malformed query arguments safely become an empty object */ }
+      setToolPrefill({ toolName, arguments: argumentsPrefill });
+    }
+    setDetailsServerName(serverName);
+    if (toolName) {
+      router.replace('/mcp');
+    }
+  }, [servers, router]);
+
+  // #396: quick actions hand an MCP target to the page that already owns the
+  // dashboard and the Tool Tester. A linked tool reuses the pre-existing
+  // `?server=&tool=` deep link above; an app opens the dashboard preselected.
+  // Nothing here invokes a tool.
+  const openMcpQuickTarget = useCallback((request: McpAppQuickAction) => {
+    if (request.toolName) {
+      setShowAppsDashboard(false);
+      setToolPrefill({ toolName: request.toolName, arguments: {} });
+      setDetailsServerName(request.serverName);
+      return;
+    }
+    setAppsSelection(request.uri ? { serverName: request.serverName, uri: request.uri } : null);
+    setShowAppsDashboard(true);
+  }, []);
+
+  // Route intent, for when this page was not mounted yet. One-shot: the token
+  // is claimed and the params are dropped so a refresh does not reopen it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const query = new URLSearchParams(window.location.search);
+    const serverName = query.get(MCP_APP_PARAM);
+    if (!serverName) return;
+    if (!consumeQuickActionToken(query.get(MCP_APP_TOKEN_PARAM))) return;
+    openMcpQuickTarget({ serverName, uri: query.get(MCP_APP_URI_PARAM) || undefined });
+    router.replace('/mcp');
+  }, [openMcpQuickTarget, router]);
+
+  // In-page intent, for when the menu is used while `/mcp` is already open
+  // (pushing the same route would not re-run the effect above).
+  useEffect(() => subscribeOpenMcpApp((request, token) => {
+    if (!consumeQuickActionToken(token)) return;
+    openMcpQuickTarget(request);
+  }), [openMcpQuickTarget]);
 
   const handleCloseDetails = () => {
     const name = detailsServerName;
     setDetailsServerName(null);
+    setToolPrefill(undefined);
+    if (detailsPushedByUsRef.current) {
+      // Pop the entry this instance pushed when it opened the modal, so Back
+      // afterwards leaves `/mcp` instead of re-opening it.
+      detailsPushedByUsRef.current = false;
+      router.back();
+    } else if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('server')) {
+      // The modal was opened from a deep link with nothing safe to pop back to.
+      router.replace('/mcp');
+    }
     // Opening the modal (Tool tester / resources) self-heals a stale connection via the
     // backend's reconnect-on-use; refresh this card's status so it stops showing a stale
     // "crashed" message without a full page reload.
@@ -169,19 +304,57 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Toolbar state. The view preferences (#93) persist across navigation via
   // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
-  const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
+  // #372: place the caret in the search field automatically and keep the field
+  // visible while the server list scrolls. Unlike the Flows dashboard, this page
+  // has no height-constrained ancestor, so the list Box below never becomes its
+  // own scrollport — the document scrolls instead. The toolbar therefore needs
+  // the same `StickySearchBar mode="page"` wrapper as Models/Automations.
+  const searchInputRef = useAutoFocusSearch();
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
+  const [filterOption, setFilterOption] = useWorkspaceUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', 'none');
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:mcp:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   // Collapsed sections persisted as a string[] and re-derived into a Set.
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
   const [bulkActionDialog, setBulkActionDialog] = useState<{open: boolean; action: 'enable' | 'disable' | null}>({open: false, action: null});
   
   const theme = useTheme();
+  const { visualStyle } = useAppTheme();
+  const modern = visualStyle === 'modern';
+
+  const openServerSetup = (tab: ServerSetupTab = 'spotlight') => {
+    setShowConnectionWizard(false);
+    setEditingServer(null);
+    setInitialSetupTab(tab);
+    setShowAddModal(true);
+    onServerModalToggle?.(true);
+  };
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'open-app-marketplace') return;
+      setShowConnectionWizard(false);
+      setEditingServer(null);
+      setInitialSetupTab('marketplace');
+      setShowAddModal(true);
+      onServerModalToggle?.(true);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, [onServerModalToggle]);
+
+  const handleConnectApp = () => {
+    setEditingServer(null);
+    if (modern) {
+      setShowConnectionWizard(true);
+      return;
+    }
+    openServerSetup();
+  };
 
   const handleServerToggle = async (serverName: string, enabled: boolean) => {
     log.debug(`Toggling server ${serverName} to ${enabled ? 'enabled' : 'disabled'}`);
@@ -242,7 +415,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       onServerModalToggle?.(false);
     };
 
+    let popup: Window | undefined;
     try {
+      popup = reserveOAuthPopup(`oauth_${config.name}`);
       // editingServer is the server as opened, so its name is the current storage key.
       if (editingServer) {
         await updateServer(config, editingServer.name);
@@ -262,7 +437,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         if (data.needsClientCredentials) {
           return { status: 'needs_client_credentials', error: data.error };
         }
-        return { status: 'error', error: data.error || 'Failed to start OAuth authentication.' };
+        return { status: 'error', error: data.error || t('mcp.server.oauthFailed') };
       }
 
       if (data.alreadyAuthorized || !data.authorizationUrl) {
@@ -272,8 +447,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         return { status: 'authorized' };
       }
 
-      const { openOAuthPopup } = await import('@/frontend/utils/oauth');
       await openOAuthPopup({
+        popup,
         url: data.authorizationUrl,
         windowName: `oauth_${config.name}`,
       });
@@ -284,7 +459,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       return { status: 'authorized' };
     } catch (error) {
       log.warn(`Save & Authenticate failed for ${config.name}:`, error);
-      return { status: 'error', error: error instanceof Error ? error.message : 'Unknown error' };
+      return { status: 'error', error: error instanceof Error ? error.message : t('mcp.server.unknownError') };
+    } finally {
+      popup?.close();
     }
   };
 
@@ -299,6 +476,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     // against this origin (e.g. http://localhost:4200/mcp-proxy/<name>).
     const config = format.export(servers as unknown as MCPServerConfig[], {
       proxyBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
+      workspace: getSelectedWorkspace(),
     });
 
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
@@ -331,7 +509,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       setImportError(
         errors.length > 0
           ? errors.join('\n')
-          : 'No servers found in the pasted configuration.'
+          : t('mcp.server.noImportServers')
       );
       return;
     }
@@ -354,7 +532,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           added++;
         }
       } catch (e) {
-        failures.push(`"${config.name}": ${(e as Error).message || 'failed to import'}`);
+        failures.push((e as Error).message
+          ? `“${config.name}”: ${(e as Error).message}`
+          : t('mcp.server.importEntryFailed', { name: config.name }));
       }
     }
 
@@ -363,7 +543,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     const allProblems = [...errors, ...failures];
     if (added === 0 && updated === 0) {
       setImportError(
-        allProblems.length > 0 ? allProblems.join('\n') : 'No servers could be imported.'
+        allProblems.length > 0 ? allProblems.join('\n') : t('mcp.server.noneImported')
       );
       return;
     }
@@ -372,7 +552,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     log.info(`Imported MCP servers: ${added} added, ${updated} updated`);
     if (allProblems.length > 0) {
       setImportError(
-        `Imported ${added} added / ${updated} updated. Some entries were skipped:\n${allProblems.join('\n')}`
+        t('mcp.server.partialImport', {
+          added: formatNumber(added),
+          updated: formatNumber(updated),
+          problems: allProblems.join('\n'),
+        })
       );
     } else {
       setShowImportModal(false);
@@ -432,20 +616,82 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   }, [servers, searchTerm, sortOption, filterOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the list loads.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:mcp',
-    { deps: [isLoading, filteredAndSortedServers.length] },
+    { deps: [isLoading, filteredAndSortedServers.length], groupsEnabled: groupMode !== 'none' },
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
-  const folders = useMemo(() => collectFolders(servers, (s: any) => s.folder), [servers]);
+  const folders = useMemo(() => collectFolders(servers, (server) => server.folder), [servers]);
 
   // Grouped view of the filtered/sorted servers, driven by the active group mode.
-  const serverGroups = useMemo<CardGroup<any>[]>(() => {
-    if (groupMode === 'folder') return groupByFolder(filteredAndSortedServers, (s: any) => s.folder);
-    if (groupMode === 'sort') return groupItems(filteredAndSortedServers, (s: any) => deriveServerSortGroup(s, sortOption));
+  const sortLabel = (option: ServerSortOption) => t(`mcp.server.sort.${option}`);
+  const filterLabel = (option: FilterOption) => {
+    switch (option) {
+      case 'connected': return t('mcp.status.connected');
+      case 'disconnected': return t('mcp.status.disconnected');
+      case 'error': return t('mcp.status.error');
+      case 'enabled': return t('mcp.server.enable');
+      case 'disabled': return t('mcp.server.disable');
+      case 'stdio': return t('mcp.server.transport.stdio');
+      case 'websocket': return t('mcp.server.transport.websocket');
+      case 'sse': return t('mcp.server.transport.sse');
+      case 'streamable': return t('mcp.server.transport.streamable');
+      default: return option;
+    }
+  };
+
+  // The AI installer persists an exact, approved Registry plan on the backend. For
+  // OAuth recommendations, finish the same initiate → popup flow without saving a
+  // duplicate config from the wizard.
+  const handleAiAuthenticate = async (serverName: string): Promise<void> => {
+    const popup = reserveOAuthPopup(`oauth_${serverName}`);
+    try {
+      const response = await fetch('/api/oauth/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverName }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || (data.needsClientCredentials
+          ? t('mcp.ai.clientCredentialsRequired')
+          : t('mcp.server.oauthFailed')));
+      }
+      if (!data.alreadyAuthorized && data.authorizationUrl) {
+        await openOAuthPopup({ popup, url: data.authorizationUrl, windowName: `oauth_${serverName}` });
+      }
+      await retryServer(serverName);
+    } finally {
+      popup.close();
+    }
+  };
+
+  const handleAiInstalled = async (serverName: string): Promise<void> => {
+    await retryServer(serverName);
+    setShowConnectionWizard(false);
+  };
+
+  const serverGroups = useMemo<CardGroup<ServerState>[]>(() => {
+    if (groupMode === 'folder') return groupByFolder(
+      filteredAndSortedServers,
+      (server) => server.folder,
+      t('mcp.server.ungrouped'),
+    );
+    if (groupMode === 'sort') return groupItems(filteredAndSortedServers, (server) => {
+      const group = deriveServerSortGroup(server, sortOption);
+      if (group.key === 'status:connected') return { ...group, label: t('mcp.status.connected') };
+      if (group.key === 'status:error') return { ...group, label: t('mcp.status.error') };
+      if (group.key === 'status:auth') return { ...group, label: t('mcp.server.requiresAuth') };
+      if (group.key === 'status:disconnected') return { ...group, label: t('mcp.status.disconnected') };
+      if (group.key === 'transport:stdio') return { ...group, label: t('mcp.server.transport.stdio') };
+      if (group.key === 'transport:websocket') return { ...group, label: t('mcp.server.transport.websocket') };
+      if (group.key === 'transport:sse') return { ...group, label: t('mcp.server.transport.sse') };
+      if (group.key === 'transport:streamable') return { ...group, label: t('mcp.server.transport.streamable') };
+      return group;
+    });
     return [];
-  }, [groupMode, filteredAndSortedServers, sortOption]);
+  }, [groupMode, filteredAndSortedServers, sortOption, t]);
 
   const toggleCollapsed = (key: string) => {
     setCollapsedList((prev) =>
@@ -480,12 +726,10 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   const handleSelectAll = () => {
-    // The built-in server is excluded: bulk enable/disable can't apply to it.
-    const selectable = filteredAndSortedServers.filter(s => !s.builtIn);
-    if (selectedServers.size === selectable.length) {
+    if (selectedServers.size === filteredAndSortedServers.length) {
       setSelectedServers(new Set());
     } else {
-      setSelectedServers(new Set(selectable.map(s => s.name)));
+      setSelectedServers(new Set(filteredAndSortedServers.map(s => s.name)));
     }
   };
 
@@ -514,10 +758,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   // Render the server list for a subset (whole list or one collapsible group).
-  const renderServers = (items: any[]) => (
+  const renderServers = (items: ServerState[]) => (
     <ServerList
-      servers={items.map((server: any) => ({
+      servers={items.map(({ status, ...server }) => ({
         ...server,
+        status: status === 'starting' ? 'connecting' as const : status,
         tools: [] // Add empty tools array to match the ServerList interface
       }))}
       isLoading={isLoading}
@@ -540,18 +785,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
   return (
     <Box sx={{ color: 'text.primary' }}>
-      <Box
-        sx={{
-          p: 2,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Typography variant="h5">MCP</Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+      <PageHeader
+        eyebrowKey="mcp.server.eyebrow"
+        titleKey="mcp.server.title"
+        descriptionKey="mcp.server.description"
+        icon={HubRoundedIcon}
+        actions={(
+          <>
           <Button
             variant="outlined"
             color="primary"
@@ -563,7 +803,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               fontWeight: 500,
             }}
           >
-            Import
+            {t('mcp.server.import')}
           </Button>
           <Menu
             anchorEl={importMenuAnchor}
@@ -572,7 +812,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           >
             {MCP_FORMATS.map((format) => (
               <MenuItem key={format.id} onClick={() => openImportDialog(format.id)}>
-                <ListItemText primary={`${format.label} format`} />
+                <ListItemText primary={t('mcp.server.format', { name: format.label })} />
               </MenuItem>
             ))}
           </Menu>
@@ -588,7 +828,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               boxShadow: 1,
             }}
           >
-            Export
+            {t('mcp.server.export')}
           </Button>
           <Menu
             anchorEl={exportMenuAnchor}
@@ -597,7 +837,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           >
             {MCP_FORMATS.map((format) => (
               <MenuItem key={format.id} onClick={() => handleExportConfig(format.id)}>
-                <ListItemText primary={`${format.label} format`} />
+                <ListItemText primary={t('mcp.server.format', { name: format.label })} />
               </MenuItem>
             ))}
           </Menu>
@@ -605,12 +845,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             variant="contained"
             color="primary"
             data-tour="add-mcp-server"
-            onClick={() => {
-              // Ensure editing server is null when adding a new server
-              setEditingServer(null);
-              setShowAddModal(true);
-              onServerModalToggle?.(true);
-            }}
+            onClick={handleConnectApp}
             startIcon={<AddIcon />}
             sx={{
               textTransform: 'none',
@@ -618,13 +853,22 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               boxShadow: 1,
             }}
           >
-            Add Server
+            {modern ? t('mcp.server.connectApp') : t('mcp.server.add')}
           </Button>
-        </Box>
-      </Box>
+          </>
+        )}
+      />
 
       {/* Toolbar with search, sort, and bulk actions */}
-      <Paper elevation={1} sx={{ m: 2, mb: 1, p: 1 }}>
+      {/* #372: the outer spacing lives on the sticky wrapper (as padding rather
+          than the Paper's margin) so the pinned strip stays fully opaque and
+          scrolled cards cannot bleed through above/below the toolbar. */}
+      <StickySearchBar mode="page" sx={{ pt: 3, pb: 1.5 }}>
+      <Paper
+        elevation={0}
+        variant="outlined"
+        sx={{ mx: { xs: 2, md: 3, lg: 4 }, p: 1.2, borderRadius: 3 }}
+      >
         <Box sx={{ 
           display: 'flex', 
           flexDirection: { xs: 'column', sm: 'row' }, 
@@ -634,12 +878,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         }}>
           {/* Search field */}
           <TextField
-            placeholder="Search servers..."
+            placeholder={t('mcp.server.search')}
             variant="outlined"
             size="small"
             fullWidth
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -663,7 +908,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               }}
               startIcon={<SelectAllIcon />}
             >
-              Select
+              {t('mcp.server.select')}
             </Button>
             
             {/* Bulk actions - only show when in selection mode */}
@@ -672,9 +917,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
                 <Button
                   size="small"
                   onClick={handleSelectAll}
-                  disabled={filteredAndSortedServers.filter(s => !s.builtIn).length === 0}
+                  disabled={filteredAndSortedServers.length === 0}
                 >
-                  {selectedServers.size === filteredAndSortedServers.filter(s => !s.builtIn).length && selectedServers.size > 0 ? 'Deselect All' : 'Select All'}
+                  {selectedServers.size === filteredAndSortedServers.length && selectedServers.size > 0
+                    ? t('mcp.server.deselectAll')
+                    : t('mcp.server.selectAll')}
                 </Button>
                 
                 {selectedServers.size > 0 && (
@@ -686,7 +933,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
                       onClick={() => setBulkActionDialog({open: true, action: 'enable'})}
                       startIcon={<PlayArrowIcon />}
                     >
-                      Enable ({selectedServers.size})
+                      {t('mcp.server.enableCount', { count: formatNumber(selectedServers.size) })}
                     </Button>
                     <Button
                       size="small"
@@ -695,13 +942,25 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
                       onClick={() => setBulkActionDialog({open: true, action: 'disable'})}
                       startIcon={<StopIcon />}
                     >
-                      Disable ({selectedServers.size})
+                      {t('mcp.server.disableCount', { count: formatNumber(selectedServers.size) })}
                     </Button>
                   </>
                 )}
               </>
             )}
             
+            <Button
+              size="small"
+              aria-label={t('mcp.server.openApps')}
+              onClick={() => setShowAppsDashboard(true)}
+              color={showAppsDashboard ? 'primary' : 'inherit'}
+              variant={showAppsDashboard ? 'contained' : 'outlined'}
+              startIcon={<AppsIcon fontSize="small" />}
+              sx={{ whiteSpace: 'nowrap', backgroundColor: showAppsDashboard ? undefined : theme.palette.background.default }}
+            >
+              {t('mcp.apps.title')}
+            </Button>
+
             {/* Group-by button (#71 folders / #73 sort-fold) */}
             <IconButton
               size="small"
@@ -711,7 +970,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
                 border: `1px solid ${theme.palette.divider}`,
                 backgroundColor: theme.palette.background.default
               }}
-              title="Group cards"
+              title={t('mcp.server.groupCards')}
+              aria-label={t('mcp.server.groupCards')}
             >
               <LayersIcon fontSize="small" />
             </IconButton>
@@ -720,6 +980,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             <IconButton 
               size="small" 
               onClick={handleSortMenuOpen}
+              aria-label={t('mcp.server.sort')}
               sx={{ 
                 border: `1px solid ${theme.palette.divider}`,
                 backgroundColor: theme.palette.background.default
@@ -730,6 +991,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           </Box>
         </Box>
       </Paper>
+      </StickySearchBar>
       
       {/* Statistics bar */}
       <Box sx={{ 
@@ -739,19 +1001,16 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         px: 3
       }}>
         <Typography variant="body2" color="textSecondary">
-          {filteredAndSortedServers.length} of {servers.length} servers
-          {searchTerm && ` matching "${searchTerm}"`}
-          {filterOption !== 'all' && ` (filtered by ${filterOption})`}
+          {tp('mcp.server.count', servers.length, {
+            shown: formatNumber(filteredAndSortedServers.length),
+            total: formatNumber(servers.length),
+          })}
+          {searchTerm && t('mcp.server.matching', { search: searchTerm })}
+          {filterOption !== 'all' && t('mcp.server.filtered', { filter: filterLabel(filterOption) })}
         </Typography>
         
         <Typography variant="body2" color="textSecondary">
-          Sorted by: {
-            sortOption === 'name-asc' ? 'Name (A-Z)' :
-            sortOption === 'name-desc' ? 'Name (Z-A)' :
-            sortOption === 'status-connected' ? 'Connected first' :
-            sortOption === 'status-disconnected' ? 'Disconnected first' :
-            'Transport type'
-          }
+          {t('mcp.server.sortedBy', { sort: sortLabel(sortOption) })}
         </Typography>
       </Box>
 
@@ -762,6 +1021,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           serverGroups.map((group) => (
             <CollapsibleCardSection
               key={group.key}
+              groupKey={group.key}
               label={group.label}
               count={group.items.length}
               expanded={!collapsedKeys.has(group.key)}
@@ -784,15 +1044,15 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       >
         <MenuItem selected={groupMode === 'none'} onClick={() => handleGroupChange('none')}>
           <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="No grouping" />
+          <ListItemText primary={t('mcp.server.group.none')} />
         </MenuItem>
         <MenuItem selected={groupMode === 'folder'} onClick={() => handleGroupChange('folder')}>
           <ListItemIcon><FolderOutlinedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="By folder" />
+          <ListItemText primary={t('mcp.server.group.folder')} />
         </MenuItem>
         <MenuItem selected={groupMode === 'sort'} onClick={() => handleGroupChange('sort')}>
           <ListItemIcon><LayersIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="By sort setting" />
+          <ListItemText primary={t('mcp.server.group.sort')} />
         </MenuItem>
       </Menu>
 
@@ -814,33 +1074,33 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Name (A-Z)" />
+          <ListItemText primary={sortLabel('name-asc')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('name-desc')}>
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Name (Z-A)" />
+          <ListItemText primary={sortLabel('name-desc')} />
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => handleSortChange('status-connected')}>
           <ListItemIcon>
             <CheckCircleIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Connected first" />
+          <ListItemText primary={sortLabel('status-connected')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('status-disconnected')}>
           <ListItemIcon>
             <CancelIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Disconnected first" />
+          <ListItemText primary={sortLabel('status-disconnected')} />
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => handleSortChange('transport')}>
           <ListItemIcon>
             <TerminalIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Transport type" />
+          <ListItemText primary={sortLabel('transport')} />
         </MenuItem>
       </Menu>
 
@@ -850,11 +1110,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         onClose={() => setBulkActionDialog({open: false, action: null})}
       >
         <DialogTitle>
-          {bulkActionDialog.action === 'enable' ? 'Enable Servers' : 'Disable Servers'}
+          {bulkActionDialog.action === 'enable' ? t('mcp.server.enableTitle') : t('mcp.server.disableTitle')}
         </DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Are you sure you want to {bulkActionDialog.action} {selectedServers.size} server{selectedServers.size > 1 ? 's' : ''}?
+            {bulkActionDialog.action === 'enable'
+              ? tp('mcp.server.confirmEnable', selectedServers.size)
+              : tp('mcp.server.confirmDisable', selectedServers.size)}
           </DialogContentText>
           <Box sx={{ mt: 2 }}>
             {Array.from(selectedServers).map(serverName => (
@@ -866,14 +1128,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setBulkActionDialog({open: false, action: null})}>
-            Cancel
+            {t('mcp.server.cancel')}
           </Button>
           <Button 
             onClick={bulkActionDialog.action === 'enable' ? handleBulkEnable : handleBulkDisable}
             variant="contained"
             color={bulkActionDialog.action === 'enable' ? 'success' : 'error'}
           >
-            {bulkActionDialog.action === 'enable' ? 'Enable' : 'Disable'}
+            {bulkActionDialog.action === 'enable' ? t('mcp.server.enable') : t('mcp.server.disable')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -885,13 +1147,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Import MCP Servers — {getMcpFormat(importFormat).label} format</DialogTitle>
+        <DialogTitle>{t('mcp.server.importTitle', { format: getMcpFormat(importFormat).label })}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
-            Paste a {getMcpFormat(importFormat).label}-style MCP configuration (the{' '}
-            <code>{'{ "mcpServers": { ... } }'}</code> JSON). FLUJO adds each server, preserving
-            commands, args, environment variables, URLs and custom headers. A server whose name
-            already exists is updated.
+            {t('mcp.server.importHelp', {
+              format: getMcpFormat(importFormat).label,
+              example: '{ "mcpServers": { ... } }',
+            })}
           </DialogContentText>
           <TextField
             multiline
@@ -920,7 +1182,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseImport} disabled={isImporting}>
-            Cancel
+            {t('mcp.server.cancel')}
           </Button>
           <Button
             onClick={handleImportConfig}
@@ -929,7 +1191,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             disabled={isImporting || importText.trim() === ''}
             startIcon={<UploadIcon />}
           >
-            {isImporting ? 'Importing...' : 'Import'}
+            {isImporting ? t('mcp.server.importing') : t('mcp.server.import')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -943,19 +1205,46 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           onServerModalToggle?.(false);
         }}
         initialConfig={editingServer}
+        initialTab={initialSetupTab}
         onUpdate={handleUpdateServer}
         onRestartAfterUpdate={handleServerRetry}
         onSaveAndAuthenticate={handleSaveAndAuthenticate}
       />
+
+      {modern ? (
+        <McpConnectionWizard
+          open={showConnectionWizard}
+          onClose={() => setShowConnectionWizard(false)}
+          onChooseSetup={openServerSetup}
+          onManualCreation={() => openServerSetup('spotlight')}
+          onInstalled={handleAiInstalled}
+          onAuthenticate={handleAiAuthenticate}
+        />
+      ) : null}
 
       <ServerDetailsModal
         server={detailsServer ? { name: detailsServer.name, status: detailsServer.status, env: detailsServer.env } : null}
         onClose={handleCloseDetails}
         onSaveEnv={saveEnv}
         onServerRestart={handleEnvRestart}
+        toolPrefill={toolPrefill}
       />
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <McpAppsDashboard
+        open={showAppsDashboard}
+        onClose={() => {
+          setShowAppsDashboard(false);
+          setAppsSelection(null);
+        }}
+        initialSelection={appsSelection}
+        onOpenToolTester={(serverName, toolName) => {
+          setShowAppsDashboard(false);
+          setToolPrefill({ toolName, arguments: {} });
+          setDetailsServerName(serverName);
+        }}
+      />
+
+      <ScrollNavCluster {...scrollNavProps} />
     </Box>
   );
 };

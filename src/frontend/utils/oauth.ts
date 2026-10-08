@@ -7,15 +7,23 @@ export interface OAuthPopupOptions {
   windowName?: string;
   width?: number;
   height?: number;
-  onSuccess?: (result: any) => void;
+  onSuccess?: (result: unknown) => void;
   onError?: (error: string) => void;
   onClose?: () => void;
+  /** Reserved synchronously by the initiating click, before any async work. */
+  popup?: Window;
+}
+
+export function reserveOAuthPopup(windowName: string): Window {
+  const popup = window.open('about:blank', windowName, 'popup,width=600,height=700,scrollbars=yes,resizable=yes');
+  if (!popup) throw new Error('Could not open the sign-in window. Allow popups for FLUJO and try Authenticate again.');
+  return popup;
 }
 
 /**
  * Open OAuth popup window and handle the authentication flow
  */
-export function openOAuthPopup(options: OAuthPopupOptions): Promise<any> {
+export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
   const {
     url,
     windowName = 'oauth_popup',
@@ -45,10 +53,11 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<any> {
       'location=no'
     ].join(',');
 
-    log.info('Opening OAuth popup', { url: url.substring(0, 100) + '...', windowName });
+    log.info('Opening OAuth popup', { origin: new URL(url).origin, windowName });
 
     // Open popup window
-    const popup = window.open(url, windowName, features);
+    const popup = options.popup ?? window.open(url, windowName, features);
+    if (options.popup) options.popup.location.href = url;
 
     if (!popup) {
       const error = 'Failed to open popup window. Please check if popups are blocked.';
@@ -134,12 +143,13 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<any> {
 /**
  * Generate OAuth state parameter with server information
  */
-export function generateOAuthState(serverName: string, redirectUri: string): string {
+export function generateOAuthState(serverName: string, redirectUri: string, workspace?: string): string {
   const stateData = {
     serverName,
     redirectUri,
     timestamp: Date.now(),
-    nonce: Math.random().toString(36).substring(2, 15)
+    nonce: Math.random().toString(36).substring(2, 15),
+    ...(workspace ? { workspace } : {}),
   };
   
   return encodeURIComponent(JSON.stringify(stateData));

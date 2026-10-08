@@ -9,7 +9,13 @@
  */
 import { Edge } from '@xyflow/react';
 import { computeAutoLayout } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/autoLayout';
+import { hasOverlaps } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/layoutGeometry';
 import { FlowNode } from '@/frontend/types/flow/flow';
+
+/** Shared invariant assertion (issue #373): no two padded node boxes intersect. */
+function expectNoOverlaps(nodes: FlowNode[]) {
+  expect(hasOverlaps(nodes)).toBe(false);
+}
 
 const node = (id: string, type: string, x = 0, y = 0): FlowNode =>
   ({
@@ -115,7 +121,7 @@ describe('computeAutoLayout', () => {
     expect(m1.position.y).not.toBe(m2.position.y); // stacked vertically
   });
 
-  it('leaves an unattached MCP node at its current position', () => {
+  it('relocates an unattached MCP node out of the packed graph instead of leaving it at a stale position (B5)', () => {
     const nodes = [
       node('start', 'start'),
       node('p1', 'process'),
@@ -124,7 +130,10 @@ describe('computeAutoLayout', () => {
     const edges = [flowEdge('start', 'p1')];
 
     const laid = computeAutoLayout(nodes, edges);
-    expect(laid.find(n => n.id === 'm1')!.position).toEqual({ x: 123, y: 456 });
+    // No longer glued to its old (potentially colliding) coordinates...
+    expect(laid.find(n => n.id === 'm1')!.position).not.toEqual({ x: 123, y: 456 });
+    // ...and does not overlap anything in the freshly packed graph.
+    expectNoOverlaps(laid);
   });
 
   it('does not hang on a bidirectional / cyclic flow', () => {
@@ -181,5 +190,100 @@ describe('computeAutoLayout', () => {
 
     expect(x('start')).toBeLessThan(x('p1'));
     expect(x('p1')).toBeLessThan(x('finish'));
+  });
+
+  it('never produces overlapping nodes for a process + 3 MCP + 2 sibling processes fixture (the reported bug)', () => {
+    const nodes = [
+      node('start', 'start'),
+      node('p1', 'process'),
+      node('p2', 'process'),
+      node('m1', 'mcp'),
+      node('m2', 'mcp'),
+      node('m3', 'mcp'),
+    ];
+    const edges = [
+      flowEdge('start', 'p1'),
+      flowEdge('start', 'p2'),
+      mcpEdge('p1', 'm1'),
+      mcpEdge('p1', 'm2'),
+      mcpEdge('p1', 'm3'),
+    ];
+
+    const laid = computeAutoLayout(nodes, edges);
+    expectNoOverlaps(laid);
+  });
+
+  it('never lets a sibling flow node intersect the first node\'s MCP satellite (B1)', () => {
+    const nodes = [
+      node('start', 'start'),
+      node('a', 'process'),
+      node('b', 'process'),
+      node('m1', 'mcp'),
+    ];
+    const edges = [flowEdge('start', 'a'), flowEdge('start', 'b'), mcpEdge('a', 'm1')];
+
+    const laid = computeAutoLayout(nodes, edges);
+    expectNoOverlaps(laid);
+  });
+
+  it('stacks tall MCP nodes without overlapping each other or the next rank (B2)', () => {
+    const tallMcp = (id: string): FlowNode => ({
+      ...node(id, 'mcp'),
+      measured: { width: 210, height: 200 },
+    } as FlowNode);
+    const nodes = [
+      node('start', 'start'),
+      node('p1', 'process'),
+      node('p2', 'process'),
+      tallMcp('m1'),
+      tallMcp('m2'),
+      tallMcp('m3'),
+    ];
+    const edges = [
+      flowEdge('start', 'p1'),
+      flowEdge('p1', 'p2'),
+      mcpEdge('p1', 'm1'),
+      mcpEdge('p1', 'm2'),
+      mcpEdge('p1', 'm3'),
+    ];
+
+    const laid = computeAutoLayout(nodes, edges);
+    expectNoOverlaps(laid);
+    // The MCP stack must not intrude into p2's rank.
+    const p1 = laid.find(n => n.id === 'p1')!;
+    const p2 = laid.find(n => n.id === 'p2')!;
+    const lastMcp = laid.find(n => n.id === 'm3')!;
+    expect(lastMcp.position.y + 200).toBeLessThanOrEqual(p2.position.y);
+    expect(p1.position.y).toBeLessThan(p2.position.y);
+  });
+
+  it('uses the per-type fallback size for unmeasured nodes (B3)', () => {
+    const nodes = [
+      node('start', 'start'),
+      node('p1', 'process'),
+      node('m1', 'mcp'), // no `measured` — must use the MCP fallback, not a bare 240x80 guess
+    ];
+    const edges = [flowEdge('start', 'p1'), mcpEdge('p1', 'm1')];
+
+    const laid = computeAutoLayout(nodes, edges);
+    const p1 = laid.find(n => n.id === 'p1')!;
+    const m1 = laid.find(n => n.id === 'm1')!;
+    // Offset must clear the MCP fallback width, not an undersized guess.
+    expect(m1.position.x - p1.position.x).toBeGreaterThanOrEqual(350);
+    expectNoOverlaps(laid);
+  });
+
+  it('running the layout twice on the same input is deterministic (byte-identical positions)', () => {
+    const nodes = [
+      node('start', 'start'),
+      node('a', 'process'),
+      node('b', 'process'),
+      node('m1', 'mcp'),
+    ];
+    const edges = [flowEdge('start', 'a'), flowEdge('start', 'b'), mcpEdge('a', 'm1')];
+
+    const first = computeAutoLayout(nodes, edges);
+    const second = computeAutoLayout(nodes, edges);
+    expect(first.map(n => n.position)).toEqual(second.map(n => n.position));
   });
 });

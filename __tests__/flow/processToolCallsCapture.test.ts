@@ -33,7 +33,7 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import OpenAI from 'openai';
 
-const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageToolCall => ({
+const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name, arguments: JSON.stringify(args) },
@@ -80,6 +80,11 @@ beforeEach(() => {
   captureToolResultMock.mockResolvedValue({
     result: { content: [{ type: 'text', text: '[FLUJO stored this image/png as flujo://run/conv-1/res-1]' }] },
     captured: [capturedEntry],
+    media: [{
+      type: 'image',
+      mimeType: 'image/png',
+      resourceUri: 'flujo://run/conv-1/res-1',
+    }],
   });
 });
 
@@ -107,6 +112,10 @@ describe('processToolCalls auto-capture', () => {
     const toolMsg = result.success ? result.value.toolCallMessages[0] : undefined;
     expect(toolMsg?.content).toContain('flujo://run/conv-1/res-1');
     expect(toolMsg?.content).not.toContain('aGVsbG8=');
+    expect(toolMsg?.media).toEqual([expect.objectContaining({
+      type: 'image',
+      resourceUri: 'flujo://run/conv-1/res-1',
+    })]);
 
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({
       type: 'resource:write',
@@ -118,7 +127,7 @@ describe('processToolCalls auto-capture', () => {
     }));
   });
 
-  it('does NOT capture without a conversationId (backcompat)', async () => {
+  it('delivers inline media without a conversationId while keeping base64 out of tool text', async () => {
     const emit = jest.fn();
     const result = await ModelHandler.processToolCalls({
       toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})],
@@ -130,9 +139,14 @@ describe('processToolCalls auto-capture', () => {
     expect(getRunResourceSettingsMock).not.toHaveBeenCalled();
     expect(captureToolResultMock).not.toHaveBeenCalled();
     expect(emit.mock.calls.map(([e]) => e.type)).not.toContain('resource:write');
-    // The original result reaches the message untouched.
     const toolMsg = result.success ? result.value.toolCallMessages[0] : undefined;
-    expect(toolMsg?.content).toContain('aGVsbG8=');
+    expect(toolMsg?.content).not.toContain('aGVsbG8=');
+    expect(toolMsg?.content).toContain('native image input');
+    expect(toolMsg?.media).toEqual([expect.objectContaining({
+      type: 'image',
+      mimeType: 'image/png',
+      data: 'aGVsbG8=',
+    })]);
   });
 
   it('respects autoCaptureEnabled=false', async () => {
@@ -147,6 +161,31 @@ describe('processToolCalls auto-capture', () => {
     expect(captureToolResultMock).not.toHaveBeenCalled();
   });
 
+  it('captures an exact transcript-level result for expansion-time loading', async () => {
+    const largeText = 'x'.repeat(DEFAULT_RUN_RESOURCE_SETTINGS.textThresholdChars + 10);
+    const data = { content: [{ type: 'text', text: largeText }] };
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})],
+      toolNameMap,
+      conversationId: 'conv-1',
+      node: { nodeId: 'node-9' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-1',
+      kind: 'text',
+      producedBy: expect.objectContaining({
+        source: 'tool-result',
+        payloadRole: 'tool-message',
+        toolCallId: 'call1',
+      }),
+    }));
+  });
+
   it('keeps the original result when the capture layer throws', async () => {
     captureToolResultMock.mockRejectedValue(new Error('store exploded'));
     const result = await ModelHandler.processToolCalls({
@@ -157,7 +196,13 @@ describe('processToolCalls auto-capture', () => {
 
     expect(result.success).toBe(true); // the run survives
     const toolMsg = result.success ? result.value.toolCallMessages[0] : undefined;
-    expect(toolMsg?.content).toContain('aGVsbG8='); // original passthrough
+    expect(toolMsg?.content).not.toContain('aGVsbG8=');
+    expect(toolMsg?.content).toContain('native image input');
+    expect(toolMsg?.media).toEqual([expect.objectContaining({
+      type: 'image',
+      mimeType: 'image/png',
+      data: 'aGVsbG8=',
+    })]);
   });
 
   it('does not capture failed tool calls', async () => {
@@ -220,7 +265,20 @@ describe('processToolCalls tool-args capture (#168)', () => {
     }));
 
     // The active call still executes with the FULL args (capture is lineage-only).
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'screenshot', bigArgs, expect.anything(), expect.anything());
+    // Issue #357: the call also carries a per-call AbortSignal so the user can
+    // cancel this tool call while it is in flight.
+    expect(callToolMock).toHaveBeenCalledWith(
+      'srv',
+      'screenshot',
+      bigArgs,
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      expect.any(AbortSignal),
+      'model',
+      'conversation:conv-1',
+      { conversationId: 'conv-1' },
+    );
   });
 
   it('does NOT capture sub-threshold args', async () => {

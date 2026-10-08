@@ -8,7 +8,8 @@
  *     and depth = parent runDepth + 1;
  *   - a successful run appends the subflow output as an assistant message
  *     attributed to this node and hands off to the node's successor edge;
- *   - with no successor it ends the flow (FINAL_RESPONSE_ACTION);
+ *   - with no successor it returns to an inferred Process caller when present,
+ *     otherwise it ends the flow (FINAL_RESPONSE_ACTION);
  *   - a failed subflow surfaces as ERROR_ACTION;
  *   - a missing subflowId fails without ever calling runFlow.
  *
@@ -16,7 +17,11 @@
  * module path as the alias below, so jest.mock intercepts it.
  */
 import type { SharedState } from '@/backend/execution/flow/types';
-import { FINAL_RESPONSE_ACTION, ERROR_ACTION } from '@/backend/execution/flow/types';
+import {
+  FINAL_RESPONSE_ACTION,
+  ERROR_ACTION,
+  IMPLICIT_SUBFLOW_RETURN_ACTION,
+} from '@/backend/execution/flow/types';
 
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: jest.fn(async (input: any) => {
@@ -53,6 +58,8 @@ jest.mock('@/backend/services/flow/index', () => ({
 
 import { SubflowNode, FinishNode } from '@/backend/execution/flow/nodes';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 
 const runFlowMock = runFlow as jest.Mock;
 
@@ -95,7 +102,7 @@ describe('SubflowNode', () => {
 
     // Default (no promptTemplate): the parent history is passed, not a prompt.
     const call = runFlowMock.mock.calls[0][0];
-    expect(call).toMatchObject({ flowId: 'inner-flow', mode: 'ephemeral', depth: 1, requireApproval: false });
+    expect(call).toMatchObject({ flowId: 'inner-flow', source: 'subflow', mode: 'ephemeral', depth: 1, requireApproval: false });
     expect(call.prompt).toBeUndefined();
     expect(call.messages).toEqual([
       expect.objectContaining({ role: 'user', content: 'hello world' }),
@@ -205,6 +212,29 @@ describe('SubflowNode', () => {
     expect(call.prompt).toBeUndefined();
   });
 
+  it("inputMode 'latest-message' compresses several trailing assistant turns to just the LAST one", async () => {
+    // Only the latest exchange (last user + last assistant) survives — earlier
+    // nodes' outputs since the last user message are dropped.
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'latest-message' }, 'edge-next');
+    const state = makeState({
+      messages: [
+        { role: 'user', content: 'Plan issue #70', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'A output', id: 'a1', timestamp: 2 } as any,
+        { role: 'assistant', content: 'B output', id: 'a2', timestamp: 3 } as any,
+        { role: 'assistant', content: 'C output', id: 'a3', timestamp: 4 } as any,
+      ],
+    });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Plan issue #70' }),
+      expect.objectContaining({ role: 'assistant', content: 'C output' }),
+    ]);
+    expect(call.prompt).toBeUndefined();
+  });
+
   it('back-compat: a promptTemplate with no inputMode is treated as isolated (sent as a prompt)', async () => {
     const node = makeNode({ subflowId: 'inner-flow', promptTemplate: 'use me instead' }, 'edge-next');
     await node.run(makeState());
@@ -307,6 +337,59 @@ describe('SubflowNode', () => {
     expect(state.handoffInput).toBe(stale);
   });
 
+  it('reuses a caller-addressed keyed child as a real follow-up turn', async () => {
+    const sessionIdentity = 'run-1::sub-node::writer-a';
+    const node = makeNode({
+      subflowId: 'inner-flow',
+      inputMode: 'isolated',
+      sessionScope: 'per-key',
+      saveConversation: true,
+    }, 'edge-next');
+    const state = makeState({
+      logicalRunId: 'run-1',
+      handoffInput: {
+        targetNodeId: 'sub-node',
+        prompt: 'Apply the review notes',
+        tasks: ['Apply the review notes'],
+        sessionKeys: ['writer-a'],
+      },
+      subflowSessions: {
+        [sessionIdentity]: {
+          version: 1,
+          conversationId: 'saved-child-conversation',
+          nodeId: 'sub-node',
+          sessionKey: 'writer-a',
+          visits: 1,
+          lastUsedAt: 1,
+          status: 'idle',
+        },
+      },
+    });
+    FlowExecutor.conversationStates.set('parent-conv', state);
+    FlowExecutor.conversationStates.set(
+      'saved-child-conversation',
+      makeState({ conversationId: 'saved-child-conversation', flowId: 'inner-flow' }),
+    );
+
+    try {
+      await node.run(state);
+    } finally {
+      FlowExecutor.conversationStates.delete('parent-conv');
+      FlowExecutor.conversationStates.delete('saved-child-conversation');
+    }
+
+    expect(runFlowMock.mock.calls[0][0]).toMatchObject({
+      conversationId: 'saved-child-conversation',
+      prompt: 'Apply the review notes',
+      resumeAsNewTurn: true,
+      source: 'subflow',
+    });
+    expect(state.subflowSessions?.[sessionIdentity]).toMatchObject({
+      visits: 2,
+      status: 'idle',
+    });
+  });
+
   it("an explicit inputMode wins over a leftover promptTemplate (history is used, prompt ignored)", async () => {
     // A flow switched from Isolated back to Full conversation keeps its old
     // promptTemplate in properties, but the explicit mode must win.
@@ -325,6 +408,24 @@ describe('SubflowNode', () => {
     await node.run(makeState({ runDepth: 3 }));
 
     expect(runFlowMock).toHaveBeenCalledWith(expect.objectContaining({ depth: 4 }));
+  });
+
+  // --- Wave lineage: inherit the parent's plannedExecutionId (issue #220) ---
+
+  it('propagates the parent run plannedExecutionId to the child run so it joins the same wave (#220)', async () => {
+    // Without this the persisted sub-flow conversation carried no
+    // plannedExecutionId and fell into the "Ad-hoc" wave bucket.
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState({ plannedExecutionId: 'exec-42' }));
+
+    expect(runFlowMock.mock.calls[0][0].plannedExecutionId).toBe('exec-42');
+  });
+
+  it('omits plannedExecutionId when the parent run has none (an ad-hoc parent stays ad-hoc) (#220)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState()); // no plannedExecutionId on the parent
+
+    expect(runFlowMock.mock.calls[0][0].plannedExecutionId).toBeUndefined();
   });
 
   // --- Debugging: persist the subflow's own conversation (issue #125) ---
@@ -356,9 +457,51 @@ describe('SubflowNode', () => {
     expect(runFlowMock.mock.calls[0][0].mode).toBe('conversation');
   });
 
-  it('ends the flow (FINAL_RESPONSE_ACTION) when there is no successor', async () => {
+  it('returns to its Process caller when a one-way Subflow has no successor', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }); // no explicit successor edge
+    const state = makeState({
+      pendingSubflowReturn: {
+        subflowNodeId: 'sub-node',
+        callerNodeId: 'calling-process',
+      },
+    });
+
+    const { action } = await node.run(state);
+
+    expect(action).toBe(IMPLICIT_SUBFLOW_RETURN_ACTION);
+  });
+
+  it('prefers an explicit onward successor over an inferred caller return', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    const state = makeState({
+      pendingSubflowReturn: {
+        subflowNodeId: 'sub-node',
+        callerNodeId: 'calling-process',
+      },
+    });
+
+    const { action } = await node.run(state);
+
+    expect(action).toBe('edge-next');
+  });
+
+  it('ends the flow when there is no successor and no inferred Process caller', async () => {
     const node = makeNode({ subflowId: 'inner-flow' }); // no successor edge
     const { action } = await node.run(makeState());
+    expect(action).toBe(FINAL_RESPONSE_ACTION);
+  });
+
+  it('does not use a caller marker addressed to a different Subflow node', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' });
+    const state = makeState({
+      pendingSubflowReturn: {
+        subflowNodeId: 'another-subflow',
+        callerNodeId: 'calling-process',
+      },
+    });
+
+    const { action } = await node.run(state);
+
     expect(action).toBe(FINAL_RESPONSE_ACTION);
   });
 

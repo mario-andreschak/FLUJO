@@ -1,8 +1,8 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { loadItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
@@ -15,6 +15,8 @@ import {
   DEFAULT_RUN_RESOURCE_SETTINGS,
 } from '@/shared/types/runResources';
 import type { MCPReadResourceResult } from '@/shared/types/mcp';
+import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 /**
  * Run-scoped resource store (Tier 3 data flow).
@@ -38,7 +40,12 @@ const log = createLogger('backend/services/runResources');
 
 // Mutable so tests can point the store at a temp directory (same seam pattern
 // as conversationLog's _setConversationLogDirForTests).
-let runResourcesDir = path.join(getDataDir(), 'db', 'run-resources');
+// Resolved per call (never captured at import time) because db/ now lives inside
+// the selected workspace (#406). The override keeps the existing temp-dir test
+// seam working and wins over the workspace when set.
+let runResourcesDirOverride: string | undefined;
+const runResourcesDir = () =>
+  runResourcesDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'run-resources');
 
 // Ids and conversation ids become file/directory names, so they must pass the
 // same gate as storage collection ids — anything else could escape the store
@@ -53,10 +60,45 @@ function assertSafeId(id: string, what: string): void {
   }
 }
 
-const conversationDir = (conversationId: string) => path.join(runResourcesDir, conversationId);
+const conversationDir = (conversationId: string) => path.join(runResourcesDir(), conversationId);
 const indexPath = (conversationId: string) => path.join(conversationDir(conversationId), 'index.json');
 const payloadPath = (conversationId: string, id: string) => path.join(conversationDir(conversationId), `${id}.dat`);
+
+// The canonical store stays extension-agnostic, while host tools receive a
+// lazily-created hard-link with a useful extension. This preserves the opaque,
+// metadata-driven store without leaking `.dat` paths into FFmpeg, image tools,
+// upload clients, or other extension-sensitive integrations.
+const LOCAL_EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
+  'audio/mpeg': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/ogg': '.ogg',
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'application/pdf': '.pdf',
+  'application/zip': '.zip',
+  'application/json': '.json',
+  'text/plain': '.txt',
+  'text/markdown': '.md',
+  'text/csv': '.csv',
+};
+
+function materializedPayloadPath(entry: Pick<RunResourceEntry, 'conversationId' | 'id' | 'mimeType'>): string | null {
+  const mimeType = entry.mimeType?.split(';', 1)[0].trim().toLowerCase();
+  const extension = mimeType ? LOCAL_EXTENSION_BY_MIME[mimeType] : undefined;
+  return extension ? path.join(conversationDir(entry.conversationId), `${entry.id}${extension}`) : null;
+}
+
 const chainKey = (conversationId: string) => `run-resources/${conversationId}`;
+// Conversation ids are unique only within a workspace, so the process-wide index
+// cache must be namespaced by workspace (#406).
+const cacheKey = (conversationId: string) => workspaceCacheKey('run-resources', conversationId);
 
 export function buildRunResourceUri(conversationId: string, id: string): string {
   return `${RUN_RESOURCE_SCHEME}${conversationId}/${id}`;
@@ -78,12 +120,14 @@ export function parseRunResourceUri(uri: string): { conversationId: string; id: 
 
 // --- Settings ---------------------------------------------------------------
 
-let settingsCache: { value: RunResourceSettings; at: number } | null = null;
+const settingsCache = new Map<string, { value: RunResourceSettings; at: number }>();
 const SETTINGS_TTL_MS = 30_000;
 
 export async function getRunResourceSettings(): Promise<RunResourceSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL_MS) {
-    return settingsCache.value;
+  const settingsKey = workspaceCacheKey('run-resource-settings');
+  const cachedSettings = settingsCache.get(settingsKey);
+  if (cachedSettings && Date.now() - cachedSettings.at < SETTINGS_TTL_MS) {
+    return cachedSettings.value;
   }
   let value: RunResourceSettings;
   try {
@@ -97,13 +141,13 @@ export async function getRunResourceSettings(): Promise<RunResourceSettings> {
     log.warn('Failed to load run-resource settings; using defaults', error);
     value = DEFAULT_RUN_RESOURCE_SETTINGS;
   }
-  settingsCache = { value, at: Date.now() };
+  settingsCache.set(settingsKey, { value, at: Date.now() });
   return value;
 }
 
 /** Test seam: drop the settings cache. */
 export function _clearRunResourceSettingsCache(): void {
-  settingsCache = null;
+  settingsCache.clear();
 }
 
 // --- Index cache -------------------------------------------------------------
@@ -112,14 +156,13 @@ export function _clearRunResourceSettingsCache(): void {
 // than once (route bundles, hot reload) and all instances must share the cache.
 // Disk is the cold-start source of truth.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_run_resources: Map<string, RunResourceEntry[]> | undefined;
 }
 const indexCache: Map<string, RunResourceEntry[]> =
   global.__flujo_run_resources ?? (global.__flujo_run_resources = new Map());
 
 async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
-  const cached = indexCache.get(conversationId);
+  const cached = indexCache.get(cacheKey(conversationId));
   if (cached) return cached;
   let entries: RunResourceEntry[] = [];
   try {
@@ -133,7 +176,7 @@ async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
       log.error(`Failed to read run-resource index for ${conversationId}; treating as empty`, error);
     }
   }
-  indexCache.set(conversationId, entries);
+  indexCache.set(cacheKey(conversationId), entries);
   return entries;
 }
 
@@ -155,7 +198,7 @@ async function mutateIndex<T>(
     const entries = await loadIndex(conversationId);
     const { next, result } = await mutator(entries);
     if (next !== entries) {
-      indexCache.set(conversationId, next);
+      indexCache.set(cacheKey(conversationId), next);
       await writeFileAtomic(indexPath(conversationId), JSON.stringify(next, null, 2));
     }
     return result;
@@ -173,9 +216,20 @@ export type WriteRunResourceInput = {
   data?: { text: string } | { base64: string };
   producedBy: RunResourceProducer;
   origin?: { server: string; uri: string };
+  archive?: VisualArchiveResourceMetadata;
 };
 
 export type WriteRunResourceResult = RunResourceEntry | { skipped: 'size-cap' | 'conversation-cap' };
+
+export type CopyRunResourceInput = {
+  /** Existing flujo://run/... resource to copy. */
+  uri: string;
+  /** Conversation that will own the durable copy. */
+  conversationId: string;
+  /** Optional stable destination name. Omitted for ordinary generated media. */
+  name?: string;
+  producedBy: RunResourceProducer;
+};
 
 export async function writeRunResource(input: WriteRunResourceInput): Promise<WriteRunResourceResult> {
   assertSafeId(input.conversationId, 'conversationId');
@@ -230,12 +284,15 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       name: input.name,
       mimeType: input.mimeType,
       size,
+      sha256: payload ? createHash('sha256').update(payload).digest('hex') : undefined,
       kind: input.kind,
       encoding,
       createdAt: Date.now(),
       producedBy: input.producedBy,
       origin: input.origin,
+      archive: input.archive,
       readBy: [],
+      verifications: [],
     };
 
     if (payload) {
@@ -252,7 +309,15 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
 
   if (replacedToUnlink) {
     // Best-effort: the replaced payload is already unreferenced by the index.
-    fs.unlink(payloadPath(input.conversationId, replacedToUnlink.id)).catch(() => { /* may not exist */ });
+    const replaced = replacedToUnlink;
+    await withWorkspaceMutation(async () => {
+      await fs.unlink(payloadPath(input.conversationId, replaced.id))
+        .catch(() => { /* may not exist */ });
+      const materialized = materializedPayloadPath(replaced);
+      if (materialized) {
+        await fs.unlink(materialized).catch(() => { /* may not exist */ });
+      }
+    });
   }
 
   return result;
@@ -268,10 +333,10 @@ export async function listRunResources(conversationId: string): Promise<RunResou
  * server's resources/list. Reads directories on disk (not just cache) so a
  * fresh process still lists resources from earlier runs.
  */
-export async function listAllRunResources(limit = 200): Promise<RunResourceEntry[]> {
+export async function listAllRunResources(limit = 200, offset = 0): Promise<RunResourceEntry[]> {
   let conversationIds: string[] = [];
   try {
-    const dirents = await fs.readdir(runResourcesDir, { withFileTypes: true });
+    const dirents = await fs.readdir(runResourcesDir(), { withFileTypes: true });
     conversationIds = dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name)).map(d => d.name);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -282,7 +347,7 @@ export async function listAllRunResources(limit = 200): Promise<RunResourceEntry
     all.push(...await loadIndex(conversationId));
   }
   all.sort((a, b) => b.createdAt - a.createdAt);
-  return all.slice(0, limit);
+  return all.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit));
 }
 
 export async function findRunResourceByName(
@@ -354,10 +419,224 @@ export async function readRunResource(
   return { entry, contents };
 }
 
+/**
+ * Read one byte range without materializing the complete payload. This powers
+ * the browser's paged result viewer; range size controls I/O granularity only
+ * and never changes the canonical resource.
+ */
+export async function readRunResourceRange(
+  uri: string,
+  start: number,
+  endInclusive: number,
+  access?: RunResourceAccess,
+): Promise<{
+  entry: RunResourceEntry;
+  data: Buffer;
+  start: number;
+  end: number;
+  total: number;
+} | null> {
+  const parsed = parseRunResourceUri(uri);
+  if (!parsed) return null;
+  const entries = await loadIndex(parsed.conversationId);
+  const entry = entries.find((candidate) => candidate.id === parsed.id);
+  if (!entry || entry.kind === 'link') return null;
+
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(payloadPath(parsed.conversationId, parsed.id), 'r');
+    const stat = await handle.stat();
+    const total = stat.size;
+    const safeStart = Math.max(0, Math.floor(start));
+    if (safeStart >= total) {
+      return { entry, data: Buffer.alloc(0), start: safeStart, end: safeStart - 1, total };
+    }
+    const safeEnd = Math.min(total - 1, Math.max(safeStart, Math.floor(endInclusive)));
+    const data = Buffer.allocUnsafe(safeEnd - safeStart + 1);
+    const { bytesRead } = await handle.read(data, 0, data.byteLength, safeStart);
+
+    if (access) {
+      try {
+        await mutateIndex<void>(parsed.conversationId, async (current) => {
+          const target = current.find((candidate) => candidate.id === parsed.id);
+          if (!target) return { next: current, result: undefined };
+          const updated: RunResourceEntry = {
+            ...target,
+            readBy: [...target.readBy, access],
+          };
+          return {
+            next: current.map((candidate) => candidate === target ? updated : candidate),
+            result: undefined,
+          };
+        });
+      } catch (error) {
+        log.warn(`Failed to persist ranged readBy for ${uri}`, error);
+      }
+    }
+
+    return {
+      entry,
+      data: bytesRead === data.byteLength ? data : data.subarray(0, bytesRead),
+      start: safeStart,
+      end: safeStart + bytesRead - 1,
+      total,
+    };
+  } catch (error) {
+    log.error(`Run-resource range read failed for ${uri}`, error);
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Copy a run resource into another conversation's resource scope.
+ *
+ * Subflows persist generated media under the child conversation. Downstream
+ * parent steps may only use resources owned by the parent run, so returning the
+ * child URI directly creates a visible attachment that `read_resource` quite
+ * correctly refuses. This promotion helper preserves the bytes and MIME/kind
+ * metadata while issuing a new parent-owned URI. It deliberately goes through
+ * the normal read/write APIs so size and conversation caps remain authoritative.
+ */
+export async function copyRunResourceToConversation(
+  input: CopyRunResourceInput,
+): Promise<WriteRunResourceResult | null> {
+  assertSafeId(input.conversationId, 'conversationId');
+  const source = await readRunResource(input.uri);
+  if (!source) return null;
+  if (source.entry.conversationId === input.conversationId) return source.entry;
+
+  const content = source.contents.contents[0] as { text?: unknown; blob?: unknown } | undefined;
+  let data: WriteRunResourceInput['data'];
+  if (source.entry.kind !== 'link') {
+    if (typeof content?.text === 'string') {
+      data = { text: content.text };
+    } else if (typeof content?.blob === 'string') {
+      data = { base64: content.blob };
+    } else {
+      log.warn(`Run-resource copy has no readable payload: ${input.uri}`);
+      return null;
+    }
+  }
+
+  return writeRunResource({
+    conversationId: input.conversationId,
+    name: input.name,
+    mimeType: source.entry.mimeType,
+    kind: source.entry.kind,
+    data,
+    producedBy: input.producedBy,
+    origin: source.entry.kind === 'link'
+      ? source.entry.origin
+      : { server: 'flujo', uri: source.entry.uri },
+    archive: source.entry.archive,
+  });
+}
+
+/**
+ * Resolve a stored run resource to its validated, host-local payload path.
+ * Returns null for links, missing resources/payloads, and malformed URIs.
+ * Callers must still enforce conversation ownership before exposing this path.
+ */
+export async function getRunResourceLocalPath(uri: string): Promise<string | null> {
+  const parsed = parseRunResourceUri(uri);
+  if (!parsed) return null;
+  const entries = await loadIndex(parsed.conversationId);
+  const entry = entries.find(candidate => candidate.id === parsed.id);
+  if (!entry || entry.kind === 'link' || entry.size <= 0) return null;
+  const canonicalPath = path.resolve(payloadPath(parsed.conversationId, parsed.id));
+  try {
+    await fs.access(canonicalPath);
+  } catch {
+    return null;
+  }
+
+  const materialized = materializedPayloadPath(entry);
+  if (!materialized) return canonicalPath;
+  const localPath = path.resolve(materialized);
+  try {
+    await withWorkspaceMutation(() => fs.link(canonicalPath, localPath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      log.warn(`Could not materialize extension-aware path for ${uri}; using canonical payload`, error);
+      return canonicalPath;
+    }
+  }
+  try {
+    await fs.access(localPath);
+    return localPath;
+  } catch {
+    return canonicalPath;
+  }
+}
+
+/**
+ * Bounded exact-source fetch used by visual archives. It returns at most
+ * `maxChars` of text, verifies the immutable payload hash when requested, and
+ * records both the read and verification in the resource lineage.
+ */
+export async function readRunResourceBounded(
+  uri: string,
+  options: { maxChars?: number; expectedSha256?: string; access: RunResourceAccess },
+): Promise<{
+  entry: RunResourceEntry;
+  content: string;
+  truncated: boolean;
+  verification?: { expectedSha256: string; actualSha256: string; ok: boolean };
+} | null> {
+  const parsed = parseRunResourceUri(uri);
+  if (!parsed) return null;
+  const entries = await loadIndex(parsed.conversationId);
+  const entry = entries.find((candidate) => candidate.id === parsed.id);
+  if (!entry || entry.kind === 'link') return null;
+  let payload: Buffer;
+  try {
+    payload = await fs.readFile(payloadPath(parsed.conversationId, parsed.id));
+  } catch (error) {
+    log.error(`Run-resource payload missing for ${uri}`, error);
+    return null;
+  }
+  const actualSha256 = createHash('sha256').update(payload).digest('hex');
+  const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
+  const verification = expectedSha256
+    ? { expectedSha256, actualSha256, ok: expectedSha256 === actualSha256 }
+    : undefined;
+  const maxChars = Math.max(1, Math.min(200_000, Math.floor(options.maxChars ?? 50_000)));
+  const raw = entry.encoding === 'utf8'
+    ? payload.toString('utf8')
+    : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`;
+  const content = raw.slice(0, maxChars);
+  try {
+    await mutateIndex<void>(parsed.conversationId, async (current) => {
+      const target = current.find((candidate) => candidate.id === parsed.id);
+      if (!target) return { next: current, result: undefined };
+      const updated: RunResourceEntry = {
+        ...target,
+        readBy: [...target.readBy, options.access],
+        verifications: verification
+          ? [...(target.verifications ?? []), {
+              at: options.access.at,
+              expectedSha256: verification.expectedSha256,
+              actualSha256: verification.actualSha256,
+              ok: verification.ok,
+              source: options.access.source,
+              nodeId: options.access.nodeId,
+            }]
+          : target.verifications,
+      };
+      return { next: current.map((candidate) => candidate === target ? updated : candidate), result: undefined };
+    });
+  } catch (error) {
+    log.warn(`Failed to persist bounded read lineage for ${uri}`, error);
+  }
+  return { entry, content, truncated: raw.length > content.length, verification };
+}
+
 /** Remove a conversation's resources (called from conversation DELETE). */
 export async function deleteRunResources(conversationId: string): Promise<void> {
   assertSafeId(conversationId, 'conversationId');
-  indexCache.delete(conversationId);
+  indexCache.delete(cacheKey(conversationId));
   await runInWriteChain(chainKey(conversationId), async () => {
     try {
       await fs.rm(conversationDir(conversationId), { recursive: true, force: true });
@@ -368,10 +647,67 @@ export async function deleteRunResources(conversationId: string): Promise<void> 
   });
 }
 
+/**
+ * Retention sweep (issue #251): delete spilled run resources whose `createdAt`
+ * is older than `retentionAgeDays` days across ALL conversations. Runs on an
+ * hourly background cron (armed in init.ts). Returns the number removed.
+ *
+ * `retentionAgeDays <= 0` disables the sweep (a no-op). Each conversation's
+ * index is rewritten through the same per-conversation write chain as every
+ * other mutation, so a concurrent write can never be clobbered; payload files
+ * are unlinked best-effort after the index no longer references them.
+ */
+export async function sweepOldRunResources(now: number = Date.now()): Promise<{ removed: number }> {
+  const settings = await getRunResourceSettings();
+  const ageDays = settings.retentionAgeDays ?? 0;
+  if (!ageDays || ageDays <= 0) return { removed: 0 };
+  const cutoff = now - ageDays * 86_400_000;
+
+  let conversationIds: string[] = [];
+  try {
+    const dirents = await fs.readdir(runResourcesDir(), { withFileTypes: true });
+    conversationIds = dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name)).map(d => d.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { removed: 0 };
+    throw error;
+  }
+
+  let removed = 0;
+  for (const conversationId of conversationIds) {
+    const toUnlink: RunResourceEntry[] = [];
+    await mutateIndex<void>(conversationId, async (entries) => {
+      const keep = entries.filter((e) => {
+        const expired = e.createdAt < cutoff;
+        if (expired) toUnlink.push(e);
+        return !expired;
+      });
+      // No-op (same reference) when nothing expired — skips the index rewrite.
+      return keep.length === entries.length
+        ? { next: entries, result: undefined }
+        : { next: keep, result: undefined };
+    });
+    await withWorkspaceMutation(async () => {
+      for (const e of toUnlink) {
+        if (e.size > 0) {
+          await fs.unlink(payloadPath(conversationId, e.id)).catch(() => { /* may not exist */ });
+          const materialized = materializedPayloadPath(e);
+          if (materialized) await fs.unlink(materialized).catch(() => { /* may not exist */ });
+        }
+        removed++;
+      }
+    });
+  }
+
+  if (removed > 0) {
+    log.debug(`Retention sweep removed ${removed} run resource(s) older than ${ageDays}d`);
+  }
+  return { removed };
+}
+
 /** Test seam: point the store at a temp directory. Returns the previous dir. */
 export function _setRunResourcesDirForTests(dir: string): string {
-  const previous = runResourcesDir;
-  runResourcesDir = dir;
+  const previous = runResourcesDir();
+  runResourcesDirOverride = dir;
   indexCache.clear();
   return previous;
 }

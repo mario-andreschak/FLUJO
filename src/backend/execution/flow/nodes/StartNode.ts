@@ -9,7 +9,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessa
 // Create a logger instance for this file
 const log = createLogger('execution/nodes/StartNode.ts');
 
-export class StartNode extends BaseNode {
+export class StartNode extends BaseNode<StartNodeParams, SharedState, StartNodePrepResult, StartNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: StartNodeParams): Promise<StartNodePrepResult> {
     log.info('prep() started');
 

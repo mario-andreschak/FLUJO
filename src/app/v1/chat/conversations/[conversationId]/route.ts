@@ -1,86 +1,82 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import {
-  readConversationLog,
-  projectMessages,
-  flushConversationLog,
   deleteConversationLog,
-  repairTruncatedConversationLog,
+  recoverConversationTranscript,
 } from '@/backend/execution/flow/conversationLog';
 import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
 import { StorageKey } from '@/shared/types/storage';
 import { ConversationListItem } from '@/frontend/components/Chat'; // Import for response type
-import { flowService } from '@/backend/services/flow';
-import { modelService } from '@/backend/services/model';
-import { quickChatFlowId } from '@/utils/shared/quickChat';
+import { buildContextInfo } from '@/backend/execution/flow/conversationContextInfo';
+import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteRunResources } from '@/backend/services/runResources';
+import { deleteModelTurnArchive } from '@/backend/execution/flow/modelTurnArchive';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { deleteCollectionItem } from '@/utils/storage/backend';
+import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
+import { deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
+import {
+  deleteConversationSummary,
+  persistConversationSummary,
+  persistConversationSummaryStrict,
+} from '@/backend/execution/flow/conversationSummaryStore';
+import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
+import {
+  getPersona,
+  getPersonaDeletionTombstone,
+  listPersonaActivities,
+} from '@/backend/services/enduringAgents';
+import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
+const TERMINAL_PERSONA_ACTIVITY_STATUSES = new Set(['completed', 'cancelled', 'error']);
+
 /**
- * Context-usage snapshot for the conversation's most recent model call.
- *
- * `promptTokens` is the PROVIDER-REPORTED prompt size of the last assistant
- * turn that carried usage — the exact size of what that node's model last
- * received, no tokenizer approximation needed. `contextWindow` comes from the
- * node's bound model config (optional metadata); the frontend renders a meter
- * when both are present. Advisory: any resolution failure just omits fields.
+ * Persona conversations remain lifecycle-owned while work can still mutate
+ * them. A strict-loopback user may remove a never-started draft or a
+ * conversation whose every matching Activity is terminal; active work and
+ * anonymized retention archives remain protected.
  */
-async function buildContextInfo(sharedState: SharedState): Promise<
-  | {
-      promptTokens: number;
-      completionTokens?: number;
-      nodeId?: string;
-      modelDisplayName?: string;
-      contextWindow?: number;
-    }
-  | undefined
-> {
-  try {
-    const messages = sharedState.messages || [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role !== 'assistant' || !msg.usage) continue;
-
-      const info: {
-        promptTokens: number;
-        completionTokens?: number;
-        nodeId?: string;
-        modelDisplayName?: string;
-        contextWindow?: number;
-      } = {
-        promptTokens: msg.usage.promptTokens,
-        completionTokens: msg.usage.completionTokens,
-        nodeId: msg.processNodeId,
-      };
-
-      if (msg.processNodeId && sharedState.flowId) {
-        const flow = await flowService.getFlow(sharedState.flowId);
-        const node = (flow as any)?.nodes?.find((n: any) => n.id === msg.processNodeId);
-        const boundModelId = node?.data?.properties?.boundModel;
-        if (boundModelId) {
-          const model = await modelService.getModel(boundModelId);
-          if (model) {
-            info.modelDisplayName = model.displayName || model.name;
-            info.contextWindow = model.contextWindow;
-          }
-        }
-      }
-      return info;
-    }
-  } catch (error) {
-    log.warn('buildContextInfo failed; omitting context info', { error });
+async function personaConversationDeleteConflict(
+  state: SharedState,
+  conversationId: string,
+): Promise<string | null> {
+  if (state.personaArchived) {
+    return 'An anonymized Persona archive is retained by lifecycle policy and cannot be deleted from Chat.';
   }
-  return undefined;
+
+  const personaId = state.personaAttribution?.personaId
+    ?? state.personaInstructionContext?.personaId
+    ?? state.personaTargetId;
+  if (typeof personaId !== 'string' || !personaId) {
+    return 'Persona conversation ownership is incomplete, so deletion could not be authorized.';
+  }
+
+  const activityId = state.personaAttribution?.activityId
+    ?? state.personaInstructionContext?.activityId;
+  const activities = (await listPersonaActivities(personaId))
+    .filter((activity) => activity.conversationId === conversationId);
+  if (
+    typeof activityId === 'string'
+    && !activities.some((activity) => activity.id === activityId)
+  ) {
+    return 'The owning Persona Activity could not be verified, so nothing was deleted.';
+  }
+  if (activities.some((activity) => !TERMINAL_PERSONA_ACTIVITY_STATUSES.has(activity.status))) {
+    return 'This Persona conversation is still queued, running, or waiting. Stop it before deleting it.';
+  }
+  return null;
 }
 
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> } // Reverted to using params destructuring
 ) {
@@ -93,6 +89,11 @@ export async function GET(
   const awaitedParams = await params; // Await the params object
   const conversationId = awaitedParams.conversationId; // Access conversationId from awaited params
   const requestId = `conv-get-${Date.now()}`;
+  const rawMessageLimit = request.nextUrl.searchParams.get('messageLimit');
+  const parsedMessageLimit = rawMessageLimit === null ? undefined : Number.parseInt(rawMessageLimit, 10);
+  const messageLimit = parsedMessageLimit !== undefined && Number.isFinite(parsedMessageLimit)
+    ? Math.max(1, Math.min(500, parsedMessageLimit))
+    : undefined;
   log.info('Handling GET request for conversation state', { requestId, conversationId });
 
   if (!conversationId) { // Check using the variable
@@ -116,9 +117,12 @@ export async function GET(
       // Use variable
       const storageKey = `conversations/${conversationId}` as StorageKey;
       try {
-        sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+        sharedState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
         if (sharedState) {
           stateSource = 'storage';
+          if (!isPersonaOwnedConversationState(sharedState)) {
+            await reconcileInterruptedRecovery(storageKey, sharedState);
+          }
           log.debug(`Found conversation state in storage`, { requestId, conversationId });
           // Optional: Add to in-memory map if loaded from storage?
           // FlowExecutor.conversationStates.set(conversationId, sharedState);
@@ -133,6 +137,10 @@ export async function GET(
 
     // 3. Handle based on whether state was found
     if (sharedState) {
+      if (isPersonaOwnedConversationState(sharedState)) {
+        const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+        if (notLoopback) return notLoopback;
+      }
       // --- Resolve the displayed messages ---
       // Preferred source: the append-only conversation log's projection
       // (execution-core v2 Phase 3) — it carries attribution/depth (nested
@@ -140,32 +148,29 @@ export async function GET(
       // from before the log existed (or whose log is missing) fall back to the
       // legacy SharedState messages. System-role messages are model plumbing
       // and are excluded from the displayed transcript on BOTH paths.
-      let displayedMessages: SharedState['messages'];
-      await flushConversationLog(conversationId);
-      // Self-heal conversations whose log lost events (issue #49): when a
-      // planned run's bus events were dropped by the (formerly per-instance)
-      // log tap, the `.jsonl` holds only the turn-start reconcile line while
-      // the `.json` snapshot is complete. Rebuild the log from the snapshot and
-      // display it. Returns undefined when there is nothing to repair (the
-      // common case), leaving the normal projection path below untouched.
-      const repaired = await repairTruncatedConversationLog(sharedState);
-      if (repaired) {
-        displayedMessages = repaired;
-      } else {
-        const logEvents = await readConversationLog(conversationId);
-        const projected = logEvents ? projectMessages(logEvents) : [];
-        if (projected.length > 0) {
-          displayedMessages = projected;
-        } else {
-          displayedMessages = (sharedState.messages || [])
-            .filter(msg => msg.role !== 'system')
-            .map(msg => ({
-              ...msg,
-              id: msg.id || crypto.randomUUID() // Add ID if missing (legacy data)
-            }));
-        }
-      }
-      const messagesWithIds = displayedMessages;
+      // Always resolve the durable Chat projection, including for the bounded
+      // initial hydration request. SharedState is intentionally only the active
+      // model-context view; using it here caused context tombstones to hide
+      // recoverable JSONL history after a crash or pruned on-wire dispatch.
+      const recoveredTranscript = await recoverConversationTranscript(sharedState);
+      const canonicalMessages = recoveredTranscript.messages;
+      const displayedMessages: SharedState['messages'] = messageLimit === undefined
+        ? canonicalMessages
+        : canonicalMessages.slice(-messageLimit);
+      const transcriptWindow: {
+        truncated: boolean;
+        loadedCount: number;
+        totalCount: number;
+        source: 'snapshot' | 'durable-log';
+      } = {
+        truncated: canonicalMessages.length > displayedMessages.length,
+        loadedCount: displayedMessages.length,
+        totalCount: canonicalMessages.length,
+        source: recoveredTranscript.source,
+      };
+      const messagesWithIds = request.nextUrl.searchParams.get('compactToolPayloads') === '1'
+        ? await projectLazyToolPayloads(displayedMessages, conversationId)
+        : displayedMessages;
 
       // Use variable for logging
       log.info(`Returning conversation state`, { requestId, conversationId, stateSource, messageCount: messagesWithIds.length, status: sharedState.status });
@@ -176,11 +181,30 @@ export async function GET(
         id: sharedState.conversationId || conversationId, // Prefer state ID, fallback to param
         title: sharedState.title || 'Untitled Conversation',
         messages: messagesWithIds, // Use messages with guaranteed IDs
+        transcriptWindow,
         flowId: sharedState.flowId || null, // Ensure flowId is included
+        ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId)
+          ? { personaId: sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId }
+          : {}),
+        ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId) && sharedState.personaBehaviorSlotKey
+          ? { personaBehaviorSlotKey: sharedState.personaBehaviorSlotKey }
+          : {}),
+        ...(sharedState.personaAttribution?.activityId
+          ? { activityId: sharedState.personaAttribution.activityId }
+          : {}),
+        ...(sharedState.personaAttribution?.behaviorRevisionId
+          ? { behaviorRevisionId: sharedState.personaAttribution.behaviorRevisionId }
+          : {}),
+        ...(sharedState.personaArchived ? { personaArchived: true as const } : {}),
         requireApproval: sharedState.requireApproval ?? false, // Per-conversation tool-approval setting
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
         status: sharedState.status,
+        // Additive recovery metadata: precise cancellation/interruption/failure
+        // classification, latest safe checkpoint, lane identity, and warnings.
+        recovery: sharedState.recovery,
+        parentConversationId: sharedState.parentConversationId ?? null,
+        rootConversationId: sharedState.rootConversationId ?? null,
         // Where execution currently sits — powers the chat input's node pill
         // (the manual node picker). May reference a node of a previously
         // selected flow after a flow switch; the frontend validates it.
@@ -190,6 +214,19 @@ export async function GET(
         // chat header's token counter and context meter.
         usage: sharedState.usage,
         contextInfo: await buildContextInfo(sharedState),
+        // MCP App context is host-managed conversation state. Returning the
+        // latest per-View map lets the chat hydrate it when a conversation is
+        // revisited instead of accidentally replacing persisted context with
+        // an empty map on navigation.
+        mcpAppContexts: sharedState.mcpAppContexts,
+        // Issue #383 (gap 2): the full normalized error, so the message + code
+        // survive a reload or picking an older errored conversation from the
+        // sidebar. `lastError` is populated for every run started after this
+        // change; `deriveLastErrorFromLastResponse` is a read-time fallback for
+        // conversations persisted before it existed — no migration needed.
+        ...(sharedState.status === 'error'
+          ? { lastError: sharedState.lastError ?? deriveLastErrorFromLastResponse(sharedState.lastResponse) }
+          : {}),
       };
 
       // Return the full conversation data
@@ -212,7 +249,7 @@ export async function GET(
 }
 
 // PATCH handler to update conversation properties (e.g., flowId)
-export async function PATCH(
+async function PATCH_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -250,6 +287,17 @@ export async function PATCH(
     }
     allowedUpdates.flowId = updateData.flowId;
   }
+  if ('personaTargetId' in updateData) {
+    const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+    if (personaNotLocal) return personaNotLocal;
+    if (
+      typeof updateData.personaTargetId !== 'string'
+      || !EnduringAgentIdSchema.safeParse(updateData.personaTargetId).success
+    ) {
+      return NextResponse.json({ error: 'Invalid personaTargetId in request body' }, { status: 400 });
+    }
+    allowedUpdates.personaTargetId = updateData.personaTargetId;
+  }
   if ('requireApproval' in updateData) {
     if (typeof updateData.requireApproval !== 'boolean') {
       log.warn('Invalid requireApproval in PATCH request body', { requestId, conversationId });
@@ -273,19 +321,77 @@ export async function PATCH(
   }
   if (Object.keys(allowedUpdates).length === 0) {
     log.warn('No updatable fields in PATCH request body', { requestId, conversationId, updateData: JSON.stringify(updateData) });
-    return NextResponse.json({ error: 'No updatable fields provided (flowId, requireApproval, title)' }, { status: 400 });
+    return NextResponse.json({ error: 'No updatable fields provided (flowId, personaTargetId, requireApproval, title)' }, { status: 400 });
   }
 
 
   const storageKey = `conversations/${conversationId}` as StorageKey;
 
-  try {
+  return withConversationExecutionLock(conversationId, async () => {
+    try {
     // 1. Load existing state from storage
-    const existingState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+    const existingState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
 
     if (!existingState) {
       log.warn(`Conversation state not found for PATCH`, { requestId, conversationId });
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+    if (isPersonaOwnedConversationState(existingState)) {
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (personaNotLocal) return personaNotLocal;
+    }
+    if (existingState.personaArchived) {
+      if (Object.keys(allowedUpdates).some((key) => key !== 'title')) {
+        return NextResponse.json(
+          { error: 'An anonymized Persona archive is read-only except for its title.' },
+          { status: 409 },
+        );
+      }
+    }
+    if (existingState.personaAttribution || existingState.personaInstructionContext) {
+      return NextResponse.json(
+        { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+        { status: 409 },
+      );
+    }
+    if (existingState.personaTargetId) {
+      if (
+        'flowId' in allowedUpdates
+        || ('personaTargetId' in allowedUpdates
+          && allowedUpdates.personaTargetId !== existingState.personaTargetId)
+      ) {
+        return NextResponse.json(
+          { error: 'A Persona-targeted conversation cannot switch execution target.' },
+          { status: 409 },
+        );
+      }
+    } else if (allowedUpdates.personaTargetId) {
+      if ((existingState.messages?.length ?? 0) > 0 || isQuickChatFlowId(existingState.flowId)) {
+        return NextResponse.json(
+          { error: 'Only a fresh Flow conversation can be targeted to a Persona.' },
+          { status: 409 },
+        );
+      }
+      if (await getPersonaDeletionTombstone(allowedUpdates.personaTargetId)) {
+        return NextResponse.json(
+          { error: 'Persona is being deleted or has been deleted.' },
+          { status: 409 },
+        );
+      }
+      const persona = await getPersona(allowedUpdates.personaTargetId);
+      if (!persona) {
+        return NextResponse.json({ error: 'Persona not found.' }, { status: 404 });
+      }
+      if (
+        persona.provisioningState === 'pending'
+        || persona.lifecycleState === 'disabled'
+        || persona.lifecycleState === 'error'
+      ) {
+        return NextResponse.json({ error: 'Persona is not available for chat.' }, { status: 409 });
+      }
+      // Empty string is the SharedState representation of no Flow authority.
+      // The dispatcher replaces it with the resolved immutable Behavior Flow.
+      allowedUpdates.flowId = '';
     }
 
     // 2. Update the state. Settings-only changes (e.g. toggling requireApproval,
@@ -304,6 +410,25 @@ export async function PATCH(
 
     // 3. Save updated state back to storage
     await saveItem(storageKey, updatedState);
+    await persistConversationSummary(conversationId, updatedState);
+    let targetDeletedAfterSave = false;
+    if (allowedUpdates.personaTargetId && !existingState.personaTargetId) {
+      try {
+        targetDeletedAfterSave = Boolean(
+          await getPersonaDeletionTombstone(allowedUpdates.personaTargetId),
+        );
+      } catch {
+        targetDeletedAfterSave = true;
+      }
+    }
+    if (targetDeletedAfterSave) {
+      await saveItem(storageKey, existingState);
+      await persistConversationSummaryStrict(conversationId, existingState);
+      return NextResponse.json(
+        { error: 'Persona is being deleted or has been deleted.' },
+        { status: 409 },
+      );
+    }
     log.info(`Successfully updated and saved conversation state`, { requestId, conversationId, updatedFields: Object.keys(allowedUpdates) });
 
     // 4. Update in-memory state if it exists
@@ -320,30 +445,41 @@ export async function PATCH(
     const updatedSummary: ConversationListItem = {
       id: conversationId, // Use the conversationId from params
       title: updatedState.title,
-      flowId: updatedState.flowId,
+      flowId: updatedState.flowId || null,
       createdAt: updatedState.createdAt,
       updatedAt: updatedState.updatedAt,
       // Pass the status through as-is. A never-run conversation has status
       // undefined; defaulting it to 'completed' here made the frontend show a
       // "Conversation completed" badge as soon as a flow was selected.
       status: updatedState.status,
+      ...((updatedState.personaAttribution?.personaId ?? updatedState.personaTargetId)
+        ? { personaId: updatedState.personaAttribution?.personaId ?? updatedState.personaTargetId }
+        : {}),
+      ...(updatedState.personaAttribution?.activityId
+        ? { activityId: updatedState.personaAttribution.activityId }
+        : {}),
+      ...(updatedState.personaAttribution?.behaviorRevisionId
+        ? { behaviorRevisionId: updatedState.personaAttribution.behaviorRevisionId }
+        : {}),
+      ...(updatedState.personaArchived ? { personaArchived: true as const } : {}),
     };
     return NextResponse.json(updatedSummary, { status: 200 });
 
-  } catch (error) {
-    log.error('Error updating conversation state', {
-      requestId,
-      conversationId,
-      storageKey,
-      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error
-    });
-    return NextResponse.json({ error: 'Internal server error during update' }, { status: 500 });
-  }
+    } catch (error) {
+      log.error('Error updating conversation state', {
+        requestId,
+        conversationId,
+        storageKey,
+        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error
+      });
+      return NextResponse.json({ error: 'Internal server error during update' }, { status: 500 });
+    }
+  });
 }
 
 
 // DELETE handler to remove conversation state
-export async function DELETE(
+async function DELETE_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -369,12 +505,40 @@ export async function DELETE(
     return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 });
   }
 
-  try {
+  // A running legacy execution already holds the conversation lease. Preserve
+  // tombstone-first cancellation so DELETE does not wait for an unbounded run
+  // before it can request shutdown; ownership is still re-read authoritatively
+  // after the lease is acquired and no destructive write happens before then.
+  const preLockLiveState = FlowExecutor.conversationStates.get(conversationId);
+  let tombstonedBeforeLock = false;
+  if (
+    preLockLiveState?.status === 'running'
+    && !isPersonaOwnedConversationState(preLockLiveState)
+  ) {
+    markConversationDeleted(conversationId);
+    tombstonedBeforeLock = true;
+    preLockLiveState.isCancelled = true;
+  }
+
+  return withConversationExecutionLock(conversationId, async () => {
+    try {
+    const existingState = FlowExecutor.conversationStates.get(conversationId)
+      ?? await loadItemBackend<SharedState | undefined>(
+        `conversations/${conversationId}` as StorageKey,
+        undefined,
+      );
+    if (existingState && isPersonaOwnedConversationState(existingState)) {
+      if (tombstonedBeforeLock) unmarkConversationDeleted(conversationId);
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (personaNotLocal) return personaNotLocal;
+      const conflict = await personaConversationDeleteConflict(existingState, conversationId);
+      if (conflict) return NextResponse.json({ error: conflict }, { status: 409 });
+    }
     // Tombstone FIRST: from here on, the persistence chokepoint and the
     // conversation-log tap refuse this id, so an in-flight run can no longer
     // re-write ("resurrect") the files we are about to remove. Rolled back in
     // the catch below if the delete fails.
-    markConversationDeleted(conversationId);
+    if (!tombstonedBeforeLock) markConversationDeleted(conversationId);
 
     // Stop any in-flight run and clean up the in-memory state. The running
     // loop holds a closure reference to this same state object, so setting the
@@ -396,6 +560,7 @@ export async function DELETE(
     // per-key write chain serializes the unlink behind any in-flight persist of
     // the same conversation. A missing file is treated as already deleted.
     await deleteCollectionItem('conversations', conversationId);
+    await deleteConversationSummary(conversationId);
     log.info(`Deleted conversation state from storage`, { requestId, conversationId });
 
     // A Quick-Chat (issue #61) carried its flow as an in-memory snapshot compiled
@@ -407,20 +572,28 @@ export async function DELETE(
     // Remove the append-only conversation log alongside the state (idempotent).
     await deleteConversationLog(conversationId);
 
+    // Remove exact historical SDK-request sidecars and their archived media.
+    await deleteModelTurnArchive(conversationId);
+
     // Remove the conversation's run-scoped resources (Tier 3; idempotent).
     await deleteRunResources(conversationId);
 
     return new Response(null, { status: 204 }); // Success, No Content
 
-  } catch (error: any) {
-    // The conversation still exists (delete failed) — clear the tombstone so
-    // it isn't left permanently unpersistable/unloggable.
-    unmarkConversationDeleted(conversationId);
-    log.error('Error deleting conversation', {
-      requestId,
-      conversationId,
-      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error
-    });
-    return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
-  }
+    } catch (error: unknown) {
+      // The conversation still exists (delete failed) — clear the tombstone so
+      // it isn't left permanently unpersistable/unloggable.
+      unmarkConversationDeleted(conversationId);
+      log.error('Error deleting conversation', {
+        requestId,
+        conversationId,
+        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error
+      });
+      return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
+    }
+  });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const PATCH = withWorkspaceRoute(PATCH_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

@@ -5,8 +5,13 @@ import type { ExecutionEvent } from '@/shared/types/execution/events';
 import type {
   Conversation,
   ConversationListItem,
+  ChatApiResponse,
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
+import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
+import type { WirePreviewResponse } from '@/backend/execution/flow/types';
+import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -19,8 +24,8 @@ const log = createLogger('frontend/services/chat/index');
  */
 export class ChatApiError extends Error {
   readonly status: number;
-  readonly body: any;
-  constructor(message: string, status: number, body: any) {
+  readonly body: unknown;
+  constructor(message: string, status: number, body: unknown) {
     super(message);
     this.name = 'ChatApiError';
     this.status = status;
@@ -32,13 +37,17 @@ export class ChatApiError extends Error {
 export interface CreateConversationPayload {
   id: string;
   title: string;
-  flowId: string;
+  flowId: string | null;
   createdAt: number;
   updatedAt: number;
   /** Quick-Chats (issue #61): seed an in-memory flow snapshot onto the new
    *  conversation instead of referencing a stored flow. `flowId` is the
    *  snapshot's id (quickchat-<id>). */
   flowSnapshot?: Flow;
+  /** Strict-local, non-authoritative target for a fresh Persona chat. */
+  personaTargetId?: string;
+  /** `primary` selects the Persona's Main role; another key selects a named Behavior. */
+  personaBehaviorSlotKey?: string;
 }
 
 // Handlers for the live execution event stream (SSE).
@@ -48,7 +57,77 @@ export interface EventStreamHandlers {
   onError?: (err: Event) => void;
 }
 
+export interface EventReplayOptions {
+  /** Rebuild run controls/lanes without replaying the transcript payload. */
+  activityOnly?: boolean;
+}
+
+export interface RevertPreview {
+  messageId: string;
+  previewId: string;
+  files: Array<{ path: string; status: string }>;
+  diff: string;
+  truncated: boolean;
+  fileRestoreAvailable: boolean;
+  fileRestoreUnavailableReason?:
+    | 'no-snapshotted-file-changes'
+    | 'multiple-roots'
+    | 'unsafe-path';
+  /** The selected message and every displayed message after it. */
+  chatMessageCount: number;
+}
+
+export type RestoreMode = 'chat-and-files' | 'files-only' | 'chat-only';
+
+export interface ConversationPage {
+  items: ConversationListItem[];
+  /** Saved pins and their descendants, independent of the regular page cursor. */
+  pinnedItems?: ConversationListItem[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
+}
+
+export interface ConversationPageQuery {
+  pinnedIds?: string[];
+  limit?: number;
+  cursor?: string;
+  search?: string;
+  dimension?: 'title' | 'content';
+  origin?: 'chat' | 'schedule' | 'subflow' | 'meeting';
+  /** Exact resolved session-key match. Session keys must not contain secrets. */
+  sessionKey?: string;
+  /** Return only transitive descendants of this conversation. */
+  descendantsOf?: string;
+  /** Cancels both the current page request and any all-pages traversal. */
+  signal?: AbortSignal;
+}
+
+export interface SubflowRecoveryOptions {
+  conversationId: string;
+  parentConversationId?: string;
+  invocationId?: string;
+  laneId?: string;
+  hasRecoverableFamily: boolean;
+  incompleteSiblingCount: number;
+  deepestFailedCount: number;
+  canRetryBranch: boolean;
+  canRetrySiblings: boolean;
+  canRetryDeepest: boolean;
+}
+
+export type SubflowRecoveryScope = 'branch' | 'siblings' | 'deepest';
+
+export interface SubflowRecoveryResult {
+  scope: SubflowRecoveryScope;
+  startedConversationIds: string[];
+  completedConversationIds: string[];
+  failed: Array<{ conversationId: string; error: string }>;
+}
+
 const BASE = '/v1/chat/conversations';
+// Read-only chain projection for the experimental chain-chat page (#405).
+const CHAINS_BASE = '/v1/chat/conversation-chains';
 
 // Parse a fetch Response, throwing ChatApiError on non-2xx. For 204/empty
 // bodies returns undefined.
@@ -56,7 +135,7 @@ async function parse<T>(response: Response): Promise<T> {
   if (response.status === 204) {
     return undefined as T;
   }
-  let body: any = undefined;
+  let body: unknown = undefined;
   const text = await response.text();
   if (text) {
     try {
@@ -66,10 +145,33 @@ async function parse<T>(response: Response): Promise<T> {
     }
   }
   if (!response.ok) {
-    const message =
-      (body && typeof body === 'object' && (body.error || body.message)) ||
-      `Request failed with status ${response.status}`;
+    const bodyRecord = body && typeof body === 'object'
+      ? body as Record<string, unknown>
+      : undefined;
+    const errorMessage = typeof bodyRecord?.error === 'string'
+      ? bodyRecord.error
+      : typeof bodyRecord?.message === 'string'
+        ? bodyRecord.message
+        : undefined;
+    const message = errorMessage ?? `Request failed with status ${response.status}`;
     throw new ChatApiError(message, response.status, body);
+  }
+  // Issue #383 (gap 4): the OpenAI-compatible chat-completions envelope
+  // returns HTTP 200 even on a provider/flow error, so a non-streaming
+  // client stays spec-compliant. Detect that shape here (body.error present
+  // AND no choices, so a legitimate completion whose CONTENT merely mentions
+  // the word "error" is never mistaken for a failure) and throw the same
+  // ChatApiError callers already handle for a non-2xx response.
+  const bodyRecord = body && typeof body === 'object'
+    ? body as Record<string, unknown>
+    : undefined;
+  const providerError = bodyRecord?.error && typeof bodyRecord.error === 'object'
+    ? bodyRecord.error as Record<string, unknown>
+    : undefined;
+  if (providerError && !Array.isArray(bodyRecord?.choices)) {
+    const message = typeof providerError.message === 'string' ? providerError.message : 'Request failed.';
+    const status = typeof providerError.status === 'number' ? providerError.status : response.status;
+    throw new ChatApiError(message, status, body);
   }
   return body as T;
 }
@@ -81,6 +183,16 @@ async function parse<T>(response: Response): Promise<T> {
  * issues HTTP calls inline.
  */
 class ChatService {
+  /** Cheap dashboard check that counts persisted conversation files only. */
+  async countConversations(): Promise<number> {
+    log.debug('countConversations: Entering method');
+    const response = await fetch(`${BASE}?presence=1`);
+    const result = await parse<{ count?: number }>(response);
+    return typeof result?.count === 'number' && Number.isFinite(result.count)
+      ? Math.max(0, result.count)
+      : 0;
+  }
+
   /** GET /v1/chat/conversations — list summaries (unsorted; caller sorts). */
   async listConversations(): Promise<ConversationListItem[]> {
     log.debug('listConversations: Entering method');
@@ -88,11 +200,106 @@ class ChatService {
     return parse<ConversationListItem[]>(response);
   }
 
-  /** GET /v1/chat/conversations/{id} — full conversation (messages included). */
-  async getConversation(id: string): Promise<Conversation> {
-    log.debug('getConversation: Entering method', { conversationId: id });
-    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`);
+  /** GET /v1/chat/conversations/{id}. Pass messageLimit for fast Chat hydration. */
+  async getConversation(
+    id: string,
+    options: { messageLimit?: number; signal?: AbortSignal } = {},
+  ): Promise<Conversation> {
+    log.debug('getConversation: Entering method', {
+      conversationId: id,
+      messageLimit: options.messageLimit,
+    });
+    const params = new URLSearchParams({ compactToolPayloads: '1' });
+    if (options.messageLimit !== undefined) {
+      params.set('messageLimit', String(options.messageLimit));
+    }
+    const url = `${BASE}/${encodeURIComponent(id)}?${params.toString()}`;
+    const response = options.signal
+      ? await fetch(url, { signal: options.signal })
+      : await fetch(url);
     return parse<Conversation>(response);
+  }
+
+  /** Build a read-only current-state model-input preview for one selected node. */
+  async getWirePreview(
+    conversationId: string,
+    nodeId: string,
+    options: { targetConversationId?: string; signal?: AbortSignal } = {},
+  ): Promise<WirePreviewResponse> {
+    const response = await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/wire-preview`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        signal: options.signal,
+        body: JSON.stringify({
+          nodeId,
+          ...(options.targetConversationId
+            ? { targetConversationId: options.targetConversationId }
+            : {}),
+        }),
+      },
+    );
+    return parse<WirePreviewResponse>(response);
+  }
+
+  /** Durable, exact SDK-dispatch markers for the Chat model-turn timeline. */
+  async getModelTurns(
+    conversationId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ModelTurnTimelineResponse> {
+    const response = await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/model-turns`),
+      { cache: 'no-store', signal: options.signal },
+    );
+    return parse<ModelTurnTimelineResponse>(response);
+  }
+
+  /** Lazily load one historical SDK request only after its marker is selected. */
+  async getModelTurn(
+    conversationId: string,
+    dispatchId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ModelTurnSnapshot> {
+    const response = await fetch(
+      withWorkspaceUrl(
+        `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}`,
+      ),
+      { cache: 'no-store', signal: options.signal },
+    );
+    return parse<ModelTurnSnapshot>(response);
+  }
+
+  modelTurnMediaUrl(conversationId: string, dispatchId: string, mediaId: string): string {
+    return withWorkspaceUrl(
+      `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}/media/${encodeURIComponent(mediaId)}`,
+    );
+  }
+
+  /**
+   * GET /v1/chat/conversation-chains — read-only chain projection (#405).
+   * Returns recent conversations grouped by chain root with ONE bounded
+   * message preview per node; never a full history. Active state is included
+   * as metadata. Accepts an AbortSignal so
+   * the page can drop a stale request on refresh/unmount.
+   */
+  async getConversationChains(
+    options: { rootId?: string; limit?: number; signal?: AbortSignal } = {}
+  ): Promise<ConversationChainsResponse> {
+    log.debug('getConversationChains: Entering method', { rootId: options.rootId, limit: options.limit });
+    const params = new URLSearchParams();
+    // URLSearchParams encodes both the id and the limit for us.
+    if (options.rootId) params.set('root', options.rootId);
+    if (typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+      params.set('limit', String(Math.trunc(options.limit)));
+    }
+    const query = params.toString();
+    const response = await fetch(
+      query ? `${CHAINS_BASE}?${query}` : CHAINS_BASE,
+      options.signal ? { signal: options.signal } : undefined
+    );
+    return parse<ConversationChainsResponse>(response);
   }
 
   /** POST /v1/chat/conversations — create and persist a new conversation. */
@@ -118,6 +325,20 @@ class ChatService {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ flowId }),
+    });
+    return parse<ConversationListItem>(response);
+  }
+
+  /** PATCH a fresh conversation to a Persona target (never runtime authority). */
+  async updateConversationPersonaTarget(
+    id: string,
+    personaTargetId: string
+  ): Promise<ConversationListItem> {
+    log.debug('updateConversationPersonaTarget: Entering method', { conversationId: id, personaTargetId });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personaTargetId }),
     });
     return parse<ConversationListItem>(response);
   }
@@ -159,6 +380,17 @@ class ChatService {
     await parse<void>(response);
   }
 
+  /** DELETE /v1/chat/conversations — bulk delete by id list. */
+  async deleteConversations(ids: string[]): Promise<{ deleted: number; errors: number }> {
+    log.debug('deleteConversations: Entering method', { count: ids.length });
+    const response = await fetch(BASE, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    return parse<{ deleted: number; errors: number }>(response);
+  }
+
   /**
    * POST /v1/chat/conversations/{id}/respond — approve/reject a pending tool
    * call; the backend resumes execution and returns the next stop point.
@@ -166,33 +398,68 @@ class ChatService {
   async respondToToolCall(
     id: string,
     action: 'approve' | 'reject',
-    toolCallId: string
-  ): Promise<any> {
+    toolCallId: string,
+  ): Promise<ChatApiResponse> {
     log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, toolCallId }),
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
+  }
+
+  /**
+   * POST /v1/chat/conversations/{id}/respond with action 'cancelToolCall' —
+   * abort ONE in-flight tool call (issue #357) without stopping the run. Safe
+   * no-op (cancelled:false) if the call already finished.
+   */
+  async cancelToolCall(id: string, toolCallId: string): Promise<{ cancelled: boolean }> {
+    log.debug('cancelToolCall: Entering method', { conversationId: id, toolCallId });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'cancelToolCall', toolCallId }),
+    });
+    return parse<{ cancelled: boolean }>(response);
   }
 
   /** POST /v1/chat/conversations/{id}/debug/step — advance one debug step. */
-  async debugStep(id: string): Promise<any> {
+  async debugStep(id: string): Promise<ChatApiResponse> {
     log.debug('debugStep: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/step`, {
       method: 'POST',
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
   }
 
   /** POST /v1/chat/conversations/{id}/debug/continue — resume from a pause. */
-  async debugContinue(id: string): Promise<any> {
+  async debugContinue(id: string): Promise<ChatApiResponse> {
     log.debug('debugContinue: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/continue`, {
       method: 'POST',
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
+  }
+
+  /** POST /v1/chat/conversations/{id}/debug/attach — pause at the next safe boundary. */
+  async attachDebugger(id: string): Promise<void> {
+    log.debug('attachDebugger: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/attach`, {
+      method: 'POST',
+    });
+    await parse<void>(response);
+  }
+
+  /**
+   * GET /v1/chat/conversations/{id}/debug/state — read the current debug state.
+   * Lets the debugger panel attach to a run this tab did not start (or one that
+   * paused after its POST had already resolved) instead of waiting forever.
+   */
+  async getDebugState(id: string): Promise<{ status: string; breakpoints: string[]; debugState: unknown }> {
+    log.debug('getDebugState: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/state`);
+    return parse<{ status: string; breakpoints: string[]; debugState: unknown }>(response);
   }
 
   /** PUT /v1/chat/conversations/{id}/breakpoints — replace breakpoint set. */
@@ -227,11 +494,172 @@ class ChatService {
     return parse<{ conversationId: string; flow: Flow }>(response);
   }
 
+  /** Snapshot the latest editable, vendored Flow Generator for a modal session. */
+    async synthesizeFlowGenerator(payload: {
+      conversationId: string;
+      modelId: string;
+      allowInstall?: boolean;
+  }): Promise<{ conversationId: string; flow: Flow }> {
+    const response = await fetch('/api/flow/generator', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return parse<{ conversationId: string; flow: Flow }>(response);
+  }
+
+  /** Send one non-streaming turn through a conversation-backed flow snapshot. */
+  async completeFlowGeneratorTurn(payload: {
+    conversationId: string;
+    messages: Array<Record<string, unknown>>;
+  }): Promise<ChatApiResponse> {
+    const response = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'flow-Flow Generator Session',
+        messages: payload.messages,
+        stream: false,
+        metadata: {
+          flujo: 'true',
+          conversationId: payload.conversationId,
+        },
+      }),
+    });
+    return parse<ChatApiResponse>(response);
+  }
+
+  /** Restore the bundled generator definition after user edits. */
+  async restoreFlowGenerator(): Promise<{ flow: Flow }> {
+    const response = await fetch('/api/flow/generator', { method: 'PUT' });
+    return parse<{ flow: Flow }>(response);
+  }
+
   /** POST /v1/chat/conversations/{id}/cancel — cancel an in-flight run. */
   async cancel(id: string): Promise<void> {
     log.debug('cancel: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
+    });
+    await parse<void>(response);
+  }
+
+  /** Cursor-paged summaries for the chat sidebar. */
+  async listConversationPage(query: ConversationPageQuery = {}): Promise<ConversationPage> {
+    const params = new URLSearchParams({
+      paged: '1',
+      limit: String(query.limit ?? 50),
+    });
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.search?.trim()) params.set('search', query.search.trim());
+    if (query.dimension) params.set('dimension', query.dimension);
+    if (query.origin) params.set('origin', query.origin);
+    if (query.sessionKey) params.set('sessionKey', query.sessionKey);
+    if (query.descendantsOf) params.set('descendantsOf', query.descendantsOf);
+    for (const id of query.pinnedIds ?? []) params.append('pinnedId', id);
+    const url = `${BASE}?${params.toString()}`;
+    const response = query.signal
+      ? await fetch(url, { signal: query.signal })
+      : await fetch(url);
+    return parse<ConversationPage>(response);
+  }
+
+  /** Explicit all-pages read used only by complete search and destructive bulk actions. */
+  async listAllConversationPages(query: Omit<ConversationPageQuery, 'cursor' | 'limit'> = {}): Promise<ConversationListItem[]> {
+    const items: ConversationListItem[] = [];
+    let cursor: string | undefined;
+    do {
+      query.signal?.throwIfAborted();
+      const page = await this.listConversationPage({ ...query, limit: 200, cursor });
+      items.push(...page.items);
+      cursor = page.nextCursor;
+      query.signal?.throwIfAborted();
+    } while (cursor);
+    return items;
+  }
+
+  async getSubflowRecoveryOptions(id: string): Promise<SubflowRecoveryOptions> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`);
+    return parse<SubflowRecoveryOptions>(response);
+  }
+
+  async retrySubflowRecovery(
+    id: string,
+    scope: SubflowRecoveryScope,
+  ): Promise<SubflowRecoveryResult> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope }),
+    });
+    return parse<SubflowRecoveryResult>(response);
+  }
+
+  /**
+   * POST /v1/chat/conversations/{id}/inject — hand a user message to a run that
+   * is already in flight so the model sees it on its next turn (mid-run
+   * steering) instead of after the whole run finishes.
+   *
+   * Returns `{ delivered: true }` once the message is queued for the live run,
+   * or `{ delivered: false }` when the backend reports the conversation is not
+   * running — the caller must then send the message as a normal turn. Network
+   * failures also report `delivered: false` for the same reason: a steering
+   * message that goes nowhere is worse than one that starts a new turn.
+   */
+  async injectMessage(
+    id: string,
+    content: string,
+    messageId?: string
+  ): Promise<{ delivered: boolean }> {
+    log.debug('injectMessage: Entering method', { conversationId: id, messageId });
+    try {
+      const response = await fetch(`${BASE}/${encodeURIComponent(id)}/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, id: messageId }),
+      });
+      if (response.ok) return { delivered: true };
+      if (response.status === 409) {
+        log.debug('injectMessage: run is not live; caller should send normally', { conversationId: id });
+        return { delivered: false };
+      }
+      log.warn('injectMessage: unexpected response; falling back to a normal send', {
+        conversationId: id,
+        status: response.status,
+      });
+      return { delivered: false };
+    } catch (err) {
+      log.warn('injectMessage: request failed; falling back to a normal send', { conversationId: id, err });
+      return { delivered: false };
+    }
+  }
+
+  async previewRevert(id: string, messageId: string): Promise<RevertPreview> {
+    const response = await fetch(
+      `${BASE}/${encodeURIComponent(id)}/revert?messageId=${encodeURIComponent(messageId)}`
+    );
+    return parse<RevertPreview>(response);
+  }
+
+  async revertToMessage(
+    id: string,
+    messageId: string,
+    previewId: string,
+    mode: RestoreMode,
+  ): Promise<{ operationId: string; restoredChat: boolean; restoredFiles: boolean }> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/revert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId, previewId, mode }),
+    });
+    return parse<{ operationId: string; restoredChat: boolean; restoredFiles: boolean }>(response);
+  }
+
+  async undoRevert(id: string, operationId: string): Promise<void> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/revert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operationId, action: 'undo' }),
     });
     await parse<void>(response);
   }
@@ -245,13 +673,15 @@ class ChatService {
   subscribeToEvents(
     id: string,
     handlers: EventStreamHandlers,
-    fromSeq?: number
+    fromSeq?: number,
+    replayOptions?: EventReplayOptions,
   ): EventSource {
-    const url =
-      fromSeq !== undefined
-        ? `${BASE}/${encodeURIComponent(id)}/events?fromSeq=${fromSeq}`
-        : `${BASE}/${encodeURIComponent(id)}/events`;
-    const es = new EventSource(url);
+    const params = new URLSearchParams();
+    if (fromSeq !== undefined) params.set('fromSeq', String(fromSeq));
+    if (replayOptions?.activityOnly) params.set('replay', 'activity');
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    const url = `${BASE}/${encodeURIComponent(id)}/events${query}`;
+    const es = new EventSource(withWorkspaceUrl(url));
     es.onopen = () => {
       log.debug('Execution event stream open', { conversationId: id });
       handlers.onOpen?.();
@@ -266,6 +696,32 @@ class ChatService {
     es.onerror = (err) => {
       // EventSource auto-reconnects; nothing to do unless the caller wants it.
       log.debug('SSE stream error (browser will retry if still open)');
+      handlers.onError?.(err);
+    };
+    return es;
+  }
+
+  /**
+   * Subscribe to list-level lifecycle changes across all conversations.
+   * The server filters the global stream before serialization, so token deltas
+   * and other high-volume execution events never reach the sidebar.
+   */
+  subscribeToSidebarEvents(handlers: EventStreamHandlers): EventSource {
+    const es = new EventSource(withWorkspaceUrl('/v1/chat/events?scope=sidebar'));
+    es.onopen = () => {
+      log.debug('Sidebar lifecycle event stream open');
+      handlers.onOpen?.();
+    };
+    es.onmessage = (e) => {
+      try {
+        handlers.onEvent(JSON.parse(e.data) as ExecutionEvent);
+      } catch (err) {
+        log.warn('Failed to parse sidebar lifecycle event', { err });
+      }
+    };
+    es.onerror = (err) => {
+      // EventSource reconnects automatically while the tab remains visible.
+      log.debug('Sidebar lifecycle stream error (browser will retry if still open)');
       handlers.onError?.(err);
     };
     return es;

@@ -13,7 +13,7 @@ const log = createLogger('backend/flow/execution/nodes/ResourceNode');
  * class exists only to satisfy FlowConverter.createNode's exhaustive switch
  * (and to fail loudly if a hand-crafted flow somehow routes into one).
  */
-export class ResourceNode extends BaseNode {
+export class ResourceNode extends BaseNode<ResourceNodeParams, SharedState, Record<string, never>, Record<string, never>> {
   async prep(_sharedState: SharedState, node_params?: ResourceNodeParams): Promise<Record<string, never>> {
     // Reaching here means a control edge was wired into a resource node —
     // the builder/validator forbid it, but a hand-crafted flow could.

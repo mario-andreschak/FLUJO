@@ -1,50 +1,143 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import { StreamableHTTPClientTransportOptions, StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransportOptions, SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { MCPSSEConfig } from '@/shared/types/mcp/mcp';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPStdioConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
-import { ChildProcess } from 'child_process';
-import { createOAuthClientProvider } from './oauth';
-import { isClientConnectionClosed } from '@/utils/mcp/utils';
-import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
-import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
-import { getDataDir } from '@/utils/paths';
-import { registerRootsHandler } from './roots';
-import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
-import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
-import { normalizeHeaderValue, isMaskedHeaderValue } from '@/utils/mcp/headers';
-import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { isProtectedExecutionServer } from '@/backend/execution/extensions';
+import { assertExecutionServerConfig } from '@/backend/execution/extensions';
+import {
+  StdioClientTransport,
+  StdioServerParameters,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
+import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
+import {
+  StreamableHTTPClientTransportOptions,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  SSEClientTransportOptions,
+  SSEClientTransport,
+} from "@modelcontextprotocol/sdk/client/sse.js";
+import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import { createHash } from "crypto";
+import { createLogger } from "@/utils/logger";
+import {
+  MCPServerConfig,
+  MCPStdioConfig,
+  MCPStreamableConfig,
+  MCP_SKILLS_EXTENSION_ID,
+  SERVER_DIR_PREFIX,
+} from "@/shared/types/mcp";
+import { ChildProcess } from "child_process";
+import { createOAuthClientProvider } from "./oauth";
+import { isClientConnectionClosed } from "@/utils/mcp/utils";
+import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
+import { getDataDir } from "@/utils/paths";
+import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
+import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
+import {
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+  remapLegacyDefaultWorkspaceReference,
+} from "@/utils/workspace";
+import {
+  resolvePlaywrightBrowsersPath,
+  shippedDescriptorForConfig,
+} from './shippedServers';
+import { ensureShippedWorkspacePackages } from './shippedWorkspacePackages';
+import { registerRootsHandler } from "./roots";
+import {
+  samplingEnabled,
+  registerSamplingHandler,
+  samplingConfigKey,
+} from "./sampling";
+import {
+  elicitationEnabled,
+  registerElicitationHandler,
+  elicitationConfigKey,
+} from "./elicitation";
+import { resolveAndDecryptApiKey } from "@/backend/utils/resolveGlobalVars";
+import { normalizeHeaderValue, isMaskedHeaderValue } from "@/utils/mcp/headers";
+import { MCPHeaderValue } from "@/shared/types/mcp/mcp";
+import {
+  MCP_APPS_EXTENSION_ID,
+  MCP_APP_RESOURCE_MIME_TYPE,
+} from "./appsProtocol";
+import {
+  STDIO_OAUTH_EXTENSION_CAPABILITY,
+  STDIO_OAUTH_EXTENSION_ID,
+} from "mcp-stdio-oauth/protocol";
+import {
+  issueMcpAppRuntimeBrokerEnvironment,
+  revokeMcpAppRuntimeBrokerLease,
+} from '@/backend/mcpApps/runtimeBroker';
+import {
+  GOAL_ENDURANCE_FIXTURE_TOKEN_ENV,
+  resolveGoalEnduranceFixtureToken,
+} from './goalEnduranceFixtureEnvironment';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
-// expose a client's own declared capabilities publicly). Roots deliberately do NOT
+// expose a client's own declared capabilities publicly). This includes the per-server
+// MCP Apps opt-in: turning it on/off must renegotiate the UI extension. Roots deliberately do NOT
 // participate: the roots capability is always declared and roots content is resolved
 // fresh per roots/list request (changes are announced via notifications/roots/
 // list_changed) — so no roots change may ever force a client rebuild (issue 46).
-interface ClientWithCapKey { __flujoCapKey?: string }
+interface ClientWithCapKey {
+  __flujoCapKey?: string;
+}
 
-/** Key of the config that drives client-declared capabilities (currently: sampling). */
-function capabilityKey(config: MCPServerConfig): string {
-  return samplingConfigKey(config);
+/** Key of config that drives connect-time client capabilities. */
+export function capabilityKey(config: MCPServerConfig): string {
+  return [
+    samplingConfigKey(config),
+    elicitationConfigKey(config),
+    config.enableMcpApps === true ? "mcp-apps:on" : "mcp-apps:off",
+    config.enableMcpSkills === true ? "mcp-skills:on" : "mcp-skills:off",
+  ].join("|");
 }
 
 // We stash the RAW config key on the transport at creation time so
 // shouldRecreateClient can compare config-to-config (see stdioConfigKey /
 // httpConfigKey below). __flujoStdioKey covers stdio; __flujoHttpKey covers the
 // streamable/SSE (HTTP) auth material that the URL check alone cannot see.
-interface TransportWithConfigKey { __flujoStdioKey?: string; __flujoHttpKey?: string }
+// __flujoKind identifies the transport type without instanceof so the check also
+// works for v2-beta transports (different classes, see betaClient.ts).
+export interface TransportWithConfigKey {
+  __flujoStdioKey?: string;
+  __flujoHttpKey?: string;
+  __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
+  /** Capability lease for one managed MCP Apps stdio process generation. */
+  __flujoRuntimeBrokerLeaseId?: string;
+  /** Inner SDK transport when FLUJO applies a protocol decorator. */
+  __flujoInnerTransport?: unknown;
+}
 
-const log = createLogger('backend/services/mcp/connection');
+/** Resolve through FLUJO-owned transport decorators without relying on SDK privates. */
+export function getUnderlyingTransport(transport: unknown): unknown {
+  let current = transport;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const inner = (current as TransportWithConfigKey).__flujoInnerTransport;
+    if (!inner) break;
+    current = inner;
+  }
+  return current;
+}
+
+// Marker stashed on clients built by the v2-beta path (betaClient.ts), so
+// shouldRecreateClient can rebuild a connection when the experimental
+// mcpBetaProtocol toggle flips — a v1 client must never be reused as a beta
+// client or vice versa.
+export interface ClientWithBetaMarker {
+  __flujoBeta?: boolean;
+}
+
+const log = createLogger("backend/services/mcp/connection");
 
 /**
- * Flatten + resolve a remote server's custom headers to plain string values for the live
- * connection (#84). Header values may be stored as plain strings (legacy/non-secret),
+ * Flatten + resolve a server's env values and custom headers to plain strings for the live
+ * connection (#84). Values may be stored as plain strings (legacy/non-secret),
  * `{ value, metadata }` objects, `encrypted:` secrets, or `${global:VAR}` bindings.
  * `resolveAndDecryptApiKey` handles decryption and global-var resolution for every case
  * (plain values pass through unchanged); values that fail to resolve are dropped.
@@ -55,13 +148,36 @@ const log = createLogger('backend/services/mcp/connection');
  * rebuild on every connect). A changed bound-global therefore still rebuilds the client,
  * because the resolved header material — and thus the key — changes.
  */
-export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCPServerConfig> {
-  if (config.transport !== 'streamable' && config.transport !== 'sse') {
-    return config;
+export async function resolveConfigHeaders(
+  config: MCPServerConfig,
+): Promise<MCPServerConfig> {
+  let resolvedConfig = config;
+
+  // Environment bindings must remain portable in storage and be resolved fresh
+  // for each connection. Previously updateServerConfig baked `${global:VAR}` into
+  // the saved config, so rotating the global had no effect and package re-export
+  // could no longer see the binding.
+  if (config.env && typeof config.env === "object") {
+    const resolvedEnv: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(config.env)) {
+      if (!key) continue;
+      const value =
+        raw && typeof raw === "object" && "value" in raw
+          ? ((raw as { value?: string }).value ?? "")
+          : ((raw as string) ?? "");
+      if (!value || isMaskedHeaderValue(value)) continue;
+      const out = await resolveAndDecryptApiKey(value);
+      if (out) resolvedEnv[key] = out;
+    }
+    resolvedConfig = { ...resolvedConfig, env: resolvedEnv } as MCPServerConfig;
+  }
+
+  if (config.transport !== "streamable" && config.transport !== "sse") {
+    return resolvedConfig;
   }
   const c = config as unknown as { headers?: Record<string, MCPHeaderValue> };
-  if (!c.headers || typeof c.headers !== 'object') {
-    return config;
+  if (!c.headers || typeof c.headers !== "object") {
+    return resolvedConfig;
   }
   const resolved: Record<string, string> = {};
   for (const [key, raw] of Object.entries(c.headers)) {
@@ -78,7 +194,7 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
       resolved[key] = out;
     }
   }
-  return { ...config, headers: resolved } as MCPServerConfig;
+  return { ...resolvedConfig, headers: resolved } as MCPServerConfig;
 }
 
 /**
@@ -91,12 +207,14 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
  * keys/values. Values are normally already resolved plain strings (see resolveConfigHeaders);
  * this stays defensive against a residual `{ value, metadata }` object by reading `.value`.
  */
-function flattenCustomHeaders(headers: Record<string, MCPHeaderValue>): Record<string, string> {
+export function flattenCustomHeaders(
+  headers: Record<string, MCPHeaderValue>,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, raw] of Object.entries(headers)) {
     if (!key) continue;
     const { value } = normalizeHeaderValue(raw, key);
-    if (typeof value === 'string' && value.length > 0) {
+    if (typeof value === "string" && value.length > 0) {
       out[key] = value;
     }
   }
@@ -107,7 +225,7 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
   const transformed: Record<string, string> = {};
   if (env) {
     for (const [key, envVar] of Object.entries(env)) {
-      if (envVar && typeof envVar === 'object' && 'value' in envVar) {
+      if (envVar && typeof envVar === "object" && "value" in envVar) {
         transformed[key] = (envVar as { value: string }).value;
       } else {
         transformed[key] = envVar as string;
@@ -115,6 +233,56 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
     }
   }
   return transformed;
+}
+
+/**
+ * Environment keys that locate the signed-in host account and its tool config.
+ * If the host does not define one of these, a stale value persisted on the MCP
+ * record must not resurrect it and redirect a CLI into a private/fake home.
+ */
+const HOST_TERMINAL_ENV_KEYS = new Set([
+  'path', 'pathext',
+  'home', 'userprofile', 'homedrive', 'homepath',
+  'appdata', 'localappdata', 'programdata',
+  'xdg_config_home', 'xdg_cache_home', 'xdg_data_home',
+  'xdg_state_home', 'xdg_runtime_dir',
+  'tmp', 'temp', 'tmpdir',
+  'shell', 'comspec', 'systemroot', 'windir', 'systemdrive',
+  'programfiles', 'programfiles(x86)',
+  'gh_config_dir',
+]);
+
+function setEnvCaseInsensitively(
+  target: Record<string, string>,
+  key: string,
+  value: string | undefined,
+): void {
+  for (const existing of Object.keys(target)) {
+    if (existing.toLowerCase() === key.toLowerCase()) delete target[existing];
+  }
+  if (value !== undefined) target[key] = value;
+}
+
+/**
+ * Give the bundled Bash server the actual environment of the FLUJO process.
+ * Persisted per-server values remain available for explicit additions, while
+ * the live host wins for existing keys. Host identity/config keys also mirror
+ * absence, preventing an old GH_CONFIG_DIR/HOME workaround from surviving.
+ */
+function hostTerminalEnvironment(configured: Record<string, string>): Record<string, string> {
+  const result = { ...configured };
+  const hostEntries = Object.entries(process.env).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+
+  for (const [key, value] of hostEntries) {
+    setEnvCaseInsensitively(result, key, value);
+  }
+  for (const key of HOST_TERMINAL_ENV_KEYS) {
+    const host = hostEntries.find(([name]) => name.toLowerCase() === key);
+    if (!host) setEnvCaseInsensitively(result, key, undefined);
+  }
+  return result;
 }
 
 /**
@@ -129,13 +297,17 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
  * restart death-spiral. So the transport is keyed with the RAW config at creation time
  * and compared raw-to-raw here.
  */
-function stdioConfigKey(config: MCPStdioConfig): string {
+export function stdioConfigKey(
+  config: MCPStdioConfig,
+  isolateRuntimeHome = false,
+): string {
   return JSON.stringify({
     command: config.command,
     args: config.args ?? [],
     env: transformEnv(config.env),
-    cwd: String(config.cwd ?? ''),
-    rootPath: config.rootPath ?? '',
+    cwd: String(config.cwd ?? ""),
+    rootPath: config.rootPath ?? "",
+    isolateRuntimeHome,
   });
 }
 
@@ -151,7 +323,7 @@ function stdioConfigKey(config: MCPStdioConfig): string {
  * acting instance) yet the planned execution still failed with `unauthorized`. The
  * transport is keyed with these fields at creation time and compared raw-to-raw here.
  */
-function httpConfigKey(config: MCPServerConfig): string {
+export function httpConfigKey(config: MCPServerConfig): string {
   // MCPStreamableConfig & MCPSSEConfig intersects to `never` (their `transport` literals
   // conflict), so read the shared HTTP fields off an explicit optional shape instead.
   const c = config as unknown as {
@@ -168,15 +340,15 @@ function httpConfigKey(config: MCPServerConfig): string {
   };
   return JSON.stringify({
     transport: config.transport,
-    url: c.serverUrl ?? '',
+    url: c.serverUrl ?? "",
     headers: c.headers ?? {},
     requestInit: c.requestInit ?? {},
     eventSourceInit: c.eventSourceInit ?? {},
     reconnectionOptions: c.reconnectionOptions ?? {},
-    sessionId: c.sessionId ?? '',
-    oauthClientId: c.oauthClientId ?? '',
+    sessionId: c.sessionId ?? "",
+    oauthClientId: c.oauthClientId ?? "",
     oauthClientInformation: c.oauthClientInformation ?? {},
-    oauthClientSecret: c.oauthClientSecret ?? '',
+    oauthClientSecret: c.oauthClientSecret ?? "",
     oauthTokens: c.oauthTokens ?? {},
   });
 }
@@ -185,7 +357,14 @@ function httpConfigKey(config: MCPServerConfig): string {
  * Create a new MCP client with proper capabilities
  */
 export function createNewClient(config: MCPServerConfig): Client {
-  log.debug('Entering createNewClient method');
+  log.debug("Entering createNewClient method");
+  if (isProtectedExecutionServer(config.name)) {
+    assertExecutionServerConfig(config);
+    // The configured private integration accepts only synchronous tool calls.
+    const client = new Client({ name: `flujo-${config.name}-client`, version: '3.46.2' }, { capabilities: {} });
+    (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+    return client;
+  }
 
   // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the server —
   // e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER capabilities and
@@ -197,54 +376,114 @@ export function createNewClient(config: MCPServerConfig): Client {
   // unconditional means roots changes never require a client rebuild; content changes
   // are announced via notifications/roots/list_changed instead. Sampling stays opt-in:
   // it is declared only when the server has an enabled sampling trust policy, so a
-  // server can't ask FLUJO to run LLM calls unless the user opted in.
+  // server can't ask FLUJO to run LLM calls unless the user opted in. URL elicitation
+  // and mcp-stdio-oauth are declared for local stdio servers; the handler accepts a URL
+  // only inside an explicit user-started authorization request. MCP Apps is
+  // advertised only for a server whose explicit security opt-in is on.
+  // Every configured server, including packages shipped with FLUJO, uses this
+  // same client factory and handshake.
   const serverHasSampling = samplingEnabled(config);
+  const serverHasElicitation = elicitationEnabled(config);
+  const serverHasMcpApps = config.enableMcpApps === true;
+  const serverHasStdioOAuth = config.transport === "stdio";
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '3.27.0',
+      version: "3.46.1",
     },
     {
       capabilities: {
         experimental: {},
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
-      }
-    }
+        ...(serverHasStdioOAuth || serverHasElicitation
+          ? {
+              elicitation: {
+                ...(serverHasStdioOAuth ? { url: {} } : {}),
+                ...(serverHasElicitation ? { form: {} } : {}),
+              },
+            }
+          : {}),
+        extensions: {
+          ...(config.enableMcpSkills === true
+            ? { [MCP_SKILLS_EXTENSION_ID]: {} }
+            : {}),
+          ...(serverHasStdioOAuth
+            ? { [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY }
+            : {}),
+          ...(serverHasMcpApps
+            ? {
+                [MCP_APPS_EXTENSION_ID]: {
+                  mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
+                },
+              }
+            : {}),
+        },
+      },
+    },
   );
 
   registerRootsHandler(client, config);
   if (serverHasSampling) {
     registerSamplingHandler(client, config);
   }
+  if (serverHasStdioOAuth || serverHasElicitation) {
+    registerElicitationHandler(client, config);
+  }
   (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
 
   return client;
 }
 
+export interface TransportCreationOptions {
+  /** Mint sidecar registration credentials only for the managed live process. */
+  enableRuntimeBroker?: boolean;
+  /** Use a private workspace-scoped HOME/config/cache tree for stdio. */
+  isolateRuntimeHome?: boolean;
+}
+
 /**
  * Create a transport for the MCP client
  */
-export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
-  log.debug('Entering createTransport method');
+export function createTransport(
+  config: MCPServerConfig,
+  options?: TransportCreationOptions,
+):
+  | StdioClientTransport
+  | WebSocketClientTransport
+  | StreamableHTTPClientTransport
+  | SSEClientTransport {
+  log.debug("Entering createTransport method");
 
-  if (config.transport === 'streamable') {
-    log.info(`Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`);
+  if (config.transport === "streamable") {
+    log.info(
+      `Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`,
+    );
     const streamableConfig = config as MCPStreamableConfig;
-    
+
     // Create transport options.
     // Build defensively: only include object-typed options when they are actual objects.
     // Legacy persisted configs may contain empty strings (''), which would be spread into
     // the SDK's internal fetch() call and cause a generic "fetch failed" error.
     const transportoptions: StreamableHTTPClientTransportOptions = {};
 
-    if (streamableConfig.requestInit && typeof streamableConfig.requestInit === 'object') {
+    if (
+      streamableConfig.requestInit &&
+      typeof streamableConfig.requestInit === "object"
+    ) {
       transportoptions.requestInit = streamableConfig.requestInit;
     }
-    if (streamableConfig.reconnectionOptions && typeof streamableConfig.reconnectionOptions === 'object') {
-      transportoptions.reconnectionOptions = streamableConfig.reconnectionOptions;
+    if (
+      streamableConfig.reconnectionOptions &&
+      typeof streamableConfig.reconnectionOptions === "object"
+    ) {
+      transportoptions.reconnectionOptions =
+        streamableConfig.reconnectionOptions;
     }
-    if (typeof streamableConfig.sessionId === 'string' && streamableConfig.sessionId.length > 0) {
+    if (
+      typeof streamableConfig.sessionId === "string" &&
+      streamableConfig.sessionId.length > 0
+    ) {
       transportoptions.sessionId = streamableConfig.sessionId;
     }
 
@@ -252,48 +491,70 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     // into requestInit so they are sent on every request the SDK makes. Headers are expected
     // to have been resolved to plain strings by resolveConfigHeaders() before this point;
     // flattenCustomHeaders is defensive against any residual { value, metadata } shape.
-    if (streamableConfig.headers && typeof streamableConfig.headers === 'object') {
+    if (
+      streamableConfig.headers &&
+      typeof streamableConfig.headers === "object"
+    ) {
       const customHeaders = flattenCustomHeaders(streamableConfig.headers);
       if (Object.keys(customHeaders).length > 0) {
         transportoptions.requestInit = {
           ...(transportoptions.requestInit || {}),
           headers: {
-            ...((transportoptions.requestInit?.headers as Record<string, string>) || {}),
+            ...((transportoptions.requestInit?.headers as Record<
+              string,
+              string
+            >) || {}),
             ...customHeaders,
           },
         };
-        log.info(`Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(', ')}`);
+        log.info(
+          `Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(", ")}`,
+        );
       }
     }
 
     // Add OAuth authentication if configured
-    if (streamableConfig.oauthClientId || streamableConfig.oauthClientInformation) {
+    if (
+      streamableConfig.oauthClientId ||
+      streamableConfig.oauthClientInformation
+    ) {
       log.info(`Setting up OAuth authentication for ${config.name}`);
       const oauthProvider = createOAuthClientProvider(streamableConfig);
-      
+
       // Always set the OAuth provider - let the transport handle the OAuth flow
       transportoptions.authProvider = oauthProvider;
-      
+
       // Check if we have stored tokens, for logging purposes only - actual freshness/expiry
       // is resolved async by oauthProvider.tokens() when the transport uses it.
       if (streamableConfig.oauthTokens?.access_token) {
-        log.debug(`OAuth provider configured for ${config.name} with existing tokens`);
-        log.debug(`Token expires in: ${streamableConfig.oauthTokens.expires_in} seconds`);
+        log.debug(
+          `OAuth provider configured for ${config.name} with existing tokens`,
+        );
+        log.debug(
+          `Token expires in: ${streamableConfig.oauthTokens.expires_in} seconds`,
+        );
       } else {
-        log.debug(`OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`);
+        log.debug(
+          `OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`,
+        );
       }
     } else {
       log.debug(`No OAuth configuration found for ${config.name}`);
     }
-    
-    const transport = new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions);
+
+    const transport = new StreamableHTTPClientTransport(
+      new URL(config.serverUrl),
+      transportoptions,
+    );
     // Key the transport with the RAW auth/session material so shouldRecreateClient can
     // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey = httpConfigKey(config);
+    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
+      httpConfigKey(config);
     return transport;
-
-  } else if (config.transport === 'sse') {
-    log.info(`Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`);
+  } else if (config.transport === "sse") {
+    log.info(
+      `Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`,
+    );
     const sseConfig = config as MCPSSEConfig;
 
     // Build options defensively. Do NOT spread the entire config: it contains many
@@ -301,10 +562,13 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     // that would corrupt the SDK's internal fetch() call and cause "fetch failed".
     const transportoptions: SSEClientTransportOptions = {};
 
-    if (sseConfig.requestInit && typeof sseConfig.requestInit === 'object') {
+    if (sseConfig.requestInit && typeof sseConfig.requestInit === "object") {
       transportoptions.requestInit = sseConfig.requestInit;
     }
-    if (sseConfig.eventSourceInit && typeof sseConfig.eventSourceInit === 'object') {
+    if (
+      sseConfig.eventSourceInit &&
+      typeof sseConfig.eventSourceInit === "object"
+    ) {
       transportoptions.eventSourceInit = sseConfig.eventSourceInit;
     }
 
@@ -312,49 +576,219 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     // into requestInit so they are sent on every request the SDK makes. Headers are expected
     // to have been resolved to plain strings by resolveConfigHeaders() before this point;
     // flattenCustomHeaders is defensive against any residual { value, metadata } shape.
-    if (sseConfig.headers && typeof sseConfig.headers === 'object') {
+    if (sseConfig.headers && typeof sseConfig.headers === "object") {
       const customHeaders = flattenCustomHeaders(sseConfig.headers);
       if (Object.keys(customHeaders).length > 0) {
         transportoptions.requestInit = {
           ...(transportoptions.requestInit || {}),
           headers: {
-            ...((transportoptions.requestInit?.headers as Record<string, string>) || {}),
+            ...((transportoptions.requestInit?.headers as Record<
+              string,
+              string
+            >) || {}),
             ...customHeaders,
           },
         };
-        log.info(`Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(', ')}`);
+        log.info(
+          `Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(", ")}`,
+        );
       }
     }
 
-    const transport = new SSEClientTransport(new URL(config.serverUrl), transportoptions);
+    const transport = new SSEClientTransport(
+      new URL(config.serverUrl),
+      transportoptions,
+    );
     // Key the transport with the RAW auth/session material so shouldRecreateClient can
     // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey = httpConfigKey(config);
+    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
+      httpConfigKey(config);
     return transport;
-
-  } else if (config.transport === 'websocket') {
-    log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
+  } else if (config.transport === "websocket") {
+    log.info(
+      `Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`,
+    );
     return new WebSocketClientTransport(new URL(config.websocketUrl));
-
   } else {
-    return createStdioTransport(config);
+    return createStdioTransport(config, options);
   }
 }
 
 /**
- * Create a stdio transport for the MCP client
+ * The fully resolved spawn parameters for a stdio server: the configured
+ * command/args after the Windows .bat rewrite and Node-toolchain resolution,
+ * the flattened env, and the absolute working directory. Shared by the v1
+ * transport factory below and the v2-beta factory (betaClient.ts) so both
+ * spawn a byte-identical process.
  */
-export function createStdioTransport(config: MCPServerConfig): StdioClientTransport {
-  log.debug('Entering createStdioTransport method');
-  
-  // Ensure we're working with a stdio config
-  if (config.transport !== 'stdio') {
-    throw new Error('Cannot create stdio transport for non-stdio config');
+export interface StdioLaunch {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+}
+
+/**
+ * Create the private home/cache tree inherited by one stdio MCP server.
+ *
+ * The MCP SDK supplies a small set of host environment defaults even when an
+ * explicit `env` object is passed. In particular HOME/USERPROFILE otherwise
+ * point at the account running FLUJO, so two workspaces can silently share a
+ * third-party server's tokens, sqlite files and caches. Keep those conventional
+ * persistence roots below the selected workspace and below a hash of the
+ * server name (names are user-controlled and must never become path segments).
+ */
+interface IsolatedStdioRuntime {
+  cwd: string;
+  env: Record<string, string>;
+}
+
+function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
+  const workspaceRoot = getWorkspaceDataDir();
+  const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
+
+  const assertOrCreateRealDirectory = (candidate: string, label: string): void => {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`${label} must be a real directory: ${candidate}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      fs.mkdirSync(candidate, { mode: 0o700 });
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`${label} must be a real directory: ${candidate}`);
+      }
+    }
+  };
+
+  // Never create a workspace as a side effect of launching a child. The HTTP
+  // boundary/startup migration has already validated and created this root.
+  const workspaceStat = fs.lstatSync(workspaceRoot);
+  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
+    throw new Error(`Workspace root must be a real directory: ${workspaceRoot}`);
   }
-  
+
+  let current = workspaceRoot;
+  for (const segment of ['userdata', 'mcp-runtime', serverKey]) {
+    current = path.join(current, segment);
+    assertOrCreateRealDirectory(current, 'MCP runtime directory');
+  }
+  const runtimeRoot = current;
+  const home = path.join(runtimeRoot, 'home');
+  const cwd = path.join(runtimeRoot, 'cwd');
+  assertOrCreateRealDirectory(home, 'MCP runtime home');
+  assertOrCreateRealDirectory(cwd, 'MCP runtime cwd');
+
+  const directories = {
+    appData: path.join(home, 'AppData', 'Roaming'),
+    localAppData: path.join(home, 'AppData', 'Local'),
+    config: path.join(home, '.config'),
+    cache: path.join(home, '.cache'),
+    data: path.join(home, '.local', 'share'),
+    state: path.join(home, '.local', 'state'),
+    runtime: path.join(home, '.runtime'),
+    temp: path.join(home, 'tmp'),
+    npm: path.join(home, '.npm'),
+    pip: path.join(home, '.cache', 'pip'),
+    uv: path.join(home, '.cache', 'uv'),
+  };
+  for (const directory of Object.values(directories)) {
+    const relative = path.relative(home, directory);
+    let cursor = home;
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, segment);
+      assertOrCreateRealDirectory(cursor, 'MCP runtime directory');
+    }
+  }
+
+  const result: Record<string, string> = {
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: directories.appData,
+    LOCALAPPDATA: directories.localAppData,
+    XDG_CONFIG_HOME: directories.config,
+    XDG_CACHE_HOME: directories.cache,
+    XDG_DATA_HOME: directories.data,
+    XDG_STATE_HOME: directories.state,
+    XDG_RUNTIME_DIR: directories.runtime,
+    TMPDIR: directories.temp,
+    TMP: directories.temp,
+    TEMP: directories.temp,
+    NPM_CONFIG_CACHE: directories.npm,
+    PIP_CACHE_DIR: directories.pip,
+    UV_CACHE_DIR: directories.uv,
+  };
+  if (process.platform === 'win32') {
+    const parsed = path.parse(home);
+    result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
+    result.HOMEPATH = home.slice(parsed.root.length - 1);
+  }
+  return { cwd, env: result };
+}
+
+/**
+ * Backfill the Windows environment variables a child needs in order to launch
+ * anything itself.
+ *
+ * We hand every stdio server an explicit `env`, and the MCP SDK's default
+ * Windows inherit list contains neither ComSpec nor windir/PATHEXT. Any server
+ * that shells out then breaks at spawn time rather than at run time: `npm run`
+ * takes its script shell from `process.env.ComSpec` without a fallback, so a
+ * missing value makes npm spawn `undefined` and abort with ERR_INVALID_ARG_TYPE
+ * before the script produces any diagnostics. Gap-filling only, so an explicit
+ * per-server `env` and the forced runtime boundary above both still win.
+ *
+ * A key that is present but blank counts as missing: a persisted config can
+ * carry `COMSPEC: ""`, and since Windows resolves environment variables
+ * case-insensitively, leaving that empty spelling beside the one we add would
+ * let the child inherit the blank value and crash exactly as before. So the
+ * blank spellings are dropped before the canonical name is written.
+ */
+function applyWindowsSpawnEssentials(env: Record<string, string>): void {
+  if (process.platform !== 'win32') return;
+  const nonEmpty = (
+    source: Record<string, string | undefined>,
+    key: string,
+  ): string | undefined => Object.entries(source).find(
+    ([name, value]) => name.toLowerCase() === key.toLowerCase() && (value ?? '').trim() !== '',
+  )?.[1];
+  const fromHost = (key: string): string | undefined => nonEmpty(process.env, key);
+  const systemRoot = fromHost('SystemRoot') ?? fromHost('windir') ?? 'C:\\Windows';
+  const defaults: Record<string, string> = {
+    SystemRoot: systemRoot,
+    windir: systemRoot,
+    ComSpec: fromHost('ComSpec') ?? path.join(systemRoot, 'System32', 'cmd.exe'),
+    PATHEXT: fromHost('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD',
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    // A spelling that already carries a real value wins untouched, so a server
+    // reading `%windir%` keeps seeing the name it was configured with.
+    if (nonEmpty(env, key) !== undefined) continue;
+    for (const spelling of Object.keys(env)) {
+      if (spelling.toLowerCase() === key.toLowerCase()) delete env[spelling];
+    }
+    env[key] = value;
+  }
+}
+
+/**
+ * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
+ */
+export function resolveStdioLaunch(
+  config: MCPStdioConfig,
+  options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
+): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
-  let command = config.command;
-  let args = config.args ? [...config.args] : [];
+  const shippedDescriptor = shippedDescriptorForConfig(config);
+  const isShipped = Boolean(shippedDescriptor);
+  const isHostTerminal = shippedDescriptor?.defaultName === 'bash';
+  const remapMcpPath = (value: string): string => isShipped
+    ? value
+    : remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
+  let command = remapMcpPath(config.command);
+  let args = config.args ? config.args.map(remapMcpPath) : [];
   const serverDir = `${SERVER_DIR_PREFIX}/${config.name}`;
 
   log.info(`Creating stdio transport for server ${config.name}`);
@@ -363,21 +797,22 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   log.debug(`Server directory: ${serverDir}`);
 
   // Check if the command is a relative path or just a filename
-  const isRelativePath = !path.isAbsolute(command) &&
-    (command.includes('/') || command.includes('\\'));
-  const isJustFilename = !command.includes('/') && !command.includes('\\');
+  const isRelativePath =
+    !path.isAbsolute(command) &&
+    (command.includes("/") || command.includes("\\"));
+  const isJustFilename = !command.includes("/") && !command.includes("\\");
 
   // Log the path analysis
   log.debug(`Is relative path: ${isRelativePath}`);
   log.debug(`Is just filename: ${isJustFilename}`);
 
   // Check if this is a .bat file on Windows
-  if (os.platform() === 'win32' && command.toLowerCase().endsWith('.bat')) {
+  if (os.platform() === "win32" && command.toLowerCase().endsWith(".bat")) {
     log.debug(`Detected .bat file on Windows: ${command}`);
 
     // If it's just a filename (e.g., "run.bat"), check if it exists in the server directory
     if (isJustFilename) {
-      const fullPath = path.join(getDataDir(), serverDir, command);
+      const fullPath = path.join(getWorkspaceDataDir(), serverDir, command);
       log.debug(`Checking if file exists at: ${fullPath}`);
 
       const fileExists = fs.existsSync(fullPath);
@@ -387,19 +822,19 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
         // Use the full path to the .bat file
         log.debug(`Using full path to .bat file: ${fullPath}`);
         // Use cmd.exe to execute the .bat file
-        args = ['/c', fullPath, ...args];
-        command = 'cmd.exe';
+        args = ["/c", fullPath, ...args];
+        command = "cmd.exe";
       } else {
         log.warn(`WARNING: .bat file not found at ${fullPath}`);
         // Still try to use cmd.exe, but log the warning
-        args = ['/c', command, ...args];
-        command = 'cmd.exe';
+        args = ["/c", command, ...args];
+        command = "cmd.exe";
       }
     } else {
       // For relative or absolute paths, use as is with cmd.exe
       log.debug(`Using cmd.exe with path as provided: ${command}`);
-      args = ['/c', command, ...args];
-      command = 'cmd.exe';
+      args = ["/c", command, ...args];
+      command = "cmd.exe";
     }
   }
 
@@ -415,53 +850,183 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
     fileExists: fs.existsSync,
   });
   if (resolvedCommand !== command) {
-    log.debug(`Resolved Node toolchain command "${command}" to absolute path: ${resolvedCommand}`);
+    log.debug(
+      `Resolved Node toolchain command "${command}" to absolute path: ${resolvedCommand}`,
+    );
     command = resolvedCommand;
   }
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  // Use the original (pre-.bat-rewrite) command/args for runner detection so e.g.
-  // `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
-  const resolvedCwd = resolveServerCwd({
+  // Runtime-home isolation is opt-in. The caller resolves the process/server/
+  // workspace precedence before reaching this synchronous spawn boundary.
+  // Bundled Bash remains attached to the host account regardless, because it
+  // intentionally behaves like the user's terminal.
+  const runtime = !isHostTerminal && options?.isolateRuntimeHome === true
+    ? isolatedStdioRuntime(config.name)
+    : undefined;
+  const resolvedCwd = remapMcpPath(resolveServerCwd({
+    // Use the original (pre-.bat-rewrite) command/args for runner detection so
+    // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
     command: config.command,
     args: config.args,
     rootPath: config.rootPath,
     cwd: config.cwd,
     serverName: config.name,
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
-  });
-  // resolveServerCwd may hand back a relative path (e.g. the default
-  // `mcp-servers/<name>`). A child process resolves a relative cwd against the
-  // FLUJO process's cwd (the app dir), but mcp-servers/ lives under the DATA dir
-  // for a packaged install — so anchor a relative cwd to the data dir. For a git
-  // checkout the data dir IS the app dir, so this is a no-op there.
+    // Package managers walk ancestor directories for package.json/node_modules.
+    // Keep their cwd outside both the server root and every other server root.
+    packageRunnerCwd: runtime?.cwd,
+  }));
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
-    : path.join(getDataDir(), resolvedCwd);
+    : path.join(getWorkspaceDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
-  log.debug(`env: ${JSON.stringify(config.env)}`);
+
+  // Transform the env object to extract only the value part from each key.
+  const configuredEnv = transformEnv(config.env);
+  const transformedEnv = isHostTerminal
+    ? hostTerminalEnvironment(configuredEnv)
+    : configuredEnv;
+  if (!isShipped) {
+    for (const [name, value] of Object.entries(transformedEnv)) {
+      transformedEnv[name] = remapMcpPath(value);
+    }
+  }
+  // Third-party and non-terminal shipped servers keep private runtime homes.
+  // Bundled Bash deliberately stays attached to the host account so installed
+  // CLIs, credentials and config behave exactly as they do in a local terminal.
+  if (runtime) Object.assign(transformedEnv, runtime.env);
+  applyWindowsSpawnEssentials(transformedEnv);
+  const parentDataDir = getDataDir();
+  const workspaceDataDir = getWorkspaceDataDir();
+  transformedEnv.FLUJO_PARENT_DATA_DIR = parentDataDir;
+  transformedEnv.FLUJO_DATA_DIR = workspaceDataDir;
+  transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
+  if (shippedDescriptor?.defaultName === 'browser') {
+    // Package installation happens before the child's private HOME/cache is
+    // created. Existing records may therefore have no explicit browser-binary
+    // path even though Patchright installed Chromium successfully in the host
+    // cache. Reattach that installation-wide, read-only asset at the final
+    // launch boundary; explicit persisted/operator paths still win.
+    if (!transformedEnv.PLAYWRIGHT_BROWSERS_PATH?.trim()) {
+      const browsersPath = resolvePlaywrightBrowsersPath(process.env);
+      if (browsersPath) transformedEnv.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+    }
+    // Durable browser output/profile overrides from a pre-workspace config must
+    // not keep writing beside (or outside) the workspace tree.
+    transformedEnv.FLUJO_BROWSER_PROFILE_DIR = path.join(
+      workspaceDataDir,
+      'browser-profile',
+      'trusted',
+    );
+    transformedEnv.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(
+      workspaceDataDir,
+      'screenshots',
+      'browser',
+    );
+    transformedEnv.FLUJO_BROWSER_RECORD_DIR = path.join(
+      workspaceDataDir,
+      'recordings',
+      'browser',
+    );
+  }
+  // This name is reserved for runner-owned, runtime-only authorization.
+  // Strip every case variant so persisted config or an inherited host
+  // environment cannot smuggle a value around the controlled-fixture allowlist.
+  for (const name of Object.keys(transformedEnv)) {
+    if (name.toUpperCase() === GOAL_ENDURANCE_FIXTURE_TOKEN_ENV) {
+      delete transformedEnv[name];
+    }
+  }
+
+  log.verbose(
+    "Transformed environment variable names",
+    JSON.stringify(Object.keys(transformedEnv)),
+  );
+
+  // Select the endurance authorization here, at the final spawn boundary,
+  // through the exact runner/config allowlist. It is never accepted from a
+  // caller or persisted config and is attached only to the matching fixture.
+  const goalEnduranceFixtureToken = resolveGoalEnduranceFixtureToken(config);
+  if (goalEnduranceFixtureToken) {
+    transformedEnv[GOAL_ENDURANCE_FIXTURE_TOKEN_ENV] =
+      goalEnduranceFixtureToken;
+  }
+
+  // Runtime-only credentials for the bundled FLUJO HTTP client. Do not put
+  // these in persisted server configs, archive metadata, or launch logs.
+  if (process.env.FLUJO_WORKER_MODE === '1' && shippedDescriptor?.defaultName === 'flujo') {
+    transformedEnv.FLUJO_WORKER_MODE = '1';
+    if (process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN) {
+      transformedEnv.FLUJO_SNAPSHOT_CONTROL_TOKEN = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+    }
+  }
+
+  return { command, args, env: transformedEnv, cwd };
+}
+
+/** Prepare only workspace-owned shipped code immediately before either SDK spawns it. */
+export function attachShippedWorkspaceReadiness(
+  transport: { start: () => Promise<void> }, config: MCPStdioConfig, cwd: string,
+): void {
+  const descriptor = shippedDescriptorForConfig(config);
+  const workspaceRoot = getWorkspaceDataDir();
+  if (!descriptor || path.resolve(cwd) !== path.resolve(workspaceRoot, 'mcp-servers', descriptor.packageDirectory)) return;
+  const start = transport.start.bind(transport);
+  transport.start = async () => {
+    await ensureShippedWorkspacePackages(workspaceRoot, undefined, [descriptor.packageDirectory]);
+    await start();
+  };
+}
+
+/** Create a stdio transport for the MCP client. */
+export function createStdioTransport(
+  config: MCPServerConfig,
+  options?: TransportCreationOptions,
+): StdioClientTransport {
+  log.debug("Entering createStdioTransport method");
+
+  // Ensure we're working with a stdio config
+  if (config.transport !== "stdio") {
+    throw new Error("Cannot create stdio transport for non-stdio config");
+  }
+
+  const { command, args, env, cwd } = resolveStdioLaunch(config, options);
+  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
+    : undefined;
 
   // Create the transport with stderr capture
-  log.info(`Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`);
+  log.info(
+    `Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`,
+  );
 
-  // Transform the env object to extract only the value part from each key
-  const transformedEnv = transformEnv(config.env);
-
-  log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
   const transportoptions: StdioServerParameters = {
-    command: command, 
+    command: command,
     args: args,
-    env: transformedEnv,
-    cwd: cwd, 
-    stderr: 'pipe'
+    env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
+    cwd: cwd,
+    stderr: "pipe",
   };
 
-  const transport = new StdioClientTransport(transportoptions);
+  let transport: StdioClientTransport;
+  try {
+    transport = new StdioClientTransport(transportoptions);
+    attachShippedWorkspaceReadiness(transport, config, cwd);
+  } catch (error) {
+    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    throw error;
+  }
+  if (runtimeBroker) {
+    (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
+      runtimeBroker.leaseId;
+  }
 
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
-  (transport as unknown as TransportWithConfigKey).__flujoStdioKey = stdioConfigKey(config);
+  (transport as unknown as TransportWithConfigKey).__flujoStdioKey =
+    stdioConfigKey(config, options?.isolateRuntimeHome === true);
 
   // Check if stderr is available
   if (transport.stderr) {
@@ -474,13 +1039,19 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 }
 
 /**
- * Check if an existing client needs to be recreated
+ * Check if an existing client needs to be recreated.
+ *
+ * `useBetaProtocol` is the CURRENT value of the experimental mcpBetaProtocol
+ * setting (see betaClient.ts). A client built by the other SDK generation can
+ * never be reused — the toggle flip rebuilds the connection on next connect.
  */
 export function shouldRecreateClient(
   client: Client,
-  config: MCPServerConfig
+  config: MCPServerConfig,
+  useBetaProtocol = false,
+  options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
 ): { needsNewClient: boolean; reason?: string } {
-  log.debug('Entering shouldRecreateClient method');
+  log.debug("Entering shouldRecreateClient method");
 
   // A closed connection can never serve another request — for HTTP transports the
   // aborted internal signal makes every send() reject instantly with AbortError
@@ -490,25 +1061,75 @@ export function shouldRecreateClient(
   // restart death-spiral this function's raw-key comparisons guard against: a
   // healthy connection never reads as closed.
   if (isClientConnectionClosed(client)) {
-    return { needsNewClient: true, reason: 'Existing connection is closed' };
+    return { needsNewClient: true, reason: "Existing connection is closed" };
   }
 
-  // A change to a connect-time-negotiated client capability (sampling) must rebuild the
+  // A change to a connect-time-negotiated client capability must rebuild the
   // client: it alters both the declared capability (none<->some) and the config the
   // request handlers close over. Roots are exempt by design (issue 46): the capability
   // is always declared and content changes are served live by the roots/list handler +
   // announced via notifications/roots/list_changed — never a rebuild.
-  const currentCapKey = (client as unknown as ClientWithCapKey).__flujoCapKey ?? '';
+  const currentCapKey =
+    (client as unknown as ClientWithCapKey).__flujoCapKey ?? "";
   if (currentCapKey !== capabilityKey(config)) {
-    return { needsNewClient: true, reason: 'Client capabilities (sampling) changed' };
+    return {
+      needsNewClient: true,
+      reason: "Client capabilities (sampling/elicitation/MCP Apps/Skills) changed",
+    };
+  }
+
+  // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always
+  // stay on the v1 SDK (the v2 SDK has no websocket transport), so for them the
+  // toggle is not a config change.
+  const clientIsBeta =
+    (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
+  const wantBeta = useBetaProtocol && config.transport !== "websocket";
+  if (clientIsBeta !== wantBeta) {
+    return {
+      needsNewClient: true,
+      reason: wantBeta
+        ? "Beta MCP protocol enabled"
+        : "Beta MCP protocol disabled",
+    };
+  }
+
+  // A v2-beta client's transports are different classes, so the v1 instanceof checks
+  // below cannot see them. Its transports carry the same raw config keys plus an
+  // explicit kind marker (stashed in betaClient.ts), so compare those instead.
+  if (clientIsBeta) {
+    const transport = client.transport as unknown as
+      TransportWithConfigKey | undefined;
+    if (!transport || transport.__flujoKind !== config.transport) {
+      return {
+        needsNewClient: true,
+        reason: `Transport type changed to ${config.transport}`,
+      };
+    }
+    if (config.transport === "stdio") {
+      if (
+        transport.__flujoStdioKey !==
+        stdioConfigKey(config, options?.isolateRuntimeHome === true)
+      ) {
+        return {
+          needsNewClient: true,
+          reason: "Connection parameters changed",
+        };
+      }
+    } else if (transport.__flujoHttpKey !== httpConfigKey(config)) {
+      return {
+        needsNewClient: true,
+        reason: `${config.transport} auth/connection parameters changed`,
+      };
+    }
+    return { needsNewClient: false };
   }
 
   // Check if transport type has changed
-  if (config.transport === 'websocket') {
+  if (config.transport === "websocket") {
     if (!(client.transport instanceof WebSocketClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to websocket',
+        reason: "Transport type changed to websocket",
       };
     }
 
@@ -517,71 +1138,98 @@ export function shouldRecreateClient(
     // if (transport._url?.toString() !== config.websocketUrl) { // Property '_url' is private and only accessible within class 'WebSocketClientTransport'.
     //   return { needsNewClient: true, reason: 'WebSocket URL changed' };
     // }
-  } else if (config.transport === 'streamable') {
+  } else if (config.transport === "streamable") {
     // For streamable HTTP transport, ensure the existing client uses the matching transport.
     if (!(client.transport instanceof StreamableHTTPClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to streamable',
+        reason: "Transport type changed to streamable",
       };
     }
 
     // Check if the server URL has changed
     const transport = client.transport as StreamableHTTPClientTransport;
-    const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
-    if (currentUrl !== undefined && currentUrl !== new URL(config.serverUrl).toString()) {
-      return { needsNewClient: true, reason: 'Streamable server URL changed' };
+    const currentUrl = (
+      transport as unknown as { _url?: URL }
+    )._url?.toString();
+    if (
+      currentUrl !== undefined &&
+      currentUrl !== new URL(config.serverUrl).toString()
+    ) {
+      return { needsNewClient: true, reason: "Streamable server URL changed" };
     }
 
     // The URL alone cannot reveal a changed PAT / Bearer token or custom header (same URL,
     // new auth). Compare the RAW auth/session key stashed at creation so a token update
     // rebuilds the client instead of silently reusing the stale-token connection — the
     // direct cause of the planned execution's `unauthorized` after a PAT update.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey).__flujoHttpKey;
+    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
+      .__flujoHttpKey;
     if (!existingHttpKey) {
-      return { needsNewClient: true, reason: 'Existing streamable transport has no config key' };
+      return {
+        needsNewClient: true,
+        reason: "Existing streamable transport has no config key",
+      };
     }
     if (existingHttpKey !== httpConfigKey(config)) {
-      return { needsNewClient: true, reason: 'Streamable auth/connection parameters changed' };
+      return {
+        needsNewClient: true,
+        reason: "Streamable auth/connection parameters changed",
+      };
     }
-  } else if (config.transport === 'sse') {
+  } else if (config.transport === "sse") {
     // For SSE transport, ensure the existing client uses the matching transport.
     if (!(client.transport instanceof SSEClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to sse',
+        reason: "Transport type changed to sse",
       };
     }
 
     // Check if the server URL has changed
     const sseConfig = config as MCPSSEConfig;
     const transport = client.transport as SSEClientTransport;
-    const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
-    if (currentUrl !== undefined && currentUrl !== new URL(sseConfig.serverUrl).toString()) {
-      return { needsNewClient: true, reason: 'SSE server URL changed' };
+    const currentUrl = (
+      transport as unknown as { _url?: URL }
+    )._url?.toString();
+    if (
+      currentUrl !== undefined &&
+      currentUrl !== new URL(sseConfig.serverUrl).toString()
+    ) {
+      return { needsNewClient: true, reason: "SSE server URL changed" };
     }
 
     // Same as streamable: detect a changed PAT / Bearer token or custom header behind an
     // unchanged URL by comparing the RAW auth/session key stashed at creation time.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey).__flujoHttpKey;
+    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
+      .__flujoHttpKey;
     if (!existingHttpKey) {
-      return { needsNewClient: true, reason: 'Existing sse transport has no config key' };
+      return {
+        needsNewClient: true,
+        reason: "Existing sse transport has no config key",
+      };
     }
     if (existingHttpKey !== httpConfigKey(config)) {
-      return { needsNewClient: true, reason: 'SSE auth/connection parameters changed' };
+      return {
+        needsNewClient: true,
+        reason: "SSE auth/connection parameters changed",
+      };
     }
   } else {
     // Default is stdio transport
     if (!(client.transport instanceof StdioClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to stdio',
+        reason: "Transport type changed to stdio",
       };
     }
 
     // Ensure we're working with a stdio config
-    if (config.transport !== 'stdio') {
-      return { needsNewClient: true, reason: 'Transport type changed from stdio' };
+    if (config.transport !== "stdio") {
+      return {
+        needsNewClient: true,
+        reason: "Transport type changed from stdio",
+      };
     }
 
     // Compare the RAW config the transport was created from against the incoming raw
@@ -589,18 +1237,25 @@ export function shouldRecreateClient(
     // REWRITTEN command/args (.bat -> cmd.exe, bare node -> absolute path), so for e.g.
     // command "node" they never matched the raw config and every reconnect attempt
     // needlessly killed and respawned a healthy server (the restart death-spiral).
-    const existingKey = (client.transport as unknown as TransportWithConfigKey).__flujoStdioKey;
+    const existingKey = (client.transport as unknown as TransportWithConfigKey)
+      .__flujoStdioKey;
     if (!existingKey) {
       // Transport predates the config-key mechanism (only possible for a client adopted
       // across a dev hot-reload via the global recovery map) — we cannot prove the
       // config still matches, so rebuild once to get a keyed transport.
-      return { needsNewClient: true, reason: 'Existing stdio transport has no config key' };
-    }
-
-    if (existingKey !== stdioConfigKey(config)) {
       return {
         needsNewClient: true,
-        reason: 'Connection parameters changed',
+        reason: "Existing stdio transport has no config key",
+      };
+    }
+
+    if (
+      existingKey !==
+      stdioConfigKey(config, options?.isolateRuntimeHome === true)
+    ) {
+      return {
+        needsNewClient: true,
+        reason: "Connection parameters changed",
       };
     }
   }
@@ -616,17 +1271,17 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
   }
-  return new Promise<boolean>(resolve => {
+  return new Promise<boolean>((resolve) => {
     const onExit = () => {
       clearTimeout(timer);
       resolve(true);
     };
     const timer = setTimeout(() => {
-      child.removeListener('exit', onExit);
+      child.removeListener("exit", onExit);
       resolve(false);
     }, timeoutMs);
     timer.unref?.();
-    child.once('exit', onExit);
+    child.once("exit", onExit);
   });
 }
 
@@ -635,6 +1290,16 @@ export interface SafeCloseOptions {
   gracePeriodMs?: number;
   /** After SIGTERM, how long to wait before escalating to SIGKILL. */
   killEscalationMs?: number;
+}
+
+/** What actually happened during a close — reported so teardown is verifiable (#413). */
+export interface SafeCloseResult {
+  /** The child process (and its group/tree) is gone, or there was no child. */
+  exited: boolean;
+  /** Termination needed signals/taskkill rather than a voluntary exit. */
+  forced: boolean;
+  /** Total time spent tearing the child down, ms. */
+  durationMs: number;
 }
 
 /**
@@ -649,17 +1314,28 @@ export interface SafeCloseOptions {
  * teardown work (browser destroy, session flush) legitimately need more than 2s.
  * Once the child has exited, the SDK's ladder is a no-op.
  */
-export async function safelyCloseClient(client: Client, serverName: string, config?: MCPServerConfig, options?: SafeCloseOptions): Promise<void> {
-  log.debug('Entering safelyCloseClient method');
+export async function safelyCloseClient(
+  client: Client,
+  serverName: string,
+  config?: MCPServerConfig,
+  options?: SafeCloseOptions,
+): Promise<SafeCloseResult> {
+  log.debug("Entering safelyCloseClient method");
+  const startedAt = Date.now();
   const gracePeriodMs = options?.gracePeriodMs ?? 15000;
   const killEscalationMs = options?.killEscalationMs ?? 5000;
+  let exited = true;
+  let forced = false;
+  const rawTransport = getUnderlyingTransport(client.transport);
   try {
-    // Check if the transport is stdio
-    if (client.transport instanceof StdioClientTransport) {
-      const stdioTransport = client.transport as StdioClientTransport;
-      const child: ChildProcess | undefined = (stdioTransport as unknown as { _process: ChildProcess | undefined })._process;
-
-      if (child && child.exitCode === null && child.signalCode === null) {
+    // Check if the transport is stdio. Duck-typed on the private _process field
+    // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
+    // instanceof, so beta-built connections get the same graceful shutdown.
+    const child: ChildProcess | undefined = (
+      rawTransport as { _process?: ChildProcess } | undefined
+    )?._process;
+    if (child && typeof child.kill === "function") {
+      if (child.exitCode === null && child.signalCode === null) {
         // First close stdin to signal graceful shutdown (the MCP stdio convention)
         try {
           if (child.stdin && !child.stdin.destroyed) {
@@ -670,26 +1346,34 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
           log.warn(`Error closing stdin for ${serverName}:`, stdinError);
         }
 
-        let exited = await waitForExit(child, gracePeriodMs);
+        exited = await waitForExit(child, gracePeriodMs);
 
         if (!exited) {
-          log.warn(`Process did not exit within ${gracePeriodMs}ms after stdin close, sending SIGTERM for ${serverName}`);
-          try {
-            child.kill('SIGTERM');
-          } catch (termError) {
-            log.error(`Error sending SIGTERM for ${serverName}:`, termError);
-          }
-          // On Windows SIGTERM is already TerminateProcess, so this second wait
-          // resolves almost immediately; on POSIX it gives handlers a chance.
-          exited = await waitForExit(child, killEscalationMs);
-        }
-
-        if (!exited) {
-          log.warn(`Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`);
-          try {
-            child.kill('SIGKILL');
-          } catch (killError) {
-            log.error(`Error sending SIGKILL for ${serverName}:`, killError);
+          // Issue #413: escalate against the whole process TREE, not just the
+          // immediate child. Most stdio servers are launched through a shell /
+          // `npx` wrapper, so `child.kill()` only ever reached the wrapper and
+          // left the real server (and anything it spawned — a browser, a
+          // language server, a python venv) running as an orphan for the
+          // lifetime of the machine. The awaiting variant also VERIFIES exit, so
+          // a replacement connection can never be built on top of a predecessor
+          // that is still holding its port/profile/lock.
+          log.warn(
+            `Process did not exit within ${gracePeriodMs}ms after stdin close; escalating to a tree kill for ${serverName}`,
+          );
+          const killed = await killProcessTreeAndWait(child, {
+            graceMs: killEscalationMs,
+            finalWaitMs: killEscalationMs,
+          });
+          exited = killed.exited;
+          forced = killed.forced;
+          if (!exited) {
+            log.error(
+              `Process tree for ${serverName} (pid ${killed.pid ?? "unknown"}) did not exit after forced escalation`,
+            );
+          } else {
+            log.warn(
+              `Process tree for ${serverName} force-terminated after ${killed.durationMs}ms`,
+            );
           }
         } else {
           log.info(`Process exited gracefully for ${serverName}`);
@@ -704,5 +1388,10 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
   } catch (error) {
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
+  } finally {
+    revokeMcpAppRuntimeBrokerLease(
+      (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
+    );
   }
+  return { exited, forced, durationMs: Date.now() - startedAt };
 }

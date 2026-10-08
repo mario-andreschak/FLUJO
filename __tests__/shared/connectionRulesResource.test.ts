@@ -76,6 +76,8 @@ describe('getConnectionError — resource matrix', () => {
   it('existing MCP rules are unchanged', () => {
     expect(getConnectionError('process', 'process-right-mcp', 'mcp', 'mcp-left')).toBeNull();
     expect(getConnectionError('mcp', 'mcp-bottom', 'process', 'process-left-mcp')).toBeNull();
+    expect(getConnectionError('static', 'static-right-mcp', 'mcp', 'mcp-left')).toBeNull();
+    expect(getConnectionError('mcp', 'mcp-right', 'static', 'static-left-mcp')).toBeNull();
     expect(getConnectionError('process', 'process-bottom', 'mcp', 'mcp-top')).not.toBeNull();
     expect(getConnectionError('process', 'process-bottom', 'process', 'process-top')).toBeNull();
   });
@@ -88,6 +90,11 @@ describe('pane-drop defaults', () => {
 
   it('a drag from resource-out lands on the process resource input', () => {
     expect(defaultTargetHandleFor('process', 'resource-out')).toBe('process-left-resource');
+  });
+
+  it('connects a newly added MCP node on the side facing its process node', () => {
+    expect(defaultTargetHandleFor('mcp', 'process-left-mcp')).toBe('mcp-right');
+    expect(defaultTargetHandleFor('mcp', 'process-right-mcp')).toBe('mcp-left');
   });
 
   it('flow-control defaults unchanged', () => {

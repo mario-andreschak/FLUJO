@@ -23,7 +23,12 @@ export interface UrlWatchDeps {
    * hash is advanced only once the run actually processed the change — a
    * skipped/failed run leaves it un-consumed for the next check to retry.
    */
-  onFire: (payload: { summary: string; context: unknown }) => Promise<{ status: RunRecordStatus }>;
+  onFire: (payload: {
+    summary: string;
+    context: unknown;
+    /** Stable content identity; unchanged until the baseline commits. */
+    deliveryId: string;
+  }) => Promise<{ status: RunRecordStatus }>;
   onError: (message: string) => void;
   /** Called after every successful check (fired or not) — clears stale errors. */
   onSuccess?: () => void;
@@ -82,6 +87,10 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
       // actually processes the change (commit-after-success, issue #75).
       const { status } = await deps.onFire({
         summary: 'Online content changed',
+        // Retain identity across ambiguous admission/crash retries, but advance
+        // generation after a known terminal failure so bounded retries can run
+        // as new mailbox work instead of deduplicating the same error forever.
+        deliveryId: `url-watch-${hash}-attempt-${state.pendingFailures ?? 0}`,
         context: {
           url: config.url,
           status: response.status,

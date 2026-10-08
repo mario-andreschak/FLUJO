@@ -2,24 +2,59 @@
 
 import React, { Suspense } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
+import LivingWorldGate from './AmbientWorld/LivingWorldGate';
+import RouteStage from './shared/RouteStage';
 import { createLogger } from '@/utils/logger';
+import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
+import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
+import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
+import WorkspaceBootstrap from './WorkspaceBootstrap';
 
 const log = createLogger('frontend/components/AppWrapper');
+
+function AppLoading({ message = 'shell.loading.preparing', compact = false }: { message?: TranslationKey; compact?: boolean }) {
+  const { t } = useI18n();
+  const label = t(message);
+  if (compact) {
+    return (
+      <div
+        aria-label={label}
+        style={{
+          height: 'var(--app-bar-height)',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--surface-glass)',
+          backdropFilter: 'blur(20px)',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="app-loading" role="status" aria-live="polite">
+      <div className="app-loading__content">
+        <div className="app-loading__mark" aria-hidden="true"><span>F</span></div>
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
 
 // Dynamically import components with loading fallbacks
 const ThemeProvider = dynamic(() => import('../contexts/ThemeContext').then(mod => mod.ThemeProvider), {
   ssr: false,
-  loading: () => <div>Loading theme...</div>
+  loading: () => <AppLoading message="shell.loading.theme" />
 });
 
 const StorageProvider = dynamic(() => import('../contexts/StorageContext').then(mod => mod.StorageProvider), {
   ssr: false,
-  loading: () => <div>Loading storage...</div>
+  loading: () => <AppLoading message="shell.loading.workspace" />
 });
 
 const Navigation = dynamic(() => import("./Navigation"), {
   ssr: false,
-  loading: () => <div>Loading navigation...</div>
+  loading: () => <AppLoading message="shell.loading.navigation" compact />
 });
 
 const EncryptionAuthDialog = dynamic(() => import("./EncryptionAuthDialog"), {
@@ -37,6 +72,26 @@ const TourOverlay = dynamic(() => import('./Tour/TourOverlay'), {
   loading: () => null
 });
 
+const TelemetryNotice = dynamic(() => import('./TelemetryNotice'), {
+  ssr: false,
+  loading: () => null
+});
+
+const BigTutorialOverlay = dynamic(() => import('./Tour/BigTutorialOverlay'), {
+  ssr: false,
+  loading: () => null,
+});
+
+const AskFlujoDock = dynamic(() => import('./AskFlujo/AskFlujoDock'), {
+  ssr: false,
+  loading: () => null,
+});
+
+const GlobalMcpAppsHost = dynamic(() => import('./mcp/GlobalMcpAppsHost'), {
+  ssr: false,
+  loading: () => null,
+});
+
 // Error boundary component to catch chunk loading errors
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -51,36 +106,60 @@ class ErrorBoundary extends React.Component<
     return { hasError: true };
   }
 
-  componentDidCatch(error: any) {
+  componentDidCatch(error: unknown) {
     log.error('AppWrapper error boundary caught an error:', error);
   }
 
   render() {
     if (this.state.hasError) {
-      return (
-        <div style={{ padding: '20px', textAlign: 'center' }}>
-          <h2>Something went wrong loading the application.</h2>
-          <p>Please try refreshing the page.</p>
-          <button 
-            onClick={() => window.location.reload()}
-            style={{
-              padding: '8px 16px',
-              background: '#3498DB',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginTop: '10px'
-            }}
-          >
-            Refresh
-          </button>
-        </div>
-      );
+      return <AppErrorFallback />;
     }
 
     return this.props.children;
   }
+}
+
+function AppErrorFallback() {
+  const { t } = useI18n();
+  return (
+    <div className="app-loading">
+      <div
+        className="premium-surface"
+        style={{
+          width: 'min(92vw, 520px)',
+          padding: '42px',
+          borderRadius: '28px',
+          textAlign: 'center',
+        }}
+      >
+        <div className="app-loading__mark" style={{ margin: '0 auto 24px' }} aria-hidden="true">
+          <span>!</span>
+        </div>
+        <h2 style={{ margin: '0 0 10px', letterSpacing: '-0.035em' }}>
+          {t('shell.error.title')}
+        </h2>
+        <p style={{ margin: '0 auto 24px', maxWidth: 380, color: 'var(--text-secondary)' }}>
+          {t('shell.error.body')}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            minHeight: 46,
+            padding: '0 22px',
+            border: 0,
+            borderRadius: 14,
+            cursor: 'pointer',
+            color: '#fff',
+            background: 'linear-gradient(135deg, #9b8cff, #6253e8 55%, #18b8d7)',
+            boxShadow: '0 14px 34px rgba(102, 87, 245, 0.32)',
+            fontWeight: 700,
+          }}
+        >
+          {t('shell.error.reload')}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 interface AppWrapperProps {
@@ -90,23 +169,57 @@ interface AppWrapperProps {
 export default function AppWrapper({ children }: AppWrapperProps) {
   log.debug('Rendering AppWrapper');
   return (
-    <ErrorBoundary>
-      <Suspense fallback={<div>Loading application...</div>}>
-        <ThemeProvider>
-          <StorageProvider>
-            <TourProvider>
-              <Suspense fallback={<div>Loading navigation...</div>}>
-                <Navigation />
-                <EncryptionAuthDialog />
-              </Suspense>
-              <main>
-                {children}
-              </main>
-              <TourOverlay />
-            </TourProvider>
-          </StorageProvider>
-        </ThemeProvider>
+    <I18nProvider>
+      <ErrorBoundary>
+        <Suspense fallback={<AppLoading />}>
+          <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
+            <ThemeProvider>
+              <StorageProvider>
+                <AskFlujoProvider>
+                  <TourProvider>
+                    <LocalizedAppShell>
+                      {children}
+                    </LocalizedAppShell>
+                  </TourProvider>
+                </AskFlujoProvider>
+              </StorageProvider>
+            </ThemeProvider>
+          </WorkspaceBootstrap>
+        </Suspense>
+      </ErrorBoundary>
+    </I18nProvider>
+  );
+}
+
+function LocalizedAppShell({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
+  useCompactAppChrome();
+
+  return (
+    <div className="app-shell">
+      <Link
+        className="skip-link"
+        href="#main-content"
+        replace
+        onNavigate={() => document.getElementById('main-content')?.focus()}
+      >
+        {t('shell.skipToContent')}
+      </Link>
+      <LivingWorldGate />
+      <Suspense fallback={<AppLoading message="shell.loading.navigation" compact />}>
+        <Navigation />
+        <EncryptionAuthDialog />
+        <TelemetryNotice />
+        <AskFlujoDock />
       </Suspense>
-    </ErrorBoundary>
+      <main id="main-content" className="app-main" tabIndex={-1}>
+        <RouteStage>{children}</RouteStage>
+      </main>
+      {/* Persistent owner for Quick Actions MCP Apps. It remains mounted across
+          route changes, so a live iframe/bridge is never reparented or lost. */}
+      <GlobalMcpAppsHost />
+      <TourOverlay />
+      <BigTutorialOverlay />
+    </div>
   );
 }

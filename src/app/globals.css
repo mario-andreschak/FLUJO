@@ -1,35 +1,453 @@
-/* Import XYFlow styles globally */
+/* XYFlow is part of FLUJO's product surface, so its base styles live with the shell. */
 @import '@xyflow/react/dist/style.css';
 
 :root {
-  /* Light theme variables (default) */
-  --background: #FFFFFF;
-  --foreground: #2C3E50;
-  --paper-background: #F5F6FA;
-  --surface-raised: #FFFFFF;
-  --text-secondary: #7F8C8D;
-  --border: #e5e7eb;
+  color-scheme: light;
+  --background: #f5f7ff;
+  --foreground: #151726;
+  --paper-background: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.78);
+  --surface-glass-strong: rgba(255, 255, 255, 0.92);
+  --text-secondary: #626b84;
+  --border: rgba(32, 39, 66, 0.12);
+  --border-strong: rgba(32, 39, 66, 0.2);
+  --accent: #6657f5;
+  --accent-secondary: #16b8d8;
+  --accent-soft: rgba(102, 87, 245, 0.12);
+  --focus-ring: rgba(102, 87, 245, 0.28);
+  --shadow-soft: 0 18px 60px rgba(66, 60, 120, 0.12);
+  --shadow-lifted: 0 28px 80px rgba(50, 45, 104, 0.18);
+  --app-bar-height: 72px;
+  --subnav-height: 44px;
+  --active-subnav-height: 0px;
+  /* Reserved by the persistent app-shell MCP surface. A collapsed rail keeps
+     these at zero and overlays the edge, matching the chat canvas behavior. */
+  --global-mcp-dock-left: 0px;
+  --global-mcp-dock-right: 0px;
+  --global-mcp-dock-top: 0px;
+  --global-mcp-dock-bottom: 0px;
+}
+
+/* Scroll-heavy workspaces trade their introductory chrome for working room
+   once the user has moved into the page. The route-aware scroll listener keeps
+   the controls available while reducing the persistent stack to two compact
+   rows (navigation + page title/actions). */
+:root.app-chrome-condensed {
+  --app-bar-height: 56px;
+  --subnav-height: 38px;
+}
+
+[data-app-navigation],
+[data-app-navigation-toolbar],
+[data-page-header-content],
+[data-page-header-icon],
+[data-page-header-title],
+.living-watershed-nav-link {
+  transition:
+    min-height 180ms ease,
+    height 180ms ease,
+    width 180ms ease,
+    padding 180ms ease,
+    gap 180ms ease,
+    font-size 180ms ease,
+    box-shadow 180ms ease;
+}
+
+:root.app-chrome-condensed [data-app-navigation] {
+  box-shadow: 0 8px 24px rgba(47, 52, 96, 0.1);
+}
+
+:root.app-chrome-condensed [data-app-navigation-toolbar] {
+  gap: 8px;
+}
+
+:root.app-chrome-condensed [data-app-brand-mark] {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  box-shadow: 0 6px 18px rgba(102, 87, 245, 0.24);
+}
+
+:root.app-chrome-condensed [data-app-brand-copy],
+:root.app-chrome-condensed [data-app-private-chip] {
+  display: none;
+}
+
+:root.app-chrome-condensed .living-watershed-nav-link {
+  min-height: 36px;
+  padding-right: 9px;
+  padding-left: 9px;
+}
+
+:root.app-chrome-condensed [data-page-header-content] {
+  gap: 12px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:root.app-chrome-condensed [data-page-header-icon] {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+
+:root.app-chrome-condensed [data-page-header-meta],
+:root.app-chrome-condensed [data-page-header-description] {
+  display: none;
+}
+
+:root.app-chrome-condensed [data-page-header-title] {
+  font-size: 1.05rem;
+}
+
+:root.app-chrome-condensed [data-page-header-actions] {
+  gap: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-app-navigation],
+  [data-app-navigation-toolbar],
+  [data-page-header-content],
+  [data-page-header-icon],
+  [data-page-header-title],
+  .living-watershed-nav-link {
+    transition: none;
+  }
 }
 
 :root.dark-theme {
-  /* Dark theme variables (layered ramp, redesigned for issue #150) */
+  color-scheme: dark;
+  --background: #070912;
+  --foreground: #f4f6ff;
+  --paper-background: #12182c;
+  --surface-raised: #1c243b;
+  --surface-glass: rgba(13, 17, 31, 0.76);
+  --surface-glass-strong: rgba(13, 17, 31, 0.94);
+  --text-secondary: #aab2c8;
+  --border: rgba(153, 166, 205, 0.16);
+  --border-strong: rgba(153, 166, 205, 0.28);
+  --accent: #8b7cff;
+  --accent-secondary: #31d2ed;
+  --accent-soft: rgba(139, 124, 255, 0.14);
+  --focus-ring: rgba(139, 124, 255, 0.34);
+  --shadow-soft: 0 22px 70px rgba(0, 0, 0, 0.34);
+  --shadow-lifted: 0 34px 100px rgba(0, 0, 0, 0.5);
+}
+
+/* The two Legacy presets intentionally restore the original compact palette.
+   UX improvements remain available, but the modern ambient/glass treatment is
+   kept behind the visual-style preference instead of leaking across themes. */
+:root.legacy-theme {
+  --background: #ffffff;
+  --foreground: #2c3e50;
+  --paper-background: #f5f6fa;
+  --surface-raised: #ffffff;
+  --surface-glass: #f5f6fa;
+  --surface-glass-strong: #ffffff;
+  --text-secondary: #7f8c8d;
+  --border: #e5e7eb;
+  --border-strong: #d1d5db;
+  --accent: #007bff;
+  --accent-secondary: #6c757d;
+  --accent-soft: rgba(0, 123, 255, 0.1);
+  --focus-ring: rgba(0, 123, 255, 0.26);
+  --shadow-soft: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lifted: 0 10px 24px rgba(0, 0, 0, 0.14);
+}
+
+:root.legacy-theme.dark-theme {
   --background: #0f1319;
   --foreground: #eef1f5;
   --paper-background: #1a212b;
   --surface-raised: #242d3a;
+  --surface-glass: #1a212b;
+  --surface-glass-strong: #242d3a;
   --text-secondary: #b4bdca;
   --border: #37404e;
+  --border-strong: #4b5563;
+  --accent: #4f93f5;
+  --accent-secondary: #a3adba;
+  --accent-soft: rgba(79, 147, 245, 0.12);
+  --focus-ring: rgba(79, 147, 245, 0.3);
+  --shadow-soft: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lifted: 0 12px 28px rgba(0, 0, 0, 0.42);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: var(--background);
+  scroll-behavior: smooth;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100dvh;
   margin: 0;
   padding: 0;
+  color: var(--foreground);
+  background:
+    radial-gradient(circle at 8% -10%, rgba(102, 87, 245, 0.14), transparent 34rem),
+    radial-gradient(circle at 96% 8%, rgba(22, 184, 216, 0.1), transparent 28rem),
+    var(--background);
+  font-family: var(--font-geist-sans), Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  isolation: isolate;
 }
 
-/* Global styles that were previously provided by Tailwind */
+body::before {
+  position: fixed;
+  z-index: -2;
+  inset: -25vh -18vw auto;
+  height: 70vh;
+  content: '';
+  pointer-events: none;
+  opacity: 0.72;
+  filter: blur(80px);
+  background:
+    radial-gradient(circle at 32% 46%, rgba(121, 92, 255, 0.24), transparent 23%),
+    radial-gradient(circle at 64% 26%, rgba(46, 207, 232, 0.16), transparent 22%),
+    radial-gradient(circle at 78% 62%, rgba(244, 98, 177, 0.11), transparent 20%);
+  transform: translate3d(0, 0, 0);
+}
+
+body::after {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  opacity: 0.2;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), transparent 68%);
+}
+
+:root.legacy-theme body {
+  background: var(--background);
+}
+
+:root.legacy-theme body::before,
+:root.legacy-theme body::after {
+  display: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  color: #fff;
+  background: rgba(102, 87, 245, 0.82);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 42%, transparent);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-secondary) 65%, transparent);
+  background-clip: padding-box;
+}
+
+.app-shell {
+  position: relative;
+  min-height: 100dvh;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 9999;
+  top: 10px;
+  left: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--foreground);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform 150ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.app-main {
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+  width: calc(100% - var(--global-mcp-dock-left) - var(--global-mcp-dock-right));
+  min-height: calc(
+    100dvh
+    - var(--app-bar-height)
+    - var(--active-subnav-height)
+    - var(--global-mcp-dock-top)
+    - var(--global-mcp-dock-bottom)
+  );
+  margin-top: var(--global-mcp-dock-top);
+  margin-right: var(--global-mcp-dock-right);
+  margin-bottom: var(--global-mcp-dock-bottom);
+  margin-left: var(--global-mcp-dock-left);
+  transition: margin 160ms ease, width 160ms ease, min-height 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-main {
+    transition: none;
+  }
+}
+
+.app-loading {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  color: var(--foreground);
+  background: var(--background);
+}
+
+.app-loading__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.app-loading__mark {
+  position: relative;
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  color: #fff;
+  background: linear-gradient(145deg, #8d7dff, #5042df 48%, #16b8d8);
+  box-shadow: 0 18px 50px rgba(102, 87, 245, 0.38);
+  animation: loading-float 1.8s ease-in-out infinite;
+}
+
+.app-loading__mark::after {
+  position: absolute;
+  inset: -40%;
+  content: '';
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.65), transparent 62%);
+  transform: translateX(-80%) rotate(12deg);
+  animation: loading-shine 1.8s ease-in-out infinite;
+}
+
+.app-loading__mark span {
+  z-index: 1;
+  font-size: 1.05rem;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+
+.premium-page {
+  width: min(100%, 1440px);
+  margin-inline: auto;
+  padding: clamp(20px, 3vw, 42px);
+}
+
+.premium-surface {
+  border: 1px solid var(--border);
+  background: var(--surface-glass);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(22px) saturate(140%);
+}
+
+.premium-eyebrow {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.stagger-in {
+  animation: reveal-up 620ms cubic-bezier(0.2, 0.75, 0.2, 1) both;
+}
+
+.stagger-in:nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.stagger-in:nth-child(3) {
+  animation-delay: 140ms;
+}
+
+.stagger-in:nth-child(4) {
+  animation-delay: 210ms;
+}
+
+:root.legacy-theme .premium-surface {
+  background: var(--paper-background);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: none;
+}
+
+:root.legacy-theme .stagger-in {
+  animation: none;
+}
+
+:root.legacy-theme .app-loading__mark {
+  border-radius: 8px;
+  background: var(--accent);
+  box-shadow: var(--shadow-soft);
+  animation: none;
+}
+
+:root.legacy-theme .app-loading__mark::after {
+  display: none;
+}
+
+/* Global styles that were previously provided by Tailwind. */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -40,4 +458,86 @@ body {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border-width: 0;
+}
+
+@keyframes loading-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(2deg);
+  }
+}
+
+@keyframes loading-shine {
+  0%,
+  28% {
+    transform: translateX(-90%) rotate(12deg);
+  }
+  72%,
+  100% {
+    transform: translateX(90%) rotate(12deg);
+  }
+}
+
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 1199px) {
+  :root {
+    --app-bar-height: 64px;
+  }
+}
+
+@media (min-width: 900px) {
+  :root.has-app-subnav {
+    --active-subnav-height: var(--subnav-height);
+  }
+}
+
+@media (max-width: 599px) {
+  body::after {
+    background-size: 32px 32px;
+  }
+
+  .premium-page {
+    padding: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+@keyframes ask-flujo-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(139, 124, 246, 0.42), 0 0 0 8px rgba(24, 184, 215, 0.14); }
+  50% { box-shadow: 0 0 0 5px rgba(139, 124, 246, 0.7), 0 0 0 14px rgba(24, 184, 215, 0.08); }
+}
+
+.ask-flujo-highlight {
+  position: relative;
+  z-index: 2;
+  border-radius: 10px;
+  outline: 2px solid rgba(139, 124, 246, 0.95) !important;
+  outline-offset: 3px;
+  animation: ask-flujo-pulse 1.35s ease-in-out infinite;
 }

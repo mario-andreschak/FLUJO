@@ -23,12 +23,14 @@ import {
   type RegistryAuthAction,
   type RegistryAuthResult,
   type RegistryPublishResult,
+  type RegistryDeleteResult,
   type RegistryOAuthProvider,
 } from '@/shared/types/registry';
 import * as client from '@/backend/utils/packageRegistryClient';
 import type { RegistryAuthPayload } from '@/backend/utils/packageRegistryClient';
 import { buildAuthorizeUrl, exchangeAuthorizationCode } from '@/backend/services/registry/oauth-adapter';
 import { randomBytes, createHash } from 'crypto';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/registry');
 
@@ -107,8 +109,23 @@ function toStatus(account: StoredRegistryAccount): RegistryAccountStatus {
   };
 }
 
+/**
+ * Masked, browser-safe view of the stored account, verified against the real
+ * decryptability of the token (not just presence of the ciphertext string).
+ * `toStatus()`'s `hasToken` check alone can't tell a usable token from stale/
+ * undecryptable ciphertext (e.g. left over from an encryption-key change), which
+ * showed the account as "signed in" while `publish()` still threw
+ * `NotAuthenticatedError`.
+ */
 export async function getAccountStatus(): Promise<RegistryAccountStatus> {
-  return toStatus(await loadStored());
+  const account = await loadStored();
+  if (account.accessToken) {
+    const decrypted = await decryptApiKey(account.accessToken);
+    if (!decrypted) {
+      return toStatus({ ...account, accessToken: '' });
+    }
+  }
+  return toStatus(account);
 }
 
 /**
@@ -120,9 +137,10 @@ export async function authenticate(
   email: string,
   password: string,
   mode: RegistryAuthAction,
+  handle?: string,
 ): Promise<RegistryAuthResult> {
-  const call = mode === 'signup' ? client.signup : client.login;
-  const { status, body } = await call(email, password);
+  const { status, body } =
+    mode === 'signup' ? await client.signup(email, password, handle || '') : await client.login(email, password);
 
   if (status === 0) {
     return { status: 'error', message: 'Could not reach the package registry.' };
@@ -184,6 +202,7 @@ interface OAuthPendingSession {
   codeVerifier: string;
   redirectUri: string;
   createdAt: number;
+  workspace: string;
 }
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes.
@@ -215,7 +234,13 @@ export async function beginOAuth(
   pruneExpiredOAuthSessions();
   const state = randomBytes(24).toString('base64url');
   const { verifier, challenge } = generatePkce();
-  oauthSessions.set(state, { provider, codeVerifier: verifier, redirectUri, createdAt: Date.now() });
+  oauthSessions.set(state, {
+    provider,
+    codeVerifier: verifier,
+    redirectUri,
+    createdAt: Date.now(),
+    workspace: getCurrentWorkspace(),
+  });
   const authorizationUrl = await buildAuthorizeUrl({ provider, redirectUri, state, codeChallenge: challenge });
   return { authorizationUrl, state };
 }
@@ -229,12 +254,16 @@ export async function beginOAuth(
 export async function completeOAuth(code: string, state: string): Promise<RegistryAuthResult> {
   pruneExpiredOAuthSessions();
   const session = state ? oauthSessions.get(state) : undefined;
-  // Single-use: consume the state regardless of the exchange outcome.
-  if (state) oauthSessions.delete(state);
 
   if (!code || !session) {
     return { status: 'error', message: 'Your sign-in session expired or was invalid. Please try again.' };
   }
+  if (session.workspace !== getCurrentWorkspace()) {
+    return { status: 'error', message: 'The sign-in callback targeted a different workspace.' };
+  }
+  // Single-use after workspace validation: a callback cannot consume another
+  // workspace's pending session by changing its workspace query parameter.
+  oauthSessions.delete(state);
 
   const { status, body } = await exchangeAuthorizationCode({
     code,
@@ -258,6 +287,12 @@ export async function completeOAuth(code: string, state: string): Promise<Regist
     status: 'error',
     message: body?.error || body?.message || `Registry responded with status ${status}.`,
   };
+}
+
+/** Resolve the workspace bound to an opaque, still-live OAuth state token. */
+export function pendingOAuthWorkspace(state: string): string | undefined {
+  pruneExpiredOAuthSessions();
+  return state ? oauthSessions.get(state)?.workspace : undefined;
 }
 
 /** Resend the confirmation email for the stored (or provided) address. */
@@ -308,10 +343,16 @@ async function withAccessToken<T>(
   call: (token: string) => Promise<client.RegistryHttpResponse<T>>,
 ): Promise<client.RegistryHttpResponse<T>> {
   const account = await loadStored();
-  if (!account.accessToken) throw new NotAuthenticatedError();
+  if (!account.accessToken) {
+    log.warn('withAccessToken: no accessToken stored; treating as signed out.');
+    throw new NotAuthenticatedError();
+  }
 
   const accessToken = await decryptApiKey(account.accessToken);
-  if (!accessToken) throw new NotAuthenticatedError();
+  if (!accessToken) {
+    log.warn('withAccessToken: stored accessToken could not be decrypted; treating as signed out.');
+    throw new NotAuthenticatedError();
+  }
 
   let result = await call(accessToken);
   if (result.status !== 401) return result;
@@ -374,6 +415,52 @@ export async function publish(manifest: unknown): Promise<RegistryPublishResult>
     }
     log.error('Unexpected error publishing package', err instanceof Error ? err.message : err);
     return { ok: false, code: 'error', error: 'Unexpected error publishing package.' };
+  }
+}
+
+/** Delete a published package; the hosted registry verifies token ownership. */
+export async function deletePublishedPackage(packageId: string): Promise<RegistryDeleteResult> {
+  const id = packageId.trim();
+  if (!id) {
+    return { ok: false, code: 'validation', error: 'A package id is required.' };
+  }
+
+  try {
+    // Fail locally as defense-in-depth; the hosted registry performs the same
+    // ownership check against the JWT and remains authoritative.
+    const account = await loadStored();
+    const idOwner = id.split('/')[0]?.replace(/^@/, '').toLowerCase();
+    const accountOwner = account.publisherHandle?.replace(/^@/, '').toLowerCase();
+    if (accountOwner && idOwner !== accountOwner) {
+      return { ok: false, code: 'forbidden', error: 'You can only delete packages you own.' };
+    }
+
+    const { status, body } = await withAccessToken((token) => client.deletePackage(id, token));
+    if (status >= 200 && status < 300) return { ok: true };
+
+    const message = body?.error || body?.message || '';
+    if (status === 401) {
+      return { ok: false, code: 'unauthorized', error: 'Your registry session expired. Please log in again.' };
+    }
+    if (status === 403) {
+      return { ok: false, code: 'forbidden', error: 'You can only delete packages you own.' };
+    }
+    if (status === 404) {
+      return { ok: false, code: 'not_found', error: message || 'The package no longer exists.' };
+    }
+    if (status === 400 || status === 422) {
+      return { ok: false, code: 'validation', error: message || 'The registry rejected the package id.' };
+    }
+    if (status === 0) {
+      return { ok: false, code: 'error', error: 'Could not reach the package registry.' };
+    }
+    return { ok: false, code: 'error', error: message || `Registry responded with status ${status}.` };
+  } catch (err) {
+    if (err instanceof NotAuthenticatedError) {
+      return { ok: false, code: 'not_authenticated', error: 'Sign in to the package registry before deleting a package.' };
+    }
+    log.error('Unexpected error deleting package', err instanceof Error ? err.message : err);
+    return { ok: false, code: 'error', error: 'Unexpected error deleting package.' };
   }
 }
 

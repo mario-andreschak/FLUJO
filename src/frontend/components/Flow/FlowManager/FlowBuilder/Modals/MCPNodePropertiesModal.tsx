@@ -1,551 +1,632 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  TextField, // Keep TextField
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Typography,
+  Alert,
   Box,
-  IconButton,
-  Divider,
-  FormHelperText,
-  Grid,
-  Paper,
-  Radio,
-  RadioGroup,
-  FormControlLabel,
-  Checkbox,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
-  Switch,
+  Button,
+  Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  Divider,
+  FormControlLabel,
+  FormHelperText,
+  IconButton,
+  Stack,
+  Switch,
+  Tab,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DnsOutlinedIcon from '@mui/icons-material/DnsOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import Tooltip from '@mui/material/Tooltip';
-import { FlowNode } from '@/frontend/types/flow/flow';
-import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
-import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
-import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/RootsManager';
-import { createLogger } from '@/utils/logger/index';
-
-const logger = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal');
-import { useServerStatus } from '@/frontend/hooks/useServerStatus';
-import { useServerTools } from '@/frontend/hooks/useServerTools';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
+import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
+import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/RootsManager';
+import { FlowNode } from '@/frontend/types/flow/flow';
+import { useServerStatus, type ServerState } from '@/frontend/hooks/useServerStatus';
+import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
+import {
+  DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+  TOOL_CALL_TIMEOUT_INFINITE,
+  type MCPToolParameterPresets,
+} from '@/shared/types/mcp';
+import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { createLogger } from '@/utils/logger/index';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import MCPNodeToolList from './MCPNodeToolList';
+
+const logger = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal');
 
 interface MCPNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
+  authoringMode?: FlowAuthoringMode;
+  /** Open the server card picker immediately for a quick-created MCP node. */
+  serverPickerInitiallyOpen?: boolean;
+  /** Quick-create selection commits immediately instead of revealing settings. */
+  onQuickServerSelect?: (node: FlowNode, serverName: string) => void | Promise<void>;
 }
 
-export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodePropertiesModalProps) => {
-  // Clone node data to avoid direct mutation
-  const [nodeData, setNodeData] = useState<{
-    label: string;
-    type: string;
-    description?: string;
-    properties: Record<string, any>;
-  } | null>(null);
+type CompactTab = 'server' | 'tools' | 'settings';
+type DesktopTab = 'tools' | 'settings';
 
-  // Get server status using the hook
-  const { 
-    servers, 
-    isLoading: isLoadingServers, 
-    loadError, 
-    retryServer 
-  } = useServerStatus();
-  
-  // State for the selected server
-  // State for tracking which servers are being retried
+interface MCPNodeProperties extends Record<string, unknown> {
+  boundServer?: string;
+  nameIsCustom?: boolean;
+  enabledTools?: string[];
+  toolParameterPresets?: MCPToolParameterPresets;
+  roots?: string[];
+  toolTimeout?: number;
+}
+
+interface MCPNodeData {
+  label: string;
+  type: string;
+  description?: string;
+  properties: MCPNodeProperties;
+}
+
+type ServerCardStatus = React.ComponentProps<typeof ServerCard>['status'];
+
+const toServerCardStatus = (status: ServerState['status']): ServerCardStatus => (
+  status === 'starting' ? 'connecting' : status
+);
+
+export const MCPNodePropertiesModal = ({
+  open,
+  node,
+  onClose,
+  onSave,
+  authoringMode = 'advanced',
+  serverPickerInitiallyOpen = false,
+  onQuickServerSelect,
+}: MCPNodePropertiesModalProps) => {
+  const { t } = useI18n();
+  const theme = useTheme();
+  const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
+  const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
+  const [nodeData, setNodeData] = useState<MCPNodeData | null>(null);
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
-
-  // Shared MCP picker view-model (#92): reuse the MCP Servers page's saved
-  // search/sort/folder settings so binding a server here matches that page.
-  const serverPicker = useCardPicker<any>('mcp', servers);
-
-  // Whole-list "reload connections" retry beside the picker (#92): the modal's
-  // retry is a list-level reload, so one control refreshes every server.
   const [retryingAll, setRetryingAll] = useState(false);
-  const handleRetryAllServers = async () => {
-    setRetryingAll(true);
-    try {
-      await Promise.all(servers.map((s: any) => retryServer(s.name)));
-    } finally {
-      setTimeout(() => setRetryingAll(false), 500);
-    }
-  };
-  
-  // Get tools for the selected server using the hook
-  const { 
-    tools: mcpTools, 
-    isLoading: isLoadingTools, 
+  const [serverPickerOpen, setServerPickerOpen] = useState(false);
+  const [activeCompactTab, setActiveCompactTab] = useState<CompactTab>('server');
+  const [activeDesktopTab, setActiveDesktopTab] = useState<DesktopTab>('tools');
+  const [initializeToolsForServer, setInitializeToolsForServer] = useState<string | null>(null);
+
+  const {
+    servers,
+    isLoading: isLoadingServers,
+    loadError,
+    retryServer,
+  } = useServerStatus();
+  const serverPicker = useCardPicker<ServerState>('mcp', servers);
+  const selectedServer = nodeData?.properties.boundServer ?? '';
+  const {
+    tools: mcpTools,
+    toolsServerName,
+    isLoading: isLoadingTools,
     error: toolsError,
-    loadTools
-  } = useServerTools(nodeData?.properties?.boundServer || ''); // Use derived value directly
+    loadTools,
+    retryLoadTools,
+  } = useServerTools(selectedServer);
 
-  // Load node data when node changes
   useEffect(() => {
-    if (node) {
-      setNodeData({
-        ...node.data,
-        properties: { ...node.data.properties }
-      });
-      // If there's a bound server, ensure it's part of the initial nodeData
-      // No need to call setSelectedServer here anymore
-    }
-  }, [node, open]);
-
-  // Get selected server name from nodeData (can be used elsewhere if needed)
-  const selectedServer = nodeData?.properties?.boundServer || '';
-
-  // Helper function to initialize enabled tools
-  const initializeEnabledTools = (tools: any[]) => {
-    if (!nodeData) return;
-    
-    const enabledToolsFromProps = nodeData.properties.enabledTools || [];
-    if (enabledToolsFromProps.length === 0 && tools.length > 0) {
-      // If no tools were previously enabled, enable all by default
-      logger.debug('Enabling all tools by default');
-      setNodeData(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          properties: {
-            ...prev.properties,
-            enabledTools: tools.map((tool) => tool.name)
-          }
-        };
-      });
-    }
-  };
-
-  // Initialize enabled tools when tools change
-  useEffect(() => {
-    if (mcpTools && mcpTools.length > 0) {
-      initializeEnabledTools(mcpTools);
-    }
-  }, [mcpTools]);
-
-  const handlePropertyChange = (key: string, value: any) => {
-    setNodeData((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        properties: {
-          ...prev.properties,
-          [key]: value,
-        },
-      };
+    if (!node) return;
+    setNodeData({
+      ...node.data,
+      properties: { ...node.data.properties } as MCPNodeProperties,
     });
+    const hasServer = !!node.data.properties?.boundServer;
+    setActiveCompactTab(hasServer ? 'tools' : 'server');
+    setActiveDesktopTab('tools');
+    setServerPickerOpen(serverPickerInitiallyOpen && !hasServer);
+    setInitializeToolsForServer(null);
+  }, [node, open, serverPickerInitiallyOpen]);
+
+  // A newly selected server starts with all of its tools enabled, matching the
+  // existing add-and-connect flow. An explicitly saved empty list is left alone
+  // so "Deactivate all" remains durable after reopening the modal.
+  useEffect(() => {
+    if (
+      !initializeToolsForServer
+      || initializeToolsForServer !== selectedServer
+      || toolsServerName !== initializeToolsForServer
+      || isLoadingTools
+      || toolsError
+    ) return;
+    setNodeData((previous) => previous ? {
+      ...previous,
+      properties: {
+        ...previous.properties,
+        enabledTools: mcpTools.map((tool) => tool.name),
+      },
+    } : null);
+    setInitializeToolsForServer(null);
+  }, [initializeToolsForServer, isLoadingTools, mcpTools, selectedServer, toolsError, toolsServerName]);
+
+  const handlePropertyChange = (key: string, value: unknown) => {
+    setNodeData((previous) => previous ? {
+      ...previous,
+      properties: { ...previous.properties, [key]: value },
+    } : null);
   };
 
-  // Handle label change. Editing the label by hand marks it custom so binding a
-  // server never auto-overwrites it (issue #38, Item C).
   const handleLabelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setNodeData((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        label: event.target.value,
-        properties: {
-          ...prev.properties,
-          nameIsCustom: true,
-        },
-      };
-    });
+    setNodeData((previous) => previous ? {
+      ...previous,
+      label: event.target.value,
+      properties: { ...previous.properties, nameIsCustom: true },
+    } : null);
   };
 
   const handleSave = () => {
-    if (node && nodeData) {
-      onSave(node.id, nodeData);
-      onClose();
+    if (!node || !nodeData) return;
+    onSave(node.id, nodeData);
+    onClose();
+  };
+
+  const handleRetryAllServers = async () => {
+    setRetryingAll(true);
+    try {
+      await Promise.all(servers.map((server) => retryServer(server.name)));
+    } finally {
+      setRetryingAll(false);
     }
   };
 
-  // Handle retrying a server connection
   const handleRetryServer = async (serverName: string, event?: React.MouseEvent) => {
-    if (event) {
-      event.stopPropagation();
-    }
-    
+    event?.stopPropagation();
     logger.debug(`Retrying server: ${serverName}`);
-    
-    // Set retrying state for this server
-    setRetryingServers(prev => ({
-      ...prev,
-      [serverName]: true
-    }));
-    
+    setRetryingServers((previous) => ({ ...previous, [serverName]: true }));
     try {
-      // Call the retry function from the hook
       await retryServer(serverName);
-      
-      // If this is the selected server, reload its tools
-      if (serverName === selectedServer) {
-        loadTools(true); // Force reload
-      }
-      
+      if (serverName === selectedServer) loadTools(true);
       return true;
     } catch (error) {
       logger.warn(`Failed to retry server ${serverName}: ${error}`);
       return false;
     } finally {
-      // Reset retrying state after a short delay
-      setTimeout(() => {
-        setRetryingServers(prev => ({
-          ...prev,
-          [serverName]: false
-        }));
-      }, 500);
+      setRetryingServers((previous) => ({ ...previous, [serverName]: false }));
     }
   };
 
   const handleServerSelect = (serverName: string) => {
     logger.debug(`Server selected: ${serverName}`);
-    logger.debug(`Server selected: ${serverName}`);
-    // Update selectedServer state if needed (though it's derived now)
-    // setSelectedServer(serverName); // No longer needed if derived
-
-    setNodeData((prev) => {
-      if (!prev) return null;
-      // Auto-name the node after the bound server unless the user renamed it by
-      // hand. previousAutoLabel (the prior server name) lets a re-bind re-label a
-      // node still showing the old server's auto name (issue #38, Item C).
+    if (node && onQuickServerSelect) {
+      setServerPickerOpen(false);
+      void Promise.resolve(onQuickServerSelect(node, serverName)).then(onClose);
+      return;
+    }
+    setServerPickerOpen(false);
+    setNodeData((previous) => {
+      if (!previous || previous.properties?.boundServer === serverName) return previous;
       const newLabel = resolveAutoNodeLabel({
-        currentLabel: prev.label,
-        nameIsCustom: prev.properties?.nameIsCustom,
+        currentLabel: previous.label,
+        nameIsCustom: previous.properties?.nameIsCustom,
         defaultLabel: 'MCP Node',
-        previousAutoLabel: prev.properties?.boundServer || undefined,
+        previousAutoLabel: previous.properties?.boundServer || undefined,
         nextAutoLabel: serverName,
       });
-
       return {
-        ...prev,
+        ...previous,
         label: newLabel,
         properties: {
-          ...prev.properties,
+          ...previous.properties,
           boundServer: serverName,
-          // Reset enabled tools when server changes? Consider this.
-          // enabledTools: [], // Optional: Reset tools on server change
+          enabledTools: [],
         },
+      };
+    });
+    if (serverName !== selectedServer) setInitializeToolsForServer(serverName);
+    setActiveCompactTab('tools');
+  };
+
+  const handleToolToggle = (toolName: string) => {
+    setNodeData((previous) => {
+      if (!previous) return null;
+      const current = Array.isArray(previous.properties.enabledTools)
+        ? previous.properties.enabledTools as string[]
+        : [];
+      const enabledTools = current.includes(toolName)
+        ? current.filter((name) => name !== toolName)
+        : [...current, toolName];
+      return {
+        ...previous,
+        properties: { ...previous.properties, enabledTools },
       };
     });
   };
-  
-  const handleToolToggle = (toolName: string) => {
-    logger.debug(`Tool toggled: ${toolName}`);
-    setNodeData((prev) => {
-      if (!prev) return null;
-      
-      const currentEnabledTools = prev.properties.enabledTools || [];
-      let newEnabledTools: string[];
-      
-      if (currentEnabledTools.includes(toolName)) {
-        // Remove tool if already enabled
-        newEnabledTools = currentEnabledTools.filter((name: string) => name !== toolName);
-      } else {
-        // Add tool if not already enabled
-        newEnabledTools = [...currentEnabledTools, toolName];
-      }
-      
-      return {
-        ...prev,
-        properties: {
-          ...prev.properties,
-          enabledTools: newEnabledTools,
-        },
-      };
-    });
+
+  const setAllToolsEnabled = (enabled: boolean) => {
+    handlePropertyChange('enabledTools', enabled ? mcpTools.map((tool) => tool.name) : []);
   };
 
   if (!node || !nodeData) return null;
 
   const boundServer = nodeData.properties?.boundServer || '';
-  const enabledTools = nodeData.properties?.enabledTools || [];
+  const enabledTools = Array.isArray(nodeData.properties?.enabledTools)
+    ? nodeData.properties.enabledTools as string[]
+    : [];
+  const selectedServerConfig = servers.find((server) => server.name === boundServer);
+  const toolTimeout = nodeData.properties?.toolTimeout;
+  const isTimeoutInfinite = toolTimeout === TOOL_CALL_TIMEOUT_INFINITE;
 
-  // Build the server-picker cells (#92). Each server card is a click target
-  // that binds the node; selection mirrors the RadioGroup this replaced.
-  const renderServerCard = (server: any) => (
+  const renderServerCard = (server: ServerState) => (
     <ServerCard
       name={server.name}
-      status={(server.status as any) || 'disconnected'}
+      status={toServerCardStatus(server.status)}
       path={server.path || server.rootPath || ''}
       enabled={!server.disabled}
-      transport={(server.transport as any) || 'stdio'}
+      transport={server.transport}
       pickerMode
       selected={boundServer === server.name}
       onClick={() => handleServerSelect(server.name)}
     />
   );
-  const toServerCell = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const toServerCell = (server: ServerState): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
   const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
   const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
-    ? serverPicker.groups.map((g) => ({ ...g, items: g.items.map(toServerCell) }))
+    ? serverPicker.groups.map((group) => ({ ...group, items: group.items.map(toServerCell) }))
     : null;
-  // Tool call timeout: seconds; -1 = infinite; undefined = 5-minute default.
-  const toolTimeout = nodeData.properties?.toolTimeout;
-  const isTimeoutInfinite = toolTimeout === TOOL_CALL_TIMEOUT_INFINITE;
 
-  return (
-    <Dialog 
-      open={open} 
-      onClose={onClose}
-      maxWidth="md"
-      fullWidth
-      PaperProps={{
-        sx: { 
-          borderTop: 5, 
-          borderColor: 'info.main',
-          height: '80vh',
-          maxHeight: '80vh'
-        }
-      }}
-    >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {nodeData.label || 'MCP Node'} Properties
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
-            <CloseIcon />
-          </IconButton>
+  const serverGrid = (
+    <CardPickerGrid
+      isLoading={isLoadingServers}
+      error={loadError}
+      emptyMessage={t('flows.mcpNode.empty')}
+      loadingMessage={t('flows.mcpNode.loadingServers')}
+      searchable
+      searchPlaceholder={t('flows.mcpNode.searchServers')}
+      searchTerm={serverPicker.searchTerm}
+      onSearchChange={serverPicker.setSearchTerm}
+      columns={{ xs: 12 }}
+      items={serverPickerItems}
+      groups={serverPickerGroups}
+      collapsedKeys={serverPicker.collapsedKeys}
+      onToggleGroup={serverPicker.toggleGroup}
+      autoFocusSearch={false}
+    />
+  );
+
+  const desktopServerPanel = (
+    <Box data-testid="mcp-server-pane" sx={{ height: '100%', minHeight: 0, overflowY: 'auto', p: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1.5 }}>
+        <Box>
+          <Typography variant="h6">{t('flows.mcpNode.bind')}</Typography>
+          <Typography variant="body2" color="text.secondary">{t('flows.mcpNode.select')}</Typography>
         </Box>
-      </DialogTitle>
-      
-      <Divider />
+        <Tooltip title={t('flows.mcpNode.retryAll')}>
+          <span>
+            <IconButton size="small" onClick={handleRetryAllServers} disabled={retryingAll || isLoadingServers}>
+              {retryingAll ? <CircularProgress size={18} /> : <RefreshIcon fontSize="small" />}
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+      {serverGrid}
+      <FormHelperText sx={{ mt: 1 }}>
+        {boundServer ? t('flows.mcpNode.bound', { server: boundServer }) : t('flows.mcpNode.select')}
+      </FormHelperText>
+    </Box>
+  );
 
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 3, overflow: 'auto' }}>
-        {/* Node Label Input */}
-        <TextField
-          fullWidth
-          label="Node Label"
-          value={nodeData.label || ''}
-          onChange={handleLabelChange}
-          margin="normal"
-          helperText="The display name for this node on the canvas"
-          sx={{ mb: 2 }} // Add some bottom margin
-        />
-
-        {/* Bind to MCP Server */}
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="subtitle1" gutterBottom>
-            Bind to MCP Server
-          </Typography>
-          
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-            <Tooltip title="Retry all server connections">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={handleRetryAllServers}
-                  disabled={retryingAll || isLoadingServers}
-                >
-                  {retryingAll ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-          <CardPickerGrid
-            isLoading={isLoadingServers}
-            error={loadError}
-            emptyMessage="No MCP servers available. Add some in the MCP Manager."
-            loadingMessage="Loading MCP servers…"
-            searchable
-            searchPlaceholder="Search servers…"
-            searchTerm={serverPicker.searchTerm}
-            onSearchChange={serverPicker.setSearchTerm}
-            columns={{ xs: 12, sm: 6 }}
-            items={serverPickerItems}
-            groups={serverPickerGroups}
-            collapsedKeys={serverPicker.collapsedKeys}
-            onToggleGroup={serverPicker.toggleGroup}
+  const compactServerPanel = (
+    <Box data-testid="mcp-compact-server-picker" sx={{ maxWidth: 680, mx: 'auto' }}>
+      <Typography variant="h6" sx={{ mb: 0.5 }}>{t('flows.mcpNode.bind')}</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {t('flows.mcpNode.select')}
+      </Typography>
+      <Button
+        fullWidth
+        variant="outlined"
+        size="large"
+        startIcon={<DnsOutlinedIcon />}
+        onClick={() => setServerPickerOpen(true)}
+        sx={{ justifyContent: 'flex-start', textTransform: 'none', py: 1.25 }}
+      >
+        <Box component="span" sx={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {boundServer || t('flows.mcpNode.chooseServer')}
+        </Box>
+        {selectedServerConfig && (
+          <Chip
+            size="small"
+            label={selectedServerConfig.status || 'disconnected'}
+            color={selectedServerConfig.status === 'connected' ? 'success' : 'default'}
+            sx={{ ml: 1 }}
           />
-          <FormHelperText>
-            {boundServer
-              ? `This node will use the "${boundServer}" MCP server for processing.`
-              : 'Select an MCP server to bind this node to.'}
-          </FormHelperText>
-        </Box>
-        
-        {/* Description field - kept */}
-        <TextField
-          fullWidth
-          label="Description"
-          value={nodeData.description || ''}
-          onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
-          margin="normal"
-          multiline
-          rows={2}
-          helperText="This description will be displayed on the node"
-        />
-        
-        {/* Tool Call Timeout section */}
-        {boundServer && (
-          <Box sx={{ mt: 4 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Tool Call Timeout
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              How long a single tool call on this server may run before it is aborted.
-              Tools that report progress keep the timeout alive while they work.
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <TextField
-                label="Timeout (seconds)"
-                type="number"
-                size="small"
-                sx={{ width: 200 }}
-                value={isTimeoutInfinite ? '' : (toolTimeout ?? '')}
-                placeholder={String(DEFAULT_TOOL_CALL_TIMEOUT_SECONDS)}
-                disabled={isTimeoutInfinite}
-                inputProps={{ min: 1 }}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  if (raw === '') {
-                    handlePropertyChange('toolTimeout', undefined);
-                    return;
-                  }
-                  const parsed = parseInt(raw, 10);
-                  if (!isNaN(parsed) && parsed > 0) {
-                    handlePropertyChange('toolTimeout', parsed);
-                  }
-                }}
-                helperText={isTimeoutInfinite
-                  ? 'No timeout — tool calls run until they finish.'
-                  : `Empty = default (${DEFAULT_TOOL_CALL_TIMEOUT_SECONDS} seconds / 5 minutes).`}
-              />
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={isTimeoutInfinite}
-                    onChange={(e) => handlePropertyChange(
-                      'toolTimeout',
-                      e.target.checked ? TOOL_CALL_TIMEOUT_INFINITE : undefined
-                    )}
-                  />
-                }
-                label="No timeout (infinite)"
-              />
-            </Box>
-          </Box>
         )}
+      </Button>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+        <Button
+          size="small"
+          startIcon={retryingAll ? <CircularProgress size={16} /> : <RefreshIcon />}
+          onClick={handleRetryAllServers}
+          disabled={retryingAll || isLoadingServers}
+        >
+          {t('flows.mcpNode.retryAll')}
+        </Button>
+      </Box>
+      <FormHelperText>
+        {boundServer ? t('flows.mcpNode.bound', { server: boundServer }) : t('flows.mcpNode.select')}
+      </FormHelperText>
+    </Box>
+  );
 
-        {/* Allowed Tools section - new */}
-        {boundServer && (
-          <Box sx={{ mt: 4 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Allowed Tools
-            </Typography>
-            
-            {/* Show message if server is disconnected */}
-            {servers.find(s => s.name === boundServer)?.status !== 'connected' && (
-              <Box sx={{ mb: 2, p: 2, bgcolor: 'error.light', borderRadius: 1 }}>
-                <Typography color="error.dark">
-                  Server is disconnected. Tools cannot be fetched. Please retry the connection.
-                </Typography>
-                <Button 
-                  variant="outlined" 
-                  size="small" 
-                  color="primary" 
+  const toolsPanel = (
+    <Box data-testid="mcp-tools-pane">
+      {!boundServer ? (
+        <Alert severity="info">{t('flows.mcpNode.connectForTools')}</Alert>
+      ) : (
+        <>
+          {selectedServerConfig?.status !== 'connected' && (
+            <Alert
+              severity="warning"
+              sx={{ mb: 2 }}
+              action={(
+                <Button
+                  color="inherit"
+                  size="small"
                   startIcon={retryingServers[boundServer] ? <CircularProgress size={16} /> : <RefreshIcon />}
                   onClick={() => handleRetryServer(boundServer)}
                   disabled={retryingServers[boundServer]}
-                  sx={{ mt: 1 }}
                 >
-                  Retry Connection
+                  {t('flows.mcpNode.retry')}
                 </Button>
-              </Box>
-            )}
-            
-            {isLoadingTools ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CircularProgress size={20} />
-                <Typography color="text.secondary">Loading tools...</Typography>
-              </Box>
-            ) : toolsError ? (
-              <Typography color="error">{toolsError}</Typography>
-            ) : !mcpTools || mcpTools.length === 0 ? (
-              <Typography color="text.secondary">
-                {servers.find(s => s.name === boundServer)?.status === 'connected' 
-                  ? "No tools available for this MCP server." 
-                  : "Connect to the server to view available tools."}
-              </Typography>
-            ) : (
-              <Box sx={{ mt: 2 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Select which tools this node will have access to. This helps limit the tools available to connected process nodes.
-                </Typography>
-                
-                <List>
-                  {mcpTools.map((tool) => (
-                    <ListItem key={tool.name} sx={{ py: 0 }}>
-                      <ListItemIcon sx={{ minWidth: 42 }}>
-                        <Switch
-                          edge="start"
-                          checked={enabledTools.includes(tool.name)}
-                          onChange={() => handleToolToggle(tool.name)}
-                        />
-                      </ListItemIcon>
-                      <ListItemText 
-                        primary={tool.name}
-                        secondary={tool.description}
-                        primaryTypographyProps={{ fontWeight: 'medium' }}
-                      />
-                    </ListItem>
-                  ))}
-                </List>
-              </Box>
-            )}
-          </Box>
-        )}
-        
-        {/* Per-node Environment Variables were removed (issue #63): MCP connections
-            are singletons keyed by server name and a stdio server's env is fixed at
-            spawn, so a per-node env overlay was never applied. Set env on the MCP
-            server config itself instead. */}
-
-        {/* Workspace folders (MCP roots) for this node — issue 46. Reuses the server
-            modal's RootsManager; these roots are ADDED to the server's own roots while
-            this node runs (connections are shared per server, so this is additive
-            advisory scoping, not an override). */}
-        {boundServer && (
-          <Box sx={{ mt: 4 }}>
-            <RootsManager
-              roots={nodeData.properties?.roots || []}
-              onChange={(roots) => handlePropertyChange('roots', roots)}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              These folders apply to this node only and are <strong>added to</strong> the
-              workspace folders configured on the &quot;{boundServer}&quot; server itself.
-              When neither is set, the server sees its own root dir as its workspace folder.
+              )}
+            >
+              {t('flows.mcpNode.disconnected')}
+            </Alert>
+          )}
+          {isLoadingTools ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, py: 6 }}>
+              <CircularProgress size={24} />
+              <Typography color="text.secondary">{t('flows.mcpNode.loadingTools')}</Typography>
+            </Box>
+          ) : toolsError ? (
+            <Alert
+              severity="error"
+              action={(
+                <Button color="inherit" size="small" onClick={retryLoadTools}>
+                  {t('flows.mcpNode.retry')}
+                </Button>
+              )}
+            >
+              {toolsError}
+            </Alert>
+          ) : mcpTools.length === 0 ? (
+            <Typography color="text.secondary" sx={{ py: 3 }}>
+              {selectedServerConfig?.status === 'connected'
+                ? t('flows.mcpNode.noTools')
+                : t('flows.mcpNode.connectForTools')}
             </Typography>
-          </Box>
-        )}
-      </DialogContent>
-      
-      <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave} variant="contained" color="primary">
-          Save Changes
-        </Button>
-      </DialogActions>
-    </Dialog>
+          ) : (
+            <MCPNodeToolList
+              tools={mcpTools}
+              enabledTools={enabledTools}
+              onToggle={handleToolToggle}
+              onActivateAll={() => setAllToolsEnabled(true)}
+              onDeactivateAll={() => setAllToolsEnabled(false)}
+              parameterPresets={nodeData.properties?.toolParameterPresets}
+              onParameterPresetsChange={(toolParameterPresets) => handlePropertyChange('toolParameterPresets', toolParameterPresets)}
+              workspaceRoots={nodeData.properties?.roots?.length
+                ? nodeData.properties.roots
+                : selectedServerConfig?.roots?.length
+                  ? selectedServerConfig.roots
+                  : selectedServerConfig?.rootPath
+                    ? [selectedServerConfig.rootPath]
+                    : []}
+            />
+          )}
+        </>
+      )}
+    </Box>
+  );
+
+  const settingsPanel = (
+    <Box data-testid="mcp-settings-pane" sx={{ maxWidth: 820 }}>
+      <Typography variant="h6" sx={{ mb: 2 }}>{t('common.settings')}</Typography>
+      <TextField
+        fullWidth
+        label={t('flows.mcpNode.label')}
+        value={nodeData.label || ''}
+        onChange={handleLabelChange}
+        helperText={t('flows.mcpNode.labelHelp')}
+        sx={{ mb: 2 }}
+      />
+      <TextField
+        fullWidth
+        label={t('flows.mcpNode.description')}
+        value={nodeData.description || ''}
+        onChange={(event) => setNodeData({ ...nodeData, description: event.target.value })}
+        multiline
+        minRows={2}
+        helperText={t('flows.mcpNode.descriptionHelp')}
+      />
+
+      {boundServer && (
+        <>
+          <Divider sx={{ my: 3 }} />
+          <Typography variant="subtitle1">{t('flows.mcpNode.timeoutTitle')}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            {t('flows.mcpNode.timeoutHelp')}
+          </Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+            <TextField
+              label={t('flows.mcpNode.timeoutSeconds')}
+              type="number"
+              size="small"
+              sx={{ width: { xs: '100%', sm: 220 } }}
+              value={isTimeoutInfinite ? '' : (toolTimeout ?? '')}
+              placeholder={String(DEFAULT_TOOL_CALL_TIMEOUT_SECONDS)}
+              disabled={isTimeoutInfinite}
+              inputProps={{ min: 1 }}
+              onChange={(event) => {
+                const raw = event.target.value;
+                if (raw === '') {
+                  handlePropertyChange('toolTimeout', undefined);
+                  return;
+                }
+                const parsed = Number.parseInt(raw, 10);
+                if (!Number.isNaN(parsed) && parsed > 0) handlePropertyChange('toolTimeout', parsed);
+              }}
+              helperText={isTimeoutInfinite
+                ? t('flows.mcpNode.noTimeoutHelp')
+                : t('flows.mcpNode.defaultTimeout', { seconds: DEFAULT_TOOL_CALL_TIMEOUT_SECONDS })}
+            />
+            <FormControlLabel
+              control={(
+                <Switch
+                  checked={isTimeoutInfinite}
+                  onChange={(event) => handlePropertyChange(
+                    'toolTimeout',
+                    event.target.checked ? TOOL_CALL_TIMEOUT_INFINITE : undefined,
+                  )}
+                />
+              )}
+              label={t('flows.mcpNode.noTimeout')}
+            />
+          </Stack>
+
+          <Divider sx={{ my: 3 }} />
+          <RootsManager
+            roots={nodeData.properties?.roots || []}
+            onChange={(roots) => handlePropertyChange('roots', roots)}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            {t('flows.mcpNode.rootsHelp', { server: boundServer })}
+          </Typography>
+        </>
+      )}
+    </Box>
+  );
+
+  return (
+    <>
+      <Dialog
+        open={open}
+        onClose={onClose}
+        maxWidth="xl"
+        fullWidth
+        data-authoring-mode={authoringMode}
+        PaperProps={{
+          sx: {
+            borderTop: 5,
+            borderColor: 'info.main',
+            m: { xs: 1, sm: 4 },
+            width: { xs: 'calc(100% - 16px)', sm: '95vw' },
+            height: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
+            maxWidth: { xs: 'calc(100% - 16px)', sm: '95vw' },
+            maxHeight: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
+          },
+        }}
+      >
+        <DialogHeaderActions
+          title={t('flows.modal.properties', { name: nodeData.label || t('flows.mcpNode.title') })}
+          onClose={onClose}
+          titleProps={{ sx: { minWidth: 0, overflowWrap: 'anywhere' } }}
+        />
+        <Divider />
+
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', flexGrow: 1, minHeight: 0 }}>
+          {isCompactLayout ? (
+            <>
+              <Box sx={{ borderBottom: 1, borderColor: 'divider', px: { xs: 0, sm: 2 }, flexShrink: 0 }}>
+                <Tabs
+                  value={activeCompactTab}
+                  onChange={(_, value: CompactTab) => setActiveCompactTab(value)}
+                  variant="scrollable"
+                  scrollButtons="auto"
+                  aria-label={t('flows.mcpNode.title')}
+                >
+                  <Tab label={t('flows.mcpNode.bind')} value="server" />
+                  <Tab label={t('flows.mcpNode.allowedTools')} value="tools" />
+                  <Tab label={t('common.settings')} value="settings" />
+                </Tabs>
+              </Box>
+              <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, sm: 3 } }}>
+                {activeCompactTab === 'server' && compactServerPanel}
+                {activeCompactTab === 'tools' && toolsPanel}
+                {activeCompactTab === 'settings' && settingsPanel}
+              </Box>
+            </>
+          ) : (
+            <Box
+              data-testid="mcp-desktop-split"
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(320px, 38%) minmax(0, 1fr)',
+                flexGrow: 1,
+                minHeight: 0,
+              }}
+            >
+              <Box sx={{ minWidth: 0, minHeight: 0, borderRight: 1, borderColor: 'divider' }}>
+                {desktopServerPanel}
+              </Box>
+              <Box sx={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2, flexShrink: 0 }}>
+                  <Tabs
+                    value={activeDesktopTab}
+                    onChange={(_, value: DesktopTab) => setActiveDesktopTab(value)}
+                    variant="scrollable"
+                    scrollButtons="auto"
+                    aria-label={t('flows.mcpNode.allowedTools')}
+                  >
+                    <Tab label={t('flows.mcpNode.allowedTools')} value="tools" />
+                    <Tab label={t('common.settings')} value="settings" />
+                  </Tabs>
+                </Box>
+                <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: 3 }}>
+                  {activeDesktopTab === 'tools' ? toolsPanel : settingsPanel}
+                </Box>
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: { xs: 1.5, sm: 3 }, py: { xs: 1, sm: 1.5 }, flexShrink: 0 }}>
+          <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
+          <Button onClick={handleSave} variant="contained" color="primary">
+            {t('flows.modal.saveChanges')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <CardPickerDialog
+        open={serverPickerOpen}
+        onClose={onQuickServerSelect ? onClose : () => setServerPickerOpen(false)}
+        fullScreen={isPhoneLayout}
+        maxWidth="md"
+        title={t('flows.mcpNode.bind')}
+        description={t('flows.mcpNode.select')}
+        isLoading={isLoadingServers}
+        error={loadError}
+        emptyMessage={t('flows.mcpNode.empty')}
+        loadingMessage={t('flows.mcpNode.loadingServers')}
+        searchable
+        searchPlaceholder={t('flows.mcpNode.searchServers')}
+        searchTerm={serverPicker.searchTerm}
+        onSearchChange={serverPicker.setSearchTerm}
+        columns={{ xs: 12, sm: 6 }}
+        items={serverPickerItems}
+        groups={serverPickerGroups}
+        collapsedKeys={serverPicker.collapsedKeys}
+        onToggleGroup={serverPicker.toggleGroup}
+      />
+    </>
   );
 };
 

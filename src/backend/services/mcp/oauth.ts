@@ -4,8 +4,35 @@ import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
+import { getCurrentWorkspace } from '@/utils/workspace';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 const log = createLogger('backend/services/mcp/oauth');
+
+/** Authorization callbacks older than this must start a fresh flow. */
+export const MCP_OAUTH_STATE_TTL_MS = 20 * 60 * 1000;
+
+/** Constant-time validation of the persisted, workspace-bound OAuth nonce. */
+export function matchesOAuthState(
+  config: MCPStreamableConfig,
+  candidate: string,
+  workspace: string,
+  now = Date.now(),
+): boolean {
+  if (
+    !/^[A-Za-z0-9_-]{43}$/.test(candidate)
+    || !/^[A-Za-z0-9_-]{43}$/.test(config.oauthState ?? '')
+    || !config.oauthState
+    || config.oauthStateWorkspace !== workspace
+    || typeof config.oauthStateCreatedAt !== 'number'
+    || now - config.oauthStateCreatedAt < 0
+    || now - config.oauthStateCreatedAt > MCP_OAUTH_STATE_TTL_MS
+  ) return false;
+
+  const expected = Buffer.from(config.oauthState);
+  const received = Buffer.from(candidate);
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
 
 /**
  * OAuth client provider implementation for MCP servers
@@ -42,12 +69,13 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     return this._clientMetadata;
   }
 
-  /**
-   * OAuth2 state parameter, carried through the redirect round-trip so /api/oauth/callback
-   * knows which server config to resume. Consumed by auth()'s startAuthorization() call.
-   */
+  /** Create an opaque callback nonce. saveCodeVerifier() persists it before redirect. */
   state(): string {
-    return encodeURIComponent(JSON.stringify({ serverName: this.config.name }));
+    const state = randomBytes(32).toString('base64url');
+    this.config.oauthState = state;
+    this.config.oauthStateWorkspace = getCurrentWorkspace();
+    this.config.oauthStateCreatedAt = Date.now();
+    return state;
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
@@ -115,6 +143,9 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     }
     if (scope === 'all' || scope === 'verifier') {
       this.config.oauthCodeVerifier = undefined;
+      this.config.oauthState = undefined;
+      this.config.oauthStateWorkspace = undefined;
+      this.config.oauthStateCreatedAt = undefined;
     }
     // Note: scope 'discovery' is a no-op — FLUJO does not cache OAuth discovery state;
     // the SDK's auth() re-discovers (RFC 9728) on each call, so there is nothing to clear.
@@ -165,8 +196,8 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       // yields one. Clearing the token set here (as this method once did) destroys the
       // refresh token and forces a full interactive re-auth after every access-token
       // lifetime (~1h for Asana), even though the grant is still perfectly valid.
-      if (this.config.oauthTokens.expires_in && (this.config.oauthTokens as any).issued_at) {
-        const issuedAt = (this.config.oauthTokens as any).issued_at;
+      const issuedAt = (this.config.oauthTokens as OAuthTokens & { issued_at?: number }).issued_at;
+      if (this.config.oauthTokens.expires_in && issuedAt) {
         const expiresIn = this.config.oauthTokens.expires_in;
         const currentTime = Math.floor(Date.now() / 1000);
         const expirationTime = issuedAt + expiresIn;

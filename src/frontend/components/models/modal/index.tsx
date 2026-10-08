@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createLogger } from '@/utils/logger';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
@@ -21,23 +20,45 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { Link as LinkIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { Model } from '@/shared/types';
+import { NormalizedModel } from '@/shared/types/model/response';
 import {
   ModelProvider,
   ModelAdapter,
   PROVIDER_PROFILES,
+  getModelConfigurationCapabilities,
   getProviderProfile,
+  resolveModelAdapter,
+  supportsProviderModelDiscovery,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
+import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 const log = createLogger('frontend/components/models/modal');
 
 import { ModelResult } from '@/frontend/services/model';
+
+const discoveredModelMetadata = (model: NormalizedModel): Partial<Model> => ({
+  ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+  ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+  ...(model.supportsTools !== undefined ? { supportsTools: model.supportsTools } : {}),
+  ...(model.supportedParameters !== undefined ? { supportedParameters: model.supportedParameters } : {}),
+  ...(model.inputModalities !== undefined ? { inputModalities: model.inputModalities } : {}),
+  ...(model.outputModalities !== undefined ? { outputModalities: model.outputModalities } : {}),
+  ...(model.visionInputCapability !== undefined ? { visionInputCapability: model.visionInputCapability } : {}),
+});
 
 export interface ModelModalProps {
   open: boolean;
@@ -47,62 +68,246 @@ export interface ModelModalProps {
 }
 
 export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
+  const { t } = useI18n();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const router = useRouter();
-  const { globalEnvVars } = useStorage();
+  const { globalEnvVars, settings } = useStorage();
   const [formState, setFormState] = useState<Partial<Model>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<string | null>(null);
   const [isApiKeyBound, setIsApiKeyBound] = useState(false);
   const [boundToGlobalVar, setBoundToGlobalVar] = useState<string | null>(null);
   const [showBindModal, setShowBindModal] = useState(false);
-  const [openRouterModels, setOpenRouterModels] = useState<Array<{id: string, name: string, description?: string}>>([]);
+  const [openRouterModels, setOpenRouterModels] = useState<NormalizedModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const discoveryRequestIdRef = useRef(0);
+  const currentProfile = getProviderProfile(formState.provider, formState.adapter);
+  const canDiscoverProviderModels =
+    supportsProviderModelDiscovery(currentProfile, formState.baseUrl);
+  const discoveryCredential = isApiKeyBound && boundToGlobalVar
+    ? `\${global:${boundToGlobalVar}}`
+    : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
+  const hasDiscoveryCredential =
+    currentProfile.id !== 'gemini-native' ||
+    Boolean(discoveryCredential) ||
+    Boolean(model.name);
 
-  // Clear models list when modal opens
+  const askEditableFields = useMemo(() => [
+    'displayName',
+    'name',
+    'description',
+    'baseUrl',
+    'azureApiVersion',
+    'promptTemplate',
+    'temperature',
+    'reasoningEffort',
+    'thinkingLevel',
+    'thinkingBudget',
+    'serviceTier',
+    'contextWindow',
+    'maxTurns',
+    'maxTokens',
+  ] as const, []);
+
+  const highlightModelField = useCallback((field: string) => {
+    const root = [...document.querySelectorAll('[data-ask-flujo-model-id]')]
+      .find(element => element.getAttribute('data-ask-flujo-model-id') === model.id) ?? null;
+    const named = root
+      ? [...root.querySelectorAll('[name]')].find(element => element.getAttribute('name') === field) ?? null
+      : null;
+    const target = named?.closest('.MuiFormControl-root') ?? root;
+    return highlightAskFlujoElement(target);
+  }, [model.id]);
+
+  const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
+    if (action.target.kind !== 'model-field' || !action.target.field) {
+      return { success: false, message: 'That model UI target is not supported.' };
+    }
+    const field = action.target.field;
+    if (!askEditableFields.includes(field as typeof askEditableFields[number])) {
+      return { success: false, message: `The model field "${field}" is read-only for Ask FLUJO.` };
+    }
+    if (action.type === 'highlight') {
+      const highlighted = highlightModelField(field);
+      return {
+        success: highlighted,
+        message: highlighted ? `Highlighted ${field}.` : `Could not find ${field} on screen.`,
+      };
+    }
+    const numericFields = new Set(['thinkingBudget', 'contextWindow', 'maxTurns', 'maxTokens']);
+    if (numericFields.has(field)) {
+      if (typeof action.value !== 'number' || !Number.isFinite(action.value)) {
+        return { success: false, message: `${field} must be a finite number.` };
+      }
+    } else if (typeof action.value !== 'string') {
+      return { success: false, message: `${field} must be text.` };
+    }
+    setFormState(current => ({ ...current, [field]: action.value }));
+    window.requestAnimationFrame(() => highlightModelField(field));
+    return { success: true, message: `Updated ${field} in the unsaved form. Review it, then Save.` };
+  }, [askEditableFields, highlightModelField]);
+
+  useAskFlujoPage({
+    scopeId: `model:${model.id}`,
+    pageType: 'model',
+    route: '/models',
+    title: formState.displayName || model.displayName || model.name || 'Model',
+    identifiers: { modelId: model.id },
+    data: {
+      model: {
+        ...formState,
+        id: model.id,
+        ApiKey: formState.ApiKey ? '[REDACTED]' : '',
+      },
+      saved: false,
+    },
+    capabilities: {
+      highlightTargets: askEditableFields.map(field => ({ kind: 'model-field', field })),
+      editableTargets: askEditableFields.map(field => ({ kind: 'model-field', field })),
+      notes: [
+        'This is the live, unsaved model form.',
+        'API keys are never included in Ask FLUJO context and cannot be edited by Ask FLUJO.',
+      ],
+    },
+  }, handleAskFlujoAction, 100);
+
+  const fetchModels = useCallback(async (
+    baseUrl: string,
+    searchTerm?: string,
+    profileId: string = currentProfile.id,
+    apiKeyForFetch?: string,
+  ) => {
+    const requestId = ++discoveryRequestIdRef.current;
+    log.debug("fetchModels called", {
+      baseUrl,
+      profileId,
+      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      apiKey: apiKeyForFetch ? "present" : "not present",
+    });
+    setIsLoadingModels(true);
+    setErrors({});
+    try {
+      // Pass the current key directly so unsaved models can discover without
+      // persisting plaintext. A masked existing key remains undefined and is
+      // resolved from the stored model on the backend.
+      const fetchedModels = await modelService.fetchProviderModels(
+        baseUrl,
+        model.id,
+        searchTerm,
+        apiKeyForFetch,
+        profileId,
+      );
+      if (requestId !== discoveryRequestIdRef.current) return;
+      log.debug("Models fetched successfully", {
+        count: fetchedModels?.length,
+        searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      });
+
+      if (Array.isArray(fetchedModels)) {
+        setOpenRouterModels(fetchedModels);
+        // Editing an existing model should discover metadata too; requiring the
+        // user to re-select the already-exact technical name would not be
+        // automatic. Resolve against current state so typing during discovery
+        // cannot apply metadata for a superseded technical name.
+        setFormState(prev => {
+          const exactModel = fetchedModels.find(candidate => candidate.id === prev.name);
+          return exactModel ? {
+            ...prev,
+            ...discoveredModelMetadata(exactModel),
+          } : prev;
+        });
+        log.info("Models set in state", {
+          count: fetchedModels.length,
+          searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+        });
+      } else {
+        log.warn("Unexpected API response format", { models: fetchedModels });
+        setOpenRouterModels([]);
+      }
+    } catch (error) {
+      if (requestId !== discoveryRequestIdRef.current) return;
+      log.warn("Error fetching models", { baseUrl, searchTerm, error });
+      // Silently fail - don't show error messages in the UI.
+      setOpenRouterModels([]);
+    } finally {
+      if (requestId === discoveryRequestIdRef.current) {
+        setIsLoadingModels(false);
+      }
+    }
+  }, [currentProfile.id, model.id]);
+
+  // Opening or closing the modal invalidates any response still in flight.
   useEffect(() => {
+    discoveryRequestIdRef.current += 1;
+    setIsLoadingModels(false);
     if (open) {
       setOpenRouterModels([]);
     }
   }, [open]);
 
-  // Clear models when baseUrl or apiKey changes
+  // Clear provider results and invalidate in-flight work whenever the discovery
+  // identity changes. Native profiles participate without exposing a base URL.
   useEffect(() => {
-    if (formState.baseUrl) {
-      log.debug("Base URL or API Key changed", { baseUrl: formState.baseUrl });
-      // Clear cached models when baseUrl or API key changes
-      setOpenRouterModels([]);
+    discoveryRequestIdRef.current += 1;
+    setIsLoadingModels(false);
+    setOpenRouterModels([]);
+    if (canDiscoverProviderModels) {
+      log.debug('Provider discovery identity changed', {
+        baseUrl: formState.baseUrl,
+        profileId: currentProfile.id,
+      });
     }
-  }, [formState.baseUrl, formState.ApiKey]);
+  }, [
+    formState.baseUrl,
+    discoveryCredential,
+    isApiKeyBound,
+    boundToGlobalVar,
+    currentProfile.id,
+    canDiscoverProviderModels,
+  ]);
 
-  // Debounced effect for fetching models when technical name changes
+  // Load the complete catalogue once per modal/profile/endpoint/credential
+  // identity. Typing filters the in-memory list locally and does not create a
+  // provider request per keystroke.
   useEffect(() => {
-    // Clear any existing timeout
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
     }
 
-    // Only set up debounced fetch if we have the required data
-    if (formState.baseUrl) {
+    if (open && canDiscoverProviderModels && hasDiscoveryCredential) {
       debounceTimeoutRef.current = setTimeout(() => {
-        log.debug("Debounced fetchModels triggered", { 
-          name: formState.name, 
+        log.debug('Automatic provider discovery triggered', {
           baseUrl: formState.baseUrl,
-          searchTerm: formState.name ? `"${formState.name}"` : 'none'
+          profileId: currentProfile.id,
         });
-        // Pass the current input value as search term for server-side filtering
-        fetchModels(formState.baseUrl!, formState.name);
-      }, 100); // 100ms delay
+        fetchModels(
+          formState.baseUrl ?? '',
+          undefined,
+          currentProfile.id,
+          discoveryCredential,
+        );
+      }, 100);
     }
 
-    // Cleanup function
     return () => {
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [formState.name, formState.baseUrl]);
+  }, [
+    open,
+    formState.baseUrl,
+    discoveryCredential,
+    isApiKeyBound,
+    boundToGlobalVar,
+    currentProfile.id,
+    canDiscoverProviderModels,
+    hasDiscoveryCredential,
+    fetchModels,
+  ]);
 
   // Cleanup timeout on component unmount
   useEffect(() => {
@@ -113,54 +318,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     };
   }, []);
 
-  const fetchModels = async (baseUrl: string, searchTerm?: string) => {
-    log.debug("fetchModels called", { 
-      baseUrl, 
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
-      apiKey: formState.ApiKey ? "present" : "not present", 
-      isApiKeyBound 
-    });
-    setIsLoadingModels(true);
-    setErrors({});
-    try {
-      // Pass the key the user is currently entering directly to the backend so the provider's
-      // model list can be fetched WITHOUT persisting the model first. When the key wasn't
-      // edited (masked placeholder), send nothing and let the backend use the stored key
-      // looked up by model id (existing models only).
-      const apiKeyForFetch = isApiKeyBound && boundToGlobalVar
-        ? `\${global:${boundToGlobalVar}}`
-        : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
-
-      const fetchedModels = await modelService.fetchProviderModels(baseUrl, model.id, searchTerm, apiKeyForFetch);
-      log.debug("Models fetched successfully", { 
-        count: fetchedModels?.length,
-        searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
-      });
-      
-      if (Array.isArray(fetchedModels)) {
-        setOpenRouterModels(fetchedModels);
-        log.info("Models set in state", { 
-          count: fetchedModels.length,
-          searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
-        });
-      } else {
-        log.warn("Unexpected API response format", { models: fetchedModels });
-        setOpenRouterModels([]);
-      }
-    } catch (error) {
-      log.warn("Error fetching models", { baseUrl, searchTerm, error });
-      // Silently fail - don't show error messages in the UI
-      setOpenRouterModels([]);
-    } finally {
-      setIsLoadingModels(false);
-    }
-  };
-
   // Reset form when modal opens/closes or model changes
   useEffect(() => {
     if (open) {
       setFormState({
         ...model,
+        adapter: resolveModelAdapter(model.provider, model.adapter),
         displayName: model.displayName || model.name,
       });
       
@@ -209,10 +372,20 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   // The provider/SDK is now chosen explicitly via the Provider dropdown (no
   // longer inferred from the base URL). The currently-selected profile is
   // derived from the stored provider + adapter.
-  const currentProfile = getProviderProfile(formState.provider, formState.adapter);
+  const configurationCapabilities = getModelConfigurationCapabilities(
+    formState.provider,
+    formState.adapter,
+    formState.name,
+  );
+  const visibleProviderModels = useMemo(
+    () => settings?.experimental?.showModelsWithoutToolCapabilities
+      ? openRouterModels
+      : openRouterModels.filter(candidate => candidate.supportsTools !== false),
+    [openRouterModels, settings?.experimental?.showModelsWithoutToolCapabilities],
+  );
 
   // Apply a provider profile: pins the vendor (provider) and SDK (adapter) and
-  // prefills the default base URL (empty for native SDK / CLI providers).
+  // prefills its base URL. A blank native-SDK URL delegates to the SDK default.
   const handleSelectProfile = (profileId: string) => {
     const profile = PROVIDER_PROFILES.find(p => p.id === profileId);
     if (!profile) return;
@@ -221,6 +394,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       provider: profile.provider,
       adapter: profile.adapter,
       baseUrl: profile.baseUrl,
+      azureApiVersion: profile.defaultApiVersion ?? '',
     }));
     setErrors(prev => ({ ...prev, baseUrl: '' }));
   };
@@ -256,13 +430,44 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
     // Validation
     if (!formState.name?.trim()) {
-      newErrors.name = 'Name is required';
+      newErrors.name = t('models.modal.nameRequired');
     }
     if (!formState.displayName?.trim()) {
-      newErrors.displayName = 'Display Name is required';
+      newErrors.displayName = t('models.modal.displayNameRequired');
     }
-    if (!isApiKeyBound && !formState.ApiKey?.trim()) {
-      newErrors.ApiKey = 'API key is required';
+    if (currentProfile.adapter === 'azure') {
+      const endpoint = formState.baseUrl?.trim();
+      if (!endpoint) {
+        newErrors.baseUrl = t('models.modal.azureEndpointRequired');
+      } else {
+        try {
+          if (new URL(endpoint).protocol !== 'https:') {
+            newErrors.baseUrl = t('models.modal.azureEndpointHttps');
+          }
+        } catch {
+          newErrors.baseUrl = t('models.modal.azureEndpointInvalid');
+        }
+      }
+      if (!formState.azureApiVersion?.trim()) {
+        newErrors.azureApiVersion = t('models.modal.azureApiVersionRequired');
+      }
+    }
+    if (configurationCapabilities.creativity && formState.temperature?.trim()) {
+      const creativity = Number(formState.temperature);
+      if (
+        !Number.isFinite(creativity) ||
+        creativity < configurationCapabilities.creativity.min ||
+        creativity > configurationCapabilities.creativity.max
+      ) {
+        newErrors.temperature = t('models.modal.creativityRange', {
+          min: configurationCapabilities.creativity.min,
+          max: configurationCapabilities.creativity.max,
+        });
+      }
+    }
+    // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
+    if (!isApiKeyBound && !formState.ApiKey?.trim() && currentProfile.adapter !== 'codex-cli') {
+      newErrors.ApiKey = t('models.modal.apiKeyRequired');
     }
 
     if (Object.keys(newErrors).length > 0) {
@@ -282,29 +487,63 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         description: formState.description,
         ApiKey: formState.ApiKey,
         baseUrl: formState.baseUrl,
+        azureApiVersion: currentProfile.adapter === 'azure' ? formState.azureApiVersion : '',
         provider: formState.provider!,
-        adapter: formState.adapter || 'openai',
+        adapter: resolveModelAdapter(formState.provider, formState.adapter),
         promptTemplate: formState.promptTemplate,
-        temperature: formState.temperature,
+        temperature: configurationCapabilities.creativity ? formState.temperature : undefined,
+        reasoningEffort: configurationCapabilities.effortLevels?.includes(formState.reasoningEffort!)
+          ? formState.reasoningEffort
+          : undefined,
+        thinkingLevel: configurationCapabilities.thinkingLevels?.includes(formState.thinkingLevel!)
+          ? formState.thinkingLevel
+          : undefined,
+        thinkingBudget: configurationCapabilities.thinkingBudget
+          ? formState.thinkingBudget
+          : undefined,
+        serviceTier: configurationCapabilities.priority
+          ? (formState.serviceTier || 'default')
+          : undefined,
         contextWindow: formState.contextWindow,
+        supportsTools: formState.supportsTools,
+        supportedParameters: formState.supportedParameters,
+        inputModalities: formState.inputModalities,
+        outputModalities: formState.outputModalities,
+        visionInputCapability: formState.visionInputCapability ?? (
+          Array.isArray(formState.inputModalities)
+            ? (formState.inputModalities.some((value) => /^(?:image|vision)$/i.test(value)) ? 'supported' : 'unsupported')
+            : 'unknown'
+        ),
         maxTurns: formState.maxTurns,
-        maxTokens: formState.maxTokens,
+        maxTokens: configurationCapabilities.maxOutputTokens ? formState.maxTokens : undefined,
       } as Model);
 
       if (result.success) {
         router.refresh();
       } else {
         setErrors({
-          submit: result.error || 'Failed to save model'
+          submit: result.error || t('models.saveFailed')
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to save model', { error });
       setErrors({
-        submit: error?.message || 'Failed to save model',
+        submit: error instanceof Error ? error.message : t('models.saveFailed'),
       });
     }
-};
+  };
+
+  const levelLabelKeys: Record<string, TranslationKey> = {
+    minimal: 'models.modal.level.minimal',
+    low: 'models.modal.level.low',
+    medium: 'models.modal.level.medium',
+    high: 'models.modal.level.high',
+    xhigh: 'models.modal.level.xhigh',
+    max: 'models.modal.level.max',
+  };
+  const levelLabel = (level: string) => levelLabelKeys[level]
+    ? t(levelLabelKeys[level])
+    : level;
 
   return (
     <Dialog 
@@ -312,20 +551,35 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       onClose={onClose} 
       maxWidth="xl" 
       fullWidth
+      fullScreen={isMobile}
       PaperProps={{
+        'data-ask-flujo-model-id': model.id,
         sx: {
-          width: '95vw',
-          height: '90vh',
-          maxWidth: '95vw',
-          maxHeight: '90vh',
+          width: isMobile ? '100%' : '95vw',
+          height: isMobile ? '100dvh' : '90vh',
+          maxWidth: isMobile ? '100%' : '95vw',
+          maxHeight: isMobile ? '100dvh' : '90vh',
         }
       }}
     >
-      <form onSubmit={handleSubmit}>
-        <DialogTitle>
-          {model ? 'Edit Model' : 'Add Model'}
-        </DialogTitle>
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', height: 'calc(90vh - 130px)' }}>
+      <form
+        onSubmit={handleSubmit}
+        style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      >
+        <DialogHeaderActions
+          title={model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}
+          onClose={onClose}
+        />
+        <DialogContent
+          sx={{
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            minHeight: 0,
+            overflowY: { xs: 'auto', md: 'hidden' },
+            px: { xs: 2, sm: 3 },
+          }}
+        >
           {errors.submit && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {errors.submit}
@@ -337,31 +591,41 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             </Alert>
           )}
           
-          <Grid container spacing={2} sx={{ flexGrow: 1 }}>
+          <Grid container spacing={2} sx={{ flexGrow: 1, minHeight: { md: 0 } }}>
             {/* Left Column - Model Configuration */}
-            <Grid item xs={6} sx={{ height: '100%' }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2 }}>
+            <Grid item xs={12} md={6} sx={{ height: { xs: 'auto', md: '100%' }, minWidth: 0 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  height: { xs: 'auto', md: '100%' },
+                  pr: { xs: 0, md: 2 },
+                  overflowY: { xs: 'visible', md: 'auto' },
+                }}
+              >
                 <Typography variant="h6" gutterBottom>
-                  Model Configuration
+                  {t('models.modal.connectionDetails')}
                 </Typography>
                 
                 <TextField
+                  name="displayName"
                   autoFocus
                   margin="dense"
-                  label="Display Name"
+                  label={t('models.modal.displayName')}
                   fullWidth
                   required
                   value={formState.displayName || ''}
                   onChange={(e) => handleChange('displayName', e.target.value)}
                   error={!!errors.displayName}
-                  helperText={errors.displayName || "The name shown in the UI"}
+                  helperText={errors.displayName || t('models.modal.displayNameHelp')}
                 />
 
                 <FormControl fullWidth margin="dense">
-                  <InputLabel id="provider-profile-label">Provider</InputLabel>
+                  <InputLabel id="provider-profile-label">{t('models.modal.provider')}</InputLabel>
                   <Select
+                    name="provider"
                     labelId="provider-profile-label"
-                    label="Provider"
+                    label={t('models.modal.provider')}
                     value={currentProfile.id}
                     onChange={(e) => handleSelectProfile(e.target.value)}
                   >
@@ -374,34 +638,62 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 </FormControl>
 
                 <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, mb: 1, display: 'block' }}>
-                  Uses the <strong>{currentProfile.sdkLabel}</strong>
+                  {t('models.modal.usesSdk', { sdk: currentProfile.sdkLabel })}
                   {currentProfile.adapter === 'claude-cli'
-                    ? '. Paste an OAuth token from `claude setup-token` into the API Key field.'
-                    : ''}
+                    ? ` ${t('models.modal.claudeAuthHelp')}`
+                    : currentProfile.adapter === 'codex-cli'
+                      ? ` ${t('models.modal.codexAuthHelp')}`
+                      : ''}
                 </Typography>
 
                 {currentProfile.showBaseUrl && (
                   <TextField
+                    name="baseUrl"
                     margin="dense"
-                    label="Base URL"
+                    label={currentProfile.adapter === 'azure'
+                      ? t('models.modal.azureEndpoint')
+                      : t('models.card.baseUrl')}
                     fullWidth
+                    required={currentProfile.adapter === 'azure'}
                     value={formState.baseUrl || ''}
                     onChange={(e) => handleChange('baseUrl', e.target.value)}
-                    helperText="Endpoint for the OpenAI-compatible API."
+                    error={!!errors.baseUrl}
+                    helperText={errors.baseUrl || (currentProfile.adapter === 'azure'
+                      ? t('models.modal.azureEndpointHelp')
+                      : currentProfile.adapter === 'anthropic'
+                        ? t('models.modal.anthropicBaseUrlHelp')
+                        : t('models.modal.baseUrlHelp'))}
+                  />
+                )}
+
+                {currentProfile.adapter === 'azure' && (
+                  <TextField
+                    name="azureApiVersion"
+                    margin="dense"
+                    label={t('models.modal.azureApiVersion')}
+                    fullWidth
+                    required
+                    value={formState.azureApiVersion || ''}
+                    onChange={(e) => handleChange('azureApiVersion', e.target.value)}
+                    error={!!errors.azureApiVersion}
+                    helperText={errors.azureApiVersion || t('models.modal.azureApiVersionHelp')}
                   />
                 )}
 
                 <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
                   <TextField
+                    name="ApiKey"
                     margin="dense"
-                    label="API Key"
+                    label={t('models.modal.apiKey')}
                     fullWidth
-                    required={!isApiKeyBound}
+                    required={!isApiKeyBound && currentProfile.adapter !== 'codex-cli'}
                     type={isApiKeyBound ? "text" : "password"}
                     value={formState.ApiKey || ''}
                     onChange={(e) => handleChange('ApiKey', e.target.value)}
                     error={!!errors.ApiKey}
-                    helperText={errors.ApiKey || "API key is required for this provider"}
+                    helperText={errors.ApiKey || (currentProfile.adapter === 'codex-cli'
+                      ? t('models.modal.apiKeyOptionalCodex')
+                      : t('models.modal.apiKeyRequiredProvider'))}
                     InputProps={{
                       readOnly: isApiKeyBound,
                       endAdornment: (
@@ -410,7 +702,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                             <IconButton
                               onClick={handleUnbindApiKey}
                               size="small"
-                              title="Unbind from global variable"
+                              title={t('models.modal.unbindGlobal')}
                             >
                               <CancelIcon />
                             </IconButton>
@@ -418,7 +710,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                             <IconButton
                               onClick={handleBindApiKey}
                               size="small"
-                              title="Bind to global variable"
+                              title={t('models.modal.bindGlobal')}
                             >
                               <LinkIcon />
                             </IconButton>
@@ -433,17 +725,27 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   freeSolo
                   loading={isLoadingModels}
                   options={
-                    currentProfile.showBaseUrl
-                      ? openRouterModels.map(model => model.id)
+                    canDiscoverProviderModels && visibleProviderModels.length > 0
+                      ? visibleProviderModels.map(model => model.id)
                       : (currentProfile.defaultModels ?? [])
                   }
                   value={formState.name || ''}
                   onChange={(_, newValue) => {
-                    handleChange('name', newValue || '');
+                    const selected = openRouterModels.find(candidate => candidate.id === newValue);
+                    setFormState(prev => ({
+                      ...prev,
+                      name: newValue || '',
+                      ...(selected ? {
+                        description: selected.description ?? prev.description,
+                        ...discoveredModelMetadata(selected),
+                      } : {}),
+                    }));
+                    setErrors(prev => ({ ...prev, name: '' }));
                   }}
                   onInputChange={(_, newValue) => {
+                    // Provider results are fetched once and filtered locally.
+                    // freeSolo deliberately preserves arbitrary manual model IDs.
                     handleChange('name', newValue);
-                    // Debounced API call is now handled by useEffect
                   }}
                   filterOptions={(options, state) => {
                     const inputValue = state.inputValue.toLowerCase();
@@ -483,10 +785,14 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     <TextField
                       {...params}
                       margin="dense"
-                      label="Technical Name"
+                      label={currentProfile.adapter === 'azure'
+                        ? t('models.modal.azureDeployment')
+                        : t('models.modal.technicalName')}
                       required
                       error={!!errors.name}
-                      helperText={errors.name || "Used for API calls to the LLM. Type to search available models."}
+                      helperText={errors.name || (currentProfile.adapter === 'azure'
+                        ? t('models.modal.azureDeploymentHelp')
+                        : t('models.modal.technicalNameHelp'))}
                       InputProps={{
                         ...params.InputProps,
                         endAdornment: (
@@ -515,13 +821,14 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       </li>
                     );
                   }}
-                  noOptionsText="No matching models found"
-                  loadingText="Loading models..."
+                  noOptionsText={t('models.modal.noMatches')}
+                  loadingText={t('models.modal.loadingModels')}
                 />
 
                 <TextField
+                  name="description"
                   margin="dense"
-                  label="Description"
+                  label={t('models.modal.description')}
                   fullWidth
                   multiline
                   rows={3}
@@ -529,9 +836,126 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   onChange={(e) => handleChange('description', e.target.value)}
                 />
 
+                {configurationCapabilities.creativity && (
+                  <TextField
+                    name="temperature"
+                    margin="dense"
+                    label={t('models.modal.creativity')}
+                    fullWidth
+                    type="number"
+                    value={formState.temperature ?? ''}
+                    onChange={(e) => handleChange('temperature', e.target.value)}
+                    error={!!errors.temperature}
+                    inputProps={configurationCapabilities.creativity}
+                    helperText={errors.temperature || t('models.modal.creativityHelp', {
+                      min: configurationCapabilities.creativity.min,
+                      max: configurationCapabilities.creativity.max,
+                    })}
+                  />
+                )}
+
+                {configurationCapabilities.effortLevels && (
+                  <FormControl fullWidth margin="dense">
+                    <InputLabel id="reasoning-effort-label">{t('models.modal.effort')}</InputLabel>
+                    <Select
+                      name="reasoningEffort"
+                      labelId="reasoning-effort-label"
+                      label={t('models.modal.effort')}
+                      value={formState.reasoningEffort || ''}
+                      onChange={(e) => setFormState(prev => ({
+                        ...prev,
+                        reasoningEffort: e.target.value
+                          ? e.target.value as Model['reasoningEffort']
+                          : undefined,
+                      }))}
+                    >
+                      <MenuItem value=""><em>{t('models.modal.providerDefault')}</em></MenuItem>
+                      {configurationCapabilities.effortLevels.map(level => (
+                        <MenuItem key={level} value={level}>
+                          {levelLabel(level)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.75 }}>
+                      {t('models.modal.effortHelp')}
+                    </Typography>
+                  </FormControl>
+                )}
+
+                {configurationCapabilities.thinkingLevels && (
+                  <FormControl fullWidth margin="dense">
+                    <InputLabel id="thinking-level-label">{t('models.modal.thinkingLevel')}</InputLabel>
+                    <Select
+                      name="thinkingLevel"
+                      labelId="thinking-level-label"
+                      label={t('models.modal.thinkingLevel')}
+                      value={formState.thinkingLevel || ''}
+                      onChange={(e) => setFormState(prev => ({
+                        ...prev,
+                        thinkingLevel: e.target.value
+                          ? e.target.value as Model['thinkingLevel']
+                          : undefined,
+                      }))}
+                    >
+                      <MenuItem value=""><em>{t('models.modal.providerDefault')}</em></MenuItem>
+                      {configurationCapabilities.thinkingLevels.map(level => (
+                        <MenuItem key={level} value={level}>
+                          {levelLabel(level)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+
+                {configurationCapabilities.thinkingBudget && (
+                  <TextField
+                    name="thinkingBudget"
+                    margin="dense"
+                    label={t('models.modal.thinkingBudget')}
+                    fullWidth
+                    type="number"
+                    value={formState.thinkingBudget ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const parsed = raw === '' ? undefined : Number(raw);
+                      setFormState(prev => ({
+                        ...prev,
+                        thinkingBudget: parsed !== undefined && Number.isFinite(parsed) && parsed >= -1
+                          ? Math.floor(parsed)
+                          : undefined,
+                      }));
+                    }}
+                    inputProps={{ min: -1, step: 1 }}
+                    helperText={t('models.modal.thinkingBudgetHelp')}
+                  />
+                )}
+
+                {configurationCapabilities.priority && (
+                  <FormControl fullWidth margin="dense">
+                    <InputLabel id="service-tier-label">{t('models.modal.priority')}</InputLabel>
+                    <Select
+                      name="serviceTier"
+                      labelId="service-tier-label"
+                      label={t('models.modal.priority')}
+                      value={formState.serviceTier || 'default'}
+                      onChange={(e) => setFormState(prev => ({
+                        ...prev,
+                        serviceTier: e.target.value as Model['serviceTier'],
+                      }))}
+                    >
+                      <MenuItem value="default">{t('models.modal.standard')}</MenuItem>
+                      <MenuItem value="priority">{t('models.modal.priorityFaster')}</MenuItem>
+                    </Select>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.75 }}>
+                      {t('models.modal.priorityHelp')}
+                    </Typography>
+                  </FormControl>
+                )}
+
                 <TextField
+                  name="contextWindow"
                   margin="dense"
-                  label="Context Window (tokens)"
+                  label={t('models.modal.contextWindow')}
                   fullWidth
                   type="number"
                   value={formState.contextWindow ?? ''}
@@ -543,12 +967,13 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       contextWindow: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
                     }));
                   }}
-                  helperText="Optional. Enables the context-usage meter in chat (e.g. 200000 for Claude, 128000 for GPT-4o)."
+                  helperText={t('models.modal.contextWindowHelp')}
                 />
 
                 <TextField
+                  name="maxTurns"
                   margin="dense"
-                  label="Max Turns"
+                  label={t('models.modal.maxTurns')}
                   fullWidth
                   type="number"
                   value={formState.maxTurns ?? ''}
@@ -561,36 +986,47 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     }));
                   }}
                   inputProps={{ min: 1 }}
-                  helperText="Max agentic turns before a run stops (default 50). Process nodes can override this per-node."
+                  helperText={t('models.modal.maxTurnsHelp')}
                 />
 
-                <TextField
-                  margin="dense"
-                  label="Max Output Tokens (optional)"
-                  fullWidth
-                  type="number"
-                  value={formState.maxTokens ?? ''}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    const parsed = raw === '' ? undefined : Number(raw);
-                    setFormState(prev => ({
-                      ...prev,
-                      maxTokens: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
-                    }));
-                  }}
-                  inputProps={{ min: 1 }}
-                  helperText="Optional. Default cap on generated tokens. A request's max_tokens overrides this. Anthropic uses 8192 when unset."
-                />
+                {configurationCapabilities.maxOutputTokens && (
+                  <TextField
+                    name="maxTokens"
+                    margin="dense"
+                    label={t('models.modal.maxOutputTokens')}
+                    fullWidth
+                    type="number"
+                    value={formState.maxTokens ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const parsed = raw === '' ? undefined : Number(raw);
+                      setFormState(prev => ({
+                        ...prev,
+                        maxTokens: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
+                      }));
+                    }}
+                    inputProps={{ min: 1 }}
+                    helperText={t('models.modal.maxOutputTokensHelp')}
+                  />
+                )}
               </Box>
             </Grid>
             
             {/* Right Column - Prompt Builder */}
-            <Grid item xs={6} sx={{ height: '100%' }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pl: 2 }}>
+            <Grid item xs={12} md={6} sx={{ height: { xs: 400, md: '100%' }, minWidth: 0 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  height: '100%',
+                  minHeight: 0,
+                  pl: { xs: 0, md: 2 },
+                }}
+              >
                 <Typography variant="h6" gutterBottom>
-                  Prompt Template
+                  {t('models.modal.promptTemplate')}
                 </Typography>
-                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 32px)' }}>
+                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                   <PromptBuilder 
                     ref={promptBuilderRef}
                     value={formState.promptTemplate || ''} 
@@ -611,21 +1047,22 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                width: 400,
+                width: { xs: 'calc(100% - 32px)', sm: 400 },
+                maxWidth: 400,
                 bgcolor: 'background.paper',
                 boxShadow: 24,
-                p: 4,
+                p: { xs: 2, sm: 4 },
                 borderRadius: 1,
                 zIndex: 9999,
               }}
             >
               <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-                Bind to Global Variable
+                {t('models.modal.bindTitle')}
               </Typography>
               
               {Object.keys(globalEnvVars).length === 0 ? (
                 <Typography sx={{ mb: 2 }}>
-                  No global variables available. Add some in Settings first.
+                  {t('models.modal.noGlobals')}
                 </Typography>
               ) : (
                 <Box sx={{ maxHeight: 300, overflow: 'auto', mb: 2 }}>
@@ -662,16 +1099,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
               
               <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <Button onClick={() => setShowBindModal(false)}>
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
               </Box>
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={onClose}>Cancel</Button>
+        <DialogActions sx={{ flexShrink: 0 }}>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
           <Button type="submit" variant="contained" color="primary">
-            Save
+            {t('models.modal.save')}
           </Button>
         </DialogActions>
       </form>

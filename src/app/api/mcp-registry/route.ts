@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -54,7 +55,7 @@ function setCached(key: string, body: unknown): void {
  *   cursor — pagination cursor from a previous response's metadata.nextCursor
  *   limit  — page size (clamped to 1..100, default 30)
  */
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -63,6 +64,9 @@ export async function GET(request: NextRequest) {
 
   const search = searchParams.get('search') || '';
   const cursor = searchParams.get('cursor') || '';
+  // Installed-card logo discovery only needs registry metadata; skip the
+  // comparatively expensive GitHub/npm quality enrichment for that request.
+  const iconsOnly = searchParams.get('iconsOnly') === 'true';
   const rawLimit = parseInt(searchParams.get('limit') || '30', 10);
   const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 30 : rawLimit, 1), 100);
 
@@ -73,7 +77,7 @@ export async function GET(request: NextRequest) {
   if (search) upstream.searchParams.set('search', search);
   if (cursor) upstream.searchParams.set('cursor', cursor);
 
-  const cacheKey = upstream.toString();
+  const cacheKey = `${upstream.toString()}#${iconsOnly ? 'icons' : 'ranked'}`;
   const cached = getCached(cacheKey);
   if (cached !== null) {
     log.debug(`Cache hit for registry query [${requestId}]`, cacheKey);
@@ -102,7 +106,7 @@ export async function GET(request: NextRequest) {
     // best/most-working servers first with star/download badges — the same
     // ranking the headless install path uses. Best-effort; never blocks the
     // listing. Cache the enriched body so repeat searches skip re-enrichment.
-    if (Array.isArray(body?.servers)) {
+    if (Array.isArray(body?.servers) && !iconsOnly) {
       body.servers = await rankRegistryResults(search, body.servers as RegistryServerResult[]);
     }
     setCached(cacheKey, body);
@@ -122,3 +126,5 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

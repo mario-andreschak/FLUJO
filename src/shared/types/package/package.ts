@@ -15,8 +15,21 @@
  */
 import type { Flow } from '../flow/flow';
 import type { PlannedExecution, TriggerConfig, WebhookTriggerConfig } from '../plannedExecution/plannedExecution';
+import type {
+  PersonaAutonomyLevel,
+  PersonaInterruptionPolicy,
+  PersonaPresentation,
+  RoleBehaviorSlot,
+  RoleDefinition,
+  RoleVersion,
+} from '../enduringAgent/enduringAgent';
 import type { PackageSecret } from './secrets';
-import type { EnvDeclaration, HeaderDeclaration, McpInstallOrigin } from './installOrigin';
+import type {
+  EnvDeclaration,
+  HeaderDeclaration,
+  McpArgTemplate,
+  McpInstallOrigin,
+} from './installOrigin';
 
 /**
  * How a packaged model's API key is supplied at install time. The real key is
@@ -46,10 +59,20 @@ export interface PackagedModel {
   promptTemplate?: string;
   reasoningSchema?: string;
   temperature?: string;
+  reasoningEffort?: string;
+  thinkingLevel?: string;
+  thinkingBudget?: number;
+  serviceTier?: string;
   functionCallingSchema?: string;
   contextWindow?: number;
+  supportsTools?: boolean;
+  supportedParameters?: string[];
+  inputModalities?: string[];
+  outputModalities?: string[];
+  visionInputCapability?: 'supported' | 'unsupported' | 'unknown';
   maxTurns?: number;
   maxTokens?: number;
+  compactionThreshold?: number;
   folder?: string;
   favorite?: boolean;
   apiKeyRef: PackageApiKeyRef;
@@ -59,20 +82,21 @@ export interface PackagedModel {
 export type PackagedMcpTransport = 'stdio' | 'sse' | 'streamable' | 'websocket';
 
 /**
- * A packaged MCP server, by reference only. No `command`, `args`, `rootPath`,
- * `_buildCommand`, `_installCommand`, `serverUrl`, OAuth secrets, or server
- * files — just where to install it (`installOrigin`) and DECLARATIONS of the
- * env vars / headers it needs (names + `isSecret`, never values).
+ * A packaged MCP server, by reference only. No runtime `command`, raw `args`,
+ * `rootPath`, `serverUrl`, OAuth secrets, or server files. A GitHub origin may
+ * retain the reviewed install/build recipe needed to reproduce the install;
+ * env/header declarations contain names only, and argument templates are
+ * narrowly scoped to portable global references.
  */
 export interface PackagedMcpServer {
   name: string;
   transport: PackagedMcpTransport;
   disabled?: boolean;
-  autoApprove?: string[];
   folder?: string;
   installOrigin: McpInstallOrigin;
   envDeclarations: EnvDeclaration[];
   headerDeclarations?: HeaderDeclaration[];
+  argTemplates?: McpArgTemplate[];
 }
 
 /**
@@ -97,6 +121,17 @@ export interface PackagedFlow {
 }
 
 /**
+ * A host-level global variable required by packaged content. Values are never
+ * exported; the installer asks for them and persists them in Global Variables.
+ */
+export interface PackageGlobal {
+  name: string;
+  description?: string;
+  required: boolean;
+  isSecret?: boolean;
+}
+
+/**
  * A packaged trigger: the live `TriggerConfig` union, except the webhook
  * variant's per-instance secret `token` is excluded (optional) — the serializer
  * omits it.
@@ -110,9 +145,37 @@ export type PackagedTrigger =
  * `flowId` expressed as a package-internal flow reference and the webhook token
  * (and similar per-instance state) excluded.
  */
-export type PackagedPlannedExecution = Omit<PlannedExecution, 'trigger'> & {
+export type PackagedPlannedExecution = Omit<
+  PlannedExecution,
+  'trigger' | 'personaId' | 'behaviorSlotKey'
+> & {
   trigger: PackagedTrigger;
 };
+
+/** A reusable, unbound Behavior template. Flow-authored tool authority is preserved verbatim. */
+export interface PackagedBehaviorTemplate extends RoleBehaviorSlot {
+  id: string;
+}
+
+/** A reusable Role blueprint with its immutable Behavior templates embedded in each version. */
+export interface PackagedRoleTemplate {
+  definition: RoleDefinition;
+  versions: RoleVersion[];
+}
+
+/**
+ * Reusable Persona configuration only. Living identity and private state are
+ * deliberately absent: no Persona id, memory, activity, account, grant,
+ * conversation, mailbox, lease, credential, or workspace binding may appear.
+ */
+export interface PackagedPersonaTemplate {
+  name: string;
+  roleVersionId: string;
+  mission?: string;
+  presentation?: PersonaPresentation;
+  autonomyLevel: PersonaAutonomyLevel;
+  interruptionPolicy: PersonaInterruptionPolicy;
+}
 
 /**
  * The FLUJO package manifest, v1. A single JSON document (the registry stores
@@ -130,11 +193,17 @@ export interface FlujoPackage {
   author?: string;
   publisher?: string;
   tags?: string[];
-  /** `${global:VAR}` names the package expects the host to provide. */
+  /** Legacy v1 form retained so previously published packages keep installing. */
   requiredGlobals?: string[];
+  /** Install-time global-variable declarations (names/metadata only). */
+  globals?: PackageGlobal[];
   secrets: PackageSecret[];
   models: PackagedModel[];
   mcpServers: PackagedMcpServer[];
   flows: PackagedFlow[];
   plannedExecutions: PackagedPlannedExecution[];
+  /** Optional additive Phase 8 fields; legacy Flow-only v1 packages remain valid. */
+  roleTemplates?: PackagedRoleTemplate[];
+  behaviorTemplates?: PackagedBehaviorTemplate[];
+  personaTemplates?: PackagedPersonaTemplate[];
 }

@@ -3,7 +3,7 @@
 # FLUJO installer / updater for Linux and macOS — the Unix counterpart of
 # scripts/install.ps1.
 #
-# Installs the prerequisites (Git, Node.js + npm, Python 3, uv), clones (or
+# Installs the prerequisites (Git, Node.js + npm, Python 3, uv, ripgrep), clones (or
 # updates) FLUJO, builds it, registers a global 'flujo' command (start FLUJO
 # from any folder), and optionally starts it. Can also optionally install Ollama
 # (the local-model runtime) — FLUJO then talks to it over HTTP.
@@ -24,14 +24,20 @@
 #     FLUJO_START     start FLUJO after building       1/true/yes or 0/false/no
 #     FLUJO_SHORTCUT  desktop entry, Linux only        1/true/yes or 0/false/no
 #     FLUJO_OLLAMA    install Ollama for local models  1/true/yes or 0/false/no
+#     FLUJO_HTTP_PROXY / FLUJO_HTTPS_PROXY / FLUJO_NO_PROXY
+#                      installer-scoped corporate proxy settings
+#     FLUJO_EXTRA_CA_CERTS
+#                      readable PEM bundle for Node/npm/Patchright
+#     FLUJO_PLAYWRIGHT_DOWNLOAD_HOST / FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT
+#                      optional managed-browser mirror and timeout
 
 set -euo pipefail
 
 REPO_URL='https://github.com/mario-andreschak/FLUJO/'
 BRANCH="${FLUJO_BRANCH:-main}"
-# Next.js 15 requires Node >= 18.18; distro repos often ship older.
-MIN_NODE_MAJOR=18
-MIN_NODE_MINOR=18
+# FLUJO requires Node >= 22.0.0 (see package.json#engines.node).
+MIN_NODE_MAJOR=22
+MIN_NODE_MINOR=0
 BIN_DIR="$HOME/.local/bin"
 MANIFEST_DIR="$HOME/.local/share/flujo-cli"
 
@@ -44,7 +50,127 @@ fi
 step() { printf '\n%s==> %s%s\n' "$C_STEP" "$1" "$C_END" >&2; }
 ok()   { printf '%s    %s%s\n'   "$C_OK"   "$1" "$C_END" >&2; }
 warn() { printf '%s    %s%s\n'   "$C_WARN" "$1" "$C_END" >&2; }
-die()  { printf '\n%sERROR: %s%s\n' "$C_WARN" "$1" "$C_END" >&2; exit 1; }
+die()  { printf '\n%sERROR: %s%s\n' "$C_WARN" "$1" "$C_END" >&2; exit "${2:-1}"; }
+
+[[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ "$BRANCH" != *..* ]] || die 'FLUJO_BRANCH must be a branch name or version tag.'
+INSTALL_CHANNEL=development
+if [[ "$BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then INSTALL_CHANNEL=stable; fi
+
+validate_existing_repository() {
+  command -v git >/dev/null 2>&1 || die 'Git is required to safely inspect an existing checkout. Install Git before updating.'
+  local origin current status
+  origin="$(git -C "$INSTALL_DIR" remote get-url origin)" || die 'Could not inspect origin; no repository files were changed.'
+  origin="$(printf '%s' "$origin" | tr '[:upper:]' '[:lower:]')"
+  [[ "$origin" =~ ^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)mario-andreschak/flujo(\.git)?/?$ ]] || die 'Target is not the official FLUJO repository. Choose a new installation directory.'
+  grep -Eq '"name"[[:space:]]*:[[:space:]]*"flujo-ai"' "$INSTALL_DIR/package.json" || die 'Target does not contain the FLUJO application package.'
+  status="$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=normal)" || die 'Could not inspect checkout changes.'
+  [ -z "$status" ] || die 'Checkout contains local changes or untracked files. Commit or back them up before updating; the installer never discards them.'
+  current="$(git -C "$INSTALL_DIR" branch --show-current)" || die 'Could not inspect the current branch.'
+  [ "$INSTALL_CHANNEL" = stable ] || [ "$current" = "$BRANCH" ] || die 'Checkout is on a different branch. Select the intended branch yourself before updating.'
+}
+
+update_existing_repository() {
+  validate_existing_repository
+  run_stage repository git -C "$INSTALL_DIR" fetch origin "$BRANCH"
+  git -C "$INSTALL_DIR" merge-base --is-ancestor HEAD FETCH_HEAD || die 'The requested version would discard local commits or downgrade this checkout. Back up your work and choose a separate install directory.'
+  validate_existing_repository
+  if [ "$INSTALL_CHANNEL" = stable ]; then
+    run_stage repository git -C "$INSTALL_DIR" checkout --detach FETCH_HEAD
+  else
+    run_stage repository git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD
+  fi
+}
+
+INSTALL_LOG="${FLUJO_INSTALL_LOG:-$MANIFEST_DIR/install.log}"
+INSTALL_STAGE_FILE="${FLUJO_INSTALL_STAGE_FILE:-$MANIFEST_DIR/install-stage.txt}"
+BROWSER_RESULT_FILE="$MANIFEST_DIR/browser-install-result.json"
+mkdir -p "$MANIFEST_DIR"
+: > "$INSTALL_LOG"
+
+sanitize_diagnostic() {
+  local safe="${1:-}" secret
+  safe="$(printf '%s' "$safe" | sed -E \
+    -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#gI' \
+    -e 's#(authorization[[:space:]]*:[[:space:]]*(bearer|basic)[[:space:]]+)[^[:space:]]+#\1[REDACTED]#gI' \
+    -e 's#([?&](access_token|auth|key|password|secret|token)=)[^&[:space:]]+#\1[REDACTED]#gI' \
+    -e 's#([A-Z0-9_]*(TOKEN|SECRET|PASSWORD|KEY))=[^[:space:]]+#\1=[REDACTED]#gI')"
+  for secret in "${FLUJO_HTTP_PROXY:-}" "${FLUJO_HTTPS_PROXY:-}" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${ALL_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}" "${all_proxy:-}" "${FLUJO_EXTRA_CA_CERTS:-}" "${NODE_EXTRA_CA_CERTS:-}" "${npm_config_cafile:-}"; do
+    [ -z "$secret" ] || safe="${safe//"$secret"/[REDACTED]}"
+  done
+  if [ "${#safe}" -gt 4000 ]; then
+    safe="${safe: -4000}"
+  fi
+  printf '%s' "$safe"
+}
+
+stage_marker() {
+  local name="$1" state="${2:-started}" code="${3:-0}"
+  printf '%s\n' "$name" > "$INSTALL_STAGE_FILE"
+  printf '[FLUJO_INSTALL_STAGE] name=%s state=%s exit=%s\n' "$name" "$state" "$code" | tee -a "$INSTALL_LOG" >&2
+}
+
+run_stage() {
+  local stage="$1"
+  shift
+  stage_marker "$stage" started 0
+  set +e
+  "$@" 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+    safe_line="$(sanitize_diagnostic "$line")"
+    printf '%s\n' "$safe_line" | tee -a "$INSTALL_LOG" >&2
+  done
+  local code=${PIPESTATUS[0]}
+  set -e
+  if [ "$code" -ne 0 ]; then
+    stage_marker "$stage" failed "$code"
+    die "Installer stage '$stage' failed (exit $code). Sanitized log: $INSTALL_LOG" "$code"
+  fi
+  stage_marker "$stage" completed 0
+}
+
+validate_proxy_uri() {
+  [ -z "${1:-}" ] || [[ "$1" =~ ^https?://[^/[:space:]][^[:space:]]*$ ]]
+}
+
+configure_installer_network() {
+  validate_proxy_uri "${FLUJO_HTTP_PROXY:-}" || die 'FLUJO_HTTP_PROXY must be an absolute http:// or https:// URI.'
+  validate_proxy_uri "${FLUJO_HTTPS_PROXY:-}" || die 'FLUJO_HTTPS_PROXY must be an absolute http:// or https:// URI.'
+  validate_proxy_uri "${FLUJO_PLAYWRIGHT_DOWNLOAD_HOST:-}" || die 'FLUJO_PLAYWRIGHT_DOWNLOAD_HOST must be an absolute http:// or https:// URI.'
+
+  if [ -n "${NODE_TLS_REJECT_UNAUTHORIZED:-}" ]; then
+    warn 'Security warning: NODE_TLS_REJECT_UNAUTHORIZED is set. The installer will ignore it; configure a trusted CA instead of disabling TLS verification.'
+    unset NODE_TLS_REJECT_UNAUTHORIZED
+  fi
+
+  [ -z "${FLUJO_HTTP_PROXY:-}" ] || export HTTP_PROXY="$FLUJO_HTTP_PROXY"
+  [ -z "${FLUJO_HTTPS_PROXY:-}" ] || export HTTPS_PROXY="$FLUJO_HTTPS_PROXY"
+  [ -z "${FLUJO_NO_PROXY:-}" ] || export NO_PROXY="$FLUJO_NO_PROXY"
+  if [ -n "${FLUJO_EXTRA_CA_CERTS:-}" ]; then
+    [ -f "$FLUJO_EXTRA_CA_CERTS" ] && [ -r "$FLUJO_EXTRA_CA_CERTS" ] || die 'FLUJO_EXTRA_CA_CERTS must point to a readable PEM certificate file.'
+    grep -q -- '-----BEGIN CERTIFICATE-----' "$FLUJO_EXTRA_CA_CERTS" &&
+      grep -q -- '-----END CERTIFICATE-----' "$FLUJO_EXTRA_CA_CERTS" ||
+      die 'FLUJO_EXTRA_CA_CERTS must contain PEM certificate material.'
+    if have node && node -e "process.exit(typeof require('node:crypto').X509Certificate === 'function' ? 0 : 1)" >/dev/null 2>&1; then
+      node -e "new (require('node:crypto').X509Certificate)(require('node:fs').readFileSync(process.argv[1]))" "$FLUJO_EXTRA_CA_CERTS" >/dev/null 2>&1 ||
+        die 'FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate.'
+    elif have openssl; then
+      openssl x509 -in "$FLUJO_EXTRA_CA_CERTS" -noout >/dev/null 2>&1 ||
+        die 'FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate.'
+    else
+      die 'Validating FLUJO_EXTRA_CA_CERTS requires Node.js or OpenSSL before network access.'
+    fi
+    ok 'Custom CA certificate parsed successfully.'
+    export NODE_EXTRA_CA_CERTS="$FLUJO_EXTRA_CA_CERTS"
+    export npm_config_cafile="${npm_config_cafile:-$FLUJO_EXTRA_CA_CERTS}"
+  fi
+  [ -z "${FLUJO_PLAYWRIGHT_DOWNLOAD_HOST:-}" ] ||
+    export PLAYWRIGHT_DOWNLOAD_HOST="$FLUJO_PLAYWRIGHT_DOWNLOAD_HOST"
+  if [ -n "${FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT:-}" ]; then
+    [[ "$FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] ||
+      die 'FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT must be a positive number of milliseconds.'
+    export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT="$FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"
+  fi
+
+}
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -76,12 +202,19 @@ flag() {
 
 node_version_ok() {
   have node || return 1
-  local v major minor
+  local v major minor patch
   v="$(node -v 2>/dev/null)" || return 1
+  # Require successful command resolution and zero exit status
+  # Normalize only one optional leading 'v'
   v="${v#v}"
-  IFS=. read -r major minor _ <<EOF
+  # Require complete numeric version shape before arithmetic comparison
+  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    return 1
+  fi
+  IFS=. read -r major minor patch <<EOF
 $v
 EOF
+  # Compare numeric components without shell coercion of malformed values
   [ "${major:-0}" -gt "$MIN_NODE_MAJOR" ] 2>/dev/null && return 0
   [ "${major:-0}" -eq "$MIN_NODE_MAJOR" ] 2>/dev/null && [ "${minor:-0}" -ge "$MIN_NODE_MINOR" ] 2>/dev/null
 }
@@ -94,6 +227,16 @@ case "$OS" in
   Linux|Darwin) ;;
   *) die "Unsupported platform '$OS'. Use scripts/install.ps1 on Windows." ;;
 esac
+
+stage_marker preflight started 0
+configure_installer_network
+PROXY_CONFIGURED=false
+[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}" ] && PROXY_CONFIGURED=true
+CUSTOM_CA_CONFIGURED=false
+[ -n "${NODE_EXTRA_CA_CERTS:-}" ] && CUSTOM_CA_CONFIGURED=true
+ok "Corporate network preflight: proxy configured=$PROXY_CONFIGURED; custom CA supplied=$CUSTOM_CA_CONFIGURED"
+ok "Sanitized installer log: $INSTALL_LOG"
+stage_marker preflight completed 0
 
 have curl || die "curl is required to bootstrap the prerequisites. Install curl and re-run."
 
@@ -115,7 +258,14 @@ if [ -z "$INSTALL_DIR" ]; then
   INSTALL_DIR="$(ask "Where should FLUJO be installed? (press Enter for: $HOME/FLUJO)" "$HOME/FLUJO")"
 fi
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
+if [ -e "$INSTALL_DIR/.git" ]; then
+  validate_existing_repository
+elif [ -e "$INSTALL_DIR" ] && { [ ! -d "$INSTALL_DIR" ] || [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; }; then
+  die 'Target exists and is not an empty directory or a verified FLUJO checkout.'
+fi
 ok "Installing into: $INSTALL_DIR"
+ok "Install channel: $INSTALL_CHANNEL; source ref: $BRANCH"
+[ "$INSTALL_CHANNEL" = stable ] || warn 'This moving source branch may contain unreleased changes. Use a release tag for a stable version.'
 
 MAKE_SHORTCUT=false
 if [ "$OS" = Linux ]; then
@@ -151,12 +301,14 @@ PRE_GIT=$(have git && echo true || echo false)
 PRE_NODE=$(have node && echo true || echo false)
 PRE_PYTHON=$(have python3 && echo true || echo false)
 PRE_UV=$(have uv && echo true || echo false)
+PRE_RG=$(have rg && echo true || echo false)
 PRE_CLAUDE=$(have claude && echo true || echo false)
 PRE_OLLAMA=$(have ollama && echo true || echo false)
 
 # ---------------------------------------------------------------------------
 # 2. Install prerequisites.
 # ---------------------------------------------------------------------------
+stage_marker prerequisites started 0
 PM=''
 if [ "$OS" = Darwin ]; then
   PM='brew'
@@ -236,6 +388,19 @@ if have git; then
 else
   step "Installing Git"
   pm_install git || die "Could not install Git. Install it manually and re-run."
+fi
+
+# ripgrep accelerates the built-in filesystem MCP search. The server retains a
+# portable Node fallback, so an unusual distro without a package can continue.
+if have rg; then
+  ok "ripgrep already installed ($(command -v rg))"
+else
+  step "Installing ripgrep"
+  if pm_install ripgrep && have rg; then
+    ok "ripgrep installed."
+  else
+    warn "Could not install ripgrep automatically; filesystem search will use its portable fallback."
+  fi
 fi
 
 # Node.js (includes npm). Distro repos are often too old for Next.js 15, so
@@ -351,41 +516,60 @@ if [ "$INSTALL_OLLAMA" = true ]; then
     fi
   fi
 fi
+stage_marker prerequisites completed 0
+
+SYSTEM_CA_SUPPORTED=false
+if [ "$(node -p "process.allowedNodeEnvironmentFlags.has('--use-system-ca')" 2>/dev/null || true)" = true ]; then
+  SYSTEM_CA_SUPPORTED=true
+  case " ${NODE_OPTIONS:-} " in
+    *" --use-system-ca "*) ;;
+    *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca" ;;
+  esac
+fi
+ok "Network clients: Node.js $(node -v); npm $(npm --version); Node system CA support=$SYSTEM_CA_SUPPORTED"
 
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
-if [ -d "$INSTALL_DIR/.git" ]; then
-  step "Existing FLUJO clone found - updating ($BRANCH)"
-  # Hard-reset instead of pull: `npm install`/`npm run build` rewrite
-  # package-lock.json, leaving the tree dirty, so `git pull` aborts. This is an
-  # install/deploy copy, not a dev checkout, so discarding tracked-file drift is
-  # safe; untracked node_modules/.next/user data are preserved by reset --hard.
-  git -C "$INSTALL_DIR" fetch origin "$BRANCH"
-  git -C "$INSTALL_DIR" checkout "$BRANCH"
-  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+if [ -e "$INSTALL_DIR/.git" ]; then
+  update_existing_repository
 else
-  step "Cloning FLUJO into $INSTALL_DIR"
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  run_stage repository git clone -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
+INSTALLED_REVISION="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+ok "Installed source: $BRANCH at $INSTALLED_REVISION"
 
 # ---------------------------------------------------------------------------
 # 4. Install dependencies and build.
 # ---------------------------------------------------------------------------
 cd "$INSTALL_DIR"
-step "Installing npm dependencies (npm install)"
-# --include=dev: `next build` needs typescript/webpack/postcss (all
-# devDependencies), which npm prunes when NODE_ENV=production.
-npm install --include=dev
+# Preserve every dependency lifecycle, but defer only the managed Chromium
+# download so it has its own diagnosable and independently retryable stage.
+export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=1
+run_stage npm-dependencies npm ci --include=dev
 
-step "Building FLUJO (npm run build)"
-npm run build
+# A downloaded Chromium binary is not usable on a minimal Ubuntu/Debian host
+# until its shared libraries and fonts are installed. Use the pinned browser
+# package's dependency list and the same sudo choice as other prerequisites.
+if [ "$OS" = Linux ] && [ "$PM" = apt ]; then
+  run_stage patchright-system-dependencies $SUDO "$(command -v node)" mcp-servers/browser/scripts/install-browser.mjs --install-deps
+fi
+
+export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=0
+export FLUJO_INSTALL_RESULT_FILE="$BROWSER_RESULT_FILE"
+run_stage patchright-chromium node mcp-servers/browser/scripts/install-browser.mjs
+unset FLUJO_INSTALL_RESULT_FILE
+run_stage patchright-verification node mcp-servers/browser/scripts/install-browser.mjs --verify
+
+run_stage build npm run build
+run_stage validation npm run validate:mcp-release
 ok "Build complete."
 
 # ---------------------------------------------------------------------------
 # 5. Register the global 'flujo' command.
 # ---------------------------------------------------------------------------
+stage_marker registration started 0
 mkdir -p "$BIN_DIR"
 LAUNCHER="$BIN_DIR/flujo"
 cat > "$LAUNCHER" <<EOF
@@ -460,6 +644,8 @@ cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
   "installDir": "$INSTALL_DIR",
   "binDir": "$BIN_DIR",
   "branch": "$BRANCH",
+  "channel": "$INSTALL_CHANNEL",
+  "revision": "$INSTALLED_REVISION",
   "repoUrl": "$REPO_URL",
   "desktopShortcut": $MAKE_SHORTCUT,
   "claudeCli": {
@@ -471,11 +657,13 @@ cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
     { "command": "git",     "displayName": "Git",                     "preexisting": $PRE_GIT },
     { "command": "node",    "displayName": "Node.js (includes npm)",  "preexisting": $PRE_NODE },
     { "command": "python3", "displayName": "Python 3",                "preexisting": $PRE_PYTHON },
-    { "command": "uv",      "displayName": "uv",                      "preexisting": $PRE_UV }$OLLAMA_MANIFEST
+    { "command": "uv",      "displayName": "uv",                      "preexisting": $PRE_UV },
+    { "command": "rg",      "displayName": "ripgrep",                 "preexisting": $PRE_RG }$OLLAMA_MANIFEST
   ]
 }
 EOF
 ok "Uninstall manifest written: $MANIFEST_DIR/install-manifest.json"
+stage_marker registration completed 0
 
 # ---------------------------------------------------------------------------
 # 7. Done — start now or explain how to.

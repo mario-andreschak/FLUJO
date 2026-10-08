@@ -8,6 +8,9 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { ModelInputSnapshot, WireStatus, ModelInputProvenanceEntry } from '@/backend/execution/flow/types';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
+import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
 
 /**
  * Conversation-aware "Model Input" viewer for the Visual Debugger (issue #153).
@@ -27,12 +30,16 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 
 type ChipColor = 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning';
 
-const STATUS_META: Record<WireStatus, { label: string; color: ChipColor }> = {
-  'system': { label: 'system', color: 'secondary' },
-  'sent': { label: 'sent', color: 'success' },
-  'folded': { label: 'folded', color: 'warning' },
-  'scoped-out': { label: 'scoped out', color: 'info' },
-  'handoff-stripped': { label: 'handoff plumbing', color: 'default' },
+const STATUS_META: Record<WireStatus, { color: ChipColor }> = {
+  'system': { color: 'secondary' },
+  'sent': { color: 'success' },
+  'folded': { color: 'warning' },
+  'scoped-out': { color: 'info' },
+  'handoff-stripped': { color: 'default' },
+  'summarized': { color: 'secondary' },
+  'visually-archived': { color: 'primary' },
+  'emergency-stripped': { color: 'error' },
+  'content-truncated': { color: 'warning' },
 };
 
 function roleColor(role: string): ChipColor {
@@ -67,11 +74,30 @@ const contentPre: React.CSSProperties = {
  * receives (shared by the inspector accordion and the #162 Conversation
  * section so both read identically).
  */
-export function wireSummary(counts: ModelInputSnapshot['counts']): string {
+export function wireSummary(
+  counts: ModelInputSnapshot['counts'],
+  t?: Translator,
+): string {
+  if (t) {
+    return [
+      t('chat.debug.summary', { history: counts.threaded, sent: counts.sent }),
+      counts.folded ? t('chat.debug.foldedCount', { count: counts.folded }) : '',
+      counts.scopedOut ? t('chat.debug.scopedCount', { count: counts.scopedOut }) : '',
+      counts.handoffStripped ? t('chat.debug.handoffCount', { count: counts.handoffStripped }) : '',
+      counts.summarized ? t('chat.debug.summarizedCount', { count: counts.summarized }) : '',
+      counts.visuallyArchived ? t('chat.debug.visuallyArchivedCount', { count: counts.visuallyArchived }) : '',
+      counts.emergencyStripped ? t('chat.debug.emergencyStrippedCount', { count: counts.emergencyStripped }) : '',
+      counts.contentTruncated ? t('chat.debug.contentTruncatedCount', { count: counts.contentTruncated }) : '',
+    ].filter(Boolean).join(' · ');
+  }
   return `${counts.threaded} in history → ${counts.sent} sent`
     + (counts.folded ? ` · ${counts.folded} folded` : '')
     + (counts.scopedOut ? ` · ${counts.scopedOut} scoped out` : '')
-    + (counts.handoffStripped ? ` · ${counts.handoffStripped} handoff-stripped` : '');
+    + (counts.handoffStripped ? ` · ${counts.handoffStripped} handoff-stripped` : '')
+    + (counts.summarized ? ` · ${counts.summarized} summarized` : '')
+    + (counts.visuallyArchived ? ` · ${counts.visuallyArchived} visually archived` : '')
+    + (counts.emergencyStripped ? ` · ${counts.emergencyStripped} emergency-stripped` : '')
+    + (counts.contentTruncated ? ` · ${counts.contentTruncated} content-truncated` : '');
 }
 
 /** One message row in the wire view (or annotated history). */
@@ -82,7 +108,28 @@ const MessageRow: React.FC<{
   status?: WireStatus;
   faded?: boolean;
 }> = ({ role, content, toolCallNames, status, faded }) => {
+  const { t } = useI18n();
   const showStatus = status && status !== 'sent' && status !== 'system';
+  const localizedRole = role === 'user'
+    ? t('chat.messages.you')
+    : role === 'assistant'
+      ? t('chat.messages.agent')
+      : role === 'tool'
+        ? t('chat.messages.tool')
+        : role === 'system'
+          ? t('chat.messages.system')
+          : role;
+  const statusLabel = status ? ({
+    system: t('chat.debug.status.system'),
+    sent: t('chat.debug.status.sent'),
+    folded: t('chat.debug.status.folded'),
+    'scoped-out': t('chat.debug.status.scoped'),
+    'handoff-stripped': t('chat.debug.status.handoff'),
+    summarized: t('chat.debug.status.summarized'),
+    'visually-archived': t('chat.debug.status.visuallyArchived'),
+    'emergency-stripped': t('chat.debug.status.emergencyStripped'),
+    'content-truncated': t('chat.debug.status.contentTruncated'),
+  } satisfies Record<WireStatus, string>)[status] : '';
   return (
     <Paper
       variant="outlined"
@@ -94,7 +141,7 @@ const MessageRow: React.FC<{
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, flexWrap: 'wrap' }}>
-        <Chip size="small" label={role} color={roleColor(role)} variant="outlined" />
+        <Chip size="small" label={localizedRole} color={roleColor(role)} variant="outlined" />
         {toolCallNames && toolCallNames.length > 0 && (
           <Chip
             size="small"
@@ -104,13 +151,13 @@ const MessageRow: React.FC<{
           />
         )}
         {showStatus && (
-          <Chip size="small" color={STATUS_META[status!].color} label={STATUS_META[status!].label} />
+          <Chip size="small" color={STATUS_META[status!].color} label={statusLabel} />
         )}
       </Box>
       {content.trim().length > 0 ? (
         <pre style={contentPre}>{content}</pre>
       ) : (
-        <Typography variant="caption" color="textSecondary">(no text content)</Typography>
+        <Typography variant="caption" color="textSecondary">{t('chat.debug.noText')}</Typography>
       )}
     </Paper>
   );
@@ -119,13 +166,14 @@ const MessageRow: React.FC<{
 /**
  * Annotated full-history view: the entire threaded history with per-message
  * provenance badges (folded / scoped-out / handoff-stripped). Extracted so the
- * #162 Conversation section can offer it as the "Full history (annotated)"
+ * regular chat's model-input view can offer it as the "Full history (annotated)"
  * companion to the real-chat wire render.
  */
-export const AnnotatedHistory: React.FC<{ provenance: ModelInputProvenanceEntry[] }> = ({ provenance }) => (
-  <Box>
+export const AnnotatedHistory: React.FC<{ provenance: ModelInputProvenanceEntry[] }> = ({ provenance }) => {
+  const { t } = useI18n();
+  return <Box>
     <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 0.5 }}>
-      Full threaded history — greyed rows are not sent to the model.
+      {t('chat.debug.historyHelp')}
     </Typography>
     {provenance.map((p: ModelInputProvenanceEntry, i: number) => (
       <MessageRow
@@ -134,22 +182,47 @@ export const AnnotatedHistory: React.FC<{ provenance: ModelInputProvenanceEntry[
         content={p.preview ?? ''}
         toolCallNames={p.toolCallNames}
         status={p.status}
-        faded={p.status !== 'sent' && p.status !== 'system'}
+        faded={!['sent', 'system', 'content-truncated'].includes(p.status)}
       />
     ))}
     {provenance.some((p) => p.status !== 'sent' && p.status !== 'system') && (
       <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>
-        Hover a badge label to understand why a message is not on the wire:
-        folded (outputMode), scoped out (inputMode), or handoff plumbing (tool-call strip).
+        {t('chat.debug.badgeHelp')}
       </Typography>
     )}
-  </Box>
-);
+  </Box>;
+};
+
+export const ContextCompactionPanel: React.FC<{
+  diagnostic?: ContextCompactionDiagnostic;
+}> = ({ diagnostic }) => {
+  const { t } = useI18n();
+  if (!diagnostic?.events.length) return null;
+  return (
+    <Paper variant="outlined" sx={{ p: 1, mb: 1, borderColor: 'warning.main' }}>
+      <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5 }}>
+        {t('chat.debug.contextCompaction')}
+      </Typography>
+      {diagnostic.events.map((event, index) => (
+        <Box key={`${event.kind}-${index}`} sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center', mb: 0.5 }}>
+          <Chip size="small" color={event.kind === 'emergency-refit' ? 'error' : 'warning'} label={event.kind} />
+          {event.before !== undefined && event.after !== undefined && (
+            <Chip size="small" variant="outlined" label={`${event.before.toLocaleString()} → ${event.after.toLocaleString()} ${event.unit ?? ''}`} />
+          )}
+          {event.omittedMessages ? <Chip size="small" variant="outlined" label={t('chat.debug.omittedMessages', { count: event.omittedMessages })} /> : null}
+          {event.truncatedMessages ? <Chip size="small" variant="outlined" label={t('chat.debug.truncatedMessages', { count: event.truncatedMessages })} /> : null}
+          <Typography variant="caption" color="text.secondary">{event.reason}</Typography>
+        </Box>
+      ))}
+    </Paper>
+  );
+};
 
 const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ modelInput }) => {
+  const { t, tp, formatNumber } = useI18n();
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
 
-  const { systemMessage, wireMessages, provenance, counts, inputMode } = modelInput;
+  const { systemMessage, wireMessages, provenance, counts, inputMode, visualCompaction, contextCompaction } = modelInput;
 
   // The wire view shows non-system messages (the system message gets its own
   // prominent block above).
@@ -158,7 +231,7 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
     [wireMessages],
   );
 
-  const summary = wireSummary(counts);
+  const summary = wireSummary(counts, t);
 
   return (
     <Box sx={{ p: 1 }}>
@@ -170,10 +243,42 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
         )}
       </Box>
 
+      <ContextCompactionPanel diagnostic={contextCompaction} />
+
+      {visualCompaction && (
+        <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Chip size="small" color={visualCompaction.route === 'image' ? 'success' : 'default'} label={t('chat.debug.visualRoute', { route: visualCompaction.route })} />
+            <Chip size="small" variant="outlined" label={t('chat.debug.vision', { capability: visualCompaction.capability })} />
+            {visualCompaction.evaluationOnly && <Chip size="small" variant="outlined" label={t('chat.debug.evaluationOnly')} />}
+            {visualCompaction.fallbackReason && <Chip size="small" variant="outlined" label={visualCompaction.fallbackReason} />}
+          </Box>
+          {visualCompaction.estimates && (
+            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 0.5 }}>
+              {t('chat.debug.visualEstimates', {
+                raw: formatNumber(visualCompaction.estimates.rawTextTokens),
+                image: formatNumber(visualCompaction.estimates.imageTokens),
+                sidecar: formatNumber(visualCompaction.estimates.sidecarTokens),
+                savings: formatNumber(visualCompaction.estimates.netSavings),
+                percent: formatNumber(visualCompaction.estimates.savingsPercent, { maximumFractionDigits: 1 }),
+                pages: tp('chat.debug.pages', visualCompaction.pages.length),
+                bytes: formatNumber(visualCompaction.renderedBytes),
+                latency: formatNumber(visualCompaction.latencyMs),
+              })}
+            </Typography>
+          )}
+          {visualCompaction.sourceResourceUri && (
+            <Typography variant="caption" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>
+              {t('chat.debug.exactSource', { uri: visualCompaction.sourceResourceUri, hash: visualCompaction.sourceSha256 ?? '—' })}
+            </Typography>
+          )}
+        </Paper>
+      )}
+
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion defaultExpanded sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-          <Typography variant="caption"><b>System message</b></Typography>
+          <Typography variant="caption"><b>{t('chat.debug.systemMessage')}</b></Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ p: 0 }}>
           {systemMessage && systemMessage.content.trim().length > 0 ? (
@@ -181,7 +286,7 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
               <pre style={contentPre}>{systemMessage.content}</pre>
             </Paper>
           ) : (
-            <Typography variant="caption" color="textSecondary">(no system message)</Typography>
+            <Typography variant="caption" color="textSecondary">{t('chat.debug.noSystem')}</Typography>
           )}
         </AccordionDetails>
       </Accordion>
@@ -194,18 +299,18 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
         onChange={(_e, v) => { if (v) setView(v); }}
         sx={{ my: 1 }}
       >
-        <ToggleButton value="wire">What the model sees</ToggleButton>
-        <ToggleButton value="annotated">Full history (annotated)</ToggleButton>
+        <ToggleButton value="wire">{t('chat.debug.modelView')}</ToggleButton>
+        <ToggleButton value="annotated">{t('chat.debug.fullHistory')}</ToggleButton>
       </ToggleButtonGroup>
 
       {view === 'wire' ? (
         <Box>
           <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 0.5 }}>
-            Wire conversation ({wireBody.length} message{wireBody.length === 1 ? '' : 's'})
+            {tp('chat.debug.wireConversation', wireBody.length)}
           </Typography>
           {wireBody.length === 0 ? (
             <Typography variant="body2" color="textSecondary">
-              No conversation messages — the model sees only the system message.
+              {t('chat.debug.noConversation')}
             </Typography>
           ) : (
             wireBody.map((m: FlujoChatMessage, i: number) => (

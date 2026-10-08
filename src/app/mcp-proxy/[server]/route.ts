@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — per-server proxy endpoint (#17A).
  *
@@ -6,17 +7,15 @@
  * mcp-inspector, ...). One downstream server per path → no name collisions, so
  * tool names pass through unchanged.
  *
- * Inbound transport: the official `StreamableHTTPServerTransport` in STATELESS
- * mode (fresh Server+transport per request; the SDK does all protocol work). We
- * bridge Next.js's Web `Request`/`Response` to the Node `http` objects the SDK
- * transport expects via `fetch-to-node`. The actual forwarding lives in
+ * Inbound transport: the official Web-standard streamable HTTP transport in
+ * STATELESS mode (fresh Server+transport per request; the SDK does all protocol
+ * work directly with Next.js's Web `Request`/`Response`). Forwarding lives in
  * `proxyForward.ts` so it stays transport-agnostic and testable.
  *
  * Posture (single-user/localhost): a localhost guard blocks the DNS-rebinding
  * vector; no bearer token in v1 (see the design plan / future security pass).
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -24,7 +23,6 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { toReqRes, toFetchResponse } from 'fetch-to-node';
 import {
   isServerExposed,
   isLocalRequest,
@@ -33,14 +31,28 @@ import {
   proxyListResources,
   proxyListResourceTemplates,
   proxyReadResource,
+  getProxyAppsCapability,
+  getProxySkillsCapability,
+  proxyGetSkill,
+  proxyListSkills,
+  proxyReadSkillDirectory,
 } from '@/backend/services/mcp/proxyForward';
+import {
+  MCP_SKILLS_EXTENSION_ID,
+  McpGetSkillRequestSchema,
+  McpListSkillsRequestSchema,
+  McpReadSkillDirectoryRequestSchema,
+  type McpSkillsExtensionCapability,
+} from '@/shared/types/mcp';
+import { handleStatelessMcpRequest } from '@/backend/services/mcp/statelessHttpTransport';
 import { createLogger } from '@/utils/logger';
+import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 
-// The SDK transport + fetch-to-node need Node APIs — never the edge runtime.
+// Proxy forwarding and downstream MCP services use Node APIs — never the edge runtime.
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-proxy/[server]/route');
-const PROXY_VERSION = '3.27.0';
+const PROXY_VERSION = '3.46.2';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -49,13 +61,45 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
-function buildProxyServer(serverName: string): Server {
+// MCP 2026-07-28 note: the new spec introduces `Mcp-Method` and `Mcp-Name` HTTP request
+// headers as advisory routing hints for load balancers and intermediate proxies. FLUJO
+// re-terminates every inbound MCP request (a fresh `Server` + Web-standard transport
+// is created per HTTP request), so routing is already handled by the URL path
+// (`/mcp-proxy/<server>`). The `Mcp-Method`/`Mcp-Name` headers are safely ignored by
+// the v1 Web-standard transport; no implementation is needed here.
+function buildProxyServer(
+  serverName: string,
+  skillsCapability?: McpSkillsExtensionCapability,
+  appsCapability?: Record<string, unknown>,
+): Server {
+  const extensions = {
+    ...(appsCapability
+      ? { [MCP_APPS_EXTENSION_ID]: appsCapability }
+      : {}),
+    ...(skillsCapability
+      ? { [MCP_SKILLS_EXTENSION_ID]: skillsCapability }
+      : {}),
+  };
   const server = new Server(
     { name: `flujo-proxy-${serverName}`, version: PROXY_VERSION },
     // The resources capability must be declared or SDK clients won't issue
     // resources/* requests at all (Tier 3: the internal "flujo" server serves
     // run-scoped resources; other exposed servers get passthrough).
-    { capabilities: { tools: {}, resources: {} } },
+    //
+    // MCP Tasks (#404) is deliberately NOT advertised here: `tasks/get`,
+    // `tasks/result` and `tasks/cancel` are not registered, and this endpoint
+    // has no authenticated caller identity (localhost + explicit exposure are
+    // an exposure boundary, NOT per-task ownership), so task lookup would be
+    // reachable by task id alone. Advertising it would also claim partial
+    // support. See docs/features/mcp-tasks.md ("Server-side status") and the
+    // FEATURES.ENABLE_MCP_TASKS_SERVER flag.
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
+      },
+    },
   );
   server.setRequestHandler(ListToolsRequestSchema, () => proxyListTools(serverName));
   server.setRequestHandler(CallToolRequestSchema, (req) =>
@@ -66,6 +110,19 @@ function buildProxyServer(serverName: string): Server {
   server.setRequestHandler(ReadResourceRequestSchema, (req) =>
     proxyReadResource(serverName, req.params.uri),
   );
+  if (skillsCapability) {
+    server.setRequestHandler(McpListSkillsRequestSchema, (req) =>
+      proxyListSkills(serverName, req.params?.cursor),
+    );
+    server.setRequestHandler(McpGetSkillRequestSchema, (req) =>
+      proxyGetSkill(serverName, req.params.uri),
+    );
+    if (skillsCapability.directoryRead === true) {
+      server.setRequestHandler(McpReadSkillDirectoryRequestSchema, (req) =>
+        proxyReadSkillDirectory(serverName, req.params.uri, req.params.cursor),
+      );
+    }
+  }
   return server;
 }
 
@@ -81,40 +138,18 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
-  const server = buildProxyServer(serverName);
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless: no session validation, fresh per request
-    enableJsonResponse: true,
-  });
-
-  const { req, res } = toReqRes(request);
+  // Keep downstream connection establishment serialized. On the first proxy
+  // request, racing two connectServer calls can launch duplicate stdio
+  // processes for the same configured server.
+  const skillsCapability = await getProxySkillsCapability(serverName);
+  const appsCapability = await getProxyAppsCapability(serverName);
+  const server = buildProxyServer(serverName, skillsCapability, appsCapability);
 
   try {
-    await server.connect(transport);
-    // Let the transport read & parse the body from the (fetch-to-node) Node stream.
-    // Do NOT call request.json() here: that locks the same body ReadableStream that
-    // `req` streams from, causing "Invalid state: ReadableStream is locked".
-    await transport.handleRequest(req, res);
-    return await toFetchResponse(res);
+    return await handleStatelessMcpRequest(server, request);
   } catch (error) {
     log.error('Proxy request failed', { serverName, error });
     return jsonError(500, 'Internal proxy error.');
-  } finally {
-    // Close once, here — NOT on a res 'close' listener. By the time the synthetic
-    // fetch-to-node response has been turned into a Response, its controller is
-    // already finalized, so a late transport.close() double-closes it and throws
-    // "Controller is already closed" as an UNCAUGHT exception. Swallow the benign
-    // already-closed errors; for stateless JSON the body is buffered by now.
-    try {
-      await transport.close();
-    } catch {
-      /* already closed */
-    }
-    try {
-      await server.close();
-    } catch {
-      /* already closed */
-    }
   }
 }
 
@@ -122,14 +157,18 @@ interface RouteCtx {
   params: Promise<{ server: string }>;
 }
 
-export async function POST(request: Request, ctx: RouteCtx): Promise<Response> {
+async function POST_handler(request: Request, ctx: RouteCtx): Promise<Response> {
   return handle(request, (await ctx.params).server);
 }
 
-export async function GET(request: Request, ctx: RouteCtx): Promise<Response> {
+async function GET_handler(request: Request, ctx: RouteCtx): Promise<Response> {
   return handle(request, (await ctx.params).server);
 }
 
-export async function DELETE(request: Request, ctx: RouteCtx): Promise<Response> {
+async function DELETE_handler(request: Request, ctx: RouteCtx): Promise<Response> {
   return handle(request, (await ctx.params).server);
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

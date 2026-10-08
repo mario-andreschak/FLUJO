@@ -9,7 +9,7 @@ const log = createLogger('app/settings/page');
 export default function SettingsPage() {
   log.debug('Rendering SettingsPage');
   return (
-    <Box component="main" sx={{ minHeight: '100vh' }}>
+    <Box component="div" sx={{ minHeight: '100%' }}>
       <Settings />
     </Box>
   );

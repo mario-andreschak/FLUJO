@@ -51,7 +51,7 @@ describe('armFileWatch', () => {
 
   const arm = (
     overrides: Partial<Parameters<typeof armFileWatch>[0]> = {},
-    onFire: (payload: FileWatchFire) => void,
+    onFire: (payload: FileWatchFire) => void | Promise<void>,
     onError: (message: string) => void = () => undefined
   ) => {
     const trigger = armFileWatch(
@@ -83,7 +83,7 @@ describe('armFileWatch', () => {
 
   it('batches a burst of new files into a single fire', async () => {
     const fires: FileWatchFire[] = [];
-    arm({}, payload => fires.push(payload));
+    arm({}, payload => { fires.push(payload); });
     // Give the watcher a moment to be ready before producing events.
     await new Promise(r => setTimeout(r, 300));
 
@@ -100,7 +100,7 @@ describe('armFileWatch', () => {
 
   it('ignores events outside the configured kinds and glob', async () => {
     const fires: FileWatchFire[] = [];
-    arm({ events: ['unlink'], glob: '*.txt' }, payload => fires.push(payload));
+    arm({ events: ['unlink'], glob: '*.txt' }, payload => { fires.push(payload); });
     await new Promise(r => setTimeout(r, 300));
 
     // 'add' events (wrong kind) and a non-matching deletion must not fire.
@@ -121,12 +121,28 @@ describe('armFileWatch', () => {
 
   it('stops firing after dispose', async () => {
     const fires: FileWatchFire[] = [];
-    const trigger = arm({}, payload => fires.push(payload));
+    const trigger = arm({}, payload => { fires.push(payload); });
     await new Promise(r => setTimeout(r, 300));
 
     trigger.dispose();
     await fs.writeFile(path.join(dir, 'late.txt'), 'a');
     await new Promise(r => setTimeout(r, 1500));
     expect(fires).toHaveLength(0);
+  });
+
+  it('retains the exact batch until its durable handoff succeeds', async () => {
+    const attempts: FileWatchFire[] = [];
+    const errors: string[] = [];
+    arm({}, async (payload) => {
+      attempts.push(payload);
+      if (attempts.length === 1) throw new Error('journal unavailable');
+    }, message => errors.push(message));
+    await new Promise(r => setTimeout(r, 300));
+
+    await fs.writeFile(path.join(dir, 'durable.txt'), 'content');
+    await waitFor(() => attempts.length >= 2);
+
+    expect(errors).toContain('journal unavailable');
+    expect(attempts[1]).toEqual(attempts[0]);
   });
 });

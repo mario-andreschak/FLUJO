@@ -6,21 +6,42 @@
  */
 import type { NextRequest } from 'next/server';
 
+// These tests exercise the registry routes' own validation and status mapping.
+// Workspace dispatch has dedicated coverage and must not run a real layout
+// migration against the developer checkout from this unit-test suite.
+jest.mock('@/app/api/_workspace', () => ({
+  withWorkspaceRoute: <H extends (...args: never[]) => unknown>(handler: H): H => handler,
+}));
+const mockWorkspaceExists = jest.fn(async (_workspace?: string) => true);
+const mockEnsureWorkspaceDirs = jest.fn(async (_workspace?: string) => undefined);
+jest.mock('@/utils/workspace', () => {
+  const actual = jest.requireActual('@/utils/workspace');
+  return {
+    ...actual,
+    workspaceExists: (workspace?: string) => mockWorkspaceExists(workspace),
+    ensureWorkspaceDirs: (workspace?: string) => mockEnsureWorkspaceDirs(workspace),
+  };
+});
+
 const authenticateMock = jest.fn();
 const getAccountStatusMock = jest.fn();
 const logoutMock = jest.fn();
 const publishMock = jest.fn();
+const deletePublishedPackageMock = jest.fn();
 const requestPasswordResetMock = jest.fn();
 const beginOAuthMock = jest.fn();
 const completeOAuthMock = jest.fn();
+const pendingOAuthWorkspaceMock = jest.fn((_state?: string) => 'default-workspace');
 jest.mock('@/backend/services/registry', () => ({
   authenticate: (...a: unknown[]) => authenticateMock(...a),
   getAccountStatus: (...a: unknown[]) => getAccountStatusMock(...a),
   logout: (...a: unknown[]) => logoutMock(...a),
   publish: (...a: unknown[]) => publishMock(...a),
+  deletePublishedPackage: (...a: unknown[]) => deletePublishedPackageMock(...a),
   requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
   beginOAuth: (...a: unknown[]) => beginOAuthMock(...a),
   completeOAuth: (...a: unknown[]) => completeOAuthMock(...a),
+  pendingOAuthWorkspace: (state: string) => pendingOAuthWorkspaceMock(state),
 }));
 
 // Store unlocked (default encryption mode). Individual tests can override with
@@ -32,6 +53,7 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { POST as authPost } from '@/app/api/registry/auth/route';
 import { POST as publishPost } from '@/app/api/registry/publish/route';
+import { DELETE as packageDelete } from '@/app/api/registry/packages/route';
 import { POST as resetPost } from '@/app/api/registry/auth/reset/route';
 import { POST as oauthInitiatePost } from '@/app/api/registry/oauth/initiate/route';
 import { GET as oauthCallbackGet } from '@/app/api/registry/oauth/callback/route';
@@ -53,14 +75,27 @@ function req(url: string, body: unknown, headers: Record<string, string> = { hos
   }) as unknown as NextRequest;
 }
 
-beforeEach(() => jest.clearAllMocks());
+function deleteReq(url: string, body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) {
+  return new Request(url, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  }) as unknown as NextRequest;
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  pendingOAuthWorkspaceMock.mockReturnValue('default-workspace');
+  mockWorkspaceExists.mockResolvedValue(true);
+  mockEnsureWorkspaceDirs.mockResolvedValue(undefined);
+});
 
 describe('POST /api/registry/auth (#197)', () => {
   it('authenticates a local login request', async () => {
     authenticateMock.mockResolvedValue({ status: 'authenticated', account: { signedIn: true } });
     const res = await authPost(req('http://localhost:4200/api/registry/auth', { action: 'login', email: 'a@b.c', password: 'pw' }));
     expect(res.status).toBe(200);
-    expect(authenticateMock).toHaveBeenCalledWith('a@b.c', 'pw', 'login');
+    expect(authenticateMock).toHaveBeenCalledWith('a@b.c', 'pw', 'login', '');
   });
 
   it('rejects a cross-origin (DNS-rebinding) request with 403 and never authenticates', async () => {
@@ -80,6 +115,21 @@ describe('POST /api/registry/auth (#197)', () => {
   it('returns 400 when email or password is missing', async () => {
     const res = await authPost(req('http://localhost:4200/api/registry/auth', { action: 'login', email: '' }));
     expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for signup without a handle, and never authenticates', async () => {
+    const res = await authPost(req('http://localhost:4200/api/registry/auth', { action: 'signup', email: 'a@b.c', password: 'pw' }));
+    expect(res.status).toBe(400);
+    expect(authenticateMock).not.toHaveBeenCalled();
+  });
+
+  it('authenticates a signup request with a handle', async () => {
+    authenticateMock.mockResolvedValue({ status: 'authenticated', account: { signedIn: true } });
+    const res = await authPost(
+      req('http://localhost:4200/api/registry/auth', { action: 'signup', email: 'a@b.c', password: 'pw', handle: 'my-handle' }),
+    );
+    expect(res.status).toBe(200);
+    expect(authenticateMock).toHaveBeenCalledWith('a@b.c', 'pw', 'signup', 'my-handle');
   });
 });
 
@@ -117,6 +167,52 @@ describe('POST /api/registry/publish (#197)', () => {
   });
 });
 
+describe('DELETE /api/registry/packages', () => {
+  it('deletes a package through the authenticated registry service', async () => {
+    deletePublishedPackageMock.mockResolvedValue({ ok: true });
+    const res = await packageDelete(
+      deleteReq('http://localhost:4200/api/registry/packages', { packageId: 'publisher/package' }),
+    );
+    expect(res.status).toBe(200);
+    expect(deletePublishedPackageMock).toHaveBeenCalledWith('publisher/package');
+  });
+
+  it('rejects a missing package id', async () => {
+    const res = await packageDelete(
+      deleteReq('http://localhost:4200/api/registry/packages', {}),
+    );
+    expect(res.status).toBe(400);
+    expect(deletePublishedPackageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not_authenticated', 401],
+    ['unauthorized', 401],
+    ['forbidden', 403],
+    ['not_found', 404],
+    ['validation', 400],
+    ['error', 502],
+  ])('maps deletion code %s to HTTP %s', async (code, status) => {
+    deletePublishedPackageMock.mockResolvedValue({ ok: false, code, error: 'x' });
+    const res = await packageDelete(
+      deleteReq('http://localhost:4200/api/registry/packages', { packageId: 'publisher/package' }),
+    );
+    expect(res.status).toBe(status);
+  });
+
+  it('rejects a cross-origin request before deleting', async () => {
+    const res = await packageDelete(
+      deleteReq(
+        'http://localhost:4200/api/registry/packages',
+        { packageId: 'publisher/package' },
+        { host: 'localhost:4200', origin: 'https://evil.example.com' },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(deletePublishedPackageMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/registry/oauth/initiate (#207)', () => {
   it('begins OAuth locally and returns the authorization URL', async () => {
     beginOAuthMock.mockResolvedValue({ authorizationUrl: 'https://registry.example/authz', state: 's' });
@@ -125,7 +221,10 @@ describe('POST /api/registry/oauth/initiate (#207)', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorizationUrl: 'https://registry.example/authz' });
-    expect(beginOAuthMock).toHaveBeenCalledWith('github', 'http://localhost:4200/api/registry/oauth/callback');
+    expect(beginOAuthMock).toHaveBeenCalledWith(
+      'github',
+      'http://localhost:4200/api/registry/oauth/callback?workspace=default-workspace',
+    );
   });
 
   it('rejects a cross-origin (DNS-rebinding) request with 403 and never begins OAuth', async () => {
@@ -162,8 +261,22 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
       getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=xyz', { host: 'localhost:4200', referer: 'https://registry.example/' }),
     );
     expect(res.status).toBe(307);
-    expect(res.headers.get('location')).toContain('/settings?registry_oauth=success');
+    expect(res.headers.get('location')).toContain('/packages?registry_oauth=success');
     expect(completeOAuthMock).toHaveBeenCalledWith('abc', 'xyz');
+    expect(mockEnsureWorkspaceDirs).toHaveBeenCalledWith('default-workspace');
+  });
+
+  it('refuses to persist tokens when the state-selected workspace fails subtree validation', async () => {
+    pendingOAuthWorkspaceMock.mockReturnValue('team-a');
+    mockEnsureWorkspaceDirs.mockRejectedValueOnce(new Error('workspace userdata is a junction'));
+
+    const res = await oauthCallbackGet(
+      getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=xyz'),
+    );
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('registry_oauth=error');
+    expect(completeOAuthMock).not.toHaveBeenCalled();
   });
 
   it('redirects to error (and never stores tokens) on invalid/expired state', async () => {
@@ -172,7 +285,7 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
       getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=stale'),
     );
     expect(res.status).toBe(307);
-    expect(res.headers.get('location')).toContain('/settings?registry_oauth=error');
+    expect(res.headers.get('location')).toContain('/packages?registry_oauth=error');
   });
 
   it('redirects to error when the provider returned an error, without exchanging', async () => {
@@ -180,7 +293,7 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
       getReq('http://localhost:4200/api/registry/oauth/callback?error=access_denied'),
     );
     expect(res.status).toBe(307);
-    expect(res.headers.get('location')).toContain('/settings?registry_oauth=error');
+    expect(res.headers.get('location')).toContain('/packages?registry_oauth=error');
     expect(completeOAuthMock).not.toHaveBeenCalled();
   });
 

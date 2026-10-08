@@ -4,15 +4,36 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 // Type-only imports (erased at compile time, so they don't trigger the ESM
 // runtime-load issue that forces the Agent SDK itself to be imported lazily).
 import type Anthropic from '@anthropic-ai/sdk';
-import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
+import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { mcpService } from '@/backend/services/mcp';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
+import { getRunResourceSettings } from '@/backend/services/runResources';
+import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
+import {
+  resolveInvokedToolUiLink,
+  toolCancellationReason,
+} from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
-import { extractText, extractImageParts, toAnthropicImageMediaType, truncateForPrompt } from './messageUtils';
-import { jsonSchemaToZodShape } from './jsonSchemaToZod';
+import {
+  DEFAULT_RUN_RESOURCE_SETTINGS,
+  DEFAULT_TOOL_RESULT_MAX_BYTES,
+  type RunResourceSettings,
+} from '@/shared/types/runResources';
+import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker, type SteeringDelivery } from './types';
+import { steeringSource, watchSteering } from './liveSteering';
+import {
+  extractMediaParts,
+  extractNativeMediaParts,
+  toAnthropicImageMediaType,
+} from './messageUtils';
+import { normalizeMessageInput, isMalformedToolCallProse } from './messageNormalization';
+import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
+import { ClaudeUsageTracker } from './claudeUsageTracker';
 import {
   sessionKey,
   computePrefixHash,
@@ -20,7 +41,14 @@ import {
   recordSession,
   invalidateSession,
 } from './claudeSessionStore';
+import { prepareClaudeRuntimeEnvironment } from './claudeRuntimeHome';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
 
@@ -69,14 +97,26 @@ const CLAUDE_BUILTIN_TOOLS = [
 // `mcp__flujo__` prefix the SDK adds.
 const MAX_TOOL_NAME_LEN = 110;
 
-// Per-item caps for the tool exchanges rendered into the flattened prompt
-// (issue #160). A prior tool result (a directory tree, a large file read) or an
-// oversized tool-call args payload (write-file-style calls carry whole file
-// contents) would otherwise dominate the single-user-message prompt. Aligned
-// with the debugger's WIRE_CONTENT_MAX = 4000 spirit; args get a smaller cap
-// because they are usually short and the result is what carries the evidence.
-const TOOL_RESULT_MAX_CHARS = 4000;
-const TOOL_ARGS_MAX_CHARS = 2000;
+// Claude Code otherwise persists MCP results after roughly 10k tokens (~50 KB)
+// and gives the model a private runtime path that FLUJO's read_resource cannot
+// resolve. FLUJO owns this boundary via boundToolResult. Raise the SDK valve to
+// at least FLUJO's configured BYTE limit: content below the FLUJO limit remains
+// inline, while content at/above it is replaced by FLUJO with a registered URI.
+// A byte can tokenize to at most one byte-level token, so using the byte count
+// as a token count is deliberately conservative. If the FLUJO byte dimension is
+// disabled, effectively disable the SDK valve too; the configured line bound
+// (if any) remains authoritative.
+const MIN_CLAUDE_MCP_OUTPUT_TOKENS = 64 * 1024;
+const DISABLED_CLAUDE_MCP_OUTPUT_TOKENS = 2_147_483_647;
+
+function claudeMcpOutputTokens(settings: RunResourceSettings | undefined): number {
+  const maxBytes = settings?.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return DISABLED_CLAUDE_MCP_OUTPUT_TOKENS;
+  return Math.max(MIN_CLAUDE_MCP_OUTPUT_TOKENS, Math.ceil(maxBytes));
+}
+
+// Compatibility export for callers that use the Claude-specific historical name.
+export const isMalformedClaudeToolCallProse = isMalformedToolCallProse;
 
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -128,159 +168,102 @@ function isHandoffName(name: string): boolean {
  * OWN live tool loop and always sees its full params/results (this function is
  * only ever handed history that precedes that live loop).
  *
- * When there are no tool exchanges the tool-rendering branches are never taken,
- * and when there are also no images the content is a plain string — byte-for-
- * byte the prompt the old flat-string path produced — so ordinary text/image
- * runs are unchanged (preserving the #89/#87 prefix-cache stability); only
- * flows that previously LOST their tool history change.
+ * INERT-RECORD FRAMING (issue #296). A tool-bearing history is wrapped in a
+ * `<conversation_history>` envelope carrying HISTORY_PREAMBLE, and its entries
+ * are separated by `===`. Prior actions render as `[prior action] <name>` /
+ * `arguments: …` / `[prior action result] <name>` rather than the former
+ * `Assistant [tool call] <name>(<args>)` call-expression form: that form was a
+ * few-shot demonstration of "act by writing an action line", and models followed
+ * it — emitting the notation as prose instead of invoking, which the CLI then
+ * failed to parse. See the constants above for the full failure chain.
  *
- * KNOWN LIMITATION (#87) — quadratic re-send: every node call spawns a fresh
- * `query()` (a new `claude` subprocess, no `resume`/`session_id`) and re-sends
- * the ENTIRE prior conversation flattened here. Only `systemPrompt` + tool defs
- * form a cacheable prefix; the conversation body is re-tokenized each turn, so
+ * When there are no tool exchanges the tool-rendering branches are never taken
+ * and no envelope is added, and when there are also no images the content is a
+ * plain string — byte-for-byte the prompt the old flat-string path produced — so
+ * ordinary text/image runs are unchanged (preserving the #89/#87 prefix-cache
+ * stability); only histories that carry tool exchanges change.
+ *
+ * QUADRATIC RE-SEND (#87) and its fix (#154): by DEFAULT every node call spawns
+ * a fresh `query()` (a new `claude` subprocess, no `resume`) and re-sends the
+ * ENTIRE prior conversation flattened here. Only `systemPrompt` + tool defs form
+ * a cacheable prefix; the conversation body is re-tokenized each turn, so
  * cumulative input grows ~O(n^2) with conversation length. The reporting side of
  * this was fixed by surfacing cache RE-READ tokens separately (see claudeUsage
- * .ts) so warmed-cache reads stop inflating the headline. The efficiency side
- * — reusing the SDK session per conversation via `resume` + a persisted
- * `session_id` and sending only the per-turn delta — is tracked as issue #154.
+ * .ts) so warmed-cache reads stop inflating the headline.
  *
- * #154 STATUS: the enabling infrastructure has landed (Phase 0/1) — a per-
- * `(conversationId, nodeId)` session registry (claudeSessionStore.ts) that keys
- * on a prefix hash of `systemPrompt` + tool set and invalidates on prefix change
- * / history divergence / error / handoff, plus capture of the SDK `session_id`
- * here and per-turn token instrumentation. The behaviour change itself (flipping
- * the send path to `resume` + delta) is the next increment, gated on live
- * token-curve verification because it touches conversation-context correctness.
- * Until then this flatten path remains the always-correct behaviour and fallback.
+ * #154 STATUS: the efficiency fix — reuse the SDK session per `(conversationId,
+ * nodeId)` via `resume` and send only the per-turn delta — is now IMPLEMENTED,
+ * behind the experimental `claudeSessionResume` setting (threaded as
+ * `CompletionInput.sessionResume`). When it is ON and a reusable session exists,
+ * `createCompletion` resumes that session (so its prior turns are loaded
+ * natively) and this function is called only over the DELTA messages. When it is
+ * OFF — the default — this flatten path over the whole history remains the
+ * always-correct behaviour and the fallback whenever a session can't be reused
+ * (prefix change, history divergence, error, handoff, or a scoped wire view).
  */
 export function buildUserMessage(
   messages: OpenAI.ChatCompletionMessageParam[],
-  /**
-   * Captured run resources for oversized PRIOR tool results/args, keyed by the
-   * producing tool_call_id (issue #168). When an oversized result/args has a
-   * captured entry, render a head excerpt + a `flujo://run/...` marker the model
-   * can dereference via `read_resource`, instead of a plain `…[truncated]`.
-   * Absent (or no matching entry) ⇒ byte-identical plain truncation. This only
-   * ever sees PRIOR/SETTLED turns (the SDK owns the current node's live loop),
-   * so the current node's in-flight args/results are never rewritten.
-   */
   resourceMarkers?: Map<string, ToolResourceMarker>,
 ): {
   systemPrompt?: string;
   content: string | Anthropic.ContentBlockParam[];
 } {
-  const systemParts: string[] = [];
-  // Each already-formatted transcript line, in original order. A plain text
-  // turn renders as before (`Human: …` / `Assistant: …`); an assistant tool-
-  // call turn and a `tool` result each render as their own line (#160).
-  const lines: string[] = [];
-  const images: ReturnType<typeof extractImageParts> = [];
+  const normalized = normalizeMessageInput(messages, resourceMarkers);
+  const documents = messages.flatMap(message => {
+    if (message.role !== 'user') return [];
+    return extractMediaParts(message.content).filter(
+      item => item.type === 'file' && item.mimeType === 'application/pdf',
+    );
+  });
 
-  // Whether any tool exchange was rendered, and how many plain text turns there
-  // were. Together these select the byte-identical no-tool fast paths below.
-  let toolActivity = false;
-  let plainTurns = 0;
-  let firstPlainText = '';
-
-  // Map tool_call_id -> the tool name from the assistant turn that issued it,
-  // so a `tool` result can be labelled with a meaningful name rather than the
-  // opaque call id.
-  const callNames = new Map<string, string>();
-  for (const msg of messages) {
-    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
-      for (const tc of msg.tool_calls) {
-        if (tc.type === 'function') callNames.set(tc.id, tc.function.name);
-      }
-    }
-  }
-
-  for (const msg of messages) {
-    if (msg.role === 'system') {
-      const text = extractText(msg.content);
-      if (text) systemParts.push(text);
-      continue;
-    }
-    if (msg.role === 'tool') {
-      // A prior tool RESULT: render it as text so a downstream full-history
-      // reader sees what the tool returned (#160). Truncated to a cap so a
-      // large payload can't dominate the flattened prompt.
-      toolActivity = true;
-      const name = callNames.get(msg.tool_call_id) ?? msg.tool_call_id;
-      const fullResult = extractText(msg.content ?? '');
-      const entry = resourceMarkers?.get(msg.tool_call_id)?.result;
-      if (entry && fullResult.length > TOOL_RESULT_MAX_CHARS) {
-        // Head excerpt + dereferenceable marker (#168): the full payload was
-        // captured as a run resource, so point the model at it via read_resource
-        // instead of silently dropping the tail.
-        lines.push(
-          `Tool result [${name}]: ${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
-          `[full content stored as run resource ${entry.uri} — call read_resource with this uri to read it]`,
-        );
-      } else {
-        lines.push(`Tool result [${name}]: ${truncateForPrompt(fullResult, TOOL_RESULT_MAX_CHARS)}`);
-      }
-      continue;
-    }
-    if (msg.role !== 'user' && msg.role !== 'assistant') continue;
-
-    const text = extractText(msg.content ?? '');
-    if (text) {
-      plainTurns++;
-      if (plainTurns === 1) firstPlainText = text;
-      lines.push(`${msg.role === 'assistant' ? 'Assistant' : 'Human'}: ${text}`);
-    }
-    // A prior assistant TOOL-CALL turn (content is typically '' so it produced
-    // no text line above): render each call so the model sees the actions its
-    // predecessor took, not just its prose (#160).
-    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
-      for (const tc of msg.tool_calls) {
-        if (tc.type !== 'function') continue;
-        toolActivity = true;
-        const fullArgs = tc.function.arguments ?? '';
-        const argsEntry = resourceMarkers?.get(tc.id)?.args;
-        if (argsEntry && fullArgs.length > TOOL_ARGS_MAX_CHARS) {
-          // Head excerpt + marker for oversized captured args (#168).
-          lines.push(
-            `Assistant [tool call] ${tc.function.name}(${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
-            `[full arguments stored as run resource ${argsEntry.uri} — call read_resource with this uri to read them])`,
-          );
-        } else {
-          const args = truncateForPrompt(fullArgs, TOOL_ARGS_MAX_CHARS);
-          lines.push(`Assistant [tool call] ${tc.function.name}(${args})`);
-        }
-      }
-    }
-    if (msg.role === 'user') images.push(...extractImageParts(msg.content));
-  }
-
-  // Byte-identical fast path for tool-free histories: a single text turn stays
-  // raw (no `Human:`/`Assistant:` prefix), matching the pre-#160 behaviour and
-  // preserving provider prefix-cache stability. Multi-turn tool-free histories
-  // also render exactly as before (prefixed lines joined by blank lines).
-  const promptText =
-    !toolActivity && plainTurns <= 1
-      ? firstPlainText
-      : lines.join('\n\n');
-
-  const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
-
-  if (images.length === 0) {
-    return { systemPrompt, content: promptText };
+  if (normalized.images.length === 0 && documents.length === 0) {
+    return { systemPrompt: normalized.systemPrompt, content: normalized.text };
   }
 
   const blocks: Anthropic.ContentBlockParam[] = [];
-  if (promptText) blocks.push({ type: 'text', text: promptText });
-  for (const img of images) {
-    if (img.base64) {
+  if (normalized.text) blocks.push({ type: 'text', text: normalized.text });
+  for (const image of normalized.images) {
+    if (image.base64) {
       blocks.push({
         type: 'image',
-        source: { type: 'base64', media_type: toAnthropicImageMediaType(img.mimeType), data: img.base64 },
+        source: {
+          type: 'base64',
+          media_type: toAnthropicImageMediaType(image.mimeType),
+          data: image.base64,
+        },
       });
     } else {
-      blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+      blocks.push({ type: 'image', source: { type: 'url', url: image.url } });
     }
   }
-  return { systemPrompt, content: blocks };
+  for (const document of documents) {
+    if (document.data) {
+      blocks.push({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: document.data,
+        },
+      } as Anthropic.ContentBlockParam);
+    } else if (document.url) {
+      blocks.push({
+        type: 'document',
+        source: { type: 'url', url: document.url },
+      } as Anthropic.ContentBlockParam);
+    }
+  }
+  return { systemPrompt: normalized.systemPrompt, content: blocks };
+}
+
+/** Count only system messages at the start of the conversation array. */
+function countLeadingSystemMessages(messages: readonly OpenAI.ChatCompletionMessageParam[]): number {
+  let count = 0;
+  for (const message of messages) {
+    if (message.role !== 'system') break;
+    count++;
+  }
+  return count;
 }
 
 interface ToolInteraction {
@@ -288,7 +271,14 @@ interface ToolInteraction {
   name: string;
   argsJson: string;
   resultContent: string;
+  ui?: ToolUi;
 }
+
+type ToolUi = NonNullable<FlujoChatMessage['ui']>;
+type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
+  ui?: ToolUi;
+  media?: import('@/shared/types/model/media').ModelMediaPart[];
+};
 
 /**
  * Claude Subscription adapter — drives a Claude Pro/Max subscription through the
@@ -322,13 +312,25 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     tools,
     toolNameMap,
     localToolExecutors,
+    shouldEndAgenticTurn,
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
+    consumeSteeringMessages,
+    steering,
+    onModelDelta,
+    onToolProgress,
     signal,
+    beforeToolDispatch,
+    executionExtensionContext,
+    authorizePersonaCoreMcp,
     conversationId,
+    runId,
     nodeId,
     runResourceMarkers,
+    sessionResume,
+    onSdkRequest,
+    onSdkRequestResult,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
     // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
@@ -343,17 +345,31 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
+    const runtime = await prepareClaudeRuntimeEnvironment();
+    let runResourceSettings: RunResourceSettings | undefined;
+    if (conversationId) {
+      try {
+        runResourceSettings = await getRunResourceSettings();
+      } catch (error) {
+        log.warn('Could not load run-resource settings before Claude tool setup; using defaults', error);
+        runResourceSettings = DEFAULT_RUN_RESOURCE_SETTINGS;
+      }
+    }
 
-    const { systemPrompt, content: userContent } = buildUserMessage(messages, runResourceMarkers);
+    // The FULL flatten of the whole history. `systemPrompt` is the hoisted,
+    // prefix-stable system block (unchanged turn to turn for a given node); its
+    // `content` is the always-correct fallback we send when NOT resuming.
+    const { systemPrompt, content: fullContent } = buildUserMessage(messages, runResourceMarkers);
 
     // #154 session tracking. When the caller identifies the conversation+node,
     // key a reusable Agent SDK session on a hash of the reusable prefix
     // (systemPrompt + tool set). We capture the SDK `session_id` below and, once
-    // the run succeeds, record it so a later turn of the SAME single-node Flow
-    // could `resume` instead of re-flattening the whole history. This increment
-    // records + measures only (the flatten path below is unchanged); the resume
-    // send-path flip is the follow-up. `findReusableSession` here surfaces, per
-    // turn, whether reuse WOULD be possible — the Phase-0 measurement signal.
+    // the run succeeds, record it (watermarked by the total message count the
+    // session now reflects) so a later turn of the SAME single-node Flow can
+    // `resume` instead of re-flattening the whole history. `findReusableSession`
+    // surfaces whether reuse is possible this turn — used both as the Phase-0
+    // measurement signal AND, when `sessionResume` is on, to actually resume.
+    const leadingSystemMessageCount = countLeadingSystemMessages(messages);
     const sessionTracking =
       conversationId && nodeId
         ? {
@@ -366,7 +382,52 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         : undefined;
     let capturedSessionId: string | undefined;
 
+    // Decide the send path (#154). When session reuse is enabled AND a reusable
+    // session exists for this (conversation, node) with a matching prefix and a
+    // non-shrunk history, RESUME it and send only the messages appended since
+    // the session's watermark (`seenMessageCount`) — the SDK already holds every
+    // prior turn NATIVELY, so re-sending them would duplicate context. Otherwise
+    // fall back to the full flatten (the always-correct path). The systemPrompt
+    // is still passed on resume: the SDK applies it per-invocation (it is not
+    // part of the persisted transcript), and the prefix-hash match guarantees it
+    // is byte-identical to what the session was built with.
+    let resumeSessionId: string | undefined;
+    let userContent: string | Anthropic.ContentBlockParam[] = fullContent;
+    if (sessionResume && sessionTracking) {
+      const reusable = findReusableSession(
+        sessionTracking.key,
+        sessionTracking.prefixHash,
+        messages.length,
+        leadingSystemMessageCount,
+      );
+      // Only resume when there are genuinely new messages beyond the watermark;
+      // an empty delta would mean "nothing new to say" (degenerate) — fall back
+      // to the full flatten rather than send an empty turn.
+      if (reusable && messages.length > reusable.seenMessageCount) {
+        const delta = buildUserMessage(messages.slice(reusable.seenMessageCount), runResourceMarkers);
+        // `content` is a string OR a content-block array; both expose `.length`,
+        // so a non-empty delta means there is genuinely something new to send.
+        if (delta.content.length > 0) {
+          resumeSessionId = reusable.sessionId;
+          userContent = delta.content;
+          log.debug('Claude subscription resuming session (#154)', {
+            key: sessionTracking.key,
+            resumeSessionId,
+            seenMessageCount: reusable.seenMessageCount,
+            deltaMessages: messages.length - reusable.seenMessageCount,
+          });
+        }
+      }
+    }
+
     const usedNames = new Set<string>();
+    const mcpToolUiByReadableName = new Map<string, {
+      serverName: string;
+      toolName: string;
+      advertisedUri?: string;
+      presetArgs?: Record<string, unknown>;
+      context?: import('@/backend/execution/flow/types').ToolReferenceContext;
+    }>();
     // Spawn-with-brief (issue #156): a routing model may call handoff tools
     // SEVERAL times — in one turn (parallel tool_use blocks) or one per turn,
     // which is how models under the SDK's agentic loop usually work. Collect
@@ -382,6 +443,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // model turn. Spawnable targets instead end when the model stops calling.
     let endSpawning = false;
     const abortController = new AbortController();
+    let endedByCaller = false;
+    const endedToolResult = (): CallToolResult => ({
+      content: [{ type: 'text', text: 'This agentic turn has ended; no further tools may run.' }],
+      isError: true,
+    });
     // Chain the caller's cancellation signal (Stop button) onto the controller
     // that owns the whole agentic loop — this is the largest otherwise
     // un-interruptible window (the SDK can run tools/turns for a long time).
@@ -400,20 +466,63 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const transcript: FlujoChatMessage[] = [];
     const baseTs = Date.now();
     let txSeq = 0;
-    const recordMessage = (msg: OpenAI.ChatCompletionMessageParam): void => {
-      const full = { ...msg, id: `m_${uuidv4()}`, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
+    const recordMessage = (msg: TranscriptMessage, id = `m_${uuidv4()}`): void => {
+      const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
     };
-    // Materialize an executed (or rejected) tool call as the OpenAI-shaped
-    // assistant(tool_call) + tool(result) pair, streaming both live.
-    const recordToolPair = (ti: ToolInteraction): void => {
+    const recordSteeringMessage = (message: FlujoChatMessage): void => {
+      // Keep the route-supplied id/timestamp so the canonical message reconciles
+      // the optimistic chat bubble instead of creating a duplicate.
+      transcript.push(message);
+      onTranscriptMessage?.(message);
+    };
+    const unansweredTools = new Set<string>();
+    const recordToolCall = (
+      ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+      messageId?: string,
+    ): void => {
+      unansweredTools.add(ti.id);
       recordMessage({
         role: 'assistant',
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
+      }, messageId);
+    };
+    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
+      unansweredTools.delete(ti.id);
+      recordMessage({
+        role: 'tool',
+        tool_call_id: ti.id,
+        content: ti.resultContent,
+        ...(ti.ui ? { ui: ti.ui } : {}),
       });
-      recordMessage({ role: 'tool', tool_call_id: ti.id, content: ti.resultContent });
+    };
+    // canUseTool sees the SDK's stable tool-use id before the in-process handler
+    // starts. Record the call there, then let the handler append only its result.
+    const queuedToolCalls = new Map<string, Array<{ id: string; argsJson: string }>>();
+    const recordedToolCallIds = new Set<string>();
+    const partialToolMessageIds = new Map<string, string>();
+    const enqueueToolCall = (name: string, callId: string, argsJson: string): void => {
+      const queue = queuedToolCalls.get(name) ?? [];
+      queue.push({ id: callId, argsJson });
+      queuedToolCalls.set(name, queue);
+    };
+    const takeToolCall = (name: string, args: Record<string, unknown>): string => {
+      const queue = queuedToolCalls.get(name);
+      const argsJson = JSON.stringify(args ?? {});
+      const matchingIndex = queue?.findIndex(entry => entry.argsJson === argsJson) ?? -1;
+      const [matching] = matchingIndex >= 0 ? queue!.splice(matchingIndex, 1) : [];
+      const callId = matching?.id ?? queue?.shift()?.id ?? `call_${uuidv4()}`;
+      if (queue?.length === 0) queuedToolCalls.delete(name);
+      if (!recordedToolCallIds.has(callId)) {
+        recordToolCall(
+          { id: callId, name, argsJson },
+          partialToolMessageIds.get(callId),
+        );
+        recordedToolCallIds.add(callId);
+      }
+      return callId;
     };
 
     // Build the in-process MCP server from the node's tools. MCP tools dispatch to
@@ -430,8 +539,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         const localExec = localToolExecutors?.[fnName];
         if (!handoff && !decoded && !localExec) return null;
 
-        const description = t.function.description ?? '';
-        const schemaShape = jsonSchemaToZodShape(t.function.parameters);
+        // Build the Zod raw shape and, when a composed/ref schema couldn't be
+        // faithfully translated, surface the original JSON Schema in the
+        // description so the model still sees the real contract (issue #232).
+        const { shape: schemaShape, fallbackSchema } = buildToolInputShape(t.function.parameters);
+        const description = embedSchemaInDescription(t.function.description ?? '', fallbackSchema);
 
         if (handoff) {
           // A spawnable sub-agent's handoff tool carries a `task` param (issue
@@ -442,10 +554,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           );
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
+            const toolStartedAt = Date.now();
             handoffCalls.push({ name: fnName, args: args ?? {} });
+            if (runId) {
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: nodeId ? { id: nodeId } : undefined,
+                tool: { id: fnName, name: fnName, kind: 'handoff' },
+                outcome: 'completed',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+              }));
+            }
             log.debug('Claude subscription requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
             // Do NOT abort here. Aborting inside the tool handler tears down the
             // SDK control stream mid-permission-round-trip and surfaces the
@@ -473,7 +597,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // hand its JSON result back to the SDK. Keep the exact name — these
           // names are already OpenAI-safe and the caller keys executors by them.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             log.debug('Claude subscription local tool call', { tool: fnName });
+            const callId = takeToolCall(fnName, args);
+            const toolStartedAt = Date.now();
             let resultContent: string;
             let isError = false;
             try {
@@ -482,40 +609,163 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
               isError = true;
             }
-            recordToolPair({
-              id: `call_${uuidv4()}`,
-              name: fnName,
-              argsJson: JSON.stringify(args ?? {}),
+            recordToolResult({
+              id: callId,
               resultContent,
             });
+            if (runId) {
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: nodeId ? { id: nodeId } : undefined,
+                tool: { id: fnName, name: fnName, kind: 'synthetic' },
+                outcome: isError ? 'error' : 'completed',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+                errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
+              }));
+            }
             return isError
               ? { content: [{ type: 'text', text: resultContent }], isError: true }
               : { content: [{ type: 'text', text: resultContent }] };
           });
         }
 
-        const { server, tool: originalTool, timeout } = decoded!;
+        const {
+          server,
+          tool: originalTool,
+          timeout,
+          nodeId: callerNodeId,
+          uiResourceUri,
+          presetArgs,
+          context,
+        } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
+        mcpToolUiByReadableName.set(readableName, {
+          serverName: server,
+          toolName: originalTool,
+          advertisedUri: uiResourceUri,
+          presetArgs,
+          context,
+        });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+          if (shouldEndAgenticTurn?.()) return endedToolResult();
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
+          const callId = takeToolCall(readableName, args);
+          const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
-          const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS);
+          const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
+          await beforeToolDispatch?.();
+          await authorizePersonaCoreMcp?.(server, callerNodeId);
+          const result = await mcpService.callTool(
+            server,
+            originalTool,
+            effectiveArgs,
+            timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+            onToolProgress
+              ? (progress) => onToolProgress({
+                  toolCallId: callId,
+                  name: readableName,
+                  progress: progress.progress,
+                  total: progress.total,
+                  message: progress.message,
+                })
+              : undefined,
+            callerNodeId,
+            abortController.signal,
+            'model',
+            // Issue #413: same canonical run owner key as the ModelHandler and
+            // Codex paths, so run-owned Bash sessions are releasable here too.
+            ownerScopeForRun({ runId, conversationId }),
+            conversationId ? { conversationId } : undefined,
+            ...(executionExtensionContext ? [executionExtensionContext] as const : [] as const),
+          );
+          if (runId) {
+            const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
+            recordStatisticsEvent(createStatisticsEvent({
+              type: 'tool.invocation',
+              runId,
+              node: { id: callerNodeId ?? nodeId ?? 'unknown' },
+              tool: { id: originalTool, name: originalTool, kind: 'mcp' },
+              provider: { id: server },
+              outcome: cancelled ? 'cancelled' : result.success ? 'completed' : 'error',
+              durationMs: Math.max(0, Date.now() - toolStartedAt),
+              errorClass: !result.success ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : result.error) : undefined,
+            }));
+          }
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {
             callResult = result.data as CallToolResult;
-            // Match the OpenAI path's tool-result encoding (JSON of the result data).
-            resultContent = JSON.stringify(result.data);
+            // Media is split out BEFORE anything is measured or stringified.
+            // The Agent SDK accepts native image/audio blocks inside a
+            // tool_result, so this path is one of the few that can give the
+            // model real vision — but base64 counted against a byte budget
+            // destroyed exactly that: a ~37 KB image already exceeds the 50 KB
+            // default once JSON-stringified, so the bound replaced the whole
+            // content array (picture included) with a text marker. Bounding is
+            // a guard against TEXT flooding the context; media has its own
+            // size story and must be exempt from it.
+            const { mediaItems, textResult } = splitToolResultMedia(callResult);
+            // Match the OpenAI path's tool-result encoding (JSON of the result
+            // data), minus the media payloads — this string is also what gets
+            // recorded into the transcript, which should never carry base64.
+            resultContent = JSON.stringify(textResult);
+            // Tool-boundary bound (#251): this path bypasses ModelHandler's
+            // processToolCalls, so without bounding here the guarantee would
+            // silently not apply on Claude-subscription runs. Spill oversized
+            // results to a run resource and show a head+tail preview instead.
+            if (conversationId) {
+              try {
+                const settings = runResourceSettings ?? await getRunResourceSettings();
+                const bounded = await boundToolResult({
+                  conversationId,
+                  toolCallId: callId,
+                  server,
+                  toolName: originalTool,
+                  nodeId: callerNodeId,
+                  content: resultContent,
+                  settings,
+                });
+                if (bounded.spilled) {
+                  resultContent = bounded.content;
+                  // callResult is what the SDK feeds the MODEL, so it must be
+                  // bounded too (not just the recorded transcript) or the model
+                  // still sees the full result on this path. Media blocks are
+                  // re-attached verbatim: the text was too big, the picture was
+                  // never the problem.
+                  callResult = {
+                    ...callResult,
+                    content: [...mediaItems, { type: 'text', text: bounded.content }],
+                  };
+                }
+              } catch (err) {
+                log.warn('boundToolResult failed on subscription path; keeping full result', err);
+              }
+            }
           } else {
             resultContent = `Error: ${result.error ?? 'Unknown error'}`;
             callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
           }
-          recordToolPair({
-            id: `call_${uuidv4()}`,
-            name: readableName,
-            argsJson: JSON.stringify(args ?? {}),
+          const uiLink = await resolveInvokedToolUiLink(
+            server,
+            originalTool,
+            uiResourceUri,
+            result.data,
+            args ?? {},
+          );
+          const cancelledReason = toolCancellationReason(result);
+          const ui = uiLink
+            ? {
+                ...uiLink,
+                ...(!result.success ? { isError: true } : {}),
+                ...(cancelledReason ? { cancelledReason } : {}),
+              }
+            : undefined;
+          recordToolResult({
+            id: callId,
             resultContent,
+            ...(ui ? { ui } : {}),
           });
           return callResult;
         });
@@ -526,10 +776,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       ? { [SDK_SERVER_NAME]: createSdkMcpServer({ name: SDK_SERVER_NAME, version: '1.0.0', tools: sdkTools }) }
       : undefined;
 
-    // Replace the subprocess env wholesale (per SDK contract): inherit ours, add
-    // the OAuth token, and drop ANTHROPIC_API_KEY so it can't take precedence.
-    const childEnv: Record<string, string | undefined> = { ...process.env };
+    // Replace the subprocess env wholesale (per SDK contract): start with the
+    // workspace-isolated Claude runtime, add the OAuth token, and drop
+    // ANTHROPIC_API_KEY so it can't take precedence.
+    const childEnv: Record<string, string | undefined> = { ...runtime.env };
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
+    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings));
     delete childEnv.ANTHROPIC_API_KEY;
 
     const hasImages = typeof userContent !== 'string';
@@ -541,24 +793,79 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
     });
 
-    // Drive the SDK via its streaming-input channel with a single user message.
-    // The generator yields once then completes, signaling end-of-input so the
-    // SDK processes the turn (and runs the agentic tool loop) to completion.
+    // Keep one input iterable open for the query lifetime. Agent SDK streamInput
+    // closes stdin when an iterable ends; starting a second finite stream can
+    // close the process early or deadlock while waiting for its first result.
+    const sdkPromptMessage: SDKUserMessage = {
+      type: 'user', parent_tool_use_id: null,
+      message: { role: 'user', content: userContent },
+    };
+    let inputClosed = false;
+    let wakeInput: (() => void) | undefined;
+    let queuedDelivery: SteeringDelivery | undefined;
+    let activeDelivery: SteeringDelivery | undefined;
+    let deliverySettled: Promise<void> | undefined;
+    let settleDelivery: (() => void) | undefined;
+    let pendingResults = 0;
+    let steeringFailure: unknown;
+    const closeInput = (): void => { inputClosed = true; wakeInput?.(); };
     async function* promptStream(): AsyncGenerator<SDKUserMessage> {
-      yield {
-        type: 'user',
-        parent_tool_use_id: null,
-        message: { role: 'user', content: userContent },
-      };
+      pendingResults++;
+      yield sdkPromptMessage;
+      while (!inputClosed) {
+        if (!queuedDelivery) {
+          await new Promise<void>(resolve => { wakeInput = resolve; });
+          wakeInput = undefined;
+          if (inputClosed) break;
+        }
+        const delivery = queuedDelivery;
+        queuedDelivery = undefined;
+        if (!delivery) continue;
+        activeDelivery = delivery;
+        try {
+          for (const message of delivery.messages) recordSteeringMessage(message);
+          await delivery.beforeSend();
+          if (inputClosed || signal?.aborted) throw new Error('Claude steering cancelled before delivery.');
+          pendingResults++;
+          yield {
+            type: 'user', parent_tool_use_id: null,
+            message: { role: 'user', content: delivery.messages.map(message =>
+              typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n\n') },
+          };
+          // Advancing the iterable means the SDK accepted the preceding write.
+          await delivery.acknowledge();
+        } catch (error) {
+          delivery.requeue();
+          steeringFailure = error;
+          abortController.abort();
+          throw error;
+        } finally {
+          activeDelivery = undefined;
+          settleDelivery?.();
+        }
+      }
     }
 
-    const response = query({
-      prompt: promptStream(),
-      options: {
+    const queryOptions: Parameters<typeof query>[0]['options'] = {
         model: model.name,
         env: childEnv,
+        cwd: runtime.workingDirectory,
+        // SDK isolation mode: never load ~/.claude, project .claude settings,
+        // CLAUDE.md, hooks, plugins, or MCP servers from the host filesystem.
+        settingSources: [],
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
+        includePartialMessages: true,
+        ...(model.reasoningEffort && model.reasoningEffort !== 'minimal' && model.reasoningEffort !== 'ultra'
+          ? {
+              effort: model.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+            }
+          : {}),
+        // #154: resume the persisted session so its prior turns are loaded
+        // NATIVELY and only the delta (userContent above) is sent this turn.
+        // forkSession is left unset ⇒ the resumed session CONTINUES (same id,
+        // appends), which is what accumulates context across turns.
+        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
         // Disable Claude Code's built-in tool suite so ONLY FLUJO's MCP tools are
         // offered to the model (issue #166). `tools: []` is the SDK-documented
@@ -578,51 +885,174 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           if (!toolName.startsWith(`mcp__${SDK_SERVER_NAME}__`)) {
             return { behavior: 'deny', message: `Tool ${toolName} is not permitted for this node.` };
           }
+          const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
+          const args = (input ?? {}) as Record<string, unknown>;
+          if (shouldEndAgenticTurn?.()) {
+            return {
+              behavior: 'deny',
+              message: 'This agentic turn has ended; no further tools may run.',
+            };
+          }
+          // Handoffs are materialized once at the routing boundary below. Every
+          // executable tool, however, becomes visible before approval/execution.
+          if (!isHandoffName(readableName) && !recordedToolCallIds.has(opts.toolUseID)) {
+            recordToolCall(
+              {
+                id: opts.toolUseID,
+                name: readableName,
+                argsJson: JSON.stringify(args),
+              },
+              partialToolMessageIds.get(opts.toolUseID),
+            );
+            recordedToolCallIds.add(opts.toolUseID);
+            enqueueToolCall(readableName, opts.toolUseID, JSON.stringify(args));
+          }
           // Human-in-the-loop: when an approval gate is wired, block until the
           // user decides (surfaced to FLUJO's tool-approval UI). Otherwise auto-allow.
           if (requestToolApproval) {
-            const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
+            const linkedTool = mcpToolUiByReadableName.get(readableName);
             const approved = await requestToolApproval({
               id: opts.toolUseID,
               name: readableName,
-              args: (input ?? {}) as Record<string, unknown>,
+              args,
             });
             if (approved) {
               return { behavior: 'allow', updatedInput: input };
             }
+            const rejectionText = 'tool denied';
+            const queued = queuedToolCalls.get(readableName);
+            if (queued) {
+              const index = queued.findIndex(entry => entry.id === opts.toolUseID);
+              if (index >= 0) queued.splice(index, 1);
+              if (queued.length === 0) queuedToolCalls.delete(readableName);
+            }
+            const uiLink = linkedTool
+              ? await resolveInvokedToolUiLink(
+                  linkedTool.serverName,
+                  linkedTool.toolName,
+                  linkedTool.advertisedUri,
+                  undefined,
+                  args,
+                )
+              : undefined;
             // On rejection the SDK never calls the tool handler, so record the
             // rejected call here — otherwise it (and the rejection) wouldn't show
             // up in the conversation transcript at all.
-            recordToolPair({
+            recordToolResult({
               id: opts.toolUseID,
-              name: readableName,
-              argsJson: JSON.stringify(input ?? {}),
-              resultContent: 'Tool call rejected by the user.',
+              resultContent: rejectionText,
+              ...(uiLink
+                ? {
+                    ui: {
+                      ...uiLink,
+                      cancelledReason: rejectionText,
+                      isError: true,
+                    },
+                  }
+                : {}),
             });
-            return { behavior: 'deny', message: 'Tool call rejected by the user.' };
+            return { behavior: 'deny', message: rejectionText };
           }
           return { behavior: 'allow', updatedInput: input };
         },
+    };
+
+    let dispatchId: string | undefined;
+    try {
+      dispatchId = await onSdkRequest?.({
+        adapter: 'claude-cli',
+        operation: 'query',
+        request: { prompt: sdkPromptMessage, options: queryOptions },
+      });
+    } catch (archiveError) {
+      try { rethrowFlowExecutionAuthorityError(archiveError); }
+      catch (authorityError) {
+        closeInput();
+        signal?.removeEventListener('abort', onExternalAbort);
+        throw authorityError;
+      }
+      log.warn('Could not archive Claude Agent SDK request', archiveError);
+    }
+
+    let response: ReturnType<typeof query>;
+    try {
+      response = query({ prompt: promptStream(), options: queryOptions });
+    } catch (error) {
+      closeInput();
+      signal?.removeEventListener('abort', onExternalAbort);
+      if (dispatchId && onSdkRequestResult) {
+        try {
+          await onSdkRequestResult({ dispatchId, outcome: signal?.aborted ? 'cancelled' : 'error' });
+        } catch (archiveError) {
+          rethrowFlowExecutionAuthorityError(archiveError);
+          log.warn('Could not update Claude Agent SDK request archive', archiveError);
+        }
+      }
+      throw error;
+    }
+
+    const watcher = watchSteering({
+      source: steeringSource({ steering, consumeSteeringMessages } as CompletionInput),
+      canDeliver: () => !inputClosed && !signal?.aborted && !queuedDelivery && !activeDelivery
+        && unansweredTools.size === 0 && handoffCalls.length === 0 && !shouldEndAgenticTurn?.(),
+      deliver: async delivery => {
+        deliverySettled = new Promise<void>(resolve => { settleDelivery = resolve; });
+        queuedDelivery = delivery;
+        wakeInput?.();
       },
+      onError: error => { steeringFailure = error; closeInput(); abortController.abort(); },
     });
 
     let resultText = '';
     let accumulatedText = '';
-    // Token accounting. The SDK's terminal `result` message carries the run's
-    // usage, but a handoff ABORTS the loop before that message arrives — so we
-    // also track per-turn usage from each assistant message as a fallback
-    // (otherwise every run that ends by routing to another node reports 0
-    // tokens). The fresh/cached split is computed by mapSdkUsage (see
-    // claudeUsage.ts and issue #87): promptTokens is the full input context,
-    // but the cheap cache RE-READ tokens are also surfaced separately so the UI
-    // doesn't count them as fresh on every turn.
-    let usage: SdkUsage | undefined;
-    let lastTurnUsage: SdkUsage | undefined;
-    let totalOutputTokens = 0;
+    // Result totals and per-request stream usage have different scopes. Track
+    // them separately and deduplicate assistant frames by their API message id.
+    const usageTracker = new ClaudeUsageTracker();
     // Whether we streamed at least one assistant text turn live (below). If so,
     // the final answer is already in the transcript and we must not re-emit the
     // concatenated text at the end (it would duplicate in the UI).
     let streamedText = false;
+    const partialToolBlocks = new Map<string, { messageId: string; toolUseId: string }>();
+    // Live-draft correlation key. `SDKPartialAssistantMessage.uuid` is a FRESH
+    // uuid on EVERY stream event (verified against SDK 0.3.220: message_start,
+    // each content_block_delta and the durable `assistant` frame all carry
+    // different uuids), so it can NOT identify the message being streamed.
+    // Keying drafts on it made every token chunk open its own bubble and none of
+    // them reconciled with the durable message (issue: fragmented + duplicated
+    // Claude streaming). The API message id (`msg_…`) IS stable: it arrives on
+    // `message_start` and is repeated on every assistant frame of that message
+    // (`message.id`), so both sides derive the SAME transcript id from it. The
+    // wrapper uuid stays as a last-resort fallback for synthetic/older streams.
+    let streamApiMessageId: string | undefined;
+    // Append text/media onto an already-recorded transcript message and re-emit
+    // it, so the live view and persistence reconcile onto ONE bubble. Returns
+    // false when no message with that id exists yet.
+    const appendToRecordedMessage = (
+      messageId: string,
+      text: string,
+      media: ReturnType<typeof extractNativeMediaParts>,
+    ): boolean => {
+      const index = transcript.findIndex(m => m.id === messageId);
+      if (index < 0) return false;
+      const prior = transcript[index];
+      const merged = {
+        ...prior,
+        content: `${typeof prior.content === 'string' ? prior.content : ''}${text}`,
+        ...(media.length ? { media: [...(prior.media ?? []), ...media] } : {}),
+      } as FlujoChatMessage;
+      transcript[index] = merged;
+      onTranscriptMessage?.(merged);
+      return true;
+    };
+    // Aborted-frame reconciliation (Agent SDK >= 0.3.220): an assistant frame
+    // can arrive with wrapper-level `aborted: true` — the stream was cut
+    // mid-word (e.g. max-output-tokens recovery, interrupt) and the SDK then
+    // CONTINUES the same prose in a follow-up assistant frame with a NEW uuid.
+    // Without merging, the draft bubble keyed to the first uuid survives as one
+    // message ("Toolchain conf") and the continuation becomes a second one
+    // ("irmed. Now building…"). Track the open aborted prose so both its live
+    // deltas and its durable continuation reconcile onto ONE stable message id.
+    let pendingAbortedProse: { messageId: string } | undefined;
 
     // The message loop, extracted so an external cancellation can race it: the
     // SDK does NOT reliably throw when its abortController fires mid-turn — the
@@ -633,6 +1063,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // Terminal controls such as meeting silence flip this predicate from a
+        // local tool executor. Stop before forwarding steering, recording prose,
+        // or allowing the SDK to begin another model/tool turn.
+        if (shouldEndAgenticTurn?.()) {
+          endedByCaller = true;
+          abortController.abort();
+          break;
+        }
+        // This also runs for partial stream events, so a correction does not
+        // wait for a long agentic SDK call to finish before reaching Claude.
+        await watcher.poll();
         // Capture the SDK session id (present on system/assistant/result
         // messages) for the #154 session registry, before any early break.
         const sid = (message as { session_id?: unknown }).session_id;
@@ -640,6 +1081,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
+        usageTracker.observe(message);
         // Handoff end conditions (issue #156). A PLAIN handoff (endSpawning)
         // ends the run at the next streamed message, exactly like before —
         // no extra model turn, no post-handoff narration. SPAWN handoffs
@@ -651,10 +1093,58 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           abortController.abort();
           break;
         }
-        if (message.type === 'assistant') {
-          const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
+        if (message.type === 'stream_event') {
+          const partial = message as SDKPartialAssistantMessage;
+          const event = partial.event;
+          // Stable per-API-message key (see streamApiMessageId above).
+          if (event.type === 'message_start') {
+            streamApiMessageId = event.message?.id;
+          } else if (event.type === 'message_stop') {
+            streamApiMessageId = undefined;
+          }
+          const frameKey = streamApiMessageId ?? partial.uuid;
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            const messageId = `stream_claude_${frameKey}_tool_${event.index}`;
+            partialToolBlocks.set(`${frameKey}:${event.index}`, {
+              messageId,
+              toolUseId: event.content_block.id,
+            });
+            partialToolMessageIds.set(event.content_block.id, messageId);
+            onModelDelta?.({
+              messageId,
+              toolCallDelta: {
+                index: 0,
+                id: event.content_block.id,
+                nameDelta: event.content_block.name,
+              },
+            });
+          } else if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'text_delta' && event.delta.text) {
+              onModelDelta?.({
+                // Continuation deltas of an aborted turn keep the FIRST frame's
+                // id so the UI appends into the same bubble instead of opening
+                // a second mid-word draft under the continuation's new uuid.
+                messageId: pendingAbortedProse?.messageId ?? `stream_claude_${frameKey}`,
+                contentDelta: event.delta.text,
+              });
+            } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
+              const toolBlock = partialToolBlocks.get(`${frameKey}:${event.index}`);
+              if (toolBlock) {
+                onModelDelta?.({
+                  messageId: toolBlock.messageId,
+                  toolCallDelta: {
+                    index: 0,
+                    argumentsDelta: event.delta.partial_json,
+                  },
+                });
+              }
+            }
+          }
+        } else if (message.type === 'assistant') {
+          const assistant = (message as { message?: { id?: string; content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
+          const turnMedia = extractNativeMediaParts(content);
           let turnHandoffUses = 0;
           if (Array.isArray(content)) {
             for (const block of content) {
@@ -678,23 +1168,55 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Mid-spawn narration (between successive spawn calls) is mid-action
           // plumbing, not the node's answer — the routing turn's own prose
           // (before any handoff was recorded) is still preserved below.
-          if (turnText && handoffCalls.length === 0) {
-            accumulatedText += turnText;
-            // Stream THIS turn's narration live as its own assistant message, so
-            // the UI shows Claude's step-by-step reasoning interleaved with the
-            // tool calls (which already stream via recordToolPair) instead of
-            // arriving as one block after the whole (possibly long) run. Text
-            // blocks precede tool_use within a turn, so this lands in the right
-            // order: turn text -> tool pair -> next turn text -> ...
-            recordMessage({ role: 'assistant', content: turnText });
-            streamedText = true;
-          }
-          if (assistant?.usage) {
-            lastTurnUsage = assistant.usage;
-            totalOutputTokens += assistant.usage.output_tokens ?? 0;
+          if ((turnText || turnMedia.length > 0) && handoffCalls.length === 0) {
+            if (isMalformedClaudeToolCallProse(turnText)) {
+              // Quarantine the complete contaminated SDK turn. Keeping adjacent
+              // prose would require guessing a safe boundary; skipping it keeps
+              // the text out of transcript, live callbacks, persistence and
+              // later prompt replay while the terminal SDK result still follows
+              // the adapter's existing success/error path.
+              log.warn('Quarantined malformed Claude tool-call prose (#298)');
+              pendingAbortedProse = undefined;
+            } else {
+              accumulatedText += turnText;
+              // Wrapper-level truncation flag: this frame's prose was cut
+              // mid-stream and the SDK will continue it in the next assistant
+              // frame (new uuid). See pendingAbortedProse above.
+              const frameAborted = (message as { aborted?: boolean }).aborted === true;
+              // Durable id derived from the API message id, exactly like the
+              // live drafts above, so the streamed bubble and this message are
+              // ONE UI message. Continuation frames of an aborted turn keep the
+              // first frame's id instead.
+              const messageId = pendingAbortedProse?.messageId
+                ?? `stream_claude_${assistant?.id ?? message.uuid}`;
+              // Fold into an existing message when this id was already
+              // recorded: an aborted turn's continuation, or a second text
+              // block of the SAME API message arriving as its own frame
+              // (interleaved text/tool_use turns). Otherwise stream THIS turn's
+              // narration live as its own assistant message, so the UI shows
+              // Claude's step-by-step reasoning interleaved with the tool calls
+              // (which already stream via recordToolPair) instead of arriving as
+              // one block after the whole (possibly long) run.
+              if (!appendToRecordedMessage(messageId, turnText, turnMedia)) {
+                recordMessage(
+                  {
+                    role: 'assistant',
+                    content: turnText,
+                    ...(turnMedia.length ? { media: turnMedia } : {}),
+                  },
+                  messageId,
+                );
+              }
+              pendingAbortedProse = frameAborted ? { messageId } : undefined;
+              streamedText = true;
+            }
+          } else if (pendingAbortedProse) {
+            // A text-less frame (e.g. pure tool_use turn) closes any open
+            // aborted prose — later text belongs to a NEW message, not the
+            // truncated one.
+            pendingAbortedProse = undefined;
           }
         } else if (message.type === 'result') {
-          usage = (message as { usage?: SdkUsage }).usage;
           if (message.subtype === 'success') {
             resultText = (message as { result?: string }).result ?? '';
           } else if (handoffCalls.length === 0) {
@@ -702,10 +1224,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const detail = Array.isArray(errs) && errs.length ? errs.join('; ') : message.subtype;
             throw new Error(`Claude subscription run failed: ${detail}`);
           }
+          pendingResults = Math.max(0, pendingResults - 1);
+          await watcher.poll();
+          if (pendingResults === 0 && (queuedDelivery || activeDelivery)) await deliverySettled;
+          if (pendingResults === 0 && !queuedDelivery && !activeDelivery) {
+            closeInput();
+            break;
+          }
         }
       }
     };
 
+    let dispatchOutcome: 'completed' | 'error' | 'cancelled' = 'completed';
     try {
       if (signal) {
         // Race the loop against cancellation. If the signal fires first we throw
@@ -733,10 +1263,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       } else {
         await messageLoop();
       }
+      if (steeringFailure) throw steeringFailure;
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
-      if (handoffCalls.length === 0) {
+      if (handoffCalls.length === 0 && !endedByCaller) {
+        dispatchOutcome = signal?.aborted ? 'cancelled' : 'error';
         // Drop any tracked session on a genuine error/cancellation so a later
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
@@ -744,49 +1276,31 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      closeInput();
+      await watcher.stop();
+      queuedDelivery?.requeue();
+      activeDelivery?.requeue();
       signal?.removeEventListener('abort', onExternalAbort);
+      if (dispatchId && onSdkRequestResult) {
+        try {
+          await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
+        } catch (archiveError) {
+          rethrowFlowExecutionAuthorityError(archiveError);
+          log.warn('Could not update Claude Agent SDK request archive', archiveError);
+        }
+      }
     }
 
     const finalText = resultText || accumulatedText;
-    // Prefer the result message's totals; on handoff-aborted runs fall back to
-    // the last turn's context size + the summed output of all turns. cacheRead
-    // is the prefix re-read cheaply from the prompt cache — kept out of the
-    // "fresh" headline so a warmed-cache conversation stops reporting millions.
-    const { promptTokens, completionTokens, cacheReadTokens } = mapSdkUsage(usage, {
-      lastTurnUsage,
-      totalOutputTokens,
-    });
-
-    // #154 session bookkeeping + Phase-0 instrumentation. A handoff routes to a
-    // different node with fresh context, so drop the session; a normal turn
-    // records the captured session for a potential future `resume`. Either way,
-    // log the per-turn token split and whether a reusable session WAS available
-    // this turn — the measurement signal that quantifies the pending resume win.
-    if (sessionTracking) {
-      const reusableSessionAvailable = Boolean(
-        findReusableSession(sessionTracking.key, sessionTracking.prefixHash, messages.length),
-      );
-      if (handoffCalls.length > 0 || !capturedSessionId) {
-        invalidateSession(sessionTracking.key);
-      } else {
-        recordSession(sessionTracking.key, {
-          sessionId: capturedSessionId,
-          prefixHash: sessionTracking.prefixHash,
-          seenMessageCount: messages.length,
-        });
-      }
-      log.debug('Claude session usage (#154)', {
-        conversationId,
-        nodeId,
-        reusableSessionAvailable,
-        capturedSession: Boolean(capturedSessionId),
-        inputMessages: messages.length,
-        promptTokens,
-        cacheReadTokens,
-        completionTokens,
-        endedByHandoff: handoffCalls.length > 0,
-      });
-    }
+    // Prefer query totals; an intentional handoff falls back to observed,
+    // deduplicated requests, including message_delta output counts.
+    const {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    } = mapSdkUsage(usageTracker.getUsage());
 
     // The per-tool assistant(tool_call)+tool(result) pairs, and now each turn's
     // narration text, were already recorded and streamed live as they happened
@@ -799,7 +1313,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     //   - a plain-text answer ONLY when nothing streamed (e.g. the run produced
     //     no assistant text turns and only the terminal `result` carried text).
     // Re-emitting `finalText` when we already streamed it would duplicate it.
-    let finalToolCalls: OpenAI.ChatCompletionMessageToolCall[] | undefined;
+    let finalToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined;
     if (handoffCalls.length > 0) {
       // ALL handoff calls of the routing turn, in call order (issue #156): the
       // run loop's capture turns repeated spawn calls into parallel lanes and
@@ -812,8 +1326,56 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
     if (finalToolCalls) {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
-    } else if (!streamedText) {
+    } else if (!streamedText && !endedByCaller) {
       recordMessage({ role: 'assistant', content: finalText || '' });
+    }
+
+    // #154 session bookkeeping + instrumentation. Runs AFTER the whole transcript
+    // is recorded, so the watermark reflects EVERY message the session now holds:
+    // this call's INPUT (`messages`) plus everything the SDK just generated
+    // (`transcript`) — which the caller (ModelHandler) appends to the
+    // conversation verbatim. The next turn's delta is therefore exactly the new
+    // messages beyond this count. A handoff routes to a different node with fresh
+    // context, so drop the session; a normal turn records the captured session
+    // (same id when resumed with forkSession unset, a fresh id on a first run).
+    // `reusableSessionAvailable` is logged as the measurement signal.
+    if (sessionTracking) {
+      const reusableSessionAvailable = Boolean(
+        findReusableSession(
+          sessionTracking.key,
+          sessionTracking.prefixHash,
+          messages.length,
+          leadingSystemMessageCount,
+        ),
+      );
+      if (endedByCaller || handoffCalls.length > 0 || !capturedSessionId) {
+        invalidateSession(sessionTracking.key);
+      } else {
+        recordSession(sessionTracking.key, {
+          sessionId: capturedSessionId,
+          prefixHash: sessionTracking.prefixHash,
+          seenMessageCount: messages.length + transcript.length,
+          leadingSystemMessageCount,
+        });
+      }
+      log.debug('Claude session usage (#154)', {
+        conversationId,
+        nodeId,
+        sessionResume: Boolean(sessionResume),
+        resumedThisTurn: Boolean(resumeSessionId),
+        reusableSessionAvailable,
+        capturedSession: Boolean(capturedSessionId),
+        inputMessages: messages.length,
+        leadingSystemMessageCount,
+        transcriptMessages: transcript.length,
+        watermark: messages.length + transcript.length,
+        promptTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        completionTokens,
+        endedByHandoff: handoffCalls.length > 0,
+        endedByCaller,
+      });
     }
 
     const completion: OpenAI.Chat.Completions.ChatCompletion = {
@@ -837,14 +1399,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       usage: {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
-        // Surface the cheap cache RE-READ subset via OpenAI's own usage detail
-        // field so downstream (ModelHandler → usage totals → UI) can present a
-        // "fresh (+cached)" split instead of one inflated number (#87).
-        ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+        total_tokens: totalTokens,
+        // Surface both cache subsets through the OpenAI-shaped neutral boundary
+        // so Chat Completions, Codex, and the Agent SDK drive one token meter.
+        prompt_tokens_details: {
+          cached_tokens: cacheReadTokens,
+          cache_write_tokens: cacheWriteTokens,
+        },
       },
     };
 
-    return { completion, transcript };
+    return { completion, transcript, contextUsage: usageTracker.getContextUsage(model.contextWindow) };
   }
 }

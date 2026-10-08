@@ -5,7 +5,7 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('app/api/mcp/utils');
 
@@ -209,7 +209,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
             // Check if the .bat file exists
             const batFilePath = path.isAbsolute(batFile)
               ? batFile
-              : path.join(getDataDir(), serverDir, batFile);
+              : path.join(getWorkspaceDataDir(), serverDir, batFile);
 
             log.debug(`Full .bat file path: ${batFilePath}`);
             const batFileExists = fs.existsSync(batFilePath);
@@ -227,7 +227,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
             if (!execExists) {
               // Try checking in the server directory
-              const fullExecPath = path.join(getDataDir(), serverDir, execPath);
+              const fullExecPath = path.join(getWorkspaceDataDir(), serverDir, execPath);
               log.debug(`Checking in server directory: ${fullExecPath}`);
               const fullExecExists = fs.existsSync(fullExecPath);
               log.debug(`Executable exists in server directory: ${fullExecExists}`);
@@ -246,7 +246,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
               const fullPath = isAbsolutePath(scriptPath)
                 ? scriptPath
-                : path.join(getDataDir(), serverDir, scriptPath);
+                : path.join(getWorkspaceDataDir(), serverDir, scriptPath);
 
               log.debug(`Full script path: ${fullPath}`);
               const scriptExists = fs.existsSync(fullPath);
@@ -313,36 +313,34 @@ const AUTH_REQUIRED_MESSAGE_PATTERNS = [
 ];
 
 /**
- * Detect whether a connection failure means "this server needs OAuth", covering both:
- *  - the SDK's own `OAuthAuthenticationRequired` error (thrown by our OAuthClientProvider
- *    when tokens/registration are missing), and
- *  - a raw 401/403 from a server that was never even given an auth provider (e.g. a
- *    freshly-added streamable server with no OAuth config yet, like Asana's MCP V2 API).
- *
- * `StreamableHTTPError`/`SSEError` (from the MCP SDK) carry the HTTP status on `.code`,
- * not in the message text, and the response body's exact wording varies per server -
- * so the numeric code is the primary, server-agnostic signal; the message patterns are
- * a fallback for shapes that don't set `.code`.
- *
- * Also covers the SDK's `OAuthError` family (thrown by refreshAuthorization/
- * exchangeAuthorization/registerClient when the auth server rejects a grant, e.g.
- * "invalid_grant" after a refresh token was rotated/revoked). These errors set an
- * `errorCode` getter backed by a static class property (e.g. `InvalidGrantError.errorCode
- * = 'invalid_grant'`), which survives minification even though `error.name`/`.constructor.name`
- * do not - so `.errorCode` is the reliable structural check, not the message text.
+ * Detect an authentication/authorization failure. A raw 401/403 means credentials may
+ * be required, but it does not establish that the server supports OAuth.
  */
 export function isAuthRequiredError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
 
-  if (error.name === 'OAuthAuthenticationRequired') return true;
+  if (isOAuthAuthenticationError(error)) return true;
 
   const httpCode = (error as unknown as { code?: unknown }).code;
   if (httpCode === 401 || httpCode === 403) return true;
 
+  return AUTH_REQUIRED_MESSAGE_PATTERNS.some(pattern => error.message.includes(pattern));
+}
+
+/**
+ * Detect errors emitted by the configured OAuth provider itself. This deliberately
+ * excludes raw HTTP 401/403 responses: those can equally indicate a missing or invalid
+ * static header, and OAuth capability must instead be confirmed by `probeOAuthSupport`.
+ */
+export function isOAuthAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  if (error.name === 'OAuthAuthenticationRequired') return true;
+
   const oauthErrorCode = (error as unknown as { errorCode?: unknown }).errorCode;
   if (typeof oauthErrorCode === 'string' && oauthErrorCode.length > 0) return true;
 
-  return AUTH_REQUIRED_MESSAGE_PATTERNS.some(pattern => error.message.includes(pattern));
+  return error.message.includes('OAuth authentication required');
 }
 
 /**

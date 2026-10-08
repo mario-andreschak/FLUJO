@@ -64,9 +64,6 @@ export function sanitizeBugContext(input: unknown): SafeBugContext {
     installMode: str(src.installMode),
     os: str(src.os),
     browser: str(src.browser),
-    mcpServerNames: Array.isArray(src.mcpServerNames)
-      ? (src.mcpServerNames as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 100)
-      : [],
     pageUrl: str(src.pageUrl),
     timestamp: str(src.timestamp),
   };

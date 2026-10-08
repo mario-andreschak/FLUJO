@@ -177,6 +177,23 @@ describe('armFlowEvent', () => {
     trigger.dispose();
   });
 
+  it('uses 100 as the default chain depth cap when maxChainDepth is omitted', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent(
+      { type: 'flow-event', source: { flowId: 'flow-A' }, on: ['completed'] },
+      deps
+    );
+
+    publish({ chainDepth: 99 });
+    expect(deps.onFire).toHaveBeenCalledWith(expect.objectContaining({ chainDepth: 100 }));
+
+    publish({ chainDepth: 100 });
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(deps.onSkip).toHaveBeenCalledWith(expect.stringContaining('depth limit (100)'));
+
+    trigger.dispose();
+  });
+
   it('enforces the minIntervalMs cooldown between fires', () => {
     jest.useFakeTimers();
     try {
@@ -206,6 +223,37 @@ describe('armFlowEvent', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('does not consume cooldown when durable downstream admission rejects', async () => {
+    const deps = makeDeps();
+    deps.onFire
+      .mockRejectedValueOnce(new Error('downstream mailbox unavailable'))
+      .mockResolvedValueOnce(undefined);
+    const trigger = armFlowEvent({
+      type: 'flow-event',
+      source: { flowId: 'flow-A' },
+      on: ['completed'],
+      minIntervalMs: 60_000,
+    }, deps);
+    const event: FlowRunEvent = {
+      flowId: 'flow-A',
+      flowName: 'Flow A',
+      executionId: 'exec-A',
+      runId: 'run-durable-replay',
+      conversationId: 'conv-durable-replay',
+      status: 'completed',
+      firedBy: 'schedule',
+      chainDepth: 0,
+      timestamp: new Date().toISOString(),
+      deliveryId: 'terminal-durable-replay',
+    };
+
+    await expect(getFlowRunEventBus().publishDurably(event))
+      .rejects.toThrow('downstream mailbox unavailable');
+    await expect(getFlowRunEventBus().publishDurably(event)).resolves.toBeUndefined();
+    expect(deps.onFire).toHaveBeenCalledTimes(2);
+    trigger.dispose();
   });
 
   it('stops firing after dispose', () => {
@@ -293,6 +341,20 @@ describe('armFlowEvent topic source (issue #117)', () => {
     publishSignal({ topic: 't', chainDepth: 2 }); // at the cap → skip
     expect(deps.onFire).toHaveBeenCalledTimes(1);
     expect(deps.onSkip).toHaveBeenCalledTimes(1);
+    trigger.dispose();
+  });
+
+  it('uses 100 as the default chain depth cap for signal events', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent({ type: 'flow-event', source: { topic: 't' } }, deps);
+
+    publishSignal({ topic: 't', chainDepth: 99 });
+    expect(deps.onFire).toHaveBeenCalledWith(expect.objectContaining({ chainDepth: 100 }));
+
+    publishSignal({ topic: 't', chainDepth: 100 });
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(deps.onSkip).toHaveBeenCalledWith(expect.stringContaining('depth limit (100)'));
+
     trigger.dispose();
   });
 

@@ -33,6 +33,26 @@ function toolTurn(callId: string, resultLen: number, prose = ''): Msg[] {
 }
 
 describe('compactForWire', () => {
+  it('does not arm read_resource for media URIs that are auto-hydrated before dispatch', () => {
+    const mediaOnly = [{
+      role: 'user',
+      content: [{
+        type: 'video_url',
+        video_url: { url: 'flujo://run/conv-1/video-1' },
+      }],
+    }] as unknown as Msg[];
+    expect(wireHasRunResourceUri(mediaOnly)).toBe(false);
+
+    const readableMarker = [{
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: 'Fallback resource: flujo://run/conv-1/video-1',
+      }],
+    }] as unknown as Msg[];
+    expect(wireHasRunResourceUri(readableMarker)).toBe(true);
+  });
+
   it('returns the input untouched when nothing is old enough to compact', () => {
     const msgs: Msg[] = [
       { role: 'system', content: 'sys' },
@@ -183,6 +203,67 @@ describe('compactForWire', () => {
     }
   });
 
+  describe('compactRecentToolResults (context-overflow emergency fit)', () => {
+    it('shrinks an oversized RECENT tool result to a size-naming URI marker', () => {
+      const uri = 'flujo://run/conv-2/res-recent';
+      // A short history whose ONLY message is a fat recent tool result — the
+      // exact shape that overflows the window without compactForWire helping,
+      // because it is inside the recent tail AND below keepRecentMessages.
+      const msgs: Msg[] = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'search everything' },
+        ...toolTurn('c1', 400_000),
+      ];
+      // Normal compaction is a no-op here (nothing is old enough).
+      expect(compactForWire(msgs, { keepRecentMessages: 12 })).toBe(msgs);
+
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 12,
+        toolResultHeadChars: 2000,
+        compactRecentToolResults: true,
+        resourceMarkers: markersFor('c1', uri),
+      });
+      const tool = out[3] as OpenAI.ChatCompletionToolMessageParam;
+      expect((tool.content as string).length).toBeLessThan(2300);
+      expect(tool.content).toContain(uri);
+      expect(tool.content).toContain('read_resource');
+      expect(tool.content).toContain('400000'); // full size announced
+      expect(wireHasRunResourceUri(out)).toBe(true);
+    });
+
+    it('lossily truncates a recent oversized result when emergency + lossy and no marker', () => {
+      const msgs: Msg[] = [
+        { role: 'user', content: 'go' },
+        ...toolTurn('c1', 400_000),
+      ];
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 12,
+        toolResultHeadChars: 2000,
+        compactRecentToolResults: true,
+        allowLossyTruncation: true,
+      });
+      const tool = out[2] as OpenAI.ChatCompletionToolMessageParam;
+      expect((tool.content as string).length).toBeLessThan(2300);
+      expect(tool.content).toContain('truncated 398000 chars');
+      expect(wireHasRunResourceUri(out)).toBe(false);
+    });
+
+    it('does NOT touch recent tool results without the flag (normal turns)', () => {
+      const msgs: Msg[] = [
+        { role: 'user', content: 'go' },
+        ...toolTurn('c1', 400_000),
+      ];
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 12,
+        allowLossyTruncation: true,
+        resourceMarkers: markersFor('c1', 'flujo://run/x/y'),
+      });
+      // keepRecentMessages(12) > length(3): identity, verbatim.
+      expect(out).toBe(msgs);
+      expect(((msgs[2] as OpenAI.ChatCompletionToolMessageParam).content as string).length).toBe(400_000);
+    });
+  });
+
   it('mirrors the reported conversation: fat downloads stop riding along', () => {
     // Reproduces cc894ecd…: two large "downloaded file" tool results early in a
     // long tool-calling run, then many more turns. On the wire they should shrink.
@@ -214,5 +295,47 @@ describe('compactForWire', () => {
     expect(after).toBeLessThan(before);
     expect(before - after).toBeGreaterThan(70_000); // ~ the two blobs minus heads
     expect(wireHasRunResourceUri(out)).toBe(true);
+  });
+
+  // Issue #286: a short-but-tool-heavy conversation (a single user message that
+  // fans out into a few MCP tool turns) never crosses the historical 12-message
+  // window, so it got NO compaction and re-sent every fat tool result each turn.
+  // A lower configurable window lets those runs benefit from wire-only shrinking.
+  describe('configurable recent window (issue #286)', () => {
+    const uri = 'flujo://run/conv-286/dl';
+    // 8 messages: system + user + 3 tool turns (assistant+tool each). One fat.
+    const shortToolHeavy = (): Msg[] => [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'do the thing' },
+      ...toolTurn('dl', 50_000),   // messages 2..3 — fat, captured
+      ...toolTurn('c2', 300, 'a'), // messages 4..5
+      ...toolTurn('c3', 300, 'b'), // messages 6..7 — recent tail
+    ];
+
+    it('leaves the short history untouched at the default window of 12', () => {
+      const msgs = shortToolHeavy();
+      expect(couldCompact(msgs, { keepRecentMessages: 12 })).toBe(false);
+      expect(compactForWire(msgs, { keepRecentMessages: 12, resourceMarkers: markersFor('dl', uri) })).toBe(msgs);
+    });
+
+    it('compacts the same fat OLD tool result once the window is lowered to 4', () => {
+      // 8 messages (indices 0..7). window=4 keeps indices 4..7 verbatim; the fat
+      // tool result at index 3 is now OLD and eligible for wire-only shrinking.
+      const msgs = shortToolHeavy();
+      expect(couldCompact(msgs, { keepRecentMessages: 4 })).toBe(true);
+      const before = JSON.stringify(msgs).length;
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 4,
+        toolResultHeadChars: 2000,
+        resourceMarkers: markersFor('dl', uri),
+      });
+      const after = JSON.stringify(out).length;
+      expect(after).toBeLessThan(before);
+      expect(before - after).toBeGreaterThan(40_000);
+      expect(wireHasRunResourceUri(out)).toBe(true);
+      // Same length/order/roles preserved (tool-pair integrity).
+      expect(out.length).toBe(msgs.length);
+      expect(out.map((m) => m.role)).toEqual(msgs.map((m) => m.role));
+    });
   });
 });

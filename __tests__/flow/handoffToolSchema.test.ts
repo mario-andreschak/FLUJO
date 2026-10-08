@@ -2,15 +2,10 @@
  * Tests for the handoff-tool schema shaping in ProcessNode.generateHandoffTools
  * (issue #96).
  *
- * A handoff tool is normally parameter-less. When its target is a Subflow node
- * in 'isolated' inputMode that did NOT explicitly opt OUT of `allowCallerPrompt`,
- * the tool must instead expose a `prompt` string so a routing model can instruct
- * the child flow. Per the canonical #138 default (issue #200), an ABSENT
- * `allowCallerPrompt` counts as ON, matching SubflowNode.prep's runtime default;
- * only an explicit `allowCallerPrompt: false` opts out. Every other target — an
- * isolated subflow that explicitly opted out, and a subflow whose inputMode is
- * not 'isolated' — must keep the byte-identical empty schema (preserving the #89
- * prefix-cache stability).
+ * Every Subflow target exposes `task`: one call creates one child job and
+ * repeated calls form its queue. Isolated Subflows without a default require
+ * the task. Process-to-Process handoffs retain the older optional/required
+ * `prompt` behavior, while ordinary Process targets stay parameterless.
  *
  * generateHandoffTools is private; it is exercised directly via a cast. Its only
  * external reads (the containing flow and each target's handoff description) are
@@ -28,7 +23,7 @@ jest.mock('@/backend/execution/flow/buildHandoffDescription', () => ({
   buildHandoffDescription: jest.fn(async () => 'stub description'),
 }));
 
-import { ProcessNode, SubflowNode } from '@/backend/execution/flow/nodes';
+import { ProcessNode, SignalNode, SubflowNode } from '@/backend/execution/flow/nodes';
 import type { SharedState } from '@/backend/execution/flow/types';
 
 const getFlowMock = flowService.getFlow as jest.Mock;
@@ -48,6 +43,21 @@ function makeProcessNode(targets: { edgeId: string; nodeId: string }[]): Process
   return proc;
 }
 
+/** A PROCESS node used as a handoff target (issue #96 extended to process→process). */
+function processTarget(id: string): ProcessNode {
+  const node = new ProcessNode();
+  node.setParams({}, { id, label: id, type: 'process', properties: {} });
+  return node;
+}
+
+/** Build the source ProcessNode wiring in arbitrary-typed target nodes. */
+function makeProcessNodeWith(targets: { edgeId: string; node: ProcessNode | SignalNode | SubflowNode }[]): ProcessNode {
+  const proc = new ProcessNode();
+  proc.setParams({}, { id: 'proc', label: 'P', type: 'process', properties: {} });
+  for (const t of targets) proc.addSuccessor(t.node, t.edgeId);
+  return proc;
+}
+
 function hasPromptParam(tool: any): boolean {
   return !!tool?.inputSchema?.properties?.prompt;
 }
@@ -56,69 +66,84 @@ beforeEach(() => {
   getFlowMock.mockReset();
 });
 
-describe('ProcessNode.generateHandoffTools — caller-prompt schema (#96)', () => {
-  it('exposes an optional `prompt` param ONLY for an isolated subflow with allowCallerPrompt', async () => {
-    const proc = makeProcessNode([
-      { edgeId: 'e-allow', nodeId: 'sub-allow' },
-      { edgeId: 'e-plain', nodeId: 'sub-plain' },
-      { edgeId: 'e-fullhist', nodeId: 'sub-fullhist' },
-    ]);
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
+describe('ProcessNode.generateHandoffTools — Signal body (#307)', () => {
+  it('requires a non-empty body for a Signal target', async () => {
+    const signal = new SignalNode();
+    signal.setParams({}, { id: 'sig', label: 'Signal', type: 'signal', properties: {} });
+    const proc = makeProcessNodeWith([{ edgeId: 'e-sig', node: signal }]);
     getFlowMock.mockResolvedValue({
-      nodes: [
-        // Has an authored promptTemplate, so `prompt` stays OPTIONAL (a caller
-        // brief is a nice-to-have; the authored message is the fallback).
-        { id: 'sub-allow', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'do the default thing' } } },
-        { id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } },
-        { id: 'sub-fullhist', type: 'subflow', data: { properties: { inputMode: 'full-history', allowCallerPrompt: true } } },
-      ],
-    });
-
-    const sharedState = { flowId: 'flow-1' } as SharedState;
-    const tools = await (proc as any).generateHandoffTools(sharedState);
-
-    // Exactly one tool carries the prompt parameter.
-    const withPrompt = tools.filter(hasPromptParam);
-    expect(withPrompt).toHaveLength(1);
-
-    // Map tool -> target node id via the recorded handoffNameMap to assert which.
-    const nameToId = sharedState.handoffNameMap!;
-    expect(nameToId[withPrompt[0].name]).toBe('sub-allow');
-
-    // The prompt param is an OPTIONAL string.
-    expect(withPrompt[0].inputSchema.properties.prompt.type).toBe('string');
-    expect(withPrompt[0].inputSchema.required).toEqual([]);
-
-    // Every other tool keeps the empty (parameter-less) schema.
-    for (const tool of tools.filter((t: any) => !hasPromptParam(t))) {
-      expect(tool.inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
-    }
-  });
-
-  it('keeps handoff tools parameter-less when a target explicitly opts out (allowCallerPrompt:false)', async () => {
-    const proc = makeProcessNode([{ edgeId: 'e-plain', nodeId: 'sub-plain' }]);
-    getFlowMock.mockResolvedValue({
-      nodes: [{ id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } }],
+      nodes: [{ id: 'sig', type: 'signal', data: { properties: { topic: 'done' } } }],
     });
 
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
 
     expect(tools).toHaveLength(1);
-    expect(hasPromptParam(tools[0])).toBe(false);
-    expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+    expect(tools[0].inputSchema.properties.body).toMatchObject({ type: 'string', minLength: 1 });
+    expect(tools[0].inputSchema.required).toEqual(['body']);
+    expect(tools[0].description).toContain('MUST');
   });
 });
 
-describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', () => {
-  it('exposes an optional `task` param ONLY for a subflow with allowCallerFanout, with the multi-call instruction', async () => {
+describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
+  it('exposes a caller-chosen sessionKey for an enabled per-key Subflow and lists reusable keys', async () => {
+    const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [{
+        id: 'sub-keyed',
+        type: 'subflow',
+        data: { properties: { sessionScope: 'per-key', sessionKey: '{{scene_id}}', saveConversation: true } },
+      }],
+    });
+    const sharedState = {
+      flowId: 'flow-1',
+      subflowSessions: {
+        'run::sub-keyed::writer-main': {
+          version: 1,
+          conversationId: 'child-1',
+          nodeId: 'sub-keyed',
+          sessionKey: 'writer-main',
+          visits: 1,
+          lastUsedAt: 10,
+          status: 'idle',
+        },
+      },
+    } as unknown as SharedState;
+
+    const tools = (await (proc as any).generateHandoffTools(sharedState)).filter((tool: any) => tool.name.startsWith('handoff_to_'));
+
+    expect(tools[0].inputSchema.properties.sessionKey).toMatchObject({
+      type: 'string',
+      maxLength: 128,
+    });
+    expect(tools[0].inputSchema.required).not.toContain('sessionKey');
+    expect(tools[0].description).toContain('follow-up');
+    expect(tools[0].description).toContain('writer-main');
+  });
+
+  it('exposes sessionKey without reading an experiment switch', async () => {
+    const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [{ id: 'sub-keyed', type: 'subflow', data: { properties: { sessionScope: 'per-key' } } }],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+
+    expect(tools.find((tool: any) => tool.name.startsWith('handoff_to_')).inputSchema.properties.sessionKey).toBeDefined();
+  });
+
+  it('exposes a `task` on every Subflow handoff without an opt-in flag', async () => {
     const proc = makeProcessNode([
-      { edgeId: 'e-spawn', nodeId: 'sub-spawn' },
+      { edgeId: 'e-legacy', nodeId: 'sub-legacy' },
       { edgeId: 'e-plain', nodeId: 'sub-plain' },
     ]);
 
     getFlowMock.mockResolvedValue({
       nodes: [
-        { id: 'sub-spawn', type: 'subflow', data: { properties: { allowCallerFanout: true } } },
+        { id: 'sub-legacy', type: 'subflow', data: { properties: { allowCallerFanout: true } } },
         { id: 'sub-plain', type: 'subflow', data: { properties: {} } },
       ],
     });
@@ -126,29 +151,20 @@ describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', 
     const sharedState = { flowId: 'flow-1' } as SharedState;
     const tools = await (proc as any).generateHandoffTools(sharedState);
 
-    const withTask = tools.filter((t: any) => !!t?.inputSchema?.properties?.task);
-    expect(withTask).toHaveLength(1);
+    const withTask = tools.filter((t: any) => t.name.startsWith('handoff_to_') && !!t?.inputSchema?.properties?.task);
+    expect(withTask).toHaveLength(2);
 
-    const nameToId = sharedState.handoffNameMap!;
-    expect(nameToId[withTask[0].name]).toBe('sub-spawn');
-
-    // task is an OPTIONAL string; the legacy parallelFlows/concurrencyLimit
-    // params are gone from the schema (the model must never name flows again).
-    expect(withTask[0].inputSchema.properties.task.type).toBe('string');
-    expect(withTask[0].inputSchema.properties.parallelFlows).toBeUndefined();
-    expect(withTask[0].inputSchema.properties.concurrencyLimit).toBeUndefined();
-    expect(withTask[0].inputSchema.required).toEqual([]);
-
-    // The description teaches the model to call the tool once per parallel worker.
-    expect(withTask[0].description).toContain('MULTIPLE TIMES');
-    expect(withTask[0].description).toContain('task');
-
-    // The non-opted subflow keeps the byte-identical empty schema.
-    const plain = tools.find((t: any) => nameToId[t.name] === 'sub-plain');
-    expect(plain.inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+    for (const tool of withTask) {
+      expect(tool.inputSchema.properties.task.type).toBe('string');
+      expect(tool.inputSchema.properties.parallelFlows).toBeUndefined();
+      expect(tool.inputSchema.properties.concurrencyLimit).toBeUndefined();
+      expect(tool.inputSchema.required).toEqual([]);
+      expect(tool.description).toContain('MULTIPLE TIMES');
+      expect(tool.description).toContain('queued');
+    }
   });
 
-  it('marks `prompt` REQUIRED for an isolated allowCallerPrompt subflow with NO authored promptTemplate (#169)', async () => {
+  it('requires `task` only when an isolated Subflow has no default prompt', async () => {
     const proc = makeProcessNode([
       { edgeId: 'e-empty', nodeId: 'sub-empty' },
       { edgeId: 'e-authored', nodeId: 'sub-authored' },
@@ -157,12 +173,9 @@ describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', 
 
     getFlowMock.mockResolvedValue({
       nodes: [
-        // No authored message → caller MUST supply a prompt.
-        { id: 'sub-empty', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true } } },
-        // Authored message → prompt stays optional.
-        { id: 'sub-authored', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'analyze the repo' } } },
-        // Whitespace-only authored message counts as empty → required.
-        { id: 'sub-ws', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: '   \n  ' } } },
+        { id: 'sub-empty', type: 'subflow', data: { properties: { inputMode: 'isolated' } } },
+        { id: 'sub-authored', type: 'subflow', data: { properties: { inputMode: 'isolated', promptTemplate: 'analyze the repo' } } },
+        { id: 'sub-ws', type: 'subflow', data: { properties: { inputMode: 'isolated', promptTemplate: '   \n  ' } } },
       ],
     });
 
@@ -171,109 +184,115 @@ describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', 
     const nameToId = sharedState.handoffNameMap!;
     const byId = (id: string) => tools.find((t: any) => nameToId[t.name] === id);
 
-    // Empty authored template → `prompt` present AND required.
     const empty = byId('sub-empty');
-    expect(empty.inputSchema.properties.prompt.type).toBe('string');
-    expect(empty.inputSchema.required).toEqual(['prompt']);
-    expect(empty.description).toContain('MUST');
+    expect(empty.inputSchema.properties.task.type).toBe('string');
+    expect(empty.inputSchema.properties.prompt).toBeUndefined();
+    expect(empty.inputSchema.required).toEqual(['task']);
 
-    // Authored template → `prompt` present but optional.
     const authored = byId('sub-authored');
-    expect(authored.inputSchema.properties.prompt.type).toBe('string');
+    expect(authored.inputSchema.properties.task.type).toBe('string');
     expect(authored.inputSchema.required).toEqual([]);
 
-    // Whitespace-only authored template is treated as empty → required.
     const ws = byId('sub-ws');
-    expect(ws.inputSchema.required).toEqual(['prompt']);
+    expect(ws.inputSchema.required).toEqual(['task']);
   });
 
-  it('keeps `prompt` OPTIONAL for a spawn (allowCallerFanout) target even with no authored message (#169 excludes spawn)', async () => {
-    // Spawn targets expose `task`, not `prompt`, and must never force a required
-    // arg — the #169 mandatory rule applies only to the non-parallel prompt path.
-    const proc = makeProcessNode([{ edgeId: 'e-spawn', nodeId: 'sub-spawn' }]);
+  it('legacy allowCallerPrompt opt-out does not disable queued task handoffs', async () => {
+    const proc = makeProcessNode([{ edgeId: 'e-sub', nodeId: 'sub' }]);
     getFlowMock.mockResolvedValue({
-      nodes: [
-        { id: 'sub-spawn', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, allowCallerFanout: true } } },
-      ],
+      nodes: [{ id: 'sub', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } }],
     });
 
-    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    const tools = (await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState)).filter((tool: any) => tool.name.startsWith('handoff_to_'));
     expect(tools).toHaveLength(1);
     expect(tools[0].inputSchema.properties.task.type).toBe('string');
     expect(tools[0].inputSchema.properties.prompt).toBeUndefined();
-    expect(tools[0].inputSchema.required).toEqual([]);
-  });
-
-  it('spawn wins over caller-prompt when both are opted in (only `task` is exposed)', async () => {
-    const proc = makeProcessNode([{ edgeId: 'e-both', nodeId: 'sub-both' }]);
-    getFlowMock.mockResolvedValue({
-      nodes: [
-        {
-          id: 'sub-both',
-          type: 'subflow',
-          data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, allowCallerFanout: true } },
-        },
-      ],
-    });
-
-    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
-
-    expect(tools).toHaveLength(1);
-    const props = tools[0].inputSchema.properties;
-    expect(props.task.type).toBe('string');
-    expect(props.prompt).toBeUndefined();
-    expect(tools[0].inputSchema.required).toEqual([]);
+    expect(tools[0].inputSchema.required).toEqual(['task']);
   });
 });
 
-describe('ProcessNode.generateHandoffTools — absent allowCallerPrompt canonical default (#200)', () => {
-  it('exposes a REQUIRED `prompt` for an isolated subflow with ABSENT allowCallerPrompt and no promptTemplate', async () => {
-    // This is the exact failing config from issue #200: inputMode 'isolated',
-    // allowCallerPrompt undefined, no promptTemplate. Previously the `=== true`
-    // check hid the param, so the model called the handoff with `{}` and the
-    // subflow stalled. The canonical #138 default treats absent as ON.
-    const proc = makeProcessNode([{ edgeId: 'e-abs', nodeId: 'sub-abs' }]);
+describe('ProcessNode.generateHandoffTools — caller-prompt for an ISOLATED PROCESS target (#96 process→process)', () => {
+  it('exposes an OPTIONAL `prompt` for an isolated process target with an authored isolatedPrompt', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-iso') }]);
     getFlowMock.mockResolvedValue({
       nodes: [
-        { id: 'sub-abs', type: 'subflow', data: { properties: { inputMode: 'isolated', outputMode: 'final-only' } } },
+        // A process node authors its isolated message as `isolatedPrompt` (not
+        // promptTemplate); present ⇒ the caller prompt is optional.
+        { id: 'proc-iso', type: 'process', data: { properties: { inputMode: 'isolated', isolatedPrompt: 'do the default thing' } } },
       ],
     });
 
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
-
     expect(tools).toHaveLength(1);
+    expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
+    expect(tools[0].inputSchema.required).toEqual([]);
+  });
+
+  it('marks `prompt` REQUIRED for an isolated process target with NO authored isolatedPrompt (#169)', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-empty') }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'proc-empty', type: 'process', data: { properties: { inputMode: 'isolated' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
     expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
     expect(tools[0].inputSchema.required).toEqual(['prompt']);
     expect(tools[0].description).toContain('MUST');
   });
 
-  it('exposes an OPTIONAL `prompt` for an isolated subflow with ABSENT allowCallerPrompt WITH a promptTemplate', async () => {
-    const proc = makeProcessNode([{ edgeId: 'e-abs-t', nodeId: 'sub-abs-t' }]);
+  it('keeps the empty schema for a full-history process target', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-full') }]);
     getFlowMock.mockResolvedValue({
       nodes: [
-        { id: 'sub-abs-t', type: 'subflow', data: { properties: { inputMode: 'isolated', promptTemplate: 'do the default thing' } } },
+        { id: 'proc-full', type: 'process', data: { properties: { inputMode: 'full-history' } } },
       ],
     });
 
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
-
-    expect(tools).toHaveLength(1);
-    expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
-    expect(tools[0].inputSchema.required).toEqual([]);
-  });
-
-  it('keeps the empty schema when allowCallerPrompt is EXPLICITLY false (opt-out preserved)', async () => {
-    const proc = makeProcessNode([{ edgeId: 'e-optout', nodeId: 'sub-optout' }]);
-    getFlowMock.mockResolvedValue({
-      nodes: [
-        { id: 'sub-optout', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } },
-      ],
-    });
-
-    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
-
-    expect(tools).toHaveLength(1);
     expect(hasPromptParam(tools[0])).toBe(false);
     expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+  });
+
+  it('keeps the empty schema when an isolated process target opts out (allowCallerPrompt:false)', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-optout') }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'proc-optout', type: 'process', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false, isolatedPrompt: 'x' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(hasPromptParam(tools[0])).toBe(false);
+    expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+  });
+});
+
+
+describe('subflow collaboration defaults', () => {
+  it.each([undefined, 'handoff', 'tool', 'detached'])('offers all execution choices for saved mode %s without settings', async invocationMode => {
+    const proc = makeProcessNode([{ edgeId: 'edge', nodeId: 'worker' }]);
+    getFlowMock.mockResolvedValue({ nodes: [{ id: 'worker', type: 'subflow', data: { properties: { invocationMode } } }] });
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(tools.map((tool: any) => tool.name)).toEqual(expect.arrayContaining([
+      'handoff_to_worker', 'call_subflow_worker', 'start_subflow_worker',
+      'subflow_list', 'subflow_send_message', 'subflow_wait', 'subflow_task_get', 'subflow_task_cancel',
+    ]));
+  });
+
+  it('gives a child with no successors its reply and wait tools automatically', async () => {
+    const proc = makeProcessNode([]);
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1', parentRunId: 'parent' } as SharedState);
+    expect(tools.map((tool: any) => tool.name)).toEqual(['subflow_list', 'subflow_send_message', 'subflow_wait']);
+  });
+
+  it('keeps launch names distinct for two equally named workers', async () => {
+    const first = subflowTarget('one'); first.node_params!.label = 'Worker';
+    const second = subflowTarget('two'); second.node_params!.label = 'Worker';
+    const proc = makeProcessNodeWith([{ edgeId: 'e1', node: first }, { edgeId: 'e2', node: second }]);
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    const names = tools.filter((tool: any) => tool.name.startsWith('start_subflow_')).map((tool: any) => tool.name);
+    expect(names).toHaveLength(2); expect(new Set(names).size).toBe(2);
   });
 });

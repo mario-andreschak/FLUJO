@@ -1,5 +1,13 @@
 import { Edge } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import {
+  isAttachmentEdge,
+  isMcpEdge,
+  isResourceEdge,
+  nodeSize,
+  resolveSatelliteParents,
+} from './layoutGeometry';
+import { computeTidyLayout } from './tidyLayout';
 
 /**
  * Options for {@link computeAutoLayout}. All are optional; the defaults produce
@@ -17,55 +25,39 @@ export interface AutoLayoutOptions {
   /** Horizontal offset of an MCP node from its process node. Default 350
    *  (matches `handleConnectMcpServer`). */
   mcpOffsetX?: number;
-  /** Vertical spacing when several MCP nodes stack on one process node.
+  /** Vertical gap between stacked MCP/resource siblings on one process node.
    *  Default 120 (matches `handleConnectMcpServer`). */
   mcpStackY?: number;
 }
 
-// Fallback dimensions for nodes React Flow has not measured yet (e.g. a freshly
-// generated flow that has never been rendered). Roughly the rendered size of a
-// CustomNode.
-const DEFAULT_WIDTH = 240;
-const DEFAULT_HEIGHT = 80;
-
-function nodeSize(node: FlowNode): { width: number; height: number } {
-  const measured = (node as { measured?: { width?: number; height?: number } }).measured;
-  const width = measured?.width ?? (node as { width?: number }).width ?? DEFAULT_WIDTH;
-  const height = measured?.height ?? (node as { height?: number }).height ?? DEFAULT_HEIGHT;
-  return { width, height };
-}
-
-function edgeTypeOf(edge: Edge): string | undefined {
-  return (edge.data as { edgeType?: string } | undefined)?.edgeType;
-}
-function isMcpEdge(edge: Edge): boolean {
-  return edgeTypeOf(edge) === 'mcp';
-}
-function isResourceEdge(edge: Edge): boolean {
-  return edgeTypeOf(edge) === 'resource';
-}
-/** Attachment (mcp/resource) edges are config wiring, not flow control. */
-function isAttachmentEdge(edge: Edge): boolean {
-  return isMcpEdge(edge) || isResourceEdge(edge);
-}
-
 /**
- * Compute a clean layered layout for a flow.
+ * Compute a clean layered layout for a flow ("Re-layout top-to-bottom",
+ * issue #373 / #100). This is a DESTRUCTIVE full re-layout: it discards
+ * existing coordinates (besides using them to keep a stable reading order)
+ * and repacks the graph from scratch. For a layout that keeps the user's
+ * existing arrangement and only resolves collisions, see `computeTidyLayout`.
  *
  * Pure geometry: only `position` fields change. `id`, `type`, `data`,
  * `selected` and the edges array are all left untouched, and a brand-new node
  * array is returned so callers (e.g. `setNodes`) treat it as an undoable edit.
  *
  * Approach (dependency-free longest-path layering):
- *  1. Split nodes/edges into flow-control vs. MCP.
+ *  1. Split nodes/edges into flow-control vs. MCP/resource satellites.
  *  2. Rank the flow nodes by longest path from the roots (nodes with no
  *     incoming flow edge, e.g. Start), so the graph reads top-to-bottom.
  *     Bidirectional edges keep their source->target direction and are not
  *     double-counted; cycles are handled with a bounded relaxation so a
  *     looping handoff can never hang the layout.
- *  3. Spread nodes horizontally within each rank.
- *  4. Park each MCP node to the right of the flow node it is wired to,
- *     stacking siblings downward.
+ *  3. Spread nodes horizontally within each rank, in the user's current
+ *     left-to-right order, reserving a lane for each node's attached
+ *     satellites so siblings never collide with them (issue #373 B1).
+ *  4. Park each MCP node to the right (resource node to the left) of the flow
+ *     node it is wired to, stacking siblings by measured height (B2). Any
+ *     satellite left unattached (no resolvable parent) is relocated to a
+ *     dedicated lane beside the packed graph instead of keeping a stale,
+ *     possibly-colliding position (B5).
+ *  5. Run a final tidy/relaxation pass as a safety net so the "no two nodes
+ *     overlap" invariant holds even for unusual measured sizes.
  *
  * A flow with 0 or 1 flow nodes is returned unchanged (nothing to arrange).
  */
@@ -128,8 +120,55 @@ export function computeAutoLayout(
     if (!changed) break;
   }
 
-  // Group nodes by rank, preserving their original array order within a rank
-  // for a stable, deterministic layout.
+  // Resolve each satellite's parent up-front so its footprint can be reserved
+  // during packing (B1) and its stack extent counted into rank spacing (B2).
+  // A parent must be a flow node that will actually be laid out.
+  const resolveParents = (satellites: FlowNode[], isSatEdge: (e: Edge) => boolean) => {
+    const map = resolveSatelliteParents(satellites, edges, isSatEdge);
+    for (const [satId, flowId] of [...map]) {
+      if (!flowIds.has(flowId)) map.delete(satId);
+    }
+    return map;
+  };
+  const mcpParent = resolveParents(mcpNodes, isMcpEdge);
+  const resourceParent = resolveParents(resourceNodes, isResourceEdge);
+
+  const groupByParent = (satellites: FlowNode[], parent: Map<string, string>) => {
+    const byParent = new Map<string, FlowNode[]>();
+    for (const sat of satellites) {
+      const parentId = parent.get(sat.id);
+      if (!parentId) continue;
+      const bucket = byParent.get(parentId);
+      if (bucket) bucket.push(sat);
+      else byParent.set(parentId, [sat]);
+    }
+    return byParent;
+  };
+  const mcpByParent = groupByParent(mcpNodes, mcpParent);
+  const resourceByParent = groupByParent(resourceNodes, resourceParent);
+
+  // A flow node's satellite lane extent, in absolute distance from the flow
+  // node's own top-left corner: how far the MCP stack reaches to the right,
+  // how far the resource stack reaches to the left, and how tall either
+  // stack grows (so the next rank clears it).
+  const laneExtent = (node: FlowNode) => {
+    const mcps = mcpByParent.get(node.id) ?? [];
+    const resources = resourceByParent.get(node.id) ?? [];
+    const stackHeight = (sats: FlowNode[]) =>
+      sats.length === 0
+        ? 0
+        : sats.reduce((sum, s) => sum + nodeSize(s).height, 0) + (sats.length - 1) * mcpStackY;
+    const maxWidth = (sats: FlowNode[]) => (sats.length === 0 ? 0 : Math.max(...sats.map(s => nodeSize(s).width)));
+    return {
+      rightReach: mcps.length === 0 ? 0 : mcpOffsetX + maxWidth(mcps),
+      leftReach: resources.length === 0 ? 0 : mcpOffsetX,
+      stackHeight: Math.max(stackHeight(mcps), stackHeight(resources)),
+    };
+  };
+
+  // Group nodes by rank. Within a rank, order by the user's current x/y (then
+  // id) rather than raw array order (B4), so a hand-arranged left-to-right
+  // reading order survives a re-layout instead of following insertion order.
   const ranks = new Map<number, FlowNode[]>();
   for (const node of flowNodes) {
     const r = rank.get(node.id)!;
@@ -145,71 +184,71 @@ export function computeAutoLayout(
   // siblings within a rank (x for TB, y for LR).
   let along = 0;
   for (const key of sortedRankKeys) {
-    const rankNodes = ranks.get(key)!;
+    const rankNodes = [...ranks.get(key)!].sort(
+      (a, b) => a.position.x - b.position.x || a.position.y - b.position.y || a.id.localeCompare(b.id)
+    );
     let across = 0;
     let maxAlongSize = 0;
     for (const node of rankNodes) {
       const { width, height } = nodeSize(node);
+      const lane = laneExtent(node);
       if (direction === 'TB') {
+        across += lane.leftReach;
         positions.set(node.id, { x: across, y: along });
-        across += width + nodeSep;
-        maxAlongSize = Math.max(maxAlongSize, height);
+        across += Math.max(width, lane.rightReach) + nodeSep;
+        maxAlongSize = Math.max(maxAlongSize, height, lane.stackHeight);
       } else {
+        across += lane.leftReach;
         positions.set(node.id, { x: along, y: across });
-        across += height + nodeSep;
-        maxAlongSize = Math.max(maxAlongSize, width);
+        across += Math.max(height, lane.rightReach) + nodeSep;
+        maxAlongSize = Math.max(maxAlongSize, width, lane.stackHeight);
       }
     }
     along += maxAlongSize + rankSep;
   }
 
-  // Map each satellite (MCP / resource) node to the single flow node it is
-  // wired to (first such edge wins), then park it beside that node and stack
-  // siblings downward. MCP nodes go right; resource nodes mirror to the left.
-  const parkSatellites = (
-    satellites: FlowNode[],
-    isSatelliteEdge: (e: Edge) => boolean,
-    offsetX: number
-  ) => {
-    const satIds = new Set(satellites.map(n => n.id));
-    const parent = new Map<string, string>();
-    for (const edge of edges) {
-      if (!isSatelliteEdge(edge)) continue;
-      const sourceIsSat = satIds.has(edge.source);
-      const targetIsSat = satIds.has(edge.target);
-      let satId: string | undefined;
-      let flowId: string | undefined;
-      if (sourceIsSat && !targetIsSat) {
-        satId = edge.source;
-        flowId = edge.target;
-      } else if (targetIsSat && !sourceIsSat) {
-        satId = edge.target;
-        flowId = edge.source;
+  // Park each satellite beside its parent, stacking siblings by their
+  // measured (or fallback) height plus `mcpStackY` gap — not a flat
+  // `index * mcpStackY`, which is what let a tall MCP node punch into the
+  // next rank (B2). MCP nodes go right; resource nodes mirror to the left.
+  const parkSatellites = (byParent: Map<string, FlowNode[]>, offsetSign: 1 | -1) => {
+    for (const [parentId, satellites] of byParent) {
+      const parentPos = positions.get(parentId);
+      if (!parentPos) continue;
+      let y = parentPos.y;
+      for (const satNode of satellites) {
+        positions.set(satNode.id, { x: parentPos.x + offsetSign * mcpOffsetX, y });
+        y += nodeSize(satNode).height + mcpStackY;
       }
-      if (satId && flowId && positions.has(flowId) && !parent.has(satId)) {
-        parent.set(satId, flowId);
-      }
-    }
-
-    const stackCount = new Map<string, number>();
-    for (const satNode of satellites) {
-      const parentId = parent.get(satNode.id);
-      if (!parentId) continue; // Unattached satellite keeps its current position.
-      const parentPos = positions.get(parentId)!;
-      const index = stackCount.get(parentId) ?? 0;
-      stackCount.set(parentId, index + 1);
-      positions.set(satNode.id, {
-        x: parentPos.x + offsetX,
-        y: parentPos.y + index * mcpStackY,
-      });
     }
   };
-  parkSatellites(mcpNodes, isMcpEdge, mcpOffsetX);
-  parkSatellites(resourceNodes, isResourceEdge, -mcpOffsetX);
+  parkSatellites(mcpByParent, 1);
+  parkSatellites(resourceByParent, -1);
 
-  // Return a new array; only positions we computed are replaced.
-  return nodes.map(node => {
+  // Unattached satellites (no resolvable parent) are relocated to a lane
+  // beside the packed graph instead of keeping a stale position that may now
+  // overlap the fresh layout (B5).
+  const packedXs = [...positions.values()].map(p => p.x);
+  const rightLaneX = packedXs.length ? Math.max(...packedXs) + mcpOffsetX : 0;
+  let leftoverY = 0;
+  const sweepLeftovers = (satellites: FlowNode[]) => {
+    for (const sat of satellites) {
+      if (positions.has(sat.id)) continue;
+      positions.set(sat.id, { x: rightLaneX, y: leftoverY });
+      leftoverY += nodeSize(sat).height + nodeSep;
+    }
+  };
+  sweepLeftovers(mcpNodes);
+  sweepLeftovers(resourceNodes);
+
+  const packed = nodes.map(node => {
     const pos = positions.get(node.id);
     return pos ? { ...node, position: pos } : node;
   });
+
+  // Final safety net (G1): the packing above should already be collision
+  // free, but unusual measured sizes could still slip through — a bounded
+  // tidy pass over the packed result guarantees the invariant regardless,
+  // and is a no-op when the packing is already clean.
+  return computeTidyLayout(packed, edges, { preserveCentroid: false, snapToGrid: false });
 }

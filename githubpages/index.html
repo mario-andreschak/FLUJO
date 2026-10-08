@@ -4,11 +4,52 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FLUJO — Open-source MCP-powered AI Workflows</title>
-<meta name="description" content="FLUJO is an open-source, local-first platform for building MCP-powered AI workflows: model management, MCP servers, a visual flow builder, chat, and headless automation — in one app.">
+<meta name="description" content="Build local-first AI workflows with models and MCP tools. FLUJO combines a visual flow builder, chat, scheduling, and automation in one open-source app.">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<link rel="canonical" href="https://flujo.com.co/">
+<meta name="theme-color" content="#070b14">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="FLUJO">
+<meta property="og:url" content="https://flujo.com.co/">
 <meta property="og:title" content="FLUJO — Open-source MCP-powered AI Workflows">
-<meta property="og:description" content="Wire models and MCP tools together in a visual flow builder, run flows on triggers, and expose them to other apps — locally, without giving up your keys and data.">
-<meta property="og:image" content="https://mario-andreschak.github.io/FLUJO/githubpages/img/flow-builder.png">
+<meta property="og:description" content="Build local-first AI workflows with models and MCP tools. Visual orchestration, chat, scheduling, and automation in one open-source app.">
+<meta property="og:image" content="https://flujo.com.co/img/flow-builder.png">
+<meta property="og:image:alt" content="FLUJO visual AI workflow builder">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="FLUJO — Open-source MCP-powered AI Workflows">
+<meta name="twitter:description" content="Build local-first AI workflows with models and MCP tools in one open-source app.">
+<meta name="twitter:image" content="https://flujo.com.co/img/flow-builder.png">
 <link rel="icon" type="image/png" href="img/favicon.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://flujo.com.co/#website",
+      "url": "https://flujo.com.co/",
+      "name": "FLUJO",
+      "description": "Open-source, local-first platform for building MCP-powered AI workflows."
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://flujo.com.co/#software",
+      "name": "FLUJO",
+      "url": "https://flujo.com.co/",
+      "description": "Build local-first AI workflows with models and MCP tools using a visual flow builder, chat, scheduling, and headless automation.",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows, macOS, Linux",
+      "downloadUrl": "https://github.com/mario-andreschak/FLUJO",
+      "license": "https://github.com/mario-andreschak/FLUJO/blob/main/LICENSE",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+  ]
+}
+</script>
 <style>
 :root {
   --bg: #070b14;
@@ -210,6 +251,36 @@ section { padding: 90px 0; }
   color: var(--text);
 }
 .btn-ghost:hover { border-color: var(--border-bright); background: rgba(56, 189, 248, 0.08); }
+.hero-short {
+  margin-top: 46px;
+  width: 100%;
+  max-width: 880px;
+}
+.hero-short .label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  margin-bottom: 10px;
+}
+.hero-short .frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border-bright);
+  background: #05070d;
+  box-shadow: 0 10px 60px rgba(56, 189, 248, 0.18), 0 30px 80px rgba(0, 0, 0, 0.5);
+}
+.hero-short iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
 .hero-install {
   margin-top: 42px;
   width: 100%;
@@ -695,14 +766,14 @@ footer {
   <h1>FLUJO</h1>
   <div class="hero-badges">
     <span class="chip"><span class="dot" style="background:#38bdf8"></span>MIT License</span>
-    <span class="chip"><span class="dot" style="background:#34d399"></span><span id="app-version">v3.27.0</span></span>
+    <span class="chip"><span class="dot" style="background:#34d399"></span><span id="app-version">v3.46.2</span></span>
     <span class="chip"><span class="dot" style="background:#818cf8"></span>Local-first</span>
     <span class="chip"><span class="dot" style="background:#f472b6"></span>Open Source</span>
   </div>
   <p class="hero-tagline">
     An open-source, local-first platform for building <strong>MCP-powered AI workflows</strong> —
     model management, MCP servers, a visual flow builder, chat, and headless automation in one app.
-    Your keys and data never leave your machine.
+    Workspace data is stored locally. Cloud AI and connected apps receive the requests you choose to send. Anonymous usage telemetry is optional in Settings.
   </p>
   <div class="hero-actions">
     <a class="btn btn-primary" href="https://github.com/mario-andreschak/FLUJO" target="_blank" rel="noopener">
@@ -713,6 +784,12 @@ footer {
       <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.93-1.51 13.8 13.8 0 0 0-.64 1.29 18.3 18.3 0 0 0-5.5 0 13.8 13.8 0 0 0-.64-1.29c-1.71.29-3.37.8-4.93 1.51A20.3 20.3 0 0 0 .1 18.06a19.9 19.9 0 0 0 6.07 3.06c.49-.66.93-1.37 1.3-2.1a12.9 12.9 0 0 1-2.05-.98c.17-.12.34-.25.5-.38a14.2 14.2 0 0 0 12.16 0c.16.13.33.26.5.38-.65.39-1.34.71-2.05.98.37.73.81 1.44 1.3 2.1a19.8 19.8 0 0 0 6.07-3.06 20.3 20.3 0 0 0-3.58-13.69ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42s.95-2.43 2.16-2.43c1.2 0 2.18 1.09 2.16 2.43 0 1.34-.96 2.42-2.16 2.42Zm7.96 0c-1.18 0-2.16-1.08-2.16-2.42s.95-2.43 2.16-2.43c1.2 0 2.18 1.09 2.16 2.43 0 1.34-.95 2.42-2.16 2.42Z"/></svg>
       Discord
     </a>
+  </div>
+  <div class="hero-short" id="short">
+    <div class="label">▶ FLUJO — Your AI. In Flow.</div>
+    <div class="frame">
+      <iframe src="short/" title="FLUJO — Your AI. In Flow. animated product film" loading="lazy" allowfullscreen allow="fullscreen; autoplay"></iframe>
+    </div>
   </div>
   <div class="hero-install" id="install">
     <div class="label">Get started in one command</div>
@@ -828,7 +905,7 @@ footer {
       <div class="feature-card reveal">
         <div class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
         <h3>Built-in API Docs</h3>
-        <p>A searchable in-app reference for every REST endpoint FLUJO exposes — chat, flows, models, MCP, planned executions, backups, and more.</p>
+        <p>A searchable, curated in-app HTTP reference for chat, flows, models, MCP, automations, and administration, with a source-derived route inventory in the repository.</p>
       </div>
     </div>
   </div>
@@ -1035,9 +1112,9 @@ footer {
     { id: 5, title: "Automation", icon: "clock", tags: ["Cron", "Webhooks", "File watch", "Tool polling"], img: "img/planned-executions.png", related: [4, 3],
       desc: "Planned Executions run flows headlessly: on a schedule, on an authenticated webhook, when files change, when a polled MCP tool or URL changes — with full run history per trigger." },
     { id: 6, title: "Integrations", icon: "link", tags: ["OpenAI-compatible", "Cline", "Cursor", "Roo"], img: "img/docs.png", related: [2, 7],
-      desc: "Expose flows as OpenAI-compatible models on http://localhost:4200/v1 and use them from any OpenAI-SDK tool. A searchable in-app API reference documents every endpoint." },
+      desc: "Expose flows as OpenAI-compatible models on http://localhost:4200/v1 and use them from OpenAI-SDK tools. A searchable in-app reference covers common integrations, alongside a generated HTTP route inventory." },
     { id: 7, title: "Local-first", icon: "zap", tags: ["MIT license", "Your machine", "Your data"], img: "img/home.png", related: [0, 6],
-      desc: "FLUJO runs entirely on your machine — free and open source under MIT. No accounts, no cloud dependency, no telemetry on your keys: your data stays yours." }
+      desc: "FLUJO runs on your machine and is free and open source under MIT. Local models can keep inference local; cloud providers and remote tools require their own connections and receive request data. Anonymous installation telemetry is optional." }
   ];
 
   var wrap = document.getElementById("orbitalWrap");

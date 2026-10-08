@@ -2,6 +2,10 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/utils/serverUpdates');
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object';
+}
+
 /**
  * Update status of a locally cloned server repository, as reported by the
  * `checkUpdates` / `checkUpdatesBatch` actions of /api/git.
@@ -135,15 +139,20 @@ export async function fetchUpdateCommitsPreview(
     if (!response.ok) {
       return null;
     }
-    const data = await response.json();
-    const commits = Array.isArray(data.commits) ? data.commits : [];
+    const data: unknown = await response.json();
+    if (!isRecord(data)) return null;
+    const commits: unknown[] = Array.isArray(data.commits) ? data.commits : [];
     return {
       behindBy: typeof data.total_commits === 'number' ? data.total_commits : null,
       // Newest last in the API response; show the most recent handful.
-      commits: commits.slice(-10).reverse().map((c: any) => ({
-        sha: (c.sha || '').slice(0, 7),
-        message: ((c.commit?.message as string) || '').split('\n')[0],
-      })),
+      commits: commits.slice(-10).reverse().flatMap((commit) => {
+        if (!isRecord(commit)) return [];
+        const details = isRecord(commit.commit) ? commit.commit : {};
+        return [{
+          sha: typeof commit.sha === 'string' ? commit.sha.slice(0, 7) : '',
+          message: typeof details.message === 'string' ? details.message.split('\n')[0] : '',
+        }];
+      }),
     };
   } catch (error) {
     log.debug('GitHub compare preview failed (non-fatal)', error);

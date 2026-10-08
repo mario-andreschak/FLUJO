@@ -15,7 +15,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import micromatch from 'micromatch';
+import picomatch from 'picomatch';
 import { ALL_TEST_GLOBS } from '../../jest.testMatch.mjs';
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -43,7 +43,7 @@ describe('testMatch coverage', () => {
     expect(files.length).toBeGreaterThan(0);
 
     const relPosix = files.map((f) => path.relative(ROOT, f).replace(/\\/g, '/'));
-    const unmatched = relPosix.filter((rel) => !micromatch.isMatch(rel, ALL_TEST_GLOBS));
+    const unmatched = relPosix.filter((rel) => !picomatch.isMatch(rel, ALL_TEST_GLOBS));
 
     // If this fails, either move the file under a matched path or broaden a
     // glob in jest.testMatch.mjs — do NOT just delete the assertion.

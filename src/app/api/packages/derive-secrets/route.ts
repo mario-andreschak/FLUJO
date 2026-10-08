@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * POST /api/packages/derive-secrets (issue #195).
  *
@@ -27,7 +28,7 @@ function sanitizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -58,12 +59,14 @@ export async function POST(request: NextRequest) {
       ? raw.entropyThreshold
       : undefined;
   const enableEntropy = typeof raw.enableEntropy === 'boolean' ? raw.enableEntropy : undefined;
+  const enableRepoSlug = typeof raw.enableRepoSlug === 'boolean' ? raw.enableRepoSlug : undefined;
 
   try {
     const result = await deriveSecretsForSelection(selection, {
       modelIdentifier,
       entropyThreshold,
       enableEntropy,
+      enableRepoSlug,
     });
     return NextResponse.json(result);
   } catch (err) {
@@ -74,3 +77,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

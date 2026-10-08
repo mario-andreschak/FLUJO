@@ -8,6 +8,7 @@ import { formatErrorResponse } from '@/utils/mcp/utils';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { maskServerHeaders } from '@/utils/mcp/headers';
 import { json, validateServerName } from '../_helpers';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 
 const log = createLogger('app/api/mcp/servers/route');
 
@@ -36,7 +37,7 @@ function redactServerConfig(config: MCPServerConfig): MCPServerConfig {
  * GET /api/mcp/servers
  * List all MCP server configurations (with secrets redacted for the browser).
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -57,7 +58,7 @@ export async function GET() {
  * POST /api/mcp/servers
  * Create a new MCP server configuration. The request body is the server config.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   // Local-only: this route persists an arbitrary `command` that the MCP manager
   // later spawns, so reject cross-origin / DNS-rebinding callers first (#141).
   const notLocal = assertLocalRequest(request);
@@ -101,3 +102,14 @@ export async function POST(request: NextRequest) {
     return json(formatErrorResponse(error), 500);
   }
 }
+
+
+// Workspaces (#406): MCP configs and clones are workspace-owned, so the same
+// server name can exist independently in two workspaces.
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);

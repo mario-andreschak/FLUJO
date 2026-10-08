@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -5,6 +6,7 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/breakpoints/route');
@@ -13,7 +15,7 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/breakpoints
  * Replace the set of breakpoint node IDs for a conversation (used by the
  * visual debugger). Body: { breakpoints: string[] }.
  */
-export async function PUT(
+async function PUT_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -47,6 +49,14 @@ export async function PUT(
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const personaNotLocal = assertLocalRequest(request);
+      if (personaNotLocal) return personaNotLocal;
+      return NextResponse.json(
+        { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+        { status: 409 },
+      );
+    }
 
     sharedState.breakpoints = breakpoints;
     FlowExecutor.conversationStates.set(conversationId, sharedState);
@@ -59,3 +69,5 @@ export async function PUT(
     return NextResponse.json({ error: 'Internal server error updating breakpoints' }, { status: 500 });
   }
 }
+
+export const PUT = withWorkspaceRoute(PUT_handler);

@@ -1,6 +1,6 @@
 /**
  * Tests for the FLUJO-as-MCP-server proxy forwarding (#17A).
- * The route's transport plumbing is the official SDK + fetch-to-node and is
+ * The route's transport plumbing is the official SDK Web transport and is
  * verified with a real client; here we pin the forwarding logic we own.
  */
 
@@ -11,6 +11,14 @@ jest.mock('@/backend/services/mcp', () => ({
     listServerTools: jest.fn(),
     callTool: jest.fn(),
     loadServerConfigs: jest.fn(),
+    listServerResources: jest.fn(),
+    listServerResourceTemplates: jest.fn(),
+    readResource: jest.fn(),
+    getServerSkillsCapability: jest.fn(),
+    getClient: jest.fn(),
+    listServerSkills: jest.fn(),
+    getServerSkill: jest.fn(),
+    readServerSkillDirectory: jest.fn(),
   },
 }));
 
@@ -19,14 +27,30 @@ import {
   isServerExposed,
   proxyListTools,
   proxyCallTool,
+  proxyListResources,
+  proxyListResourceTemplates,
+  proxyReadResource,
+  getProxySkillsCapability,
+  getProxyAppsCapability,
+  proxyGetSkill,
+  proxyListSkills,
 } from '@/backend/services/mcp/proxyForward';
 import { mcpService } from '@/backend/services/mcp';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 
 const svc = mcpService as unknown as {
   connectServer: jest.Mock;
   listServerTools: jest.Mock;
   callTool: jest.Mock;
   loadServerConfigs: jest.Mock;
+  listServerResources: jest.Mock;
+  listServerResourceTemplates: jest.Mock;
+  readResource: jest.Mock;
+  getServerSkillsCapability: jest.Mock;
+  getClient: jest.Mock;
+  listServerSkills: jest.Mock;
+  getServerSkill: jest.Mock;
+  readServerSkillDirectory: jest.Mock;
 };
 
 beforeEach(() => jest.clearAllMocks());
@@ -81,6 +105,7 @@ describe('proxyListTools', () => {
     const r = await proxyListTools('srv');
     expect(r.tools).toHaveLength(1);
     expect(r.tools[0].name).toBe('echo');
+    expect(svc.listServerTools).toHaveBeenCalledWith('srv', 'all');
   });
 
   it('throws when the downstream connection fails', async () => {
@@ -106,7 +131,16 @@ describe('proxyCallTool', () => {
     const r = await proxyCallTool('srv', 'echo', { x: 1 });
     expect(r.isError).toBeUndefined();
     expect(r.content).toEqual([{ type: 'text', text: 'hi' }]);
-    expect(svc.callTool).toHaveBeenCalledWith('srv', 'echo', { x: 1 });
+    expect(svc.callTool).toHaveBeenCalledWith(
+      'srv',
+      'echo',
+      { x: 1 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'host',
+    );
   });
 
   it('maps a tool failure to an MCP error result', async () => {
@@ -123,5 +157,157 @@ describe('proxyCallTool', () => {
     expect(r.isError).toBe(true);
     expect(JSON.stringify(r.content)).toContain('unreachable');
     expect(svc.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe('proxyListResources', () => {
+  it('returns the downstream resources on success', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.listServerResources.mockResolvedValue({
+      resources: [{ uri: 'flujo://run/abc/123', name: 'my-resource' }],
+    });
+    const r = await proxyListResources('srv');
+    expect(r.resources).toHaveLength(1);
+    expect(r.resources[0].uri).toBe('flujo://run/abc/123');
+  });
+
+  it('throws when the downstream connection fails', async () => {
+    svc.connectServer.mockResolvedValue({ success: false, error: 'down' });
+    await expect(proxyListResources('srv')).rejects.toThrow(/down/);
+    expect(svc.listServerResources).not.toHaveBeenCalled();
+  });
+
+  it('throws when listing resources fails', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.listServerResources.mockResolvedValue({ resources: [], error: 'list failed' });
+    await expect(proxyListResources('srv')).rejects.toThrow(/list failed/);
+  });
+});
+
+describe('proxyListResourceTemplates', () => {
+  it('returns the downstream resource templates on success', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.listServerResourceTemplates.mockResolvedValue({
+      resourceTemplates: [{ uriTemplate: 'flujo://run/{conv}/{id}', name: 'run-resource' }],
+    });
+    const r = await proxyListResourceTemplates('srv');
+    expect(r.resourceTemplates).toHaveLength(1);
+    expect(r.resourceTemplates[0].uriTemplate).toBe('flujo://run/{conv}/{id}');
+  });
+
+  it('throws when the downstream connection fails', async () => {
+    svc.connectServer.mockResolvedValue({ success: false, error: 'conn-err' });
+    await expect(proxyListResourceTemplates('srv')).rejects.toThrow(/conn-err/);
+    expect(svc.listServerResourceTemplates).not.toHaveBeenCalled();
+  });
+});
+
+describe('proxyReadResource', () => {
+  const resourceResult = {
+    contents: [{ uri: 'flujo://run/abc/123', text: 'hello', mimeType: 'text/plain' }],
+  };
+
+  it('returns the ReadResourceResult on success', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.readResource.mockResolvedValue({ success: true, data: resourceResult });
+    const r = await proxyReadResource('srv', 'flujo://run/abc/123');
+    expect(r).toEqual(resourceResult);
+    expect(svc.readResource).toHaveBeenCalledWith('srv', 'flujo://run/abc/123');
+  });
+
+  it('throws a generic Error when the downstream connection fails (not McpError)', async () => {
+    svc.connectServer.mockResolvedValue({ success: false, error: 'unreachable' });
+    await expect(proxyReadResource('srv', 'flujo://run/abc/123')).rejects.toThrow(/unreachable/);
+    // Must be a plain Error, not McpError — connection failure is an InternalError (-32603)
+    await expect(proxyReadResource('srv', 'flujo://run/abc/123')).rejects.not.toBeInstanceOf(McpError);
+    expect(svc.readResource).not.toHaveBeenCalled();
+  });
+
+  it('throws McpError(-32602) when the resource is not found / URI is invalid', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.readResource.mockResolvedValue({ success: false, error: 'not found', statusCode: 404 });
+    let thrown: unknown;
+    try {
+      await proxyReadResource('srv', 'flujo://run/abc/missing');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(McpError);
+    expect((thrown as McpError).code).toBe(ErrorCode.InvalidParams); // -32602
+    expect((thrown as McpError).message).toContain('flujo://run/abc/missing');
+  });
+
+  it('throws McpError(-32602) when result.data is absent (success=true but no data)', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.readResource.mockResolvedValue({ success: true, data: null });
+    let thrown: unknown;
+    try {
+      await proxyReadResource('srv', 'flujo://run/abc/empty');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(McpError);
+    expect((thrown as McpError).code).toBe(ErrorCode.InvalidParams);
+  });
+});
+
+
+describe('proxy Skills forwarding', () => {
+  it('advertises capability only after connection and downstream negotiation', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.getServerSkillsCapability.mockResolvedValue({ directoryRead: true });
+    await expect(getProxySkillsCapability('srv')).resolves.toEqual({ directoryRead: true });
+  });
+
+  it('forwards list/get without host approval state', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.listServerSkills.mockResolvedValue({
+      resultType: 'complete',
+      skills: [],
+      serverName: 'srv',
+      availability: 'available',
+      nextCursor: 'next',
+    });
+    await expect(proxyListSkills('srv', 'cursor')).resolves.toEqual({
+      resultType: 'complete',
+      skills: [],
+      nextCursor: 'next',
+    });
+
+    const skill = {
+      resultType: 'complete',
+      skill: {
+        uri: 'skill://demo/SKILL.md',
+        frontmatter: { name: 'demo', description: 'Demo' },
+        resources: 'dynamic',
+      },
+    };
+    svc.getServerSkill.mockResolvedValue({ success: true, data: skill });
+    await expect(proxyGetSkill('srv', skill.skill.uri)).resolves.toEqual(skill);
+  });
+});
+
+describe('proxy MCP Apps capability forwarding', () => {
+  it('preserves the negotiated downstream UI extension', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.getClient.mockReturnValue({
+      getServerCapabilities: () => ({
+        extensions: {
+          'io.modelcontextprotocol/ui': {
+            mimeTypes: ['text/html;profile=mcp-app'],
+          },
+        },
+      }),
+    });
+
+    await expect(getProxyAppsCapability('srv')).resolves.toEqual({
+      mimeTypes: ['text/html;profile=mcp-app'],
+    });
+  });
+
+  it('does not invent the extension when downstream omitted it', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.getClient.mockReturnValue({ getServerCapabilities: () => ({}) });
+    await expect(getProxyAppsCapability('srv')).resolves.toBeUndefined();
   });
 });

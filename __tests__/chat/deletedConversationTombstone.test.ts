@@ -21,6 +21,12 @@ jest.mock('@/utils/storage/backend', () => ({
   },
 }));
 
+// The summary sidecar is a separate, rebuildable persistence boundary. Keep this
+// regression focused on the authoritative conversation snapshot write.
+jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({
+  persistConversationSummary: jest.fn(async () => {}),
+}));
+
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import {
   markConversationDeleted,

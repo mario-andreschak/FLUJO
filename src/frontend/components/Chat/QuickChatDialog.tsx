@@ -12,7 +12,6 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   Divider,
   FormControl,
   FormControlLabel,
@@ -23,12 +22,14 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import type { Model } from '@/shared/types/model';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Chat/QuickChatDialog');
 
@@ -47,6 +48,8 @@ export interface QuickChatStartSelection {
   modelId: string;
   servers: Array<{ name: string; enabledTools?: string[] }>;
   systemPrompt?: string;
+  /** Present for saved-agent conversion; omitted by the existing Quick Chat caller. */
+  flowName?: string;
 }
 
 interface QuickChatDialogProps {
@@ -54,15 +57,44 @@ interface QuickChatDialogProps {
   onClose: () => void;
   /** Called with the validated selection when the user starts the chat. */
   onStart: (selection: QuickChatStartSelection) => Promise<void> | void;
+  initialModelId?: string;
+  lockModelSelection?: boolean;
+  initialFlowName?: string;
+  flowNameLabel?: string;
+  title?: string;
+  helpText?: string;
+  serversLabel?: string;
+  noServersText?: string;
+  submitLabel?: string;
+  submittingLabel?: string;
+  /** Saved-agent conversion only permits servers confirmed connected now. */
+  connectedServersOnly?: boolean;
 }
 
-const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStart }) => {
+const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
+  open,
+  onClose,
+  onStart,
+  initialModelId,
+  lockModelSelection = false,
+  initialFlowName,
+  flowNameLabel,
+  title,
+  helpText,
+  serversLabel,
+  noServersText,
+  submitLabel,
+  submittingLabel,
+  connectedServersOnly = false,
+}) => {
+  const { t, tp } = useI18n();
   const [models, setModels] = useState<Model[]>([]);
   const [serverNames, setServerNames] = useState<string[]>([]);
   const [loadingLists, setLoadingLists] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
   const [modelId, setModelId] = useState<string>('');
+  const [flowName, setFlowName] = useState<string>('');
   const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [picks, setPicks] = useState<Record<string, ServerPick>>({});
   const [starting, setStarting] = useState(false);
@@ -82,33 +114,50 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
         ]);
         if (cancelled) return;
         setModels(loadedModels);
-        const names = Array.isArray(serverConfigs)
-          ? serverConfigs.filter((s: any) => !s.disabled).map((s: any) => s.name as string)
+        const configuredNames = Array.isArray(serverConfigs)
+          ? serverConfigs.flatMap((server) => {
+              if (!server || typeof server !== 'object') return [];
+              const record = server as Record<string, unknown>;
+              return record.disabled !== true && typeof record.name === 'string' ? [record.name] : [];
+            })
           : [];
+        const names = connectedServersOnly
+          ? (await Promise.all(configuredNames.map(async (name) => ({
+              name,
+              status: await mcpService.getServerStatus(name),
+            }))))
+              .filter(({ status }) => status?.status === 'connected')
+              .map(({ name }) => name)
+          : configuredNames;
+        if (cancelled) return;
         setServerNames(names);
         // Default the model to the first available one so a user can start in two clicks.
-        setModelId(prev => prev || loadedModels[0]?.id || '');
+        setModelId(prev => initialModelId || prev || loadedModels[0]?.id || '');
       } catch (err) {
         if (!cancelled) {
           log.warn('Failed to load models/servers for quick chat', err);
-          setListError('Could not load models or servers.');
+          setListError(t('chat.quick.loadFailed'));
         }
       } finally {
         if (!cancelled) setLoadingLists(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [open]);
+  }, [connectedServersOnly, initialModelId, open, t]);
 
-  // Reset transient selection when the dialog is closed.
+  // Initialize conversion defaults on open and reset transient state on close.
   useEffect(() => {
-    if (!open) {
-      setSystemPrompt('');
-      setPicks({});
-      setStartError(null);
-      setStarting(false);
+    if (open) {
+      setModelId(initialModelId ?? '');
+      setFlowName(initialFlowName ?? '');
+      return;
     }
-  }, [open]);
+    setSystemPrompt('');
+    setFlowName('');
+    setPicks({});
+    setStartError(null);
+    setStarting(false);
+  }, [initialFlowName, initialModelId, open]);
 
   const toggleServer = useCallback((name: string) => {
     setPicks(prev => {
@@ -132,7 +181,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
       setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: true } }));
       try {
         const { tools } = await mcpService.listServerTools(name);
-        const names = Array.isArray(tools) ? tools.map((t: any) => t.name).filter(Boolean) : [];
+        const names = tools.map((tool) => tool.name);
         setPicks(prev => ({
           ...prev,
           [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: names, loading: false },
@@ -156,11 +205,15 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
     });
   }, []);
 
-  const canStart = Boolean(modelId) && !starting && !loadingLists;
+  const needsFlowName = initialFlowName !== undefined;
+  const canStart = Boolean(modelId)
+    && (!needsFlowName || Boolean(flowName.trim()))
+    && !starting
+    && !loadingLists;
 
   const handleStart = async () => {
     if (!modelId) {
-      setStartError('Pick a model to chat with.');
+      setStartError(t('chat.quick.pickModel'));
       return;
     }
     setStarting(true);
@@ -176,35 +229,48 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
         return isAll ? { name } : { name, enabledTools: [...pick.tools!] };
       });
     try {
-      await onStart({ modelId, servers, systemPrompt: systemPrompt.trim() || undefined });
+      await onStart({
+        modelId,
+        servers,
+        systemPrompt: systemPrompt.trim() || undefined,
+        ...(needsFlowName ? { flowName: flowName.trim() } : {}),
+      });
     } catch (err) {
       log.warn('Quick chat failed to start', err);
-      setStartError(err instanceof Error ? err.message : 'Could not start the quick chat.');
+      setStartError(err instanceof Error ? err.message : t('chat.quick.startFailed'));
       setStarting(false);
     }
   };
 
   return (
     <Dialog open={open} onClose={starting ? undefined : onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Quick Chat</DialogTitle>
+      <DialogHeaderActions
+        title={title ?? t('chat.quick.title')}
+        onClose={starting ? () => undefined : onClose}
+      />
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Chat with a model and, optionally, some MCP servers — no need to build and save a flow.
+          {helpText ?? t('chat.quick.help')}
         </Typography>
 
         {listError && <Alert severity="error" sx={{ mb: 2 }}>{listError}</Alert>}
 
-        <FormControl fullWidth size="small" sx={{ mb: 2 }} disabled={loadingLists}>
-          <InputLabel id="quick-chat-model-label">Model</InputLabel>
+        <FormControl
+          fullWidth
+          size="small"
+          sx={{ mb: 2 }}
+          disabled={loadingLists || lockModelSelection}
+        >
+          <InputLabel id="quick-chat-model-label">{t('chat.quick.model')}</InputLabel>
           <Select
             labelId="quick-chat-model-label"
-            label="Model"
+            label={t('chat.quick.model')}
             value={modelId}
             onChange={e => setModelId(e.target.value)}
           >
             {models.length === 0 && (
               <MenuItem value="" disabled>
-                {loadingLists ? 'Loading…' : 'No models configured'}
+                {loadingLists ? t('common.loading') : t('chat.quick.noModels')}
               </MenuItem>
             )}
             {models.map(m => (
@@ -215,22 +281,36 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
           </Select>
         </FormControl>
 
+        {needsFlowName && (
+          <TextField
+            fullWidth
+            size="small"
+            label={flowNameLabel}
+            value={flowName}
+            onChange={e => setFlowName(e.target.value)}
+            inputProps={{ maxLength: 160 }}
+            required
+            sx={{ mb: 2 }}
+          />
+        )}
+
         <TextField
           fullWidth
           size="small"
           multiline
           minRows={2}
           maxRows={6}
-          label="System prompt (optional)"
-          placeholder="e.g. You are a concise coding assistant."
+          label={t('chat.quick.systemPrompt')}
+          placeholder={t('chat.quick.systemPlaceholder')}
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
+          inputProps={{ maxLength: 20_000 }}
           sx={{ mb: 2 }}
         />
 
         <Divider sx={{ mb: 1 }} />
         <Typography variant="subtitle2" gutterBottom>
-          MCP servers (optional)
+          {serversLabel ?? t('chat.quick.servers')}
         </Typography>
 
         {loadingLists ? (
@@ -239,7 +319,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
           </Box>
         ) : serverNames.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            No connected MCP servers. You can still chat with the model alone.
+            {noServersText ?? t('chat.quick.noServers')}
           </Typography>
         ) : (
           serverNames.map(name => {
@@ -264,15 +344,15 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
                             variant="outlined"
                             label={
                               !activeTools
-                                ? 'all tools'
-                                : `${activeTools.size} tool${activeTools.size === 1 ? '' : 's'}`
+                                ? t('chat.quick.allTools')
+                                : tp('chat.quick.tool', activeTools.size)
                             }
                           />
                         )}
                       </Box>
                     }
                   />
-                  <IconButton size="small" onClick={() => toggleExpand(name)} aria-label={`customize ${name} tools`}>
+                  <IconButton size="small" onClick={() => toggleExpand(name)} aria-label={t('chat.quick.customize', { server: name })}>
                     {pick?.expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
                   </IconButton>
                 </Box>
@@ -300,7 +380,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
                       })
                     ) : (
                       <Typography variant="caption" color="text.secondary">
-                        {available ? 'No tools reported (server may be offline).' : ''}
+                        {available ? t('chat.quick.noTools') : ''}
                       </Typography>
                     )}
                   </Box>
@@ -313,14 +393,16 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
         {startError && <Alert severity="error" sx={{ mt: 2 }}>{startError}</Alert>}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={starting}>Cancel</Button>
+        <Button onClick={onClose} disabled={starting}>{t('common.cancel')}</Button>
         <Button
           variant="contained"
           onClick={handleStart}
           disabled={!canStart}
           startIcon={starting ? <CircularProgress size={16} color="inherit" /> : undefined}
         >
-          {starting ? 'Starting…' : 'Start chat'}
+          {starting
+            ? (submittingLabel ?? t('chat.quick.starting'))
+            : (submitLabel ?? t('chat.quick.start'))}
         </Button>
       </DialogActions>
     </Dialog>

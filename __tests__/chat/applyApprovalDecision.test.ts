@@ -63,8 +63,15 @@ describe('applyApprovalDecision (#115)', () => {
     expect(res.outcome).toBe('ready');
     expect(processToolCallsMock).not.toHaveBeenCalled();
     const toolMsg = state.messages.find(m => m.role === 'tool');
-    expect(toolMsg?.content).toMatch(/rejected/i);
+    expect(toolMsg?.content).toBe('tool denied');
     expect(state.status).toBe('running');
+  });
+
+  it('reject returns only the fixed denial result', async () => {
+    const state = makeState([{ id: 'call_1', name: 'delete_everything' }]);
+    await applyApprovalDecision(state, 'call_1', 'reject');
+    const toolMsg = state.messages.find(m => m.role === 'tool');
+    expect(toolMsg?.content).toBe('tool denied');
   });
 
   it('returns tool_not_found for an unknown tool call id', async () => {

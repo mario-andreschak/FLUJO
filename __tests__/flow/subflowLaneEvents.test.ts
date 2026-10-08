@@ -6,7 +6,7 @@
  * laneTitle + laneConversationId (and ONLY those two events do — forwarded
  * events stay {laneIndex, laneCount}); the lane's runFlow call receives the
  * SAME pre-generated conversationId and the title falls back to the subflow
- * name for static fan-out lanes; saveConversation: false suppresses the id;
+ * name for static fan-out lanes; ephemeral children retain a live address;
  * and a lane whose runFlow THROWS still yields a synthetic error subflow:done.
  */
 
@@ -63,6 +63,31 @@ beforeEach(() => {
 });
 
 describe('lane identity on subflow boundary events (issue #157)', () => {
+  it('emits one start/done pair per queued model task, including sequential queues', async () => {
+    respondingChild();
+
+    const events: Array<Record<string, unknown>> = [];
+    const node = makeNode();
+    const shared = makeShared({
+      emit: (e: Record<string, unknown>) => events.push(e),
+      handoffInput: {
+        targetNodeId: 'sub-1',
+        prompt: '',
+        tasks: ['inspect auth', 'inspect billing', 'inspect notifications'],
+      },
+    });
+    const prep = await node.prep(shared, makeParams({ subflowId: 'agent', concurrencyLimit: 1 }));
+    await node.execCore(prep);
+
+    const starts = events.filter((e) => e.type === 'subflow:start');
+    const dones = events.filter((e) => e.type === 'subflow:done');
+    expect(starts).toHaveLength(3);
+    expect(dones).toHaveLength(3);
+    expect(starts.map((e) => e.laneTitle)).toEqual(['inspect auth', 'inspect billing', 'inspect notifications']);
+    expect(starts.map((e) => e.laneIndex)).toEqual([0, 1, 2]);
+    expect(starts.every((e) => e.laneCount === 3)).toBe(true);
+  });
+
   it('stamps laneTitle (subflow-name fallback) + laneConversationId on start/done, and matches the runFlow input', async () => {
     respondingChild();
 
@@ -98,6 +123,7 @@ describe('lane identity on subflow boundary events (issue #157)', () => {
     for (const start of starts) {
       const input = inputs.find((i) => i.conversationId === start.laneConversationId)!;
       expect(input).toBeDefined();
+      expect(input.source).toBe('subflow');
       expect(input.mode).toBe('conversation');
       expect(input.title).toBe(start.laneTitle);
     }
@@ -121,7 +147,7 @@ describe('lane identity on subflow boundary events (issue #157)', () => {
     }
   });
 
-  it('saveConversation: false → ephemeral lanes, no laneConversationId, no caller-supplied id', async () => {
+  it('saveConversation: false preserves stable live lane ids without making children persistent', async () => {
     respondingChild();
 
     const events: Array<Record<string, unknown>> = [];
@@ -135,12 +161,14 @@ describe('lane identity on subflow boundary events (issue #157)', () => {
 
     const boundaries = events.filter((e) => e.type === 'subflow:start' || e.type === 'subflow:done');
     expect(boundaries.length).toBe(4);
-    expect(boundaries.every((e) => e.laneConversationId === undefined)).toBe(true);
+    expect(boundaries.every((e) => typeof e.laneConversationId === 'string')).toBe(true);
     // Labels still flow (the live view needs them regardless of persistence).
     expect(boundaries.every((e) => typeof e.laneTitle === 'string')).toBe(true);
 
     const inputs = runFlowMock.mock.calls.map((c) => c[0] as Record<string, unknown>);
-    expect(inputs.every((i) => i.mode === 'ephemeral' && i.conversationId === undefined)).toBe(true);
+    expect(inputs.every((i) => i.mode === 'ephemeral' && typeof i.conversationId === 'string')).toBe(true);
+    expect(new Set(inputs.map((i) => i.conversationId)).size).toBe(2);
+    expect(new Set(boundaries.map((e) => e.laneConversationId))).toEqual(new Set(inputs.map((i) => i.conversationId)));
   });
 
   it('a lane whose runFlow THROWS still emits a synthetic subflow:done with status error', async () => {

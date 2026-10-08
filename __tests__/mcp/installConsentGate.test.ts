@@ -32,6 +32,12 @@ jest.mock('@/backend/services/mcp/autoInstall', () => ({
   appendInstallAudit: (...a: unknown[]) => appendInstallAuditMock(...a),
 }));
 
+jest.mock('@/backend/services/flow/assistedAuthoring', () => ({
+  suggestToolsForFlowStep: jest.fn(),
+  applyToolsToFlowStep: jest.fn(),
+  checkFlowPlausibility: jest.fn(),
+}));
+
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
 import { DEFAULT_MCP_AUTO_INSTALL_SETTINGS } from '@/utils/mcp/autoInstallConsent';
 
@@ -59,6 +65,29 @@ beforeEach(() => {
 });
 
 describe('install_mcp_server consent gate', () => {
+  it.each(['registry', 'command', 'server-json'])('retains caller secret metadata for %s installation and keeps values out of audit', async (kind) => {
+    loadAutoInstallSettingsMock.mockResolvedValue({ ...DEFAULT_MCP_AUTO_INSTALL_SETTINGS });
+    const secret = 'synthetic-api-secret';
+    const source = kind === 'registry' ? 'ai.example/web-search'
+      : kind === 'command' ? 'npx -y @example/direct-mcp'
+        : npmEntry('ai.example/web-search').server;
+    const result = payload(await authoringCallTool('install_mcp_server', {
+      source,
+      env: { TOKEN: { value: secret, metadata: { isSecret: true } }, OTHER: 'synthetic-second-secret' },
+      secretEnvNames: ['OTHER'],
+    }));
+    expect(result.installed).toBe(true);
+    expect(updateServerConfigMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      env: {
+        TOKEN: { value: secret, metadata: { isSecret: true } },
+        OTHER: { value: 'synthetic-second-secret', metadata: { isSecret: true } },
+      },
+    }));
+    expect(JSON.stringify(appendInstallAuditMock.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(appendInstallAuditMock.mock.calls)).not.toContain('synthetic-second-secret');
+  });
+
   it('does NOT spawn when consent is required (untrusted) — returns the plan + consentRequired, audits first', async () => {
     // Untrusted authoring tool: brain-stem trust off, consent required, empty allowlist.
     loadAutoInstallSettingsMock.mockResolvedValue({
@@ -105,5 +134,39 @@ describe('install_mcp_server consent gate', () => {
     expect(body.installed).toBe(true);
     expect(body.consentRequired).toBeUndefined();
     expect(updateServerConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the same preview, consent, and audit gate to a raw npx source', async () => {
+    loadAutoInstallSettingsMock.mockResolvedValue({
+      requireConsent: true,
+      trustBrainStem: false,
+      namespaceAllowlist: [],
+    });
+    const blocked = payload(await authoringCallTool('install_mcp_server', {
+      source: 'npx -y @example/direct-mcp',
+      serverName: 'direct',
+    }));
+    expect(blocked).toEqual(expect.objectContaining({
+      installed: false,
+      consentRequired: true,
+      sourceType: 'command',
+      plan: expect.objectContaining({ command: 'npx', args: ['-y', '@example/direct-mcp'] }),
+    }));
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+    expect(appendInstallAuditMock).toHaveBeenCalledTimes(1);
+
+    jest.clearAllMocks();
+    loadServerConfigsMock.mockResolvedValue([]);
+    updateServerConfigMock.mockResolvedValue({ name: 'direct' });
+    listServerToolsMock.mockResolvedValue({ tools: [{ name: 'ping' }] });
+    loadAutoInstallSettingsMock.mockResolvedValue({ ...DEFAULT_MCP_AUTO_INSTALL_SETTINGS });
+    appendInstallAuditMock.mockResolvedValue(undefined);
+    const installed = payload(await authoringCallTool('install_mcp_server', {
+      source: 'npx -y @example/direct-mcp',
+      serverName: 'direct',
+    }));
+    expect(installed).toEqual(expect.objectContaining({ installed: true, sourceType: 'command' }));
+    expect(updateServerConfigMock).toHaveBeenCalledWith('direct', expect.objectContaining({ command: 'npx' }));
+    expect(appendInstallAuditMock).toHaveBeenCalledTimes(2);
   });
 });

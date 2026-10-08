@@ -1,7 +1,11 @@
 import OpenAI from 'openai';
 import { toAnthropicMessages, toAnthropicTools } from '@/backend/services/model/adapters/anthropicAdapter';
 import { toGeminiContents, toGeminiTools } from '@/backend/services/model/adapters/geminiAdapter';
-import { buildUserMessage } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
+import {
+  buildUserMessage,
+  isMalformedClaudeToolCallProse,
+} from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
 
 // A single shared logger mock so tests can assert `log.warn` was emitted when a
 // remote image fetch fails. The factory builds the object internally (no outer
@@ -29,6 +33,26 @@ const MULTIMODAL_CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
   },
 ];
 
+const OTHER_MEDIA_CONVERSATION = [{
+  role: 'user',
+  content: [
+    { type: 'text', text: 'Inspect these attachments.' },
+    { type: 'input_audio', input_audio: { data: 'AUDIO', format: 'wav' } },
+    {
+      type: 'video_url',
+      video_url: { url: 'data:video/mp4;base64,VIDEO', mime_type: 'video/mp4' },
+    },
+    {
+      type: 'file',
+      file: {
+        file_data: 'data:application/pdf;base64,PDF',
+        filename: 'brief.pdf',
+        mime_type: 'application/pdf',
+      },
+    },
+  ],
+}] as unknown as OpenAI.ChatCompletionMessageParam[];
+
 // A representative tool-using conversation in OpenAI wire format:
 // system + user, an assistant turn with a tool_call, then the tool result.
 const CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
@@ -42,13 +66,14 @@ const CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
         id: 'call_1',
         type: 'function',
         function: { name: 'mcp_get_weather_abc', arguments: '{"city":"Berlin"}' },
-      },
+        providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+      } as FlujoFunctionToolCall,
     ],
   },
   { role: 'tool', tool_call_id: 'call_1', content: '{"tempC":18}' },
 ];
 
-const TOOLS: OpenAI.ChatCompletionTool[] = [
+const TOOLS: OpenAI.ChatCompletionFunctionTool[] = [
   {
     type: 'function',
     function: {
@@ -96,6 +121,23 @@ describe('anthropic translation', () => {
     expect(tools[0]).toMatchObject({ name: 'mcp_get_weather_abc', description: 'Get weather' });
     expect(tools[0].input_schema).toMatchObject({ type: 'object' });
   });
+
+  it('maps PDF attachments to document blocks and labels unsupported audio/video', () => {
+    const { messages } = toAnthropicMessages(OTHER_MEDIA_CONVERSATION);
+    const blocks = messages[0].content as any[];
+    expect(blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'document',
+        source: expect.objectContaining({
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: 'PDF',
+        }),
+      }),
+      expect.objectContaining({ type: 'text', text: '[Unsupported audio attachment]' }),
+      expect.objectContaining({ type: 'text', text: '[Unsupported video attachment]' }),
+    ]));
+  });
 });
 
 describe('gemini translation', () => {
@@ -105,9 +147,13 @@ describe('gemini translation', () => {
     expect(contents.map(c => c.role)).toEqual(['user', 'model', 'user']);
 
     const modelParts = contents[1].parts!;
-    const fnCall = modelParts.find(p => 'functionCall' in p) as { functionCall?: { name?: string; args?: unknown } };
+    const fnCall = modelParts.find(p => 'functionCall' in p) as {
+      functionCall?: { name?: string; args?: unknown };
+      thoughtSignature?: string;
+    };
     expect(fnCall.functionCall?.name).toBe('mcp_get_weather_abc');
     expect(fnCall.functionCall?.args).toEqual({ city: 'Berlin' });
+    expect(fnCall.thoughtSignature).toBe('opaque-signature');
 
     // Gemini keys the response by function NAME (resolved from the prior call id).
     const fnResponseParts = contents[2].parts!;
@@ -116,6 +162,74 @@ describe('gemini translation', () => {
     };
     expect(fnResp.functionResponse?.name).toBe('mcp_get_weather_abc');
     expect(fnResp.functionResponse?.response).toEqual({ tempC: 18 });
+  });
+
+  it('keeps distinct signatures attached across multiple tool-use turns', async () => {
+    const signedConversation: OpenAI.ChatCompletionMessageParam[] = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_a',
+            type: 'function',
+            function: { name: 'first_tool', arguments: '{"value":1}' },
+            providerMetadata: { gemini: { thoughtSignature: 'sig-a' } },
+          } as FlujoFunctionToolCall,
+          {
+            id: 'call_b',
+            type: 'function',
+            function: { name: 'second_tool', arguments: '{"value":2}' },
+            providerMetadata: { gemini: { thoughtSignature: 'sig-b' } },
+          } as FlujoFunctionToolCall,
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_a', content: '{"ok":true}' },
+      { role: 'tool', tool_call_id: 'call_b', content: '{"ok":true}' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_c',
+          type: 'function',
+          function: { name: 'third_tool', arguments: '{}' },
+          providerMetadata: { gemini: { thoughtSignature: 'sig-c' } },
+        } as FlujoFunctionToolCall],
+      },
+    ];
+
+    const { contents } = await toGeminiContents(signedConversation);
+    expect(contents.map(content => content.role)).toEqual(['model', 'user', 'model']);
+    expect(contents[0].parts).toEqual([
+      {
+        functionCall: { name: 'first_tool', args: { value: 1 } },
+        thoughtSignature: 'sig-a',
+      },
+      {
+        functionCall: { name: 'second_tool', args: { value: 2 } },
+        thoughtSignature: 'sig-b',
+      },
+    ]);
+    expect(contents[2].parts).toEqual([{
+      functionCall: { name: 'third_tool', args: {} },
+      thoughtSignature: 'sig-c',
+    }]);
+  });
+
+  it('keeps legacy unsigned tool calls unsigned', async () => {
+    const { contents } = await toGeminiContents([{
+      role: 'assistant',
+      content: null,
+      tool_calls: [{
+        id: 'legacy_call',
+        type: 'function',
+        function: { name: 'legacy_tool', arguments: '{}' },
+      }],
+    }]);
+
+    expect(contents[0].parts).toEqual([{
+      functionCall: { name: 'legacy_tool', args: {} },
+    }]);
   });
 
   it('converts tools to function declarations with a JSON-schema passthrough', () => {
@@ -136,6 +250,15 @@ describe('gemini translation', () => {
       mimeType: 'image/png',
       data: PNG_DATA_URL.split(',')[1],
     });
+  });
+
+  it('maps audio, video, and file attachments to Gemini inlineData parts', async () => {
+    const { contents } = await toGeminiContents(OTHER_MEDIA_CONVERSATION);
+    expect(contents[0].parts).toEqual(expect.arrayContaining([
+      { inlineData: { mimeType: 'audio/wav', data: 'AUDIO' } },
+      { inlineData: { mimeType: 'video/mp4', data: 'VIDEO' } },
+      { inlineData: { mimeType: 'application/pdf', data: 'PDF' } },
+    ]));
   });
 
   describe('remote (http/https) image URLs (issue #172)', () => {
@@ -279,6 +402,42 @@ describe('gemini translation', () => {
   });
 });
 
+describe('claude subscription malformed tool-call prose quarantine (#298)', () => {
+  const malformed =
+    'Assistant [tool call] mcp__flujo__filesystem__read_file {"path":"secret"}\n' +
+    "The model's tool call could not be parsed (retry also failed)";
+
+  it('requires parse-failure wording plus invocation-like syntax', () => {
+    expect(isMalformedClaudeToolCallProse(malformed)).toBe(true);
+    expect(isMalformedClaudeToolCallProse(
+      "The model's tool call could not be parsed (retry also failed): <invoke name=filesystem.read>",
+    )).toBe(true);
+    expect(isMalformedClaudeToolCallProse('We should discuss how [tool call] notation works.')).toBe(false);
+    expect(isMalformedClaudeToolCallProse("The model's tool call could not be parsed after a network error.")).toBe(false);
+  });
+
+  it('omits malformed legacy assistant history without leaking invocation details', () => {
+    const { content } = buildUserMessage([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: malformed },
+      { role: 'user', content: 'continue' },
+    ]);
+
+    expect(content).toBe('Human: first\n\nHuman: continue');
+    expect(content).not.toContain('mcp__flujo__');
+    expect(content).not.toContain('retry also failed');
+  });
+
+  it('preserves benign assistant discussion of tools byte-for-byte', () => {
+    const benign = 'The [tool call] label is documentation, not an invocation.';
+    const { content } = buildUserMessage([
+      { role: 'user', content: 'Explain it' },
+      { role: 'assistant', content: benign },
+    ]);
+    expect(content).toBe(`Human: Explain it\n\nAssistant: ${benign}`);
+  });
+});
+
 describe('claude subscription buildUserMessage', () => {
   it('renders prior tool calls AND results as text (issue #160)', () => {
     const { systemPrompt, content } = buildUserMessage(CONVERSATION);
@@ -288,9 +447,24 @@ describe('claude subscription buildUserMessage', () => {
     // Plain turns still render as before.
     expect(text).toContain('Human: Weather in Berlin?');
     expect(text).toContain('Assistant: Let me check.');
-    // The tool CALL and its RESULT are now rendered (previously dropped).
-    expect(text).toContain('Assistant [tool call] mcp_get_weather_abc({"city":"Berlin"})');
-    expect(text).toContain('Tool result [mcp_get_weather_abc]: {"tempC":18}');
+    // The tool CALL and its RESULT are now rendered (previously dropped), in the
+    // non-invocable `[prior action]` form (#296).
+    expect(text).toContain('[prior action] mcp_get_weather_abc\narguments: {"city":"Berlin"}');
+    expect(text).toContain('[prior action result] mcp_get_weather_abc\n{"tempC":18}');
+    // The old call-expression form is gone — it was what models imitated.
+    expect(text).not.toContain('[tool call]');
+  });
+
+  it('wraps a tool-bearing history in the inert-record envelope with === separators (#296)', () => {
+    const { content } = buildUserMessage(CONVERSATION);
+    const text = content as string;
+    expect(text.startsWith('<conversation_history>\n')).toBe(true);
+    expect(text.endsWith('\n</conversation_history>')).toBe(true);
+    // The preamble tells the model this is a record, not a script to continue.
+    expect(text).toContain('This is a RECORD of the conversation so far');
+    expect(text).toContain('call the tool through your normal tool interface');
+    // Entries are separated by an explicit rule.
+    expect(text).toContain('\n===\n');
   });
 
   it('renders an assistant tool-call turn that carries no text (content: \'\')', () => {
@@ -307,8 +481,8 @@ describe('claude subscription buildUserMessage', () => {
     ];
     const { content } = buildUserMessage(convo);
     const text = content as string;
-    expect(text).toContain('Assistant [tool call] list_files({})');
-    expect(text).toContain('Tool result [list_files]: a.txt\nb.txt');
+    expect(text).toContain('[prior action] list_files\narguments: {}');
+    expect(text).toContain('[prior action result] list_files\na.txt\nb.txt');
   });
 
   it('truncates oversized tool results and args with a marker', () => {
@@ -331,7 +505,7 @@ describe('claude subscription buildUserMessage', () => {
     // (bigResult is exactly 9000 chars → 9000-4000 = 5000 truncated.)
     expect(text).toMatch(/\[truncated 5000 chars\]/);
     // The args payload is truncated too (its exact count depends on JSON overhead).
-    expect(text).toMatch(/write_file\(\{"content":"A+…\[truncated \d+ chars\]/);
+    expect(text).toMatch(/\[prior action\] write_file\narguments: \{"content":"A+…\[truncated \d+ chars\]/);
     // The whole oversized payloads are not present verbatim.
     expect(text).not.toContain('R'.repeat(9000));
     expect(text).not.toContain('A'.repeat(5000));
@@ -346,6 +520,17 @@ describe('claude subscription buildUserMessage', () => {
     expect(systemPrompt).toBe('sys');
     // No `Human:` prefix for the single-turn tool-free case (prefix-cache stability).
     expect(content).toBe('just a question');
+  });
+
+  it('leaves a tool-free MULTI-turn history unwrapped and blank-line joined (#296)', () => {
+    const convo: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+      { role: 'user', content: 'third' },
+    ];
+    const { content } = buildUserMessage(convo);
+    // Byte-identical to the pre-#296 rendering: no envelope, no `===`.
+    expect(content).toBe('Human: first\n\nAssistant: second\n\nHuman: third');
   });
 
   it('emits text + image content blocks for a multimodal turn', () => {

@@ -13,24 +13,48 @@
 # ---- Builder --------------------------------------------------------------
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
 # Install deps first (better layer caching) using the full dependency set so the
 # production build has its build-time tooling (typescript, webpack, etc.).
 COPY package.json package-lock.json ./
+COPY mcp-servers ./mcp-servers
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
-RUN npm run build
+ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
+RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 
+# CI supplies these from the checked-out source before building. Empty defaults
+# deliberately do not claim compatibility or a published revision for an
+# unlabelled local build. The worker resolver requires the complete labels.
+ARG FLUJO_APPLICATION_VERSION=""
+ARG FLUJO_BUILD_REVISION=""
+LABEL io.flujo.application.version="${FLUJO_APPLICATION_VERSION}" \
+      io.flujo.snapshot.format="2" \
+      io.flujo.workspace.layout="2" \
+      io.flujo.worker.protocol="1" \
+      org.opencontainers.image.version="${FLUJO_APPLICATION_VERSION}" \
+      org.opencontainers.image.revision="${FLUJO_BUILD_REVISION}" \
+      org.opencontainers.image.source="https://github.com/mario-andreschak/FLUJO"
+
+# Mark the install so /api/update reports "pull a new image" instead of a
+# broken in-app git updater. The MCP Apps sandbox is a second browser origin;
+# containers listen beyond loopback while publication remains runner-controlled.
 ENV NODE_ENV=production \
-    # Mark the install so /api/update reports "pull a new image" instead of a
-    # broken in-app git updater (see src/utils/paths.ts + api/update/route.ts).
-    FLUJO_CONTAINER=1
+    FLUJO_BUILD_REVISION=${FLUJO_BUILD_REVISION} \
+    FLUJO_CONTAINER=1 \
+    FLUJO_APP_ROOT=/app \
+    FLUJO_DATA_DIR=/app/data \
+    PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+    # Optional: restrict the in-chat file-browser MCP tool to specific host directories
+    # (requires a matching bind-mount in docker-compose.yml):
+    # ENV FLUJO_FS_ROOTS=/data/files
 
 # Runtime toolchains for on-demand MCP server installation/execution:
 #  - git: Marketplace/manual server clones
@@ -47,6 +71,7 @@ RUN apt-get update \
         python-is-python3 \
         ca-certificates \
         curl \
+        ripgrep \
     && rm -rf /var/lib/apt/lists/*
 # Debian refuses bare `pip install` into system site-packages (PEP 668). MCP
 # server configs run exactly that, and inside a disposable container the
@@ -58,29 +83,64 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh \
     && uv --version && uvx --version
 
-# Bring in the built app + production dependencies.
+# Bring in the built app + production dependencies. Copy the built workspace
+# packages before npm ci so their exact root dependency pins become local links;
+# `npx --no-install` can then resolve every shipped binary without a registry.
 COPY --from=builder /app/package.json /app/package-lock.json ./
+# A mistyped build argument must not advertise a version this image cannot restore.
+RUN if [ -n "$FLUJO_APPLICATION_VERSION" ]; then \
+      node -e 'if (require("./package.json").version !== process.argv[1]) process.exit(1)' "$FLUJO_APPLICATION_VERSION"; \
+    fi \
+    && if [ -n "$FLUJO_BUILD_REVISION" ]; then \
+      node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION)) process.exit(1)'; \
+    fi
+COPY --from=builder /app/mcp-servers ./mcp-servers
+# Reuse the browser payload downloaded by the workspace install lifecycle in the
+# builder. The following npm ci sees the version marker and does not download it again.
+COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright
 RUN npm ci --omit=dev
+# The browser workspace install lifecycle downloads its version-matched Chromium
+# payload above. Add the Debian libraries it requires while this stage is still root.
+RUN npx --no-install patchright install-deps chromium
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts ./scripts
 
-# User data lives under the working dir (db/, mcp-servers/) and is mounted as
-# named volumes by docker-compose. Create + own them so the non-root user can
-# write. HOME must be writable for npm's cache when installing npx-based servers.
+# Keep writable data separate from the immutable bundled package workspace so a
+# persistent mcp-servers volume cannot mask the offline built-ins. Seed the
+# workspace layout (including every runtime-owned subtree) before Docker creates
+# its named volumes; this gives fresh volumes the correct node:node ownership.
+# The two legacy mount points remain as empty directories so the transactional
+# upgrader can also consume images/volumes created by older launchers.
+# HOME remains writable for npm's cache when installing optional external npx
+# servers.
 ENV HOME=/home/node
-RUN mkdir -p /app/db /app/mcp-servers /home/node/.npm \
-    && chown -R node:node /app/db /app/mcp-servers /home/node
+RUN mkdir -p \
+      /app/data/db \
+      /app/data/mcp-servers \
+      /app/data/workspaces/default-workspace/db \
+      /app/data/workspaces/default-workspace/mcp-servers \
+      /app/data/workspaces/default-workspace/userdata \
+      /app/data/workspaces/default-workspace/snapshots \
+      /app/data/workspaces/default-workspace/screenshots \
+      /app/data/workspaces/default-workspace/recordings \
+      /app/data/workspaces/default-workspace/browser-profile \
+      /app/data/workspaces/default-workspace/bash-utils \
+      /app/data/workspaces/default-workspace/artifacts \
+      /home/node/.npm \
+    && chown -R node:node /app/data /home/node
 
 USER node
 
-EXPOSE 4200
+# Port 4200: main HTTPS proxy
+# Port 4201: shared MCP Apps transport listener (`*.localhost` browser origins)
+EXPOSE 4200 4201
 
-# /api/cwd is a side-effect-free GET (returns the resolved paths), so it is a
-# safe readiness probe.
+# Worker readiness includes authenticated bootstrap/MCP status. Normal servers
+# keep the side-effect-free /api/cwd probe. Credentials stay inside process env.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=5 \
-    CMD curl -fsS http://127.0.0.1:4200/api/cwd || exit 1
+    CMD ["node", "scripts/healthcheck.mjs"]
 
 # Go through the launcher so the same TLS/CA handling as `npm start` applies.
 # -H 0.0.0.0 makes the server reachable from outside the container.

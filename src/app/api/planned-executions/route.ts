@@ -1,9 +1,12 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { ensureBackendInitialized } from '@/backend/init';
 import { json } from './_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/route');
 
@@ -12,15 +15,35 @@ const log = createLogger('app/api/planned-executions/route');
  * List all planned executions with live trigger status and last run.
  * Response: { paused, executions: [{ execution, status, lastRun }] }
  */
-export async function GET() {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
+    const scheduler = getSchedulerService();
+    // Inspect persisted targets before backend initialization: initialization
+    // may reconcile and arm triggers, which is itself a Persona control-plane
+    // action. Public callers retain the legacy list but never see or arm
+    // Persona-targeted work through this route.
+    const preflight = await scheduler.list();
+    const hasPersonaTargets = preflight.some(entry => (
+      isPersonaControlledPlannedExecution(entry.execution)
+    ));
+    if (hasPersonaTargets) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) {
+        const paused = await scheduler.isPaused();
+        return json({
+          paused,
+          executions: preflight.filter(entry => (
+            !isPersonaControlledPlannedExecution(entry.execution)
+          )),
+        }, 200);
+      }
+    }
     // Make sure the scheduler singleton is booted (idempotent) so the status
     // fields reflect reality even if this route is hit right after startup.
     await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
-    const scheduler = getSchedulerService();
     const [paused, executions] = await Promise.all([
       scheduler.isPaused(),
       scheduler.list(),
@@ -37,12 +60,16 @@ export async function GET() {
  * Create a planned execution. Body: PlannedExecution minus id/createdAt/updatedAt.
  * The bound flow is validated advisorily — the result is returned, not enforced.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
     const body = await request.json();
+    if (isPersonaControlledPlannedExecution(body)) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
     const result = await getSchedulerService().create(body);
     if (result.error || !result.execution) {
       // A client-supplied id that collides with an existing execution is a
@@ -63,7 +90,7 @@ export async function POST(request: NextRequest) {
  * PATCH /api/planned-executions
  * Global scheduler controls. Body: { paused: boolean }.
  */
-export async function PATCH(request: NextRequest) {
+async function PATCH_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -72,7 +99,13 @@ export async function PATCH(request: NextRequest) {
     if (typeof body?.paused !== 'boolean') {
       return json({ error: '"paused" (boolean) is required' }, 400);
     }
-    await getSchedulerService().setPaused(body.paused);
+    const scheduler = getSchedulerService();
+    const entries = await scheduler.list();
+    if (entries.some(entry => isPersonaControlledPlannedExecution(entry.execution))) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    await scheduler.setPaused(body.paused);
     return json({ paused: body.paused }, 200);
   } catch (error) {
     log.error('Error handling PATCH request', error);
@@ -95,3 +128,12 @@ async function validateFlowAdvisory(flowId: string) {
     return undefined;
   }
 }
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);
+export const PATCH = withWorkspaceRoute(PATCH_handler);

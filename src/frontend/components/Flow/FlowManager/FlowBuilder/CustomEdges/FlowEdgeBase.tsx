@@ -18,6 +18,7 @@ import {
 } from './orthogonalPath';
 import { BASE_ANIMATION_MS, BASE_ANIMATION_BOTH_MS, edgeSpeedFactor } from './edgeSpeed';
 import { EdgeCondition, formatConditionLabel } from '@/utils/shared/edgeConditions';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Fired when the user finishes a re-route gesture (bend drag, waypoint move,
 // or waypoint removal). The Canvas listens and commits the change through
@@ -77,6 +78,13 @@ const EdgePath = styled(BaseEdge)({
     strokeDasharray: 5,
     animation: `flowPathAnimation ${BASE_ANIMATION_BOTH_MS}ms infinite linear alternate`,
   },
+  '&&.debugger-before': {
+    strokeDasharray: '8 5',
+    animation: 'debuggerPathPulse 900ms infinite ease-in-out',
+  },
+  '&&.debugger-after': {
+    animation: 'debuggerPathSettle 900ms 1 ease-out',
+  },
   '@keyframes flowPathAnimation': {
     '0%': {
       strokeDashoffset: 10,
@@ -84,7 +92,15 @@ const EdgePath = styled(BaseEdge)({
     '100%': {
       strokeDashoffset: 0,
     },
-  }
+  },
+  '@keyframes debuggerPathPulse': {
+    '0%, 100%': { strokeOpacity: 0.72, strokeDashoffset: 13 },
+    '50%': { strokeOpacity: 1, strokeDashoffset: 0 },
+  },
+  '@keyframes debuggerPathSettle': {
+    '0%': { strokeOpacity: 0.45 },
+    '100%': { strokeOpacity: 1 },
+  },
 });
 
 interface FlowEdgeBaseProps extends EdgeProps {
@@ -128,6 +144,10 @@ interface DragState {
 const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   variant,
   id,
+  source,
+  target,
+  sourceHandleId,
+  targetHandleId,
   sourceX,
   sourceY,
   targetX,
@@ -141,7 +161,8 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   selected
 }) => {
   const theme = useTheme();
-  const { deleteElements, screenToFlowPosition } = useReactFlow();
+  const { t } = useI18n();
+  const { deleteElements, screenToFlowPosition, getNode } = useReactFlow();
 
   const [hovered, setHovered] = useState(false);
   // Waypoints being edited right now — rendered live, committed on release.
@@ -152,12 +173,49 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   const suppressClickRef = useRef(false);
 
   const edgeData = data as
-    | { waypoints?: Point[]; waypoint?: Point; bidirectional?: boolean; animated?: boolean; condition?: EdgeCondition }
+    | {
+        waypoints?: Point[];
+        waypoint?: Point;
+        bidirectional?: boolean;
+        animated?: boolean;
+        condition?: EdgeCondition;
+        debuggerActivity?: { phase: 'before' | 'after'; operation: string };
+      }
     | undefined;
+  const debuggerActivity = edgeData?.debuggerActivity;
   // A conditional (Tier 2b) flow-control edge shows a small badge so branching
   // is legible on the canvas. Only standard edges carry routing conditions.
-  const conditionLabel =
-    variant === 'standard' && edgeData?.condition ? formatConditionLabel(edgeData.condition) : '';
+  const conditionLabel = variant === 'standard' && edgeData?.condition
+    ? formatConditionLabel(edgeData.condition, {
+        contains: t('flows.edge.condition.contains'),
+        regex: t('flows.edge.condition.regex'),
+        equals: t('flows.edge.condition.equals'),
+        always: t('flows.edge.condition.always'),
+      })
+    : '';
+  // Resource (data-flow) edges are directional: resource → process means the
+  // step CONSUMES the artifact; process → resource means it PRODUCES it. Show
+  // that role as a small badge so data-flow direction is legible on the canvas
+  // (issue #223). Prefer the endpoint node types (authoritative, mirrors
+  // FlowConverter's consume/produce folding); fall back to the handle ids when
+  // a node lookup is momentarily unavailable during a live drag. A process
+  // resource handle is the only one carrying both 'process' and 'resource'.
+  const isProcessResourceHandle = (h?: string | null): boolean =>
+    !!h && h.includes('process') && h.includes('resource');
+  let resourceRole: 'consume' | 'produce' | '' = '';
+  if (variant === 'resource') {
+    const srcType = getNode(source)?.type;
+    const tgtType = getNode(target)?.type;
+    if (srcType === 'resource' && tgtType === 'process') {
+      resourceRole = 'consume';
+    } else if (srcType === 'process' && tgtType === 'resource') {
+      resourceRole = 'produce';
+    } else if (isProcessResourceHandle(sourceHandleId)) {
+      resourceRole = 'produce';
+    } else if (isProcessResourceHandle(targetHandleId)) {
+      resourceRole = 'consume';
+    }
+  }
   // (data.waypoint is the single-waypoint shape from the first iteration of
   // this feature — treat it as a one-entry array.)
   const storedWaypoints = edgeData?.waypoints ?? (edgeData?.waypoint ? [edgeData.waypoint] : []);
@@ -200,27 +258,42 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     controlsPoint = { x: labelX, y: labelY };
   }
 
-  const animationClass = sideways
+  const baseAnimationClass = sideways
     ? ''
     : bidirectional
       ? 'animated-both'
       : edgeData?.animated !== false
         ? 'animated'
         : '';
+  const animationClass = [
+    baseAnimationClass,
+    debuggerActivity ? `debugger-${debuggerActivity.phase}` : '',
+  ].filter(Boolean).join(' ');
+  const debuggerColor = debuggerActivity?.phase === 'before'
+    ? theme.palette.warning.main
+    : debuggerActivity?.phase === 'after'
+      ? theme.palette.success.main
+      : undefined;
 
   const edgeStyle = {
     ...style,
-    strokeWidth: selected ? 3 : 2,
-    stroke: variant === 'mcp'
+    strokeWidth: debuggerActivity ? 4 : selected ? 3 : 2,
+    stroke: debuggerColor ?? (variant === 'mcp'
       ? (selected ? theme.palette.info.light : theme.palette.info.main)
       : variant === 'resource'
       ? (selected ? RESOURCE_EDGE_COLOR_SELECTED : RESOURCE_EDGE_COLOR)
-      : (selected ? theme.palette.primary.main : theme.palette.text.secondary),
+      : (selected ? theme.palette.primary.main : theme.palette.text.secondary)),
+    ...(debuggerColor ? { filter: `drop-shadow(0 0 5px ${debuggerColor})` } : {}),
+    // A static dash marks resource (data-flow) wiring so it reads differently
+    // from solid MCP tool wiring and animated control edges even for
+    // color-vision-deficient users (issue #223). Applied in the renderer only
+    // — the persisted edge shape stays untouched, so saved flows never change.
+    ...(variant === 'resource' ? { strokeDasharray: '6 4' } : {}),
     // Give each animated edge a slightly different (deterministic) speed so
     // overlapping siblings on the same handle drift out of phase. Inline
     // animation-duration (a longhand) overrides the `animation` shorthand from
     // the styled class, leaving keyframes/dash/direction untouched.
-    ...(animationClass
+    ...(baseAnimationClass && !debuggerActivity
       ? {
           animationDuration: `${Math.round(
             (bidirectional ? BASE_ANIMATION_BOTH_MS : BASE_ANIMATION_MS) * edgeSpeedFactor(id)
@@ -358,9 +431,37 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
               zIndex: 1002,
             }}
             className="nodrag nopan"
-            title={`Routing condition: ${conditionLabel}`}
+            title={t('flows.edge.routingCondition', { condition: conditionLabel })}
           >
             {conditionLabel}
+          </div>
+        )}
+        {/* Consume/produce badge on a resource (data-flow) edge so the
+            direction of data flow is legible on the canvas (issue #223).
+            Non-interactive and offset above the path midpoint, matching the
+            condition badge; teal to tie it to the resource-edge stroke. */}
+        {resourceRole && (
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${controlsPoint.x}px,${controlsPoint.y - 18}px)`,
+              pointerEvents: 'none',
+              background: selected ? RESOURCE_EDGE_COLOR_SELECTED : RESOURCE_EDGE_COLOR,
+              color: '#ffffff',
+              borderRadius: 4,
+              padding: '1px 6px',
+              fontSize: 10,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              boxShadow: theme.shadows[1],
+              zIndex: 1002,
+            }}
+            className="nodrag nopan"
+            title={resourceRole === 'consume'
+              ? t('flows.edge.consumeHelp')
+              : t('flows.edge.produceHelp')}
+          >
+            {resourceRole === 'consume' ? t('flows.edge.consume') : t('flows.edge.produce')}
           </div>
         )}
         {/* Waypoint dots — on the path, drag to move, double-click to remove */}
@@ -382,7 +483,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
               zIndex: 1001,
             }}
             className="nodrag nopan"
-            title="Drag to move; double-click to remove this bend"
+            title={t('flows.edge.bendHelp')}
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
             onPointerDown={onDotPointerDown(i)}
@@ -412,7 +513,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
           onMouseLeave={() => setHovered(false)}
         >
           <EdgeButton
-            title="Delete connection (drag to re-route)"
+            title={t('flows.edge.deleteHelp')}
             style={{ touchAction: 'none' }}
             onPointerDown={onPathPointerDown}
             onPointerMove={onDragPointerMove}

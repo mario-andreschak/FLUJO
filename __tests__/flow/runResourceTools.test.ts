@@ -12,14 +12,16 @@
 
 const writeRunResourceMock = jest.fn();
 const readRunResourceMock = jest.fn();
+const getRunResourceLocalPathMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
   readRunResource: (...args: unknown[]) => readRunResourceMock(...args),
+  getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPathMock(...args),
   parseRunResourceUri: (uri: unknown) => {
     const SCHEME = 'flujo://run/';
     if (typeof uri !== 'string' || !uri.startsWith(SCHEME)) return null;
     const parts = uri.slice(SCHEME.length).split('/');
-    if (parts.length !== 2) return null;
+    if (parts.length !== 2 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))) return null;
     return { conversationId: parts[0], id: parts[1] };
   },
 }));
@@ -55,6 +57,8 @@ const written = {
 beforeEach(() => {
   writeRunResourceMock.mockReset();
   writeRunResourceMock.mockResolvedValue(written);
+  getRunResourceLocalPathMock.mockReset();
+  getRunResourceLocalPathMock.mockResolvedValue(null);
 });
 
 describe('buildRunResourceTools', () => {
@@ -90,6 +94,9 @@ describe('buildReadResourceTool (#168)', () => {
     expect(a).toEqual(b); // no per-run interpolation → prefix-cache stable
     expect(a.name).toBe(READ_RESOURCE_TOOL_NAME);
     expect(a.inputSchema).toMatchObject({ required: ['uri'] });
+    expect(a.description?.length).toBeLessThan(300);
+    expect(a.description).toContain('flujo://run/');
+    expect(a.description).toContain('native MCP');
   });
 });
 
@@ -122,9 +129,39 @@ describe('read_resource execution (#168)', () => {
     expect(outcome).toMatchObject({ success: true, data: { uri, content: 'FULL CONTENT' } });
   });
 
+  it('returns a validated localPath for binary resources', async () => {
+    const localPath = 'C:\\data\\run-resources\\conv-1\\res-9.dat';
+    readRunResourceMock.mockResolvedValue({
+      entry: { uri, name: 'clip', mimeType: 'video/mp4', size: 42, kind: 'blob' },
+      contents: { contents: [{ uri, mimeType: 'video/mp4', blob: 'AAAA' }] },
+    });
+    getRunResourceLocalPathMock.mockResolvedValue(localPath);
+
+    const outcome = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId: 'conv-1', node },
+    );
+
+    expect(getRunResourceLocalPathMock).toHaveBeenCalledWith(uri);
+    expect(outcome).toMatchObject({ success: true, data: { uri, localPath } });
+  });
+
   it('rejects a non-run URI', async () => {
     const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri: 'http://example.com' }, { conversationId: 'conv-1' });
     expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('reserves malformed flujo://run URIs for the internal resolver', async () => {
+    const malformed = 'flujo://run/conv-1/../escape';
+    const outcome = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri: malformed },
+      { conversationId: 'conv-1', mcpNodes: [{ id: 'mcp-1', properties: {} }] },
+    );
+
+    expect(outcome).toEqual({ success: false, error: `Invalid run-resource URI: ${malformed}` });
     expect(readRunResourceMock).not.toHaveBeenCalled();
   });
 

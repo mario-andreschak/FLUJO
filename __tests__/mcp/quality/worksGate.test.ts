@@ -87,4 +87,28 @@ describe('works-gate', () => {
     // one for the dead (rejected) attempt, one for the good (installed) attempt.
     expect(onAttempt).toHaveBeenCalledTimes(2);
   });
+
+  it('resolves the exact plan and runs beforeAttempt before any server execution', async () => {
+    const beforeAttempt = jest.fn(async () => false);
+    const res = await installBestForCapability('anything', undefined, { beforeAttempt });
+
+    expect(res.installed).toBe(false);
+    expect(beforeAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      registryName: 'io.x/dead',
+      command: 'npx',
+    }));
+    expect(mockUpdateServerConfig).not.toHaveBeenCalled();
+    expect(res.attempts?.[0]).toEqual(expect.objectContaining({ reason: 'blocked before execution' }));
+  });
+
+  it('refuses execution when the freshly resolved plan differs from the audited plan', async () => {
+    const preview = await installRegistryServer('io.x/good', undefined, { resolveOnly: true });
+    const changedPlan = { ...preview.plan!, command: 'different-command' };
+
+    const res = await installRegistryServer('io.x/good', undefined, { expectedPlan: changedPlan });
+
+    expect(res.installed).toBe(false);
+    expect(res.error).toContain('changed after it was reviewed and audited');
+    expect(mockUpdateServerConfig).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getExposureMode, type ExposureMode } from './exposureMode';
 
 /**
  * Localhost / DNS-rebinding origin guard for local-only `/api/*` routes (#131).
@@ -31,21 +32,22 @@ import { NextResponse } from 'next/server';
  * a no-op while the app is unlocked and does NOT stop cross-origin drive-by
  * requests.
  *
- * HOSTED POSTURE (`FLUJO_EXTRA_LOCAL_HOSTS`, #155): when FLUJO runs behind a trusted
- * reverse proxy on a private network (e.g. one tenant microVM per customer,
- * reached only by an authenticating control plane over an internal DNS name),
- * the localhost-only Host check would 403 every request the proxy forwards.
- * Deployments may opt in to additional trusted hostnames via the
- * `FLUJO_EXTRA_LOCAL_HOSTS` env var: a comma-separated list where each entry is
- * either an exact hostname (`my-host`) or, when it starts with a dot, a domain
- * suffix (`.vm.my-tenants.internal`). Entries extend what counts as "local" for
- * BOTH the Host and the Origin hostname — so the rebinding rule is preserved
- * exactly (an attacker page's Origin still never matches). Unset (the default,
- * i.e. every standalone install) this changes nothing: localhost-family only.
- * Only set it when nothing untrusted can reach FLUJO's port at those names.
+ * NETWORK EXPOSURE: Settings has one three-state control. `localhost` keeps the
+ * original loopback-only posture; `network` additionally accepts private/link-
+ * local addresses and this machine's startup-discovered hostnames; `public`
+ * accepts any syntactically valid Host but still requires browser Origins to
+ * match that Host. The matching-Origin rule keeps public mode from turning the
+ * guard into a cross-site request forgery bypass.
+ *
+ * `FLUJO_EXTRA_LOCAL_HOSTS` remains a read-only compatibility input for old
+ * hosted deployments. It is no longer part of the documented configuration.
  */
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, '');
+}
 
 /** Parse `FLUJO_EXTRA_LOCAL_HOSTS` (see module doc). Read per call — it is a
  *  cheap split, and lazy reads keep the guard testable and Edge-safe. */
@@ -58,25 +60,89 @@ function extraLocalHosts(): string[] {
     .filter((e) => e.length > 0 && e !== '.');
 }
 
-/** Whether `hostname` (already bare, no port) is localhost-family or matches an
- *  opted-in `FLUJO_EXTRA_LOCAL_HOSTS` entry (exact, or dot-prefixed suffix). */
-function isTrustedHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (LOCAL_HOSTS.has(h)) return true;
+function runtimeLocalHosts(): string[] {
+  const raw = process.env.FLUJO_RUNTIME_LOCAL_HOSTS;
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split('.');
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) return false;
+  const octets = parts.map(Number);
+  if (octets.some((part) => part < 0 || part > 255)) return false;
+  const [a, b] = octets;
+  return a === 10
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 169 && b === 254);
+}
+
+function isPrivateIpv6(hostname: string): boolean {
+  // A DNS name such as fc.example must never inherit an IP address's trust.
+  // URL validates and canonicalizes bracketed IPv6 without a Node-only import,
+  // keeping this helper usable by both the request proxy and route handlers.
+  if (!hostname.includes(':')) return false;
+  try {
+    const literal = new URL(`http://[${hostname}]/`).hostname.slice(1, -1);
+    const firstHextet = Number.parseInt(literal.split(':')[0], 16);
+    return (firstHextet & 0xfe00) === 0xfc00 // unique-local fc00::/7
+      || (firstHextet & 0xffc0) === 0xfe80; // link-local fe80::/10
+  } catch {
+    return false;
+  }
+}
+
+function matchesLegacyHost(hostname: string): boolean {
   return extraLocalHosts().some((entry) =>
-    entry.startsWith('.') ? h.endsWith(entry) : h === entry,
+    entry.startsWith('.') ? hostname.endsWith(entry) : hostname === entry,
   );
+}
+
+function usesLegacyHostPolicy(): boolean {
+  return process.env.FLUJO_EXPOSURE_MODE_SOURCE === 'legacy'
+    || (!process.env.FLUJO_EXPOSURE_MODE && extraLocalHosts().length > 0);
+}
+
+function isNetworkHostname(hostname: string): boolean {
+  return isPrivateIpv4(hostname)
+    || isPrivateIpv6(hostname)
+    || runtimeLocalHosts().includes(hostname)
+    || ['.local', '.lan', '.home', '.internal', '.localdomain'].some((suffix) =>
+      hostname.endsWith(suffix),
+    );
+}
+
+/** Whether a bare hostname is allowed by the active exposure mode. */
+function isTrustedHostname(hostname: string, mode: ExposureMode): boolean {
+  const h = normalizeHostname(hostname);
+  if (LOCAL_HOSTS.has(h)) return true;
+  if (mode === 'public') return /^[a-z0-9._-]+$/i.test(h) || h.includes(':');
+  if (mode === 'network') {
+    return usesLegacyHostPolicy() ? matchesLegacyHost(h) : isNetworkHostname(h);
+  }
+  // Preserve old hosted installs until they save the new setting.
+  return usesLegacyHostPolicy() && matchesLegacyHost(h);
 }
 
 /** Extract the bare hostname from a Host header value (strips port; handles IPv6 brackets). */
 function hostnameOf(hostHeader: string | null): string | null {
   if (!hostHeader) return null;
   const h = hostHeader.trim();
+  if (h === '::1') return h;
   if (h.startsWith('[')) {
-    const end = h.indexOf(']');
-    return end > 0 ? h.slice(1, end) : null;
+    const match = /^\[([^\]]+)\](?::(\d{1,5}))?$/.exec(h);
+    if (!match) return null;
+    if (match[2] && Number(match[2]) > 65_535) return null;
+    return match[1];
   }
-  return h.split(':')[0] || null;
+  const match = /^([^:@\s]+)(?::(\d{1,5}))?$/.exec(h);
+  if (!match) return null;
+  if (match[2] && Number(match[2]) > 65_535) return null;
+  return match[1] || null;
 }
 
 /**
@@ -87,16 +153,104 @@ function hostnameOf(hostHeader: string | null): string | null {
  * present.
  */
 export function isLocalRequest(host: string | null, origin: string | null): boolean {
+  const mode = getExposureMode();
   const h = hostnameOf(host);
-  if (!h || !isTrustedHostname(h)) return false;
+  if (!h || !isTrustedHostname(h, mode)) return false;
   if (origin) {
     try {
-      if (!isTrustedHostname(new URL(origin).hostname)) return false;
+      const originHostname = normalizeHostname(new URL(origin).hostname);
+      if (!isTrustedHostname(originHostname, mode)) return false;
+      // Public mode trusts arbitrary hostnames for native clients, so browser
+      // requests must remain same-host (ports may differ for local tooling).
+      if (
+        (mode === 'public' || (mode === 'network' && !usesLegacyHostPolicy()))
+        && originHostname !== normalizeHostname(h)
+        && !(LOCAL_HOSTS.has(originHostname) && LOCAL_HOSTS.has(normalizeHostname(h)))
+      ) {
+        return false;
+      }
     } catch {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Strict loopback-only variant for trusted control-plane capabilities that are
+ * intentionally unavailable in network/public exposure modes. A missing
+ * Origin remains valid for native localhost clients; when present, Origin must
+ * also be loopback-family to retain the DNS-rebinding defense.
+ */
+export function isLoopbackRequest(host: string | null, origin: string | null): boolean {
+  const hostName = hostnameOf(host);
+  if (!hostName || !LOCAL_HOSTS.has(normalizeHostname(hostName))) return false;
+  if (!origin) return true;
+  try {
+    return LOCAL_HOSTS.has(normalizeHostname(new URL(origin).hostname));
+  } catch {
+    return false;
+  }
+}
+
+/** Loopback peer addresses that Next's self-injected `x-forwarded-for` carries
+ *  for a genuine local client (Windows reports IPv6-mapped forms). */
+function isLoopbackAddress(value: string): boolean {
+  const address = value.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  if (!address) return false;
+  if (address === '::1' || address === '::ffff:127.0.0.1' || address === 'localhost') return true;
+  return address.startsWith('127.');
+}
+
+/**
+ * Whether the request carries evidence of a REAL reverse proxy in front of FLUJO.
+ *
+ * The mere PRESENCE of an `x-forwarded-*` header proves nothing: Next's own
+ * server unconditionally synthesizes `x-forwarded-host`, `x-forwarded-port`,
+ * `x-forwarded-proto` and `x-forwarded-for` for EVERY request before a handler
+ * ever sees it (`next/dist/server/base-server.js`, "Update the `x-forwarded-*`
+ * headers"). Treating presence as proof therefore denied EVERY strict-loopback
+ * request under a real server — silently disabling the whole Persona control
+ * plane — while unit tests that hand-build `NextRequest`s still passed.
+ *
+ * So compare the values against what a direct local connection must look like:
+ *   - `forwarded` / `x-real-ip` are never synthesized by Next => presence is proof;
+ *   - `x-forwarded-host` mirrors Host => a DIFFERENT value means a proxy rewrote it;
+ *   - `x-forwarded-for` mirrors the socket peer => any non-loopback hop, or a
+ *     multi-hop chain, means the peer is not a local client;
+ *   - `x-forwarded-proto` is `http` for FLUJO's local listener => `https`
+ *     indicates a TLS-terminating proxy.
+ */
+function hasUntrustedForwarding(request: Request): boolean {
+  if (request.headers.get('forwarded') !== null) return true;
+  if (request.headers.get('x-real-ip') !== null) return true;
+
+  const host = request.headers.get('host');
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  if (
+    forwardedHost !== null
+    && (!host || forwardedHost.trim().toLowerCase() !== host.trim().toLowerCase())
+  ) {
+    return true;
+  }
+
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor !== null) {
+    const hops = forwardedFor.split(',').map(hop => hop.trim()).filter(Boolean);
+    if (hops.length > 1) return true;
+    if (hops.some(hop => !isLoopbackAddress(hop))) return true;
+  }
+
+  const forwardedProto = request.headers.get('x-forwarded-proto');
+  if (forwardedProto !== null && forwardedProto.trim().toLowerCase() !== 'http') return true;
+
+  return false;
+}
+
+/** Host-only half of the exposure policy for intentionally public routes. */
+export function isRequestHostAllowed(host: string | null): boolean {
+  const hostname = hostnameOf(host);
+  return Boolean(hostname && isTrustedHostname(hostname, getExposureMode()));
 }
 
 /** 403 for a cross-origin / DNS-rebinding attempt on a local-only route. */
@@ -117,8 +271,21 @@ export function nonLocalResponse(): NextResponse {
  *
  * Reads only Host/Origin headers, so it works on both `NextRequest` and `Request`.
  */
-export function assertLocalRequest(request: Request): NextResponse | null {
-  if (!isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
+export function assertLocalRequest(
+  request: Request,
+  options: { strictLoopback?: boolean } = {},
+): NextResponse | null {
+  const hasForwardingHeaders = hasUntrustedForwarding(request);
+  const allowed = options.strictLoopback
+    // Host and Origin are client-controlled headers. They become a meaningful
+    // local trust boundary only while FLUJO's launcher has selected localhost
+    // exposure and bound Next to 127.0.0.1. In network/public mode a remote
+    // native client could otherwise spoof `Host: localhost`.
+    ? !hasForwardingHeaders
+      && getExposureMode() === 'localhost'
+      && isLoopbackRequest(request.headers.get('host'), request.headers.get('origin'))
+    : isLocalRequest(request.headers.get('host'), request.headers.get('origin'));
+  if (!allowed) {
     return nonLocalResponse();
   }
   return null;

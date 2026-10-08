@@ -1,46 +1,127 @@
+import { applyExecutionRunInput, validateExecutionExtensionRun, validateExecutionLoadedState,
+  installExecutionExtensionContext, assertExecutionStateAccess, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
-import { reconcileConversationLog, recoverMessagesFromLog } from '@/backend/execution/flow/conversationLog';
+import {
+  forget as forgetConversationCacheEntry,
+  markTerminal as markConversationTerminal,
+  noteWrite as noteConversationWrite,
+} from '@/backend/execution/flow/conversationStateCache';
+import {
+  ownerScopeForRun,
+  releaseRunOwnedBashSessions,
+} from '@/backend/services/mcp/ownerScope';
+import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
+import {
+  steeringCount,
+  takeSteeringMessages,
+  requeueSteeringMessages,
+} from '@/backend/execution/flow/steeringInbox';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
-import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import { assertFlowExecutionCurrent } from '@/backend/execution/flow/executionAuthority';
+import { EmitFn, type RecoveryLaneIdentity, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import {
   SharedState,
+  type DebugBoundary,
+  type FlowInvocationSource,
+  isFlowInvocationSource,
+  isUnattendedFlowInvocation,
   TOOL_CALL_ACTION,
   FINAL_RESPONSE_ACTION,
   ERROR_ACTION,
   STAY_ON_NODE_ACTION,
   ErrorDetails,
 } from '@/backend/execution/flow/types';
+import cloneDeep from 'lodash/cloneDeep';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { waitForActiveSubflows, resumeSubflowOrchestrator } from './subflowCommunication';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
-import type { FlowService as FlowServiceType } from '@/backend/services/flow/index';
-import { Flow } from '@/shared/types/flow';
+import { Flow, normalizeBehaviorRulesInput } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
 import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
-import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
+import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
+import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
+import { isMeetingTurnSilent } from '@/backend/execution/flow/handlers/meetingTools';
+import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
+import { statisticsRevisionId } from '@/backend/services/statistics/metadata';
+import {
+  classifyRecoveryFailure,
+  commitRecoveryCheckpoint,
+  commitRecoveryTransition,
+  commitToolCheckpoint,
+  initializeRecovery,
+  markDanglingToolEffectsUnknown,
+  reconcileInterruptedRecovery,
+} from '@/backend/execution/flow/recoveryCheckpoint';
+import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
+import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
+import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
+import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
+import {
+  FlowSnapshotSchema,
+  PersonaInstructionContextSchema,
+  type PersonaAttribution,
+  type PersonaInstructionContext,
+} from '@/shared/types/enduringAgent';
+import { behaviorFlowMatchesContentHash } from '@/backend/services/enduringAgents/behaviorRevisions';
+import {
+  ATTACH_BREAKPOINT,
+  matchToolBreakpoint,
+  nodeBreakpoints,
+} from '@/utils/shared/debugBreakpoints';
+import {
+  applyToolRepeatGuard,
+  TOOL_REPEAT_TEMPERATURE,
+} from '@/backend/execution/flow/toolRepeatGuard';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
-// --- Add getFlowByName to flowService if it doesn't exist ---
-// (Moved here from chatCompletionService: flow-name resolution now lives in the
-// keystone, since the OpenAI route is a thin adapter on top of runFlow.)
-if (!(flowService as any).getFlowByName) {
-  (flowService as any).getFlowByName = async (name: string): Promise<Flow | null> => {
-    const flows = await flowService.loadFlows();
-    return flows.find(flow => flow.name === name) || null;
-  };
-  log.info('Added getFlowByName method directly to flowService instance.');
+const isHandoffToolCall = (call: OpenAI.ChatCompletionMessageFunctionToolCall): boolean =>
+  call.function.name === 'handoff' || call.function.name.startsWith('handoff_to_');
+
+/** Find the assistant batch which owns a staged handoff. Tool/approval results
+ * may already follow it, so callers must not assume it is the last message. */
+function findStagedHandoffAssistant(state: SharedState): FlujoChatMessage | undefined {
+  return [...state.messages].reverse().find((message) =>
+    message.role === 'assistant'
+    && requireFunctionToolCalls(message.tool_calls).some(isHandoffToolCall),
+  );
 }
-const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByName: (name: string) => Promise<Flow | null> };
+
+function unansweredOrdinaryCalls(
+  state: SharedState,
+  assistant: FlujoChatMessage,
+): OpenAI.ChatCompletionMessageFunctionToolCall[] {
+  const answeredIds = new Set(
+    state.messages
+      .filter((message) => message.role === 'tool' && !!(message as { tool_call_id?: string }).tool_call_id)
+      .map((message) => (message as { tool_call_id: string }).tool_call_id),
+  );
+  return requireFunctionToolCalls(assistant.tool_calls).filter(
+    (call) => !isHandoffToolCall(call) && !answeredIds.has(call.id),
+  );
+}
 
 // Persist conversation state WITHOUT the in-memory-only debug execution trace.
 const persistState = persistConversationState;
@@ -48,33 +129,58 @@ const persistState = persistConversationState;
 /** Cap the output carried on a runFlow-originated FlowRunEvent (issue #116). */
 const MAX_EVENT_OUTPUT_CHARS = 4096;
 
+function instructionContextsEqual(
+  left: PersonaInstructionContext,
+  right: PersonaInstructionContext,
+): boolean {
+  return left.schemaVersion === right.schemaVersion
+    && left.personaId === right.personaId
+    && left.activityId === right.activityId
+    && left.behaviorRevisionId === right.behaviorRevisionId
+    && left.behaviorContentHash === right.behaviorContentHash
+    && left.behaviorSlotKey === right.behaviorSlotKey
+    && left.rootFlowId === right.rootFlowId
+    && left.roleVersionId === right.roleVersionId
+    && left.personaName === right.personaName
+    && left.personaMission === right.personaMission
+    && left.roleName === right.roleName
+    && left.roleMission === right.roleMission
+    && left.instruction === right.instruction;
+}
+
+function assertInstructionContextAttribution(
+  context: PersonaInstructionContext,
+  attribution: PersonaAttribution | undefined,
+  label: string,
+): void {
+  if (
+    !attribution
+    || context.personaId !== attribution.personaId
+    || context.activityId !== attribution.activityId
+    || context.behaviorRevisionId !== attribution.behaviorRevisionId
+  ) {
+    throw new Error(`${label} Persona instruction context does not match its attribution triple.`);
+  }
+}
+
+function assertBehaviorSnapshotMatchesInstructionContext(
+  flow: Flow,
+  context: PersonaInstructionContext,
+  label: string,
+): void {
+  if (flow.id !== context.rootFlowId) {
+    throw new Error(`${label} Behavior snapshot does not match the Persona instruction root Flow.`);
+  }
+  if (!behaviorFlowMatchesContentHash(flow, context.behaviorContentHash)) {
+    throw new Error(`${label} Behavior snapshot does not match the attributed immutable revision.`);
+  }
+}
+
 /** Unattended mode (issue #218): how many times to re-prompt a Process node
  *  that ended on plain text but has MORE THAN ONE forward successor (so the
  *  engine can't pick deterministically) before giving up and completing the
  *  run. The single-forward-successor case never nudges — it auto-advances. */
 const UNATTENDED_MAX_NUDGES = 1;
-
-/**
- * Resolve whether this run is UNATTENDED (issue #218), memoized on the state.
- * Precedence: the flow's explicit `unattended` flag, else a source default —
- * scheduled/headless runs default ON (no human to nudge them past a stall),
- * interactive chat defaults OFF (a plain-text answer legitimately waits for the
- * user). A flow load failure falls back to the source default. Never throws.
- */
-async function resolveUnattended(state: SharedState): Promise<boolean> {
-  if (typeof state.unattended === 'boolean') return state.unattended;
-  let flag: boolean | undefined;
-  try {
-    const flow = state.flowSnapshot
-      ?? (state.flowId ? (await flowService.getFlow(state.flowId)) ?? undefined : undefined);
-    flag = flow?.unattended;
-  } catch (err) {
-    log.debug('resolveUnattended: flow load failed; using source default', { err });
-  }
-  const resolved = typeof flag === 'boolean' ? flag : state.source === 'schedule';
-  state.unattended = resolved;
-  return resolved;
-}
 
 type UnattendedOutcome = 'advanced' | 'nudged' | 'complete';
 
@@ -91,16 +197,17 @@ type UnattendedOutcome = 'advanced' | 'nudged' | 'complete';
  *     model to hand off, bounded by UNATTENDED_MAX_NUDGES, then complete;
  *   - ZERO (a genuine leaf, e.g. a simple answer flow)       -> complete as
  *     today.
- * "Forward" excludes bidirectional back-edges (they return to a caller rather
- * than progress toward a finish) and MCP edges. Only Process nodes are driven;
- * a Finish node reaching FINAL_RESPONSE_ACTION completes normally.
+ * "Forward" excludes explicit bidirectional back-edges AND one-way terminal
+ * Subflows (both return to their caller rather than progress toward a finish),
+ * plus MCP/resource attachments. Only Process nodes are driven; a Finish node
+ * reaching FINAL_RESPONSE_ACTION completes normally.
  */
 async function unattendedDriveForward(
   state: SharedState,
   emit: EmitFn,
   nudges: Map<string, number>,
 ): Promise<UnattendedOutcome> {
-  if (!(await resolveUnattended(state))) return 'complete';
+  if (!state.unattended) return 'complete';
 
   const nodeId = state.currentNodeId;
   if (!nodeId) return 'complete';
@@ -120,20 +227,46 @@ async function unattendedDriveForward(
   // reaching here means the flow genuinely ended — complete normally.
   if (!node || node.type !== 'process') return 'complete';
 
-  const mcpNodeIds = new Set((flow.nodes ?? []).filter(n => n.type === 'mcp').map(n => n.id));
+  const flowNodes = flow.nodes ?? [];
+  const flowEdges = flow.edges ?? [];
+  const mcpNodeIds = new Set(flowNodes.filter(n => n.type === 'mcp').map(n => n.id));
+
+  // Mirror FlowConverter's control-successor rules. A Subflow has an explicit
+  // onward path when it authors a non-attachment outgoing edge, or when a
+  // bidirectional edge pointing at it supplies a reverse successor. Without
+  // either, Process -> Subflow is an implicit call/return and must not be
+  // mistaken for unattended forward progress.
+  const hasRuntimeControlSuccessor = (subflowId: string): boolean =>
+    flowEdges.some((edge) => {
+      const data = edge.data as { edgeType?: string; bidirectional?: boolean } | undefined;
+      const attachment =
+        edge.type === 'mcpEdge' ||
+        data?.edgeType === 'mcp' ||
+        data?.edgeType === 'resource';
+      if (attachment) return false;
+      return edge.source === subflowId || (edge.target === subflowId && data?.bidirectional === true);
+    });
+
+  const isImplicitReturningSubflow = (targetId: string): boolean => {
+    const target = flowNodes.find(candidate => candidate.id === targetId);
+    return target?.type === 'subflow' && !hasRuntimeControlSuccessor(targetId);
+  };
+
   const forwardTargets = Array.from(
     new Set(
-      (flow.edges ?? [])
+      flowEdges
         .filter(e =>
           e.source === nodeId &&
           e.type !== 'mcpEdge' &&
           (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.edgeType !== 'mcp' &&
+          (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.edgeType !== 'resource' &&
           (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.bidirectional !== true &&
-          !mcpNodeIds.has(e.target),
+          !mcpNodeIds.has(e.target) &&
+          !isImplicitReturningSubflow(e.target),
         )
         .map(e => e.target),
     ),
-  ).filter(t => (flow!.nodes ?? []).some(n => n.id === t));
+  ).filter(t => flowNodes.some(n => n.id === t));
 
   if (forwardTargets.length === 1) {
     const nextNodeId = forwardTargets[0];
@@ -197,18 +330,25 @@ async function publishRunFlowEvent(
     if (!flowId) {
       return;
     }
-    let flowName: string | undefined;
-    try {
-      flowName = (await flowService.getFlow(flowId))?.name ?? undefined;
-    } catch {
-      /* best-effort name resolution */
+    let flowName: string | undefined = state.flowSnapshot?.name;
+    if (!state.flowSnapshot) {
+      try {
+        flowName = (await flowService.getFlow(flowId))?.name ?? undefined;
+      } catch {
+        /* best-effort name resolution */
+      }
     }
-    // 'schedule' is filtered out before this is ever called.
-    const firedBy: FlowRunFiredBy = state.source === 'api' ? 'api' : 'chat';
+    // Scheduled/triggered runs are filtered out before this is ever called.
+    const firedBy: FlowRunFiredBy = state.source === 'chat' ? 'chat' : 'api';
     const trimmed =
       outputText && outputText.length > MAX_EVENT_OUTPUT_CHARS
         ? `${outputText.slice(0, MAX_EVENT_OUTPUT_CHARS)}…`
         : outputText;
+    // Flow-name resolution can cross an arbitrary I/O boundary. Check the
+    // Activity lease / meeting generation only after it completes and directly
+    // before the process-visible publication. Authority loss is caught by this
+    // best-effort helper, suppressing the stale event without rejecting runFlow.
+    await assertFlowExecutionCurrent(state);
     getFlowRunEventBus().publish({
       flowId,
       flowName,
@@ -226,7 +366,7 @@ async function publishRunFlowEvent(
   }
 }
 
-export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | 'paused_debug' | 'running';
+export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | 'paused_debug' | 'running' | 'capped';
 
 /**
  * The "flow-as-callable" keystone input. One operation — run a flow with a
@@ -235,6 +375,7 @@ export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | '
  * (deferred) flows-as-MCP-tools (#17B).
  */
 export interface FlowRunInput {
+  executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   /** Resolved flow id. Provide this OR `modelName`. */
   flowId?: string;
   /** OpenAI-style model string ("flow-<name>"); resolved to a flowId for a NEW
@@ -245,14 +386,25 @@ export interface FlowRunInput {
    *  run WITHOUT persisting it to the flows store. Mutually exclusive with
    *  `flowId`/`modelName`. For a NEW conversation it is snapshotted onto the
    *  state (`flowSnapshot`) so the engine resolves it from there and follow-up
-   *  turns/restarts work by construction. Ignored when resuming (the snapshot
-   *  is already on the loaded state). */
+   *  turns/restarts work by construction. Ordinarily ignored when resuming (the
+   *  snapshot is already on the loaded state). A validated Persona instruction
+   *  context is the narrow exception: a draft's first Activity or a successor
+   *  Activity installs its newly pinned immutable Behavior snapshot. */
   flowDefinition?: Flow;
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
-  messages?: any[];
+  messages?: FlowRunMessageInput[];
+  /** Latest future-turn context supplied by mounted MCP Apps. */
+  mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
+  /** Exact approved remote Skill identities selected for this user turn. */
+  mcpSkillSelections?: import('@/shared/types/mcp').McpSkillSelection[];
   /** Convenience: a single user message. Used when `messages` is absent. */
   prompt?: string;
+  /** Internal resumable-subflow continuation. For an EXISTING conversation,
+   *  append the supplied input as a new turn instead of replacing its saved
+   *  transcript, then re-enter the child flow from its Start node. Ignored for
+   *  a fresh conversation. */
+  resumeAsNewTurn?: boolean;
   /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
   processNodeId?: string;
   /** Named inputs seeded onto SharedState.variables (Tier 2c) at run start.
@@ -265,6 +417,9 @@ export interface FlowRunInput {
   mode?: 'ephemeral' | 'conversation';
   /** Required to resume/persist a conversation; a random id is used otherwise. */
   conversationId?: string;
+  /** Stable logical run id supplied by an orchestrator (the scheduler uses its
+   * existing RunRecord id). Approval/debug resumes recover it from SharedState. */
+  runId?: string;
   /** Sidebar title for a NEW persisted conversation (issue #156: spawn lanes
    *  are titled by their brief so parallel sub-agent runs are tellable apart).
    *  Ignored when resuming (the existing title wins) and for ephemeral runs. */
@@ -283,16 +438,20 @@ export interface FlowRunInput {
   /** Conversation id of the spawning run (subflows). Recorded on the child's
    *  SharedState so cancelling an ancestor stops this run too (issue #109). */
   parentRunId?: string;
+  /** Durable identity for a persisted parallel subflow lane (issue #355). */
+  lane?: RecoveryLaneIdentity;
   depth?: number;
 
-  /** Where this run originated (issue #113). Recorded on SharedState at run
-   *  start and surfaced read-only by GET /api/runs/active so a suspend-when-idle
-   *  orchestrator can tell scheduled runs apart from ad-hoc API/chat runs.
-   *  Optional/back-compat: omitted callers report an undefined source. */
-  source?: 'schedule' | 'chat' | 'api';
+  /** Explicit invocation context (issue #113/#339). Required at the runFlow
+   *  boundary so unattended behavior can never depend on an omitted default or
+   *  a persisted flow property. Chat/API are attended; schedule/trigger,
+   *  subflow, MCP, meeting-participant, and internal-tool execution are unattended. */
+  source: FlowInvocationSource;
   /** For scheduler-originated runs: the planned execution id that fired this
    *  run (issue #113). Only meaningful when `source === 'schedule'`. */
   plannedExecutionId?: string;
+  /** Display-name snapshot for scheduler-originated statistics. */
+  plannedExecutionName?: string;
   /** Event-chain depth of this run (issue #116/#117). Set by the scheduler from
    *  the firing trigger's chainDepth so a `signal` node mid-run stamps the right
    *  depth onto what it emits, and passed by SubflowNode so a child inherits the
@@ -305,20 +464,71 @@ export interface FlowRunInput {
    *  run as awaiting_tool_approval so it can be resumed via /api/approvals.
    *  Only consulted when `requireApproval` is true. Default 'auto'. */
   onApprovalRequired?: 'auto' | 'fail' | 'pause';
+  /** External owner cancellation (for example MeetingEngine). Runtime-only. */
+  abortSignal?: AbortSignal;
+
+  /**
+   * Runtime-only higher-level authority (Persona Activity lease/fence). It is
+   * asserted before model/tool dispatch and attributed conversation writes,
+   * and is never persisted or exposed to the model.
+   */
+  executionAuthority?: import('./types').FlowExecutionAuthority;
+
+  /**
+   * Trusted, capability-free Persona attribution. Persona-aware adapters set
+   * this only after claiming an Activity; arbitrary request bodies must never
+   * be forwarded here as authoritative attribution.
+   */
+  personaAttribution?: PersonaAttribution;
+
+  /**
+   * Dispatcher-only exact MCP config names projected into this top-level
+   * Persona Activity. Runtime-only; never serialized into a dispatch envelope
+   * or inherited by structural/Behavior subflows.
+   */
+  personaCoreAppRefs?: string[];
+
+  /**
+   * Dispatcher-only, capability-free Persona identity/mission instructions.
+   * This field is intentionally absent from serializable public input and from
+   * SubflowNode child inputs; runFlow persists it only after validating the
+   * exact attributed Activity and immutable Behavior root.
+   */
+  personaInstructionContext?: PersonaInstructionContext;
+
+  /**
+   * Dispatcher-authorized Behavior callables for this immutable Activity.
+   * Stored separately from graph Subflow mappings and never forwarded to child
+   * Behavior runs.
+   */
+  behaviorToolRegistry?: import('./handlers/behaviorToolInvocation').BehaviorToolRegistry;
+
+  /** MeetingEngine-only participant identity. Never forwarded to subflows. */
+  meetingParticipant?: SharedState['meetingParticipant'];
+  /** MeetingEngine-only fresh action buffer for this participant turn. */
+  meetingTurn?: SharedState['meetingTurn'];
 }
+
+export type FlowRunMessageInput = OpenAI.ChatCompletionMessageParam
+  & Partial<Pick<FlujoChatMessage, 'id' | 'timestamp' | 'processNodeId'>>
+  & { depth?: number };
 
 export interface FlowRunResult {
   status: FlowRunStatus;
   conversationId: string;
+  /** Metadata-only logical run identity, stable across approval/debug resume. */
+  runId: string;
   /** Final assistant content (the default "output"), post external-tool XML wrap. */
   outputText: string;
+  /** Provider-neutral media attached to the final assistant output. */
+  outputMedia?: ModelMediaPart[];
   /** Tool calls to surface in a tool-calls response (undefined when XML-wrapped). */
-  toolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+  toolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   /** Full transcript of THIS run. */
   messages: FlujoChatMessage[];
   /** Aggregated token/cost totals for the run. */
   usage?: UsageTotals;
-  pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+  pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   error?: { message: string; details?: ErrorDetails; statusCode: number };
   /** Set when flow resolution failed (the adapter maps this to a 400). */
   flowNotFound?: { name: string };
@@ -338,6 +548,217 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  input = applyExecutionRunInput(input);
+  await validateExecutionExtensionRun(input);
+  const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);
+  const registration = await registerCancellableRun({
+    runId: input.runId,
+    conversationId: input.conversationId,
+    signal: ownerSignal,
+  });
+  const registeredInput: FlowRunInput = {
+    ...input,
+    abortSignal: combineAbortSignals(ownerSignal, registration.signal),
+  };
+  try {
+    if (!registeredInput.conversationId) return runFlowUnlocked(registeredInput);
+    return await withConversationExecutionLock(
+      registeredInput.conversationId,
+      () => runFlowUnlocked(registeredInput),
+    );
+  } finally {
+    registration.release();
+  }
+}
+
+/**
+ * Install a successor Persona Activity's immutable Behavior as a fresh
+ * execution boundary. The conversation transcript and user-owned metadata
+ * survive, but no graph-derived capability, pending action, or resumable child
+ * state from the prior Activity may cross into the newly pinned revision.
+ */
+function normalizeRecoveredBehaviorRules(sharedState: SharedState): void {
+  const legacyState = sharedState as SharedState & {
+    permissionRules?: Flow['behaviorRules'];
+    savedPermissionRules?: Flow['behaviorRules'];
+  };
+  if (sharedState.flowSnapshot) {
+    sharedState.flowSnapshot = FlowSnapshotSchema.parse(sharedState.flowSnapshot);
+  }
+  const snapshotRules = sharedState.flowSnapshot?.behaviorRules;
+
+  const normalizedState = normalizeBehaviorRulesInput(legacyState);
+  sharedState.behaviorRules = structuredClone(
+    snapshotRules ?? normalizedState.behaviorRules ?? [],
+  );
+  delete legacyState.permissionRules;
+
+  const savedAliases: {
+    behaviorRules?: Flow['behaviorRules'];
+    permissionRules?: Flow['behaviorRules'];
+  } = {};
+  if (Object.prototype.hasOwnProperty.call(sharedState, 'savedBehaviorRules')) {
+    savedAliases.behaviorRules = sharedState.savedBehaviorRules;
+  }
+  if (Object.prototype.hasOwnProperty.call(legacyState, 'savedPermissionRules')) {
+    savedAliases.permissionRules = legacyState.savedPermissionRules;
+  }
+  const normalizedSaved = normalizeBehaviorRulesInput(savedAliases);
+  sharedState.savedBehaviorRules = structuredClone(
+    snapshotRules ?? normalizedSaved.behaviorRules ?? [],
+  );
+  delete legacyState.savedPermissionRules;
+}
+
+function installPersonaActivitySnapshot(
+  sharedState: SharedState,
+  flowDefinition: Flow,
+  debug: boolean,
+): void {
+  const priorFlowId = sharedState.flowId;
+  for (const flowId of new Set([priorFlowId, flowDefinition.id])) {
+    if (flowId) FlowExecutor.clearFlowCache(flowId);
+  }
+
+  const canonicalFlow = normalizeBehaviorRulesInput(flowDefinition) as Flow;
+  sharedState.flowSnapshot = structuredClone(canonicalFlow);
+  sharedState.flowId = canonicalFlow.id;
+  sharedState.currentNodeId = undefined;
+
+  // Model/tool authority derived from the prior graph.
+  sharedState.mcpContext = undefined;
+  sharedState.currentMCPNodes = undefined;
+  delete sharedState.personaCoreAppRefs;
+  sharedState.armedSyntheticTools = undefined;
+  sharedState.toolNameMap = undefined;
+  // The successor Activity starts from the immutable Behavior policy, never
+  // from stale graph-derived rules or an unguarded empty policy.
+  sharedState.behaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
+  sharedState.savedBehaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
+  sharedState.frozenSystemPrompts = undefined;
+  sharedState.codexSessions = undefined;
+  sharedState.turnBudgets = undefined;
+  sharedState.mcpAppContexts = undefined;
+  sharedState.mcpSkillSelections = undefined;
+
+  // Graph routing, subflow recovery, and detached-task handles.
+  sharedState.handoffRequested = undefined;
+  sharedState.handoffInput = undefined;
+  sharedState.handoffNameMap = undefined;
+  sharedState.handoffTargetTypes = undefined;
+  sharedState.pendingSubflowReturn = undefined;
+  sharedState.subflowToolNameMap = undefined;
+  sharedState.subflowDetachedToolNameMap = undefined;
+  sharedState.subflowInvocations = undefined;
+  sharedState.activeSubflowInvocationByNode = undefined;
+  sharedState.subflowSessions = undefined;
+  sharedState.subflowLane = undefined;
+  sharedState.launchedTaskIds = undefined;
+  sharedState.subflowOrchestratorNodeId = undefined;
+  sharedState.staticInjected = undefined;
+
+  // No paused tool/debug decision from the old Activity may execute under the
+  // new lease. Debug configuration is re-established from this invocation.
+  sharedState.pendingToolCalls = undefined;
+  sharedState.debugPendingToolCalls = undefined;
+  sharedState.debugPendingAction = undefined;
+  sharedState.debugPauseRequested = false;
+  sharedState.debugResumeAfterDetach = false;
+  sharedState.breakpoints = [];
+  sharedState.lastBreakNodeId = undefined;
+  sharedState.debugMode = debug;
+  sharedState.executionTrace = debug && FEATURES.ENABLE_EXECUTION_TRACKER ? [] : undefined;
+
+  // Activity/run-scoped scratchpads and lifecycle projections.
+  sharedState.variables = {};
+  sharedState.todos = undefined;
+  sharedState.usage = undefined;
+  sharedState.logicalRunId = undefined;
+  sharedState.recovery = undefined;
+  sharedState.runDepth = undefined;
+  sharedState.chainDepth = undefined;
+  sharedState.onApprovalRequired = undefined;
+  sharedState.forceSummaryTurn = undefined;
+  sharedState.capped = undefined;
+  sharedState.cappedReason = undefined;
+  sharedState.lastResponse = undefined;
+  sharedState.lastError = undefined;
+  sharedState.errorEventEmitted = false;
+  sharedState.isCancelled = false;
+  sharedState.status = 'running';
+  sharedState.trackingInfo = {
+    executionId: crypto.randomUUID(),
+    startTime: Date.now(),
+    nodeExecutionTracker: [],
+  };
+
+  // Statistics describe this Activity's snapshot, never its predecessor.
+  sharedState.statisticsRunStartedAt = undefined;
+  sharedState.statisticsRunStarted = false;
+  sharedState.statisticsRunFinished = false;
+  sharedState.statisticsFlowName = undefined;
+  sharedState.statisticsPlannedExecutionName = undefined;
+  sharedState.statisticsFlowRevisionId = undefined;
+}
+
+async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
+  if (!isFlowInvocationSource(input.source)) {
+    throw new TypeError(
+      `runFlow requires an explicit invocation source (${String(input.source)} is invalid)`,
+    );
+  }
+  if (input.source === 'meeting' && (!input.meetingParticipant || !input.meetingTurn)) {
+    throw new TypeError('Meeting flow runs require participant and turn coordination context.');
+  }
+  if (input.personaAttribution && !input.executionAuthority) {
+    throw new TypeError('Persona-attributed flow runs require execution authority.');
+  }
+  const personaInstructionContext = input.personaInstructionContext
+    ? PersonaInstructionContextSchema.parse(input.personaInstructionContext)
+    : undefined;
+  const rawPersonaCoreAppRefs = (input as { personaCoreAppRefs?: unknown }).personaCoreAppRefs;
+  let personaCoreAppRefs: string[] | undefined;
+  if (rawPersonaCoreAppRefs !== undefined) {
+    if (
+      !Array.isArray(rawPersonaCoreAppRefs)
+      || rawPersonaCoreAppRefs.length > 128
+      || rawPersonaCoreAppRefs.some((value) => typeof value !== 'string' || !value.trim())
+    ) {
+      throw new TypeError('Persona Core App refs must be an array of non-empty MCP config names.');
+    }
+    if (
+      typeof input.executionAuthority?.authorizePersonaCoreMcp !== 'function'
+      || !input.personaAttribution
+      || !personaInstructionContext
+    ) {
+      throw new TypeError(
+        'Persona Core App refs require top-level dispatcher authority, App authorization, and instruction context.',
+      );
+    }
+    personaCoreAppRefs = Array.from(new Set(rawPersonaCoreAppRefs));
+  }
+  if (personaInstructionContext) {
+    if (!input.executionAuthority) {
+      throw new TypeError('Persona instruction context requires execution authority.');
+    }
+    assertInstructionContextAttribution(
+      personaInstructionContext,
+      input.personaAttribution,
+      'Input',
+    );
+    if (input.source === 'subflow' || input.parentRunId || (input.depth ?? 0) > 0) {
+      throw new TypeError('Persona instruction context is confined to its top-level Behavior run.');
+    }
+    if (!input.flowDefinition) {
+      throw new TypeError('Persona instruction context requires its immutable Behavior snapshot.');
+    }
+    assertBehaviorSnapshotMatchesInstructionContext(
+      input.flowDefinition,
+      personaInstructionContext,
+      'Input',
+    );
+  }
+
   const startTime = Date.now();
 
   const flujo = input.flujo ?? true;
@@ -348,9 +769,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const ephemeral = input.mode === 'ephemeral';
 
   // Reconstruct the legacy `data` shape the body below reads from.
-  const inputMessages: any[] = input.messages
+  const inputMessages: FlowRunMessageInput[] = input.messages
     ?? (input.prompt !== undefined ? [{ role: 'user', content: input.prompt }] : []);
-  const data: { model?: string; messages: any[]; processNodeId?: string } = {
+  const data: { model?: string; messages: FlowRunMessageInput[]; processNodeId?: string } = {
     model: input.modelName,
     messages: inputMessages,
     processNodeId: input.processNodeId,
@@ -388,22 +809,175 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // transient and never adopt a persisted conversation).
   else if (!ephemeral) {
     try {
-      loadedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+      loadedState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
       if (loadedState) {
+        await assertExecutionStateAccess(loadedState, effectiveConvId);
+        if (input.executionExtensionContext) {
+          await validateExecutionLoadedState(input.executionExtensionContext, loadedState);
+          installExecutionExtensionContext(loadedState, input.executionExtensionContext);
+        }
         log.info(`Loaded conversation state from storage: ${effectiveConvId}`);
         stateSource = 'storage';
-        // Per-step durability lives in the append-only log; the snapshot is
-        // only written at run boundaries. Fold in anything it missed (e.g. a
-        // crash mid-run after messages were streamed/appended).
-        await recoverMessagesFromLog(loadedState);
-        FlowExecutor.conversationStates.set(effectiveConvId, loadedState);
+        const mayRecoverPersonaState = !loadedState.personaAttribution || (
+          input.personaAttribution?.personaId === loadedState.personaAttribution.personaId
+          && Boolean(input.executionAuthority)
+        );
+        if (loadedState.personaAttribution && mayRecoverPersonaState) {
+          Object.defineProperty(loadedState, 'executionAuthority', {
+            value: input.executionAuthority,
+            enumerable: false,
+            configurable: true,
+            writable: true,
+          });
+        }
+        if (mayRecoverPersonaState) {
+          // Per-step durability lives in the append-only log; the snapshot is
+          // only written at run boundaries. Fold in anything it missed (e.g. a
+          // crash mid-run after messages were streamed/appended). Persona
+          // recovery happens only after the dispatcher authority is installed.
+          await recoverMessagesFromLog(loadedState);
+          await reconcileInterruptedRecovery(storageKey, loadedState);
+          FlowExecutor.conversationStates.set(effectiveConvId, loadedState);
+        }
       } else {
         log.info(`No state found in storage for conversation: ${effectiveConvId}. Will create new state.`);
       }
     } catch (error) {
+      if (error instanceof ExecutionExtensionError) throw error;
       log.warn(`Error loading conversation state from storage for ${effectiveConvId}:`, error);
     }
   }
+
+  if (loadedState) {
+    await assertExecutionStateAccess(loadedState, effectiveConvId);
+    if (input.executionExtensionContext) {
+      await validateExecutionLoadedState(input.executionExtensionContext, loadedState);
+      installExecutionExtensionContext(loadedState, input.executionExtensionContext);
+    }
+    normalizeRecoveredBehaviorRules(loadedState);
+  }
+
+  if (loadedState?.personaArchived) {
+    throw new Error(
+      `Conversation ${effectiveConvId} is an anonymized Persona archive and cannot be executed.`,
+    );
+  }
+
+  // Meeting participant conversations remain inspectable, but an ordinary
+  // chat/API run must not mutate their memory while their owning meeting can
+  // still schedule another turn. The shared execution lease above makes this
+  // check race-free with an in-flight participant turn.
+  if (loadedState?.meetingParticipant && input.source !== 'meeting') {
+    const { getMeeting } = await import('@/backend/services/meetings/store');
+    const owner = await getMeeting(loadedState.meetingParticipant.meetingId);
+    if (
+      owner
+      && owner.status !== 'completed'
+      && owner.status !== 'cancelled'
+      && owner.status !== 'error'
+    ) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is reserved by active meeting ${owner.id}.`,
+      );
+    }
+  }
+
+  const loadedInstructionContext = loadedState?.personaInstructionContext
+    ? PersonaInstructionContextSchema.parse(loadedState.personaInstructionContext)
+    : undefined;
+  let resetPersonaPromptPrefix = false;
+  if (loadedInstructionContext) {
+    assertInstructionContextAttribution(
+      loadedInstructionContext,
+      loadedState?.personaAttribution,
+      'Persisted',
+    );
+    if (loadedState?.flowId !== loadedInstructionContext.rootFlowId) {
+      throw new Error(
+        `Conversation ${effectiveConvId} has Persona instructions for a different Behavior root Flow.`,
+      );
+    }
+    if (!loadedState.flowSnapshot) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is missing its frozen Persona Behavior snapshot.`,
+      );
+    }
+    assertBehaviorSnapshotMatchesInstructionContext(
+      loadedState.flowSnapshot,
+      loadedInstructionContext,
+      'Persisted',
+    );
+    if (!personaInstructionContext) {
+      throw new Error(
+        `Conversation ${effectiveConvId} must resume with its frozen Persona instruction context.`,
+      );
+    }
+    if (loadedInstructionContext.activityId === personaInstructionContext.activityId) {
+      if (!instructionContextsEqual(loadedInstructionContext, personaInstructionContext)) {
+        throw new Error(
+          `Conversation ${effectiveConvId} Persona instruction context changed within one Activity.`,
+        );
+      }
+    } else {
+      // A new leased Activity for the same Persona may install a newly resolved
+      // context. Its system prefix and native provider session must be rebuilt;
+      // approval/debug/recovery continuations keep the same Activity and never
+      // enter this branch.
+      resetPersonaPromptPrefix = true;
+    }
+  } else if (personaInstructionContext && loadedState) {
+    // This is either the first context-aware Activity on an older conversation
+    // or a deliberately context-free legacy Activity's successor. runFlow never
+    // resolves/backfills historical data; it only accepts the dispatcher pin.
+    resetPersonaPromptPrefix = true;
+  }
+
+  // A Persona-owned conversation may only be resumed by the trusted
+  // dispatcher after it reacquires an Activity lease. This blocks legacy
+  // debug/approval/chat paths from accidentally continuing Persona work with
+  // no fence. A later Activity for the same Persona may intentionally replace
+  // the previous activity/revision attribution on a new turn.
+  if (loadedState?.personaAttribution) {
+    if (!input.personaAttribution || !input.executionAuthority) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is Persona-owned and must be resumed through the Persona dispatcher.`,
+      );
+    }
+    if (loadedState.personaAttribution.personaId !== input.personaAttribution.personaId) {
+      throw new Error(`Conversation ${effectiveConvId} belongs to a different Persona.`);
+    }
+    Object.defineProperty(loadedState, 'executionAuthority', {
+      value: input.executionAuthority,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  if (loadedState?.personaTargetId) {
+    if (!input.personaAttribution || !input.executionAuthority) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is targeted to a Persona and must start through the Persona dispatcher.`,
+      );
+    }
+    if (loadedState.personaTargetId !== input.personaAttribution.personaId) {
+      throw new Error(`Conversation ${effectiveConvId} is targeted to a different Persona.`);
+    }
+  }
+
+  // Approval/debug resumes are continuations of the same logical run. A new
+  // user turn on a completed/error conversation receives a fresh id below.
+  const resumingPausedLogicalRun = Boolean(
+    !resetPersonaPromptPrefix
+    &&
+    !userTurn
+    &&
+    loadedState?.logicalRunId
+    && (
+      loadedState.status === 'awaiting_tool_approval'
+      || loadedState.status === 'paused_debug'
+      || loadedState.debugResumeAfterDetach
+    )
+  );
 
   let sharedState: SharedState;
   if (loadedState) {
@@ -426,6 +1000,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       resumingAfterError = sharedState.status === 'error';
       sharedState.status = 'running';
       sharedState.lastResponse = undefined;
+      sharedState.lastError = undefined;
+      sharedState.errorEventEmitted = false;
       sharedState.isCancelled = false;
       if (stateSource === 'storage') {
         FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
@@ -439,8 +1015,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.currentNodeId = data.processNodeId;
       sharedState.status = 'running';
       sharedState.lastResponse = undefined;
+      sharedState.lastError = undefined;
+      sharedState.errorEventEmitted = false;
       sharedState.pendingToolCalls = undefined;
       sharedState.handoffRequested = undefined;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugPendingToolCalls = undefined;
+      sharedState.debugBoundary = undefined;
+      sharedState.debugBoundaryCounter = 0;
+      sharedState.debugPauseRequested = false;
       sharedState.isCancelled = false;
 
       sharedState.trackingInfo = {
@@ -471,7 +1054,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       status: 'running',
       // A caller-supplied title (spawn lanes: the brief) sticks — the
       // first-user-message auto-titling below only replaces the placeholder.
-      title: input.title?.trim() || 'New Conversation',
+      title: input.title?.trim() || DEFAULT_CONVERSATION_TITLE,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       debugMode: flujodebug,
@@ -480,6 +1063,18 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       // seeded from FlowRunInput.variables just below.
       variables: {},
     };
+  }
+
+  if (personaInstructionContext && resetPersonaPromptPrefix) {
+    // Same-Activity approval/debug/crash resumes never enter this branch.
+    installPersonaActivitySnapshot(sharedState, input.flowDefinition!, flujodebug);
+  }
+
+  // `injectOnce` applies to this top-level user turn. Keep the map across
+  // approval/debug continuations, but clear it before a new turn re-enters the
+  // flow so persisted conversation state cannot suppress a later traversal.
+  if (userTurn && !resumingPausedLogicalRun && !input.parentRunId && (input.depth ?? 0) === 0) {
+    sharedState.staticInjected = undefined;
   }
 
   // Tier 2c (named variables): wire the dormant FlowRunInput.variables field onto
@@ -495,17 +1090,113 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
+  // MCP Apps: each ui/update-model-context request overwrites that app's
+  // previous value in the frontend-owned map. When the map accompanies a
+  // future user turn, replace the persisted snapshot atomically; omission means
+  // an internal resume should keep the last snapshot.
+  if (input.mcpAppContexts !== undefined) {
+    sharedState.mcpAppContexts = input.mcpAppContexts;
+  }
+
+  // MCP Skills are per user turn. Internal approval/debug continuations retain
+  // the active selection, while a fresh turn replaces it (including clearing
+  // an earlier selection when the client sends none).
+  if (userTurn || input.mcpSkillSelections !== undefined) {
+    sharedState.mcpSkillSelections = input.mcpSkillSelections;
+  }
+
+  // Never inherit a stale in-memory authority from an earlier invocation. A
+  // paused Persona Activity must be explicitly reacquired by its dispatcher;
+  // ordinary/legacy resumes remain authority-free.
+  if (input.executionExtensionContext) {
+    installExecutionExtensionContext(sharedState, input.executionExtensionContext);
+  } else {
+    delete sharedState.executionExtensionContext;
+  }
+  if (input.executionAuthority) {
+    Object.defineProperty(sharedState, 'executionAuthority', {
+      value: input.executionAuthority,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } else {
+    delete sharedState.executionAuthority;
+  }
+  if (input.personaAttribution) {
+    sharedState.personaAttribution = { ...input.personaAttribution };
+    delete sharedState.personaTargetId;
+  }
+  if (personaCoreAppRefs !== undefined) {
+    Object.defineProperty(sharedState, 'personaCoreAppRefs', {
+      value: [...personaCoreAppRefs],
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } else {
+    delete sharedState.personaCoreAppRefs;
+  }
+  if (personaInstructionContext) {
+    sharedState.personaInstructionContext = structuredClone(personaInstructionContext);
+  }
+  if (
+    input.behaviorToolRegistry
+    && (!sharedState.behaviorToolRegistry || resetPersonaPromptPrefix)
+  ) {
+    sharedState.behaviorToolRegistry = structuredClone(input.behaviorToolRegistry);
+  }
+  // A meeting round is still executed by the regular flow runtime, but its
+  // coordination state belongs to the sibling MeetingEngine. Install only the
+  // participant's identity and a fresh per-turn action buffer here; because
+  // SubflowNode does not forward these fields, child runs cannot accidentally
+  // speak or vote on behalf of their parent participant.
+  if (input.source === 'meeting' && input.meetingParticipant && input.meetingTurn) {
+    sharedState.meetingParticipant = { ...input.meetingParticipant };
+    sharedState.meetingTurn = {
+      ...input.meetingTurn,
+      actions: [...input.meetingTurn.actions],
+    };
+  } else {
+    // Participant conversations are ordinary inspectable conversations once
+    // a person re-enters them outside the coordinator. Do not leave stale
+    // meeting capabilities or provider prefixes armed on a later chat/API run.
+    // The frozen prompt and native session were created with the meeting
+    // protocol, so both must be rebuilt before normal conversation continues.
+    if (sharedState.meetingParticipant) {
+      sharedState.frozenSystemPrompts = undefined;
+      sharedState.codexSessions = undefined;
+    }
+    sharedState.meetingTurn = undefined;
+  }
+
   // The conversation's approval setting (single source of truth).
   sharedState.requireApproval = requireApproval;
 
-  // Tag the run's origin (issue #113) so GET /api/runs/active can distinguish
-  // scheduled fires from ad-hoc API/chat runs. Only overwrite when the caller
-  // supplied one, so a resumed run keeps the source it was first tagged with.
-  if (input.source) {
-    sharedState.source = input.source;
-  }
+  // Tag the invocation origin and derive the run-local unattended flag from it
+  // (issue #339).
+  //
+  // `source` is the CONVERSATION's provenance and is immutable once recorded:
+  // it answers "what created this conversation", not "how was it re-entered".
+  // Every resume path — approval release, debug step/continue, respond — goes
+  // back through chatCompletionService, which hardcodes source:'chat'. Blindly
+  // overwriting therefore relabelled a scheduled/triggered run as a user chat
+  // (wrong origin badge, wrong "by origin" bucket) AND, worse, bypassed the
+  // `source !== 'schedule' && source !== 'trigger'` guard on the run:done emit
+  // below, so a scheduler-owned run that happened to pause for approval sprayed
+  // a duplicate flow-run event on resume. Keep the first origin; only fill it
+  // in when absent (fresh state, or a legacy record from before this field).
+  sharedState.source = sharedState.source ?? input.source;
+  // `unattended`, by contrast, stays strictly RUN-local and is always derived
+  // from THIS invocation: a human releasing an approval on a scheduled run is
+  // genuinely attended for that turn. Overwritten every call so a legacy
+  // persisted value or a flow-level property can never influence this run.
+  sharedState.unattended = isUnattendedFlowInvocation(input.source);
   if (input.plannedExecutionId) {
     sharedState.plannedExecutionId = input.plannedExecutionId;
+  }
+  if (input.plannedExecutionName) {
+    sharedState.statisticsPlannedExecutionName = input.plannedExecutionName;
   }
 
   // The persistence policy travels ON the state: persistConversationState (the
@@ -521,6 +1212,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // top conversation stops every descendant subflow at its next iteration.
   if (input.parentRunId) {
     sharedState.parentRunId = input.parentRunId;
+    sharedState.parentLogicalRunId = FlowExecutor.conversationStates.get(input.parentRunId)?.logicalRunId;
     // Conversation-level parent link (issue #182): formalize the subflow
     // parentage at the conversation record so the chat sidebar can render
     // Flow->Subflow->... chains without reverse-engineering run internals.
@@ -547,10 +1239,125 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // there is no interactive approver. Persisted on the state so a resumed
   // 'pause' run keeps re-pausing (not failing) on later tool calls.
   sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
+
+  if (!resumingPausedLogicalRun) {
+    // Subflow sessions are scoped to one logical parent run. Old handles stay in
+    // their saved child conversations but must not leak into a later user turn.
+    sharedState.subflowSessions = undefined;
+    sharedState.toolRepeatGuard = undefined;
+    sharedState.temperatureOverrideOnce = undefined;
+    sharedState.logicalRunId = input.runId ?? crypto.randomUUID();
+    sharedState.statisticsRunStartedAt = Date.now();
+    sharedState.statisticsRunStarted = false;
+    sharedState.statisticsRunFinished = false;
+    sharedState.statisticsFlowName = input.flowDefinition?.name
+      ?? (input.modelName?.startsWith('flow-') ? input.modelName.slice(5) : undefined);
+    sharedState.statisticsPlannedExecutionName = input.plannedExecutionName;
+  }
+  const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
+  sharedState.logicalRunId = logicalRunId;
+  if (input.executionExtensionContext) {
+    const { bindExecutionExtensionRun } = await import('@/backend/execution/extensions');
+    await bindExecutionExtensionRun(input.executionExtensionContext, effectiveConvId, logicalRunId);
+  }
+  sharedState.toolRepeatGuard ??= { logicalRunId, entries: [] };
+  if (sharedState.toolRepeatGuard.logicalRunId !== logicalRunId) {
+    sharedState.toolRepeatGuard = { logicalRunId, entries: [] };
+  }
+  sharedState.debugResumeAfterDetach = false;
+  sharedState.statisticsRunStartedAt ??= Date.now();
+  initializeRecovery(sharedState, logicalRunId);
+  if (input.lane) sharedState.subflowLane = input.lane;
+  if (sharedState.subflowLane) sharedState.recovery!.lane = sharedState.subflowLane;
+  const flowSnapshot = () => ({
+    id: sharedState.flowId || input.flowId || input.flowDefinition?.id || input.modelName || 'unknown',
+    name: sharedState.statisticsFlowName ?? sharedState.flowSnapshot?.name ?? input.flowDefinition?.name,
+  });
+  const plannedExecution = sharedState.plannedExecutionId
+    ? {
+        id: sharedState.plannedExecutionId,
+        name: sharedState.statisticsPlannedExecutionName,
+      }
+    : undefined;
+  const runPersonaAttribution = sharedState.personaAttribution
+    ? { ...sharedState.personaAttribution }
+    : undefined;
+  // Lineage: the spawning run's logical id travels with every lifecycle record
+  // so a child run can be rolled up under its parent without in-memory state.
+  const runRevisions = () => (sharedState.statisticsFlowRevisionId
+    ? { flowRevisionId: sharedState.statisticsFlowRevisionId }
+    : undefined);
+  const ensureRunStarted = () => {
+    if (sharedState.statisticsRunStarted) return;
+    recordStatisticsEvent(createStatisticsEvent({
+      type: 'run.started',
+      runId: logicalRunId,
+      source: input.source,
+      flow: flowSnapshot(),
+      plannedExecution,
+      conversationId: effectiveConvId,
+      parentRunId: sharedState.parentRunId,
+      revisions: runRevisions(),
+      ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
+    }));
+    sharedState.statisticsRunStarted = true;
+  };
+
+  const finalizeRun = (result: Omit<FlowRunResult, 'runId'>): FlowRunResult => {
+    ensureRunStarted();
+    const durationMs = Math.max(0, Date.now() - (sharedState.statisticsRunStartedAt ?? startTime));
+    if (result.status === 'awaiting_tool_approval' || result.status === 'paused_debug') {
+      recordStatisticsEvent(createStatisticsEvent({
+        type: 'run.paused',
+        runId: logicalRunId,
+        source: input.source,
+        flow: flowSnapshot(),
+        plannedExecution,
+        pauseKind: result.status === 'paused_debug' ? 'debug' : 'approval',
+        durationMs,
+        parentRunId: sharedState.parentRunId,
+        revisions: runRevisions(),
+        ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
+      }));
+    } else if (!sharedState.statisticsRunFinished) {
+      const outcome = sharedState.isCancelled
+        ? 'cancelled' as const
+        : result.status === 'error'
+          ? 'error' as const
+          : result.status === 'capped' || sharedState.capped
+            ? 'capped' as const
+            : 'completed' as const;
+      recordStatisticsEvent(createStatisticsEvent({
+        type: 'run.finished',
+        runId: logicalRunId,
+        source: input.source,
+        flow: flowSnapshot(),
+        plannedExecution,
+        outcome,
+        durationMs,
+        parentRunId: sharedState.parentRunId,
+        revisions: runRevisions(),
+        ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
+        errorClass: outcome === 'error' ? classifyStatisticsError(result.error) : undefined,
+        usage: result.usage ? {
+          inputTokens: result.usage.promptTokens,
+          outputTokens: result.usage.completionTokens,
+          totalTokens: result.usage.totalTokens,
+          cachedInputTokens: result.usage.cacheReadTokens,
+          cacheWriteTokens: result.usage.cacheWriteTokens,
+        } : undefined,
+      }));
+      sharedState.statisticsRunFinished = true;
+    }
+    const finalized = { ...result, runId: logicalRunId };
+    queueSubflowRunOutcome(finalized);
+    return finalized;
+  };
+
   if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
     log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
     sharedState.status = 'error';
-    return {
+    return finalizeRun({
       status: 'error',
       conversationId: effectiveConvId,
       outputText: '',
@@ -558,7 +1365,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       error: { message: `Subflow recursion limit (${MAX_SUBFLOW_DEPTH}) exceeded`, statusCode: 500 },
       finalAction: ERROR_ACTION,
       sharedState,
-    };
+    });
+  }
+
+  // Conversation GET responses may carry short display previews for large tool
+  // bodies. Restore those references before the client history can replace the
+  // canonical transcript (also covers a split copied into a new conversation).
+  if (data.messages?.length) {
+    data.messages = await hydrateLazyToolPayloads(
+      data.messages,
+      sharedState.messages ?? [],
+      effectiveConvId,
+      sharedState,
+    ) as FlowRunMessageInput[];
   }
 
   // Snapshot the pre-turn messages for the log reconcile below: the incoming
@@ -578,12 +1397,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
     // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
     let resolvedFlowId = input.flowDefinition ? input.flowDefinition.id : input.flowId;
+    let resolvedFlow: Flow | undefined;
     if (!resolvedFlowId && data.model) {
       const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
-      const reactFlow = await flowServiceWithGetByName.getFlowByName(flowName);
+      const reactFlow = await flowService.getFlowByName(flowName);
       if (!reactFlow) {
         log.error(`Flow not found: ${flowName}`);
-        return {
+        return finalizeRun({
           status: 'error',
           conversationId: effectiveConvId,
           outputText: '',
@@ -592,13 +1412,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           error: { message: `Flow not found: ${flowName}`, statusCode: 400 },
           finalAction: ERROR_ACTION,
           sharedState,
-        };
+        });
       }
       resolvedFlowId = reactFlow.id;
+      resolvedFlow = reactFlow;
     }
     if (!resolvedFlowId) {
       log.error('No flow specified for run (neither flowId nor model provided).');
-      return {
+      return finalizeRun({
         status: 'error',
         conversationId: effectiveConvId,
         outputText: '',
@@ -606,9 +1427,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         error: { message: 'No flow specified (provide flowId or model).', statusCode: 400 },
         finalAction: ERROR_ACTION,
         sharedState,
-      };
+      });
     }
     sharedState.flowId = resolvedFlowId;
+
+    // Pin the actual saved definition before the first persistence or engine
+    // step. Named root runs and by-id subflow children use the same seam, so
+    // later edits to the catalog cannot change an in-flight or resumed run.
+    // Loaded conversations deliberately keep their original snapshot (or its
+    // absence for legacy runs); current catalog data is not historical proof.
+    if (!input.flowDefinition) {
+      resolvedFlow ??= await flowService.getFlow(resolvedFlowId) ?? undefined;
+      if (resolvedFlow) sharedState.flowSnapshot = structuredClone(resolvedFlow);
+    }
 
     // Preserve caller-provided ids/timestamps (like the resume path below).
     // The chat frontend sends its optimistic message id; keeping it means the
@@ -617,18 +1448,23 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // depth>0 messages are display-only subflow steps served by the projection
     // — they must never (re-)enter the parent transcript / model context.
     const initialMessages: FlujoChatMessage[] = (data.messages || [])
-      .filter(msg => !((msg as any).depth > 0))
+      .filter(msg => !(typeof msg.depth === 'number' && msg.depth > 0))
       .map(msg => ({
         ...msg,
-        id: (msg as any).id || crypto.randomUUID(),
-        timestamp: (msg as any).timestamp || Date.now(),
-        processNodeId: (msg as any).processNodeId || undefined,
-      }));
+        id: msg.id || crypto.randomUUID(),
+        timestamp: msg.timestamp || Date.now(),
+        processNodeId: msg.processNodeId || undefined,
+      }) as FlujoChatMessage);
     sharedState.messages = initialMessages;
+    // Stamp lastUserMessageAt for the initial user turn
+    const _initLastUser = [...initialMessages].reverse().find(m => m.role === 'user');
+    if (_initLastUser) {
+      sharedState.lastUserMessageAt = _initLastUser.timestamp ?? Date.now();
+    }
 
     try {
       sharedState.updatedAt = Date.now();
-      if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+      if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
         const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
         if (firstUserMessage && typeof firstUserMessage.content === 'string') {
           sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -646,24 +1482,58 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     if (data.messages && data.messages.length > 0) {
       // As above: drop display-only subflow step messages (depth>0) so they
       // can never round-trip from the projection into the parent transcript.
-      sharedState.messages = data.messages
-        .filter(msg => !((msg as any).depth > 0))
+      const normalizedInputMessages = data.messages
+        .filter(msg => !(typeof msg.depth === 'number' && msg.depth > 0))
         .map(msg => {
-          const flujoMsg: FlujoChatMessage = {
+          const flujoMsg = {
             ...msg,
-            id: (msg as any).id || crypto.randomUUID(),
-            timestamp: (msg as any).timestamp || Date.now(),
-            processNodeId: (msg as any).processNodeId || undefined,
-          };
+            id: msg.id || crypto.randomUUID(),
+            timestamp: msg.timestamp || Date.now(),
+            processNodeId: msg.processNodeId || undefined,
+          } as FlujoChatMessage;
           return flujoMsg;
         });
-      log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+      if (input.resumeAsNewTurn) {
+        sharedState.messages.push(...normalizedInputMessages);
+        const lastUser = [...normalizedInputMessages].reverse().find(m => m.role === 'user');
+        if (lastUser) sharedState.lastUserMessageAt = lastUser.timestamp ?? Date.now();
+        log.info(`Appended ${normalizedInputMessages.length} follow-up message(s) to resumed conversation ${sharedState.conversationId}`);
+      } else {
+        sharedState.messages = normalizedInputMessages;
+        log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+      }
+      // Stamp lastUserMessageAt whenever a user turn is received
+      if (userTurn) {
+        const _existLastUser = [...sharedState.messages].reverse().find(m => m.role === 'user');
+        if (_existLastUser) {
+          sharedState.lastUserMessageAt = _existLastUser.timestamp ?? Date.now();
+        }
+      }
     }
     if (userTurn || sharedState.debugMode === undefined) {
       sharedState.debugMode = flujodebug;
     }
     if (userTurn) {
+      // A real message is allowed to recover a conversation whose debugger UI
+      // was closed/reloaded while the run was parked. Treat it as a fresh run,
+      // not as a hidden debugger resume: clear the parked status and, unless the
+      // caller explicitly requested debugging again, disarm old breakpoints.
+      if (sharedState.status === 'paused_debug') {
+        sharedState.status = 'running';
+        sharedState.lastResponse = undefined;
+        sharedState.lastError = undefined;
+        sharedState.errorEventEmitted = false;
+        sharedState.isCancelled = false;
+      }
+      if (!flujodebug) {
+        sharedState.breakpoints = [];
+        sharedState.lastBreakNodeId = undefined;
+      }
       sharedState.debugPendingToolCalls = undefined;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugBoundary = undefined;
+      sharedState.debugBoundaryCounter = 0;
+      sharedState.debugPauseRequested = false;
     }
     if (sharedState.debugMode) {
       if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
@@ -672,6 +1542,50 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
+  if (input.resumeAsNewTurn && stateSource !== 'new') {
+    // A finished child is a conversation, not a suspended call stack. A keyed
+    // follow-up starts a new logical turn at the child flow's Start node while
+    // retaining the complete prior transcript that was just appended to.
+    sharedState.currentNodeId = undefined;
+    sharedState.status = 'running';
+    sharedState.lastResponse = undefined;
+    sharedState.lastError = undefined;
+    sharedState.errorEventEmitted = false;
+    sharedState.pendingToolCalls = undefined;
+    sharedState.handoffRequested = undefined;
+    sharedState.handoffInput = undefined;
+    sharedState.pendingSubflowReturn = undefined;
+    sharedState.debugPendingToolCalls = undefined;
+    sharedState.debugPendingAction = undefined;
+    sharedState.debugBoundary = undefined;
+    sharedState.debugPauseRequested = false;
+    sharedState.isCancelled = false;
+  }
+
+  if (
+    sharedState.flowId
+    && (!sharedState.statisticsFlowName || !sharedState.statisticsFlowRevisionId)
+  ) {
+    try {
+      const executionFlow = sharedState.flowSnapshot
+        ?? await flowService.getFlow(sharedState.flowId);
+      sharedState.statisticsFlowName ??= executionFlow?.name;
+      // Opaque, installation-local fingerprint of the execution configuration
+      // (graph plus node configuration). Statistics store only the fingerprint;
+      // the conversation's snapshot separately preserves its definition.
+      if (executionFlow && !sharedState.statisticsFlowRevisionId) {
+        sharedState.statisticsFlowRevisionId = await statisticsRevisionId('flow', {
+          id: executionFlow.id,
+          nodes: executionFlow.nodes,
+          edges: executionFlow.edges,
+        });
+      }
+    } catch {
+      // Snapshot names are best-effort; the stable flow id remains authoritative.
+    }
+  }
+  ensureRunStarted();
+
   // --- Bring the append-only conversation log in line with this turn's input ---
   // Bootstraps the log for brand-new/legacy conversations and records the diff
   // (new turns, edits, pruned messages) for logged ones, BEFORE any run event
@@ -679,6 +1593,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // legacy SharedState persistence below still covers the conversation.
   try {
     await reconcileConversationLog(sharedState, messagesBeforeTurn);
+    // Issue #256: heal any assistant tool_calls turn left unanswered by a
+    // crash/restart mid-tool before the run loop builds a provider request.
+    // Persist each synthetic result via the log-only path so the projection is
+    // self-healing and the repair is auditable in the transcript.
+    const repaired = repairDanglingToolCalls(sharedState);
+    if (repaired.length) {
+      log.info(`Repaired ${repaired.length} dangling tool call(s) for ${effectiveConvId} at run start (issue #256).`);
+      markDanglingToolEffectsUnknown(sharedState, 'running');
+      await appendRawForState(sharedState, [
+        ...repaired.map(m => ({ type: 'message' as const, message: m })),
+        { type: 'recovery:checkpoint', checkpoint: sharedState.recovery!.currentCheckpoint! },
+        { type: 'recovery:transition', recovery: { ...sharedState.recovery! } },
+      ]);
+    }
   } catch (error) {
     log.warn(`Conversation-log reconcile failed for ${effectiveConvId}; continuing`, error);
   }
@@ -722,7 +1650,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       }
       if (!entryNodeId && sharedState.flowId) {
         try {
-          const flow = await flowService.getFlow(sharedState.flowId);
+          const flow = sharedState.flowSnapshot
+            ?? await flowService.getFlow(sharedState.flowId);
           entryNodeId = flow?.nodes?.find((n) => n.type === 'start')?.id;
         } catch (err) {
           log.warn(`Could not resolve start node for error-resume of ${effectiveConvId}`, err);
@@ -752,9 +1681,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // Unattended drive-forward (issue #218): per-node nudge counter, run-scoped
   // (a resume starts fresh). Keyed by the Process node id that stalled.
   const unattendedNudges = new Map<string, number>();
+  // Graceful landing (issue #253): per-node agentic-turn counter for the
+  // request/response tool loop. Incremented each time the loop re-enters with a
+  // tool-call action for the same Process node; once it reaches that node's
+  // resolved turn budget we force a final text-only summary instead of running
+  // more tools. Run-scoped (a resume starts fresh).
+  const nodeTurnCounts = new Map<string, number>();
 
   // --- Execution event emission (live progress + debugger) ---
   const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
+  // A custom emitter forwards child events onto the parent channel. Recovery
+  // records for persisted children must instead append to the child's own log;
+  // omitting the emitter selects that direct durable path.
+  const recoveryEmit: EmitFn | undefined = input.emit ? undefined : emit;
   // Emission is tracked by message IDENTITY, not index: ProcessNode.post
   // REPLACES sharedState.messages with a system-message-prefixed copy of the
   // node context, so an index cursor shifts and re-emits the last pre-step
@@ -778,12 +1717,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // so state persisted before #87 (no cacheReadTokens) doesn't produce NaN.
     const msgCacheRead = msg.usage.cacheReadTokens ?? 0;
     if (msgCacheRead) totals.cacheReadTokens = (totals.cacheReadTokens ?? 0) + msgCacheRead;
+    const msgCacheWrite = msg.usage.cacheWriteTokens ?? 0;
+    if (msgCacheWrite) totals.cacheWriteTokens = (totals.cacheWriteTokens ?? 0) + msgCacheWrite;
     const nodeKey = msg.processNodeId || 'unknown';
     const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
     node.promptTokens += msg.usage.promptTokens;
     node.completionTokens += msg.usage.completionTokens;
     node.totalTokens += msg.usage.totalTokens;
     if (msgCacheRead) node.cacheReadTokens = (node.cacheReadTokens ?? 0) + msgCacheRead;
+    if (msgCacheWrite) node.cacheWriteTokens = (node.cacheWriteTokens ?? 0) + msgCacheWrite;
     totals.byNode[nodeKey] = node;
     sharedState.usage = totals;
     emit({
@@ -794,6 +1736,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       totalTokens: msg.usage.totalTokens,
       costUsd: 0,
       ...(msgCacheRead ? { cacheReadTokens: msgCacheRead } : {}),
+      ...(msgCacheWrite ? { cacheWriteTokens: msgCacheWrite } : {}),
     });
   };
 
@@ -818,7 +1761,55 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
   };
 
+  const applyRepeatGuard = (processedCalls: readonly import('./types').ToolCallInfo[] | undefined) => {
+    const guardState = sharedState.toolRepeatGuard
+      ?? { logicalRunId, entries: [] };
+    sharedState.toolRepeatGuard = guardState;
+    const decision = applyToolRepeatGuard(guardState, processedCalls);
+    if (decision.raiseTemperature) {
+      sharedState.temperatureOverrideOnce = TOOL_REPEAT_TEMPERATURE;
+      log.info(`Repeated-tool guard raised the next model turn temperature for ${effectiveConvId}.`);
+    }
+    for (const content of decision.hints) {
+      sharedState.messages.push({
+        id: crypto.randomUUID(),
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+        processNodeId: sharedState.currentNodeId,
+        // Synthetic control-plane guidance must survive latest-message and
+        // isolated input scoping so it reaches the very next model turn.
+        injected: true,
+      } as FlujoChatMessage);
+    }
+  };
+
   emit({ type: 'run:start', flowId: sharedState.flowId });
+  await commitRecoveryTransition(storageKey, sharedState, 'running', {}, recoveryEmit);
+
+  // --- Elicitation context: bind active run to each MCP server in this flow ---
+  // The elicitation handler (registered at connect time) looks up the active
+  // conversationId + unattended flag here when a server calls elicitation/create.
+  const elicitationServerNames: string[] = [];
+  if (sharedState.flowId) {
+    try {
+      const elicitFlow = sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId);
+      if (elicitFlow) {
+        for (const node of elicitFlow.nodes || []) {
+          const serverName = node.data?.properties?.boundServer as string | undefined;
+          if (node.data?.type === 'mcp' && serverName) {
+            elicitationServerNames.push(serverName);
+            setElicitationContext(serverName, {
+              conversationId: effectiveConvId,
+              getUnattended: () => !!(sharedState.unattended),
+            });
+          }
+        }
+      }
+    } catch (err) {
+      log.debug('Could not enumerate MCP servers for elicitation context; skipping', { err });
+    }
+  }
 
   // --- Pre-run consistency check (blocking) ---
   // Only at the start of a run: a genuine new user turn or a brand-new
@@ -831,8 +1822,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // error path below formats the result (and emits run:done).
   if ((userTurn || stateSource === 'new') && sharedState.flowId) {
     try {
-      // Quick-Chat snapshots aren't in the store, so validate the in-memory
-      // object; everything else validates by id (unchanged path).
+      // Validate the pinned execution definition, including saved-flow runs.
+      // Legacy conversations without a snapshot retain the by-id path.
       const validation = sharedState.flowSnapshot
         ? await validateFlowObjectForRun(sharedState.flowSnapshot)
         : await validateFlowForRun(sharedState.flowId);
@@ -863,19 +1854,320 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // subflow child has its own SharedState, so the parent's flag only reaches it
   // through the parentRunId chain. Once an ancestor is found cancelled, the flag
   // is copied onto this state so descendants (and later checks) short-circuit.
+  let cancelledByAncestor = false;
+  const runtimeAbortSignal = combineAbortSignals(
+    input.abortSignal,
+    input.executionAuthority?.signal,
+  );
+  Object.defineProperty(sharedState, 'abortSignal', {
+    value: runtimeAbortSignal,
+    configurable: true,
+    writable: true,
+    enumerable: false,
+  });
   const runCancelled = (): boolean => {
+    if (runtimeAbortSignal?.aborted) {
+      sharedState.isCancelled = true;
+      return true;
+    }
     if (sharedState.isCancelled) return true;
     if (isCancelledByAncestry(sharedState.parentRunId, FlowExecutor.conversationStates)) {
+      cancelledByAncestor = true;
       sharedState.isCancelled = true;
       return true;
     }
     return false;
   };
 
+  const processToolCallsRecoverably = async (
+    args: Parameters<typeof ModelHandler.processToolCalls>[0],
+  ): ReturnType<typeof ModelHandler.processToolCalls> => {
+    await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'before', recoveryEmit);
+    try {
+      const result = await ModelHandler.processToolCalls({
+        ...args,
+        signal: combineAbortSignals(args.signal, runtimeAbortSignal),
+        beforeToolDispatch: input.executionAuthority?.assertCurrent,
+        executionAuthority: sharedState.executionAuthority,
+        executionExtensionContext: sharedState.executionExtensionContext,
+        personaAttribution: sharedState.personaAttribution,
+      });
+      if (!result.success) {
+        await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
+      }
+      return result;
+    } catch (error) {
+      await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
+      throw error;
+    }
+  };
+
+  // --- Mid-run steering (user intervention while the run is in flight) --------
+  // A correction is only useful if it reaches the model that is going the wrong
+  // way, so messages posted to /inject are folded into THIS run at the next safe
+  // boundary rather than queued for a run of their own.
+  //
+  // "Safe" means the transcript is well-formed: an assistant `tool_calls` turn
+  // whose results have not been appended yet must never be split by a user
+  // message (every provider 400s on that shape — the same invariant issue #256
+  // repairs after a crash). When the tail is mid-exchange we simply leave the
+  // messages in the inbox and try again on the next iteration, which is at most
+  // one tool batch away. This is also what defers a drain past the debug
+  // pending-tool-calls step below.
+  const hasUnansweredToolCalls = (): boolean => {
+    const answered = new Set<string>();
+    for (const m of sharedState.messages) {
+      if (m.role === 'tool') {
+        const id = (m as { tool_call_id?: string }).tool_call_id;
+        if (id) answered.add(id);
+      }
+    }
+    return sharedState.messages.some(
+      (m) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.tool_calls) &&
+        m.tool_calls.some((tc) => tc.id && !answered.has(tc.id)),
+    );
+  };
+
+  /**
+   * Fold any waiting steering messages into the live transcript. Returns true
+   * when at least one was folded in (the caller keeps executing so the model
+   * sees it on its very next call). Every child has its own addressable inbox,
+   * including ephemeral children. Agent messages use this same safe boundary.
+  */
+  const drainSteering = async (): Promise<boolean> => {
+    if (hasUnansweredToolCalls()) {
+      log.debug(`Steering message(s) waiting for ${effectiveConvId} but a tool exchange is in flight; deferring.`);
+      return false;
+    }
+    // Persona deliveries remain pending in the durable mailbox until this
+    // transcript-safe boundary consumes and acknowledges their stable ids.
+    // Generic fence assertions intentionally have no delivery side effects.
+    await sharedState.executionAuthority?.pollRelatedInputs?.();
+    if (steeringCount(effectiveConvId) === 0) return false;
+    await resumeSubflowOrchestrator(sharedState);
+    const injected = takeSteeringMessages(effectiveConvId);
+    if (injected.length === 0) return false;
+    const existingIds = new Set(sharedState.messages
+      .map((message) => message.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0));
+    const newlyFolded = injected.filter((message) =>
+      !message.id || !existingIds.has(message.id));
+    let foldedDurably = newlyFolded.length === 0;
+    try {
+      // Stamp the current node so the message is attributed to the step it is
+      // steering (live-view lane placement + subflow projection tagging).
+      for (const m of newlyFolded) {
+        if (!m.processNodeId && sharedState.currentNodeId) m.processNodeId = sharedState.currentNodeId;
+      }
+      if (newlyFolded.length > 0) {
+        sharedState.messages.push(...newlyFolded);
+        sharedState.lastUserMessageAt = newlyFolded[newlyFolded.length - 1].timestamp ?? Date.now();
+        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+        emitNewMessages();
+        // Per-step durability is the append-only log, exactly as for tool
+        // results (the log refuses ephemeral runs, which have no transcript).
+        if (!sharedState.ephemeral) {
+          await appendRawForState(
+            sharedState,
+            newlyFolded.map(message => ({ type: 'message', message })),
+          );
+        }
+        foldedDurably = true;
+      }
+      const stableIds = injected
+        .map((message) => message.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      if (stableIds.length > 0) {
+        await sharedState.executionAuthority?.acknowledgeRelatedInputs?.(stableIds);
+      }
+      log.info(`Folded ${newlyFolded.length} steering message(s) into the live run for ${effectiveConvId}.`);
+      // An SDK may have persisted the transcript before rejecting delivery.
+      // Its requeued message must still trigger another model turn even though
+      // the stable transcript ID is already present.
+      return true;
+    } catch (error) {
+      // If transcript persistence failed, undo the in-memory fold before
+      // retrying. If only the durable mailbox ACK failed, keep the already
+      // persisted fold; the next poll is deduplicated by stable message id and
+      // retries acknowledgement without appending a second copy.
+      if (!foldedDurably && newlyFolded.length > 0) {
+        sharedState.messages.splice(
+          Math.max(0, sharedState.messages.length - newlyFolded.length),
+          newlyFolded.length,
+        );
+        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      }
+      requeueSteeringMessages(effectiveConvId, injected);
+      log.warn(`Failed to fold steering message(s) for ${effectiveConvId}; re-queued`, error);
+      return false;
+    }
+  };
+
   const singleStep = !!sharedState.debugMode && !continueDebug;
-  const pauseForDebug = () => {
+  if (!userTurn && sharedState.status === 'paused_debug') {
+    // A Step request resumes one safe boundary. Mark the transient in-flight
+    // state accurately; pauseForDebug below parks it again before returning.
+    sharedState.status = 'running';
+  }
+  type DebugPausePhase =
+    | 'before-node'
+    | 'after-node'
+    | 'before-model'
+    | 'after-model'
+    | 'before-tool'
+    | 'after-tool'
+    | 'before-handoff'
+    | 'after-handoff';
+  /** The tool breakpoint (if any) armed for this batch of tool calls. Decodes
+   *  namespaced MCP names so `tool:read_file` matches `mcp_<slug>_<hash>`. */
+  const matchedToolBreakpointName = (toolCalls: readonly { function?: { name?: string } }[] | undefined) =>
+    matchToolBreakpoint(
+      sharedState.breakpoints,
+      toolCalls,
+      (name) => decodeToolName(name, sharedState.toolNameMap),
+    );
+  const hasAttachRequest = () =>
+    !!sharedState.debugPauseRequested
+    || !!sharedState.breakpoints?.includes(ATTACH_BREAKPOINT);
+  const consumeAttachRequest = () => {
+    const requested = hasAttachRequest();
+    if (!requested) return false;
+    sharedState.debugPauseRequested = false;
+    // Backward compatibility for clients that still arm the legacy sentinel.
+    sharedState.breakpoints = (sharedState.breakpoints ?? []).filter(b => b !== ATTACH_BREAKPOINT);
+    return true;
+  };
+  type BoundaryDetails = Omit<DebugBoundary, 'index' | 'timestamp' | 'stateSnapshot'>;
+  const toolNodeIdsFor = (
+    toolCalls: readonly OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined,
+  ): string[] | undefined => {
+    if (!toolCalls?.length) return undefined;
+    const ids = Array.from(new Set(toolCalls
+      .map(call => sharedState.toolNameMap?.[call.function.name]?.nodeId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)));
+    return ids.length > 0 ? ids : undefined;
+  };
+  const latestModelInput = () => {
+    const step = sharedState.executionTrace?.[sharedState.executionTrace.length - 1];
+    return step?.modelInputs?.[step.modelInputs.length - 1] ?? step?.modelInput;
+  };
+  const previewNextModelInput = async () => {
+    // Some focused tests replace FlowExecutor with a deliberately small mock;
+    // keep the preview additive so those legacy seams and recovered runtimes
+    // still fall back to the ordinary conversation/state inspector.
+    const preview = (FlowExecutor as typeof FlowExecutor & {
+      previewNextModelInput?: typeof FlowExecutor.previewNextModelInput;
+    }).previewNextModelInput;
+    if (typeof preview !== 'function') return null;
+    try {
+      return await preview.call(FlowExecutor, sharedState);
+    } catch (error) {
+      log.warn(`Could not prepare debugger wire preview for conv ${effectiveConvId}`, error);
+      return null;
+    }
+  };
+  const captureBoundaryState = () => {
+    const lastMessage = sharedState.messages[sharedState.messages.length - 1];
+    return {
+      status: sharedState.status,
+      currentNodeId: sharedState.currentNodeId,
+      messageCount: sharedState.messages.length,
+      ...(lastMessage ? {
+        lastMessage: {
+          id: lastMessage.id,
+          role: lastMessage.role,
+          processNodeId: lastMessage.processNodeId,
+          ...(lastMessage.tool_calls?.length
+            ? { toolCallIds: lastMessage.tool_calls.map(call => call.id) }
+            : {}),
+        },
+      } : {}),
+      ...(sharedState.variables ? { variables: cloneDeep(sharedState.variables) } : {}),
+      ...(sharedState.usage ? { usage: cloneDeep(sharedState.usage) } : {}),
+      ...(sharedState.lastResponse !== undefined
+        ? { lastResponse: cloneDeep(sharedState.lastResponse) }
+        : {}),
+      ...(sharedState.handoffInput ? { handoffInput: cloneDeep(sharedState.handoffInput) } : {}),
+      ...(sharedState.pendingSubflowReturn
+        ? { pendingSubflowReturn: cloneDeep(sharedState.pendingSubflowReturn) }
+        : {}),
+    };
+  };
+  const inferredBoundary = (
+    phase: DebugPausePhase | undefined,
+    nodeId: string | undefined,
+  ): BoundaryDetails | undefined => {
+    if (!phase) return undefined;
+    if (phase === 'before-node' || phase === 'after-node') {
+      return { operation: 'node', phase: phase === 'before-node' ? 'before' : 'after', nodeId };
+    }
+    if (phase === 'before-model' || phase === 'after-model') {
+      return {
+        operation: 'model',
+        phase: phase === 'before-model' ? 'before' : 'after',
+        nodeId,
+        ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+      };
+    }
+    if (phase === 'before-tool' || phase === 'after-tool') {
+      return { operation: 'tool', phase: phase === 'before-tool' ? 'before' : 'after', nodeId };
+    }
+    return { operation: 'handoff', phase: phase === 'before-handoff' ? 'before' : 'after', nodeId };
+  };
+  const pauseForDebug = (options: {
+    reason?: 'debug' | 'breakpoint';
+    phase?: DebugPausePhase;
+    nodeId?: string;
+    kind?: 'node' | 'tool' | 'attach';
+    toolName?: string;
+    boundary?: BoundaryDetails;
+  } = {}) => {
+    const nodeId = options.nodeId ?? sharedState.currentNodeId;
+    const boundary = options.boundary ?? inferredBoundary(options.phase, nodeId);
+    if (boundary) {
+      const index = (sharedState.debugBoundaryCounter ?? 0) + 1;
+      sharedState.debugBoundaryCounter = index;
+      sharedState.debugBoundary = {
+        ...boundary,
+        index,
+        timestamp: new Date().toISOString(),
+        stateSnapshot: captureBoundaryState(),
+      };
+    }
     sharedState.status = 'paused_debug';
-    emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
+    sharedState.debugMode = true;
+    if (options.kind && nodeId) {
+      emit({
+        type: 'breakpoint:hit',
+        node: { nodeId },
+        kind: options.kind,
+        ...(options.toolName ? { toolName: options.toolName } : {}),
+      });
+    }
+    emit({
+      type: 'run:paused',
+      reason: options.reason ?? 'debug',
+      ...(nodeId ? { node: { nodeId } } : {}),
+      ...(options.phase ? { phase: options.phase } : {}),
+      ...(options.toolName ? { toolName: options.toolName } : {}),
+    });
+  };
+  const pauseForAttachAtSafePoint = async (
+    phase: DebugPausePhase,
+    boundary?: BoundaryDetails,
+  ): Promise<boolean> => {
+    if (!consumeAttachRequest()) return false;
+    pauseForDebug({ reason: 'breakpoint', phase, kind: 'attach', boundary });
+    FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    try {
+      sharedState.updatedAt = Date.now();
+      await persistState(storageKey, sharedState);
+    } catch (error) {
+      log.error(`Failed to save state while attaching debugger for conv ${effectiveConvId}:`, error);
+    }
+    return true;
   };
 
   try {
@@ -901,18 +2193,114 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           break;
         }
 
+        // meeting_control(silent) is a terminal control for this participant's
+        // current barrier round. The action buffer is freshly installed for
+        // every round, so this stops only this run and naturally resets on the
+        // next coordinator turn.
+        if (isMeetingTurnSilent(sharedState.meetingTurn)) {
+          log.info(`Meeting participant ended the current round silently for conv ${effectiveConvId}.`);
+          sharedState.status = 'completed';
+          currentAction = FINAL_RESPONSE_ACTION;
+          break;
+        }
+
+        // A heartbeat can fail or another owner can recover an expired lease
+        // between loop iterations without this process receiving an abort event.
+        // Verify the authoritative fence before doing more Persona work.
+        await input.executionAuthority?.assertCurrent();
+        if (input.executionExtensionContext) await (await import('@/backend/execution/extensions')).assertExecutionExtensionCurrent(input.executionExtensionContext);
+
+        // Mid-run steering: deliver anything the user sent while this run has
+        // been working, BEFORE the next model call, so the correction lands on
+        // the very next turn instead of after the run finishes. Deferred
+        // automatically while a tool exchange is unresolved (see drainSteering).
+        // The first iteration also picks up anything left over from a previous
+        // run that ended before its inbox was drained.
+        await drainSteering();
+
+        // A completed model turn can be parked before its action is applied.
+        // Consume that action exactly once on resume instead of calling the
+        // model again and potentially producing a different decision.
+        let actionReadyFromDebugPause = false;
+        let steppedThroughControlNode = false;
+        if (sharedState.debugPendingAction) {
+          currentAction = sharedState.debugPendingAction.action;
+          sharedState.debugPendingAction = undefined;
+          actionReadyFromDebugPause = true;
+          log.info(`[Debug Resume] Applying pending action "${currentAction}" for conv ${effectiveConvId}.`);
+        }
+
+        // Resume a mixed ordinary-tools + handoff batch after an approval,
+        // debugger pause, or process restart. Execute only unanswered ordinary
+        // calls; once none remain, commit the staged edge without another model
+        // turn. Approval/debug pending lists retain precedence while parked.
+        if (
+          !actionReadyFromDebugPause
+          && sharedState.handoffRequested
+          && !sharedState.debugPendingToolCalls?.length
+          && sharedState.status !== 'awaiting_tool_approval'
+        ) {
+          const stagedAssistant = findStagedHandoffAssistant(sharedState);
+          if (stagedAssistant) {
+            const unanswered = unansweredOrdinaryCalls(sharedState, stagedAssistant);
+            currentAction = unanswered.length > 0
+              ? TOOL_CALL_ACTION
+              : sharedState.handoffRequested.edgeId;
+            actionReadyFromDebugPause = true;
+            log.info('[Staged Handoff] Resuming mixed tool batch', {
+              conversationId: effectiveConvId,
+              unansweredOrdinaryCalls: unanswered.length,
+              nextAction: currentAction,
+            });
+          }
+        }
+
         // Debug step granularity: execute tool calls a previous step paused before.
-        if (sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
+        if (!actionReadyFromDebugPause && sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
           const pendingCalls = sharedState.debugPendingToolCalls;
-          sharedState.debugPendingToolCalls = undefined;
-          log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
-          const toolProcessingResult = await ModelHandler.processToolCalls({
-            toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap, emit,
+          // After one call in a model-produced batch, expose the next call as its
+          // own BEFORE boundary. Advancing from AFTER call N to BEFORE call N+1
+          // intentionally performs no side effect.
+          if (
+            singleStep
+            && sharedState.debugBoundary?.operation === 'tool'
+            && sharedState.debugBoundary.phase === 'after'
+          ) {
+            const nextCall = pendingCalls[0];
+            pauseForDebug({
+              phase: 'before-tool',
+              boundary: {
+                operation: 'tool',
+                phase: 'before',
+                nodeId: sharedState.currentNodeId,
+                toolCalls: [nextCall],
+                ...(toolNodeIdsFor([nextCall]) ? { toolNodeIds: toolNodeIdsFor([nextCall]) } : {}),
+                ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+              },
+            });
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save before-tool debugger boundary for conv ${effectiveConvId}:`, error);
+            }
+            break;
+          }
+
+          const callsToExecute = singleStep ? pendingCalls.slice(0, 1) : pendingCalls;
+          const remainingCalls = pendingCalls.slice(callsToExecute.length);
+          sharedState.debugPendingToolCalls = remainingCalls.length > 0 ? remainingCalls : undefined;
+          log.info(`[Debug Step] Executing ${callsToExecute.length} pending tool call(s) for conv ${effectiveConvId}.`);
+          const toolProcessingResult = await processToolCallsRecoverably({
+            toolCalls: callsToExecute, toolNameMap: sharedState.toolNameMap, emit,
             // Run-resource auto-capture: ephemeral (subflow-child) runs never
             // write resources — same policy as persistConversationState.
             conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+            runId: logicalRunId,
             node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
             shouldAbort: runCancelled,
+            mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
           });
           if (!toolProcessingResult.success) {
             log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
@@ -927,41 +2315,75 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             processNodeId: sharedState.currentNodeId,
           }));
           sharedState.messages.push(...toolResultMessages);
+          applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
           FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
           emitNewMessages();
+          await commitToolCheckpoint(storageKey, sharedState, callsToExecute, 'completed', recoveryEmit);
           try {
             sharedState.updatedAt = Date.now();
             await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
           } catch (error) {
             log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
           }
-          if (singleStep) {
+          const nextModelPreview = remainingCalls.length === 0
+            ? await previewNextModelInput()
+            : null;
+          const afterToolBoundary: BoundaryDetails = {
+            operation: 'tool',
+            phase: 'after',
+            nodeId: sharedState.currentNodeId,
+            toolCalls: callsToExecute,
+            ...(toolNodeIdsFor(callsToExecute) ? { toolNodeIds: toolNodeIdsFor(callsToExecute) } : {}),
+            ...(remainingCalls.length === 0 ? { nextOperation: 'model' as const } : {}),
+            ...(nextModelPreview?.modelInput
+              ? { modelInput: nextModelPreview.modelInput }
+              : latestModelInput()
+                ? { modelInput: latestModelInput() }
+                : {}),
+          };
+          const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', afterToolBoundary);
+          if (singleStep && !attachedAfterTool) {
             log.info(`[Debug Step] Paused after tool execution for conv ${effectiveConvId}.`);
-            pauseForDebug();
-            break;
+            pauseForDebug({ phase: 'after-tool', boundary: afterToolBoundary });
           }
+          if (singleStep || attachedAfterTool) break;
           continue;
         }
 
-        // Breakpoint check.
-        if (!singleStep && sharedState.breakpoints && sharedState.breakpoints.length > 0) {
+        if (!actionReadyFromDebugPause) {
+        // Breakpoint check (node-scoped; `tool:` breakpoints are evaluated after
+        // the model returns, before any resulting action is applied).
+        const armedNodeBreakpoints = nodeBreakpoints(sharedState.breakpoints);
+        const attachArmed = hasAttachRequest();
+        if (!singleStep && (armedNodeBreakpoints.length > 0 || attachArmed)) {
           const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
-          // '*' is a one-shot "attach" breakpoint set by the live-view Attach-
-          // debugger button (setBreakpoints(convId, ['*'])): pause before
-          // whatever node comes next, then consume the sentinel so a subsequent
-          // Continue resumes normally instead of re-pausing at every node.
-          const wildcard = sharedState.breakpoints.includes('*');
-          const hit = !!nextNodeId && (wildcard || sharedState.breakpoints.includes(nextNodeId));
-          if (hit && sharedState.lastBreakNodeId !== nextNodeId) {
+          // '*' is a one-shot "attach" breakpoint set by the Debugger button
+          // (setBreakpoints(convId, ['*'])): pause before whatever node comes
+          // next, then consume the sentinel so a subsequent Continue resumes
+          // normally instead of re-pausing at every node.
+          const wildcard = attachArmed;
+          const hit = !!nextNodeId && (wildcard || armedNodeBreakpoints.includes(nextNodeId));
+          if (hit && (attachArmed || sharedState.lastBreakNodeId !== nextNodeId)) {
             if (wildcard) {
-              sharedState.breakpoints = sharedState.breakpoints.filter(b => b !== '*');
+              consumeAttachRequest();
             }
             log.info(`Breakpoint hit at node ${nextNodeId}${wildcard ? ' (attach)' : ''} for conv ${effectiveConvId}. Pausing.`);
-            sharedState.status = 'paused_debug';
-            sharedState.debugMode = true;
             sharedState.lastBreakNodeId = nextNodeId;
-            emit({ type: 'breakpoint:hit', node: { nodeId: nextNodeId } });
-            emit({ type: 'run:paused', reason: 'breakpoint', node: { nodeId: nextNodeId } });
+            const modelPreview = await previewNextModelInput();
+            pauseForDebug({
+              reason: 'breakpoint',
+              phase: 'before-node',
+              nodeId: nextNodeId,
+              kind: wildcard ? 'attach' : 'node',
+              boundary: {
+                operation: 'node',
+                phase: 'before',
+                nodeId: nextNodeId,
+                ...(modelPreview?.nodeId === nextNodeId
+                  ? { modelInput: modelPreview.modelInput }
+                  : {}),
+              },
+            });
             try {
               sharedState.updatedAt = Date.now();
               await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
@@ -974,6 +2396,37 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           }
         }
 
+        // A debugger-started user turn stops before its very first executable
+        // node. Older debugger sessions did not carry a boundary cursor, so key
+        // this only to the fresh user turn instead of treating every missing
+        // cursor as an initial pause (backward-compatible resumes still run).
+        if (singleStep && userTurn && internalIterations === 1) {
+          const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
+          if (nextNodeId) {
+            const modelPreview = await previewNextModelInput();
+            pauseForDebug({
+              phase: 'before-node',
+              nodeId: nextNodeId,
+              boundary: {
+                operation: 'node',
+                phase: 'before',
+                nodeId: nextNodeId,
+                ...(modelPreview?.nodeId === nextNodeId
+                  ? { modelInput: modelPreview.modelInput }
+                  : {}),
+              },
+            });
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save initial before-node debug boundary for conv ${effectiveConvId}:`, error);
+            }
+            break;
+          }
+        }
+
         if (sharedState.messages.length > 0) {
           const lastFewMessages = sharedState.messages.slice(-3);
           log.verbose(`Message history before step ${internalIterations}`, lastFewMessages);
@@ -981,21 +2434,32 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           log.verbose(`No messages in history before step ${internalIterations}`);
         }
 
-        // 2a. Execute one step of the flow
+        // 2a. Execute one step of the flow. Recovery checkpoints deliberately
+        // order journal append before snapshot persistence, so a restart can
+        // always select the latest fully committed safe boundary.
+        const checkpointNodeId = await FlowExecutor.peekNextNodeId(sharedState)
+          ?? sharedState.currentNodeId;
+        await commitRecoveryCheckpoint(storageKey, sharedState, {
+          phase: 'node:before',
+          nodeId: checkpointNodeId,
+          safe: true,
+        }, recoveryEmit);
+        const assistantMessageIdBeforeStep = [...sharedState.messages].reverse().find(
+          message => message.role === 'assistant',
+        )?.id;
         const stepResult = await FlowExecutor.executeStep(sharedState, emit);
         sharedState = stepResult.sharedState;
         currentAction = stepResult.action;
         emitNewMessages();
-
-        // No mid-loop state snapshot: per-step durability is the append-only
-        // conversation log (every emitted event is appended by the bus tap;
-        // this replaced the old rewrite-the-whole-file-per-step and its 500ms
-        // throttle). The full SharedState snapshot is written only at run
-        // boundaries — initial save, every pause, breakpoints, the final save —
-        // and a storage load folds log messages the snapshot missed back in
-        // (recoverMessagesFromLog).
+        if (currentAction !== ERROR_ACTION) {
+          await commitRecoveryCheckpoint(storageKey, sharedState, {
+            phase: 'node:after',
+            nodeId: checkpointNodeId,
+            safe: true,
+          }, recoveryEmit);
+        }
         sharedState.updatedAt = Date.now();
-        if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+        if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
           const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
           if (firstUserMessage && typeof firstUserMessage.content === 'string') {
             sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -1006,7 +2470,124 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         log.info(`Step ${internalIterations} completed for conv ${effectiveConvId}. Action: ${currentAction}`, { currentNodeId: sharedState.currentNodeId });
         log.verbose(`Shared state after step ${internalIterations}`, sharedState);
 
+        // A Process node execution is one complete model turn. Park HERE —
+        // after the assistant narration/tool arguments are durable, but before
+        // tools, approvals, handoffs, or finalization consume its action. This
+        // is the missing boundary that previously made Step jump straight from
+        // narration to a handoff (and made Attach wait for that handoff).
+        const latestAssistant = [...sharedState.messages].reverse().find(
+          message => message.role === 'assistant',
+        );
+        const completedModelTurn =
+          !!latestAssistant
+          && latestAssistant.id !== assistantMessageIdBeforeStep
+          && latestAssistant.processNodeId === checkpointNodeId;
+        // Only inspect calls produced by this model turn. Looking backwards for
+        // the last assistant with calls would re-trigger an old tool breakpoint
+        // when a later assistant turn contains only final narration.
+        const producedToolCalls = completedModelTurn ? latestAssistant?.tool_calls : undefined;
+        const toolBreakpointName = matchedToolBreakpointName(producedToolCalls);
+        const attachRequested = hasAttachRequest();
+
+        if (
+          currentAction !== ERROR_ACTION
+          && (completedModelTurn || singleStep)
+          && (singleStep || attachRequested || !!toolBreakpointName)
+        ) {
+          const attached = attachRequested ? consumeAttachRequest() : false;
+          const pendingCalls = currentAction === TOOL_CALL_ACTION
+            ? requireFunctionToolCalls(producedToolCalls).filter((call) => !isHandoffToolCall(call))
+            : undefined;
+          const debugHandoff = ![
+            ERROR_ACTION,
+            FINAL_RESPONSE_ACTION,
+            TOOL_CALL_ACTION,
+            STAY_ON_NODE_ACTION,
+          ].includes(currentAction)
+            ? await FlowExecutor.resolveHandoff(sharedState, currentAction)
+            : undefined;
+          const isHandoff = debugHandoff?.isSuccessorEdge === true;
+          // Start/static/control nodes have no meaningful internal work to stop
+          // between their AFTER boundary and their outgoing edge. A Step across
+          // one of those nodes therefore applies the graph transition and parks
+          // at the target node, where the next Process input can be inspected.
+          const transparentControlHandoff = singleStep && !completedModelTurn && isHandoff;
+          steppedThroughControlNode = transparentControlHandoff;
+
+          // Without approvals, the next Step executes exactly this captured
+          // batch and pauses after its results. With approvals enabled, retain
+          // the action instead so resuming still passes through the approval
+          // approval gate rather than accidentally bypassing it.
+          if (!transparentControlHandoff) {
+            if (pendingCalls?.length && !requireApproval) {
+              sharedState.debugPendingToolCalls = pendingCalls;
+            } else {
+              sharedState.debugPendingAction = {
+                action: currentAction,
+                nodeId: checkpointNodeId,
+                phase: 'after-model',
+              };
+            }
+
+            const boundary: BoundaryDetails = isHandoff
+            ? {
+                operation: 'handoff',
+                phase: 'before',
+                nodeId: checkpointNodeId,
+                edgeId: currentAction,
+                ...(debugHandoff.targetNodeId ? { targetNodeId: debugHandoff.targetNodeId } : {}),
+                ...(producedToolCalls?.length ? { toolCalls: producedToolCalls } : {}),
+                previousOperation: completedModelTurn ? 'model' : 'node',
+                ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+              }
+            : pendingCalls?.length
+              ? {
+                  operation: 'tool',
+                  phase: 'before',
+                  nodeId: checkpointNodeId,
+                  toolCalls: [pendingCalls[0]],
+                  ...(toolNodeIdsFor([pendingCalls[0]])
+                    ? { toolNodeIds: toolNodeIdsFor([pendingCalls[0]]) }
+                    : {}),
+                  previousOperation: 'model',
+                  ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+                }
+              : {
+                  operation: 'node',
+                  phase: 'after',
+                  nodeId: checkpointNodeId,
+                  ...(completedModelTurn && latestModelInput() ? { modelInput: latestModelInput() } : {}),
+                };
+            pauseForDebug({
+              reason: attached || toolBreakpointName ? 'breakpoint' : 'debug',
+              phase: isHandoff
+                ? 'before-handoff'
+                : pendingCalls?.length
+                  ? 'before-tool'
+                  : 'after-node',
+              nodeId: checkpointNodeId,
+              kind: attached ? 'attach' : toolBreakpointName ? 'tool' : undefined,
+              ...(toolBreakpointName ? { toolName: toolBreakpointName } : {}),
+              boundary,
+            });
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save state at post-model debug boundary for conv ${effectiveConvId}:`, error);
+            }
+            break;
+          }
+        }
+        }
+
         log.debug(`[Action Handling] Step ${internalIterations}: Received action "${currentAction}" for conv ${effectiveConvId}`);
+
+        if (!currentAction) {
+          sharedState.lastResponse = { success: false, error: 'Execution reached action handling without a node action.' };
+          currentAction = ERROR_ACTION;
+        }
 
         // 2b. Handle the action returned by the step
         if (currentAction === ERROR_ACTION) {
@@ -1018,6 +2599,29 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         if (currentAction === FINAL_RESPONSE_ACTION) {
           log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
           log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
+
+          // Self-orchestrating adapters execute meeting_control locally inside
+          // one provider call. When they return, do not let unattended routing,
+          // steering, or another graph step reopen the participant's turn.
+          if (isMeetingTurnSilent(sharedState.meetingTurn)) {
+            sharedState.status = 'completed';
+            log.info(`Meeting silence completed the current round turn for conv ${effectiveConvId}.`);
+            break;
+          }
+
+          // Graceful landing (issue #253): this FINAL_RESPONSE is the forced
+          // text-only summary we requested when the turn budget was spent. Mark
+          // the run `capped` (a success-like terminal state distinct from error,
+          // so captureVariable/lastOutput chaining still fires on the summary)
+          // and finish — do NOT drive forward or drain steering; the plane has
+          // landed on purpose.
+          if (sharedState.forceSummaryTurn) {
+            sharedState.forceSummaryTurn = false;
+            sharedState.capped = true;
+            sharedState.status = 'capped';
+            log.info(`[#253] Graceful landing complete for conv ${effectiveConvId}; status=capped.`);
+            break;
+          }
 
           // Unattended safety net (issue #218): a Process node that ended its
           // turn on plain text (no tool call / handoff) would silently complete
@@ -1038,6 +2642,21 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             continue;
           }
 
+          // Mid-run steering, last call: a message posted while the model was
+          // producing this final response would otherwise be stranded in the
+          // inbox with the run already over. Fold it in and keep going — the
+          // user asked the running agent something, so the running agent
+          // answers it rather than making them re-send into a fresh turn.
+          if (await drainSteering()) {
+            log.info(`Steering message arrived as ${effectiveConvId} was completing; continuing the run to answer it.`);
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            continue;
+          }
+
+          if (await waitForActiveSubflows(sharedState, runtimeAbortSignal)) {
+            if (await drainSteering()) continue;
+          }
+          if (runCancelled()) break;
           sharedState.status = 'completed';
           log.info(`Setting conversation status to 'completed' for conv ${effectiveConvId}`);
           break;
@@ -1046,43 +2665,102 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         if (currentAction === TOOL_CALL_ACTION) {
           log.info(`[Action Handling] Step ${internalIterations}: Handling TOOL_CALL_ACTION for conv ${effectiveConvId}`);
           log.info(`Tool call action received at step ${internalIterations} for conv ${effectiveConvId}`);
-          const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+          // In a staged handoff, approvals or prior tool results may follow the
+          // owning assistant turn. Locate that turn explicitly and execute only
+          // unanswered ordinary calls; handoff tools are control flow, never MCP
+          // work for ModelHandler.
+          const lastAssistantMsg = sharedState.handoffRequested
+            ? findStagedHandoffAssistant(sharedState)
+            : [...sharedState.messages].reverse().find((message) => message.role === 'assistant');
+          const ordinaryToolCalls = lastAssistantMsg
+            ? unansweredOrdinaryCalls(sharedState, lastAssistantMsg)
+            : [];
 
-          if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
+          if (lastAssistantMsg?.role === 'assistant' && ordinaryToolCalls.length > 0) {
             if (flujo) {
-              // --- Flujo=true: Handle optional approval ---
-              if (requireApproval && sharedState.onApprovalRequired === 'fail') {
-                // Headless fail-fast (#115): a tool needs approval but this run
-                // has no interactive approver. Do NOT execute the tool and do
-                // NOT hang — end the run with a structured approval-required
-                // error so the scheduler can record a `needs_approval` outcome.
-                const firstCall = lastAssistantMsg.tool_calls[0];
-                const toolName =
-                  firstCall && firstCall.type === 'function' ? firstCall.function.name : 'unknown';
-                log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
-                sharedState.status = 'error';
-                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
-                sharedState.lastResponse = {
-                  success: false,
-                  error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
-                  errorDetails: {
-                    message: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
-                    type: 'approval_required',
-                    name: toolName,
-                  },
-                };
-                currentAction = ERROR_ACTION;
-                break;
+              // --- Graceful landing at the agentic-turn cap (issue #253) ---
+              // The R/R tool loop is where per-node maxTurns is actually enforced
+              // (adapters ignore it — FLUJO drives the loop here). Count this
+              // node's tool turns; once the budget is spent, DO NOT run more
+              // tools — answer the pending calls synthetically and force one
+              // final text-only summary turn so the run "lands the plane".
+              const capNodeId = sharedState.currentNodeId;
+              // A mixed batch has already selected a successor. Its ordinary
+              // calls are part of that committed operation and must not be
+              // discarded by the source node's agentic-turn landing cap.
+              if (capNodeId && !sharedState.forceSummaryTurn && !sharedState.handoffRequested) {
+                const turns = (nodeTurnCounts.get(capNodeId) ?? 0) + 1;
+                nodeTurnCounts.set(capNodeId, turns);
+                const cap = sharedState.turnBudgets?.[capNodeId] ?? DEFAULT_AGENTIC_MAX_TURNS;
+                if (turns >= cap) {
+                  log.info(`[#253] Turn budget (${cap}) reached for node ${capNodeId} on conv ${effectiveConvId}; forcing a graceful summary turn instead of executing tools.`);
+                  const nowTs = Date.now();
+                  // Answer every still-pending tool call synthetically so the
+                  // transcript stays well-formed (unanswered tool_calls 400).
+                  const cappedToolResults: FlujoChatMessage[] = ordinaryToolCalls.map((tc) => ({
+                    id: crypto.randomUUID(),
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    content: GRACEFUL_CAP_TOOL_RESULT,
+                    timestamp: nowTs,
+                    processNodeId: capNodeId,
+                  } as FlujoChatMessage));
+                  const summaryInstruction: FlujoChatMessage = {
+                    id: crypto.randomUUID(),
+                    role: 'user',
+                    content: GRACEFUL_CAP_SUMMARY_INSTRUCTION,
+                    timestamp: nowTs + 1,
+                    processNodeId: capNodeId,
+                  } as FlujoChatMessage;
+                  sharedState.messages.push(...cappedToolResults, summaryInstruction);
+                  sharedState.forceSummaryTurn = true;
+                  sharedState.cappedReason = 'maxTurns';
+                  FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                  emitNewMessages();
+                  if (!sharedState.ephemeral) {
+                    try {
+                      await appendRawForState(
+                        sharedState,
+                        [...cappedToolResults, summaryInstruction].map((m) => ({ type: 'message', message: m })),
+                      );
+                    } catch (err) {
+                      log.warn(`Failed to append graceful-cap messages to log for ${effectiveConvId}`, err);
+                    }
+                  }
+                  continue;
+                }
               }
+              // --- Flujo=true: Handle optional approval ---
               if (requireApproval) {
+                if (sharedState.onApprovalRequired === 'fail') {
+                  // Headless fail-fast (#115): approval was explicitly required,
+                  // but this run has no interactive approver. Execute nothing.
+                  const firstCall = ordinaryToolCalls[0];
+                  const toolName = firstCall?.function.name ?? 'unknown';
+                  log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
+                  sharedState.status = 'error';
+                  sharedState.pendingToolCalls = ordinaryToolCalls;
+                  sharedState.lastResponse = {
+                    success: false,
+                    error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
+                    errorDetails: {
+                      message: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
+                      type: 'approval_required',
+                      name: toolName,
+                    },
+                  };
+                  currentAction = ERROR_ACTION;
+                  break;
+                }
+
                 log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
                 sharedState.status = 'awaiting_tool_approval';
-                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
+                sharedState.pendingToolCalls = ordinaryToolCalls;
                 sharedState.lastResponse = undefined;
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
                   sharedState.updatedAt = Date.now();
-                  if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+                  if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
                     const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
                     if (firstUserMessage && typeof firstUserMessage.content === 'string') {
                       sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -1094,27 +2772,18 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 } catch (error) {
                   log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
                 }
-                emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
-                break;
-              } else if (singleStep) {
-                log.info(`[Debug Step] Paused before executing ${lastAssistantMsg.tool_calls.length} tool call(s) for conv ${effectiveConvId}.`);
-                sharedState.debugPendingToolCalls = lastAssistantMsg.tool_calls;
-                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                try {
-                  sharedState.updatedAt = Date.now();
-                  await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
-                } catch (error) {
-                  log.error(`Failed to save state before debug tool pause for conv ${effectiveConvId}:`, error);
-                }
-                pauseForDebug();
+                emit({ type: 'run:awaiting_approval', pendingToolCalls: ordinaryToolCalls });
                 break;
               } else {
-                log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
-                const toolProcessingResult = await ModelHandler.processToolCalls({
-                  toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit,
+                log.info(`[flujo=true, requireApproval=false] Processing ${ordinaryToolCalls.length} tools internally for conv ${effectiveConvId}`);
+                const toolProcessingResult = await processToolCallsRecoverably({
+                  toolCalls: ordinaryToolCalls, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                  runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
+                  mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
+                  unattended: sharedState.unattended, // Issue #258
                 });
 
                 if (!toolProcessingResult.success) {
@@ -1132,17 +2801,41 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   processNodeId: sharedState.currentNodeId,
                 }));
                 sharedState.messages.push(...toolResultMessagesWithTimestamp);
+                applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
-                log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
-                continue;
+                await commitToolCheckpoint(storageKey, sharedState, ordinaryToolCalls, 'completed', recoveryEmit);
+                if (isMeetingTurnSilent(sharedState.meetingTurn)) {
+                  sharedState.status = 'completed';
+                  currentAction = FINAL_RESPONSE_ACTION;
+                  log.info(`Meeting silence stopped the agentic tool loop for conv ${effectiveConvId}.`);
+                  break;
+                }
+                const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', {
+                  operation: 'tool',
+                  phase: 'after',
+                  nodeId: sharedState.currentNodeId,
+                  toolCalls: ordinaryToolCalls,
+                  ...(toolNodeIdsFor(ordinaryToolCalls)
+                    ? { toolNodeIds: toolNodeIdsFor(ordinaryToolCalls) }
+                    : {}),
+                  nextOperation: 'model',
+                });
+                if (attachedAfterTool) break;
+                if (sharedState.handoffRequested) {
+                  currentAction = sharedState.handoffRequested.edgeId;
+                  log.info(`[Staged Handoff] Ordinary tools completed; committing edge ${currentAction}.`);
+                } else {
+                  log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
+                  continue;
+                }
               }
             } else {
               // --- flujo=false: Handle internal vs external tools ---
               log.info(`[flujo=false] Tool call action received for conv ${effectiveConvId}. Checking tool types.`);
-              const allToolCalls = lastAssistantMsg.tool_calls || [];
-              const internalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
-              const externalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
+              const allToolCalls = ordinaryToolCalls;
+              const internalTools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
+              const externalTools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
 
               allToolCalls.forEach(tc => {
                 if (tc.type === 'function' && isInternalToolName(tc.function.name, sharedState.toolNameMap)) {
@@ -1156,11 +2849,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
               if (internalTools.length > 0) {
                 log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);
-                const toolProcessingResult = await ModelHandler.processToolCalls({
+                const toolProcessingResult = await processToolCallsRecoverably({
                   toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                  runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
+                  mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
                 });
 
                 if (!toolProcessingResult.success) {
@@ -1178,7 +2873,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   processNodeId: sharedState.currentNodeId,
                 }));
                 sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
+                applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                emitNewMessages();
+                await commitToolCheckpoint(storageKey, sharedState, internalTools, 'completed', recoveryEmit);
                 log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (flujo=false).`);
                 continue;
 
@@ -1232,7 +2930,23 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           const nextNodeId = handoff.targetNodeId;
           if (typeof nextNodeId === 'string' && nextNodeId.length > 0) {
 
-            const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+            // Reset any caller handoff input at the transition: it is single-shot
+            // and scoped to exactly ONE target node. The block below re-sets it
+            // for `nextNodeId` when this handoff carries caller args. Clearing it
+            // here (rather than relying on the target's prep to consume it) keeps
+            // it from leaking to a later node or a REVISIT of the same node — a
+            // process node reads it WITHOUT clearing (its tool loop re-runs prep
+            // each iteration), so its lifecycle is managed here instead.
+            sharedState.handoffInput = undefined;
+
+            // Ordinary tool results may now sit after the assistant batch. Keep
+            // the handoff bound to the turn that originally selected this edge.
+            const lastAssistantMsg = sharedState.handoffRequested
+              ? findStagedHandoffAssistant(sharedState)
+              : [...sharedState.messages].reverse().find((message) => message.role === 'assistant');
+            const handoffCallsForBoundary = lastAssistantMsg?.role === 'assistant'
+              ? requireFunctionToolCalls(lastAssistantMsg.tool_calls).filter(isHandoffToolCall)
+              : undefined;
 
             if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
               const allHandoffCalls = lastAssistantMsg.tool_calls.filter(tc =>
@@ -1268,20 +2982,38 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               // the target node's prep consumes and clears it. A malformed args
               // string must NEVER break routing — parse defensively per call.
               const briefs: string[] = [];
+              const sessionKeys: Array<string | null> = [];
               let callerPrompt = '';
+              let signalBody = '';
               let callerFlows: string[] | undefined;
               let callerConcurrency: number | undefined;
+              const isSubflowHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'subflow';
               callsToAnswer.forEach((call, laneIdx) => {
                 if (call.type === 'function') {
                   try {
                     const parsedArgs = JSON.parse(call.function.arguments || '{}');
                     const task = typeof parsedArgs?.task === 'string' ? parsedArgs.task.trim() : '';
                     const prompt = typeof parsedArgs?.prompt === 'string' ? parsedArgs.prompt.trim() : '';
+                    const body = typeof parsedArgs?.body === 'string' ? parsedArgs.body.trim() : '';
+                    if (!signalBody && body) signalBody = body;
                     // `task` is always a spawn brief; a `prompt` on a MULTI-call
                     // turn clearly means per-instance instructions too. On a
                     // single-call turn `prompt` keeps its issue-#96 meaning.
                     const brief = task || (callsToAnswer.length > 1 ? prompt : '');
-                    if (brief) briefs.push(brief);
+                    // Every Subflow handoff call is one queued job, even when it
+                    // omits `task` and therefore uses the node's configured input.
+                    // Other target types retain the old non-empty-only behavior.
+                    if (isSubflowHandoff || brief) {
+                      briefs.push(brief);
+                      const sessionKey = normalizeSessionKey(parsedArgs?.sessionKey);
+                      sessionKeys.push(sessionKey ?? null);
+                      if (parsedArgs?.sessionKey !== undefined && !sessionKey) {
+                        log.warn('Ignoring invalid Subflow sessionKey; this job will use fresh/per-node behavior', {
+                          targetNodeId: nextNodeId,
+                          lane: laneIdx + 1,
+                        });
+                      }
+                    }
                     if (!callerPrompt && prompt) callerPrompt = prompt;
                     if (!callerFlows && Array.isArray(parsedArgs?.parallelFlows)) {
                       const flows = parsedArgs.parallelFlows.filter(
@@ -1331,17 +3063,24 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               // `task`-style call still drives an isolated allowCallerPrompt
               // subflow that never opted into spawning.
               if (!callerPrompt && briefs.length === 1) callerPrompt = briefs[0];
-              if (callerPrompt || briefs.length > 0 || (callerFlows && callerFlows.length > 0)) {
+              const isSignalHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'signal';
+              const hasCallerSessionKey = sessionKeys.some((key) => key !== null);
+              if (isSignalHandoff || signalBody || callerPrompt || briefs.length > 0 || hasCallerSessionKey || (callerFlows && callerFlows.length > 0)) {
                 sharedState.handoffInput = {
                   targetNodeId: nextNodeId,
                   prompt: callerPrompt,
+                  ...(isSignalHandoff ? { fromHandoffTool: true } : {}),
+                  ...(signalBody ? { signalBody } : {}),
                   ...(briefs.length > 0 ? { tasks: briefs } : {}),
+                  ...(hasCallerSessionKey ? { sessionKeys } : {}),
                   ...(callerFlows && callerFlows.length > 0 ? { parallelFlows: callerFlows } : {}),
                   ...(callerConcurrency !== undefined ? { concurrencyLimit: callerConcurrency } : {}),
                 };
                 log.info(`Captured caller handoff input for node ${nextNodeId}`, {
                   promptChars: callerPrompt.length,
+                  signalBodyChars: signalBody.length,
                   spawnBriefs: briefs.length,
+                  sessionKeys: sessionKeys.filter((key) => key !== null).length,
                   fanoutCount: callerFlows?.length ?? 0,
                 });
               } else {
@@ -1353,18 +3092,23 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 // an empty prompt and stall silently. Surface a clear, actionable
                 // warning instead of proceeding quietly.
                 try {
-                  const handoffFlow = await flowService.getFlow(sharedState.flowId);
+                  const handoffFlow = sharedState.flowSnapshot
+                    ?? await flowService.getFlow(sharedState.flowId);
                   const targetNode = handoffFlow?.nodes?.find(n => n.id === nextNodeId);
-                  const targetProps = targetNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string } | undefined;
+                  const targetProps = targetNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
+                  // The target's authored isolated message: promptTemplate for a
+                  // subflow, isolatedPrompt for a process node (issue #96).
+                  const authoredIsolated =
+                    targetNode?.type === 'subflow' ? targetProps?.promptTemplate : targetProps?.isolatedPrompt;
                   if (
-                    targetNode?.type === 'subflow' &&
+                    (targetNode?.type === 'subflow' || targetNode?.type === 'process') &&
                     targetProps?.inputMode === 'isolated' &&
                     targetProps?.allowCallerPrompt !== false &&
                     targetProps?.allowCallerFanout !== true &&
-                    !(targetProps?.promptTemplate?.trim())
+                    !(authoredIsolated?.trim())
                   ) {
                     log.warn(
-                      `Handoff to isolated subflow node ${nextNodeId} has neither a caller-supplied prompt nor an authored promptTemplate; the subflow will start with an empty prompt and may stall. The routing model should have supplied the required "prompt" argument (issue #169).`,
+                      `Handoff to isolated ${targetNode?.type} node ${nextNodeId} has neither a caller-supplied prompt nor an authored message; the target will start with an empty prompt and may stall. The routing model should have supplied the required "prompt" argument (issue #169).`,
                       { targetNodeId: nextNodeId },
                     );
                   }
@@ -1385,6 +3129,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
             emitNewMessages();
             const fromNodeId = sharedState.currentNodeId;
+            // The engine marks only Process -> one-way TERMINAL Subflow calls.
+            // Sequential Subflows and explicit bidirectional edges omit this,
+            // and every later transition clears any previous marker.
+            sharedState.pendingSubflowReturn = handoff.implicitSubflowReturn;
             sharedState.currentNodeId = nextNodeId;
             sharedState.handoffRequested = undefined;
             emit({
@@ -1396,8 +3144,33 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             log.info(`Transitioning conv ${effectiveConvId} to node ${sharedState.currentNodeId}`);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
             if (singleStep) {
-              log.info(`[Debug Step] Paused after handoff to node ${sharedState.currentNodeId} for conv ${effectiveConvId}.`);
-              pauseForDebug();
+              const modelPreview = await previewNextModelInput();
+              log.info(`[Debug Step] Paused at handoff target node ${sharedState.currentNodeId} for conv ${effectiveConvId}.`);
+              pauseForDebug({
+                phase: steppedThroughControlNode ? 'before-node' : 'after-handoff',
+                nodeId: steppedThroughControlNode ? nextNodeId : fromNodeId,
+                boundary: steppedThroughControlNode
+                  ? {
+                      operation: 'node',
+                      phase: 'before',
+                      nodeId: nextNodeId,
+                      edgeId: currentAction,
+                      ...(modelPreview?.nodeId === nextNodeId
+                        ? { modelInput: modelPreview.modelInput }
+                        : {}),
+                    }
+                  : {
+                      operation: 'handoff',
+                      phase: 'after',
+                      nodeId: fromNodeId,
+                      targetNodeId: nextNodeId,
+                      edgeId: currentAction,
+                      ...(handoffCallsForBoundary?.length ? { toolCalls: handoffCallsForBoundary } : {}),
+                      ...(modelPreview?.nodeId === nextNodeId
+                        ? { modelInput: modelPreview.modelInput, nextOperation: 'model' }
+                        : { nextOperation: 'node' }),
+                    },
+              });
               break;
             }
             log.info(`Continuing loop for conv ${effectiveConvId} after handoff.`);
@@ -1434,7 +3207,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       currentAction = ERROR_ACTION;
     }
     if (currentAction !== ERROR_ACTION) {
-      const modelDetails = (loopError as any)?.details;
+      const modelDetails = loopError && typeof loopError === 'object' && 'details' in loopError
+        ? loopError.details
+        : undefined;
       sharedState.lastResponse = {
         success: false,
         error: loopError instanceof Error ? loopError.message : String(loopError),
@@ -1448,6 +3223,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           : undefined,
       };
       currentAction = ERROR_ACTION;
+      // Issue #383 (gap 1): this loop-level catch previously set lastResponse
+      // but never emitted an `error` event, so a failure caught here (as
+      // opposed to inside FlowExecutor.executeStep) was silent on a live run.
+      emitErrorOnce(sharedState, emit, loopError, {
+        nodeId: sharedState.currentNodeId,
+      });
     }
   }
 
@@ -1466,32 +3247,109 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.status = 'error';
   }
 
+  // Issue #383 (gap 1) backstop: guarantee that EVERY run ending in 'error'
+  // produces at least one `error` event, even if none of the specific emit
+  // sites above happened to fire for this particular failure shape. Skipped
+  // for user cancellation (`isCancelled`) — a stop is not an error and must
+  // keep rendering as the neutral "stopped" banner.
+  if (
+    currentAction === ERROR_ACTION
+    && !sharedState.errorEventEmitted
+    && !sharedState.isCancelled
+  ) {
+    const derived = deriveLastErrorFromLastResponse(sharedState.lastResponse);
+    if (derived) {
+      emitNormalizedErrorOnce(sharedState, emit, derived, { nodeId: sharedState.currentNodeId });
+    }
+  }
+
   // --- 3. Finalize ---
+  // Clear elicitation context for all MCP servers bound in this run.
+  for (const serverName of elicitationServerNames) {
+    clearElicitationContext(serverName);
+  }
+
   const finalExecutionTime = Date.now() - startTime;
   const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
+  // Debugging is run-scoped. Once this run is terminal, do not leave a hidden
+  // debugMode/breakpoint payload attached to the conversation for its next user
+  // turn (or paint the sidebar as though an old debug session were still live).
+  if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
+    sharedState.debugMode = false;
+    sharedState.debugPauseRequested = false;
+    sharedState.debugPendingAction = undefined;
+    sharedState.debugPendingToolCalls = undefined;
+    sharedState.debugBoundary = undefined;
+    sharedState.breakpoints = [];
+    sharedState.lastBreakNodeId = undefined;
+  }
+
+  // Persist the precise recovery transition before the legacy terminal event.
+  // Existing status values remain unchanged for backward compatibility.
+  if (sharedState.isCancelled) {
+    await commitRecoveryTransition(storageKey, sharedState, 'cancelled', {
+      failure: {
+        category: cancelledByAncestor ? 'ancestor_cancelled' : 'user_cancelled',
+        message: cancelledByAncestor
+          ? 'Execution was cancelled because an ancestor run was cancelled.'
+          : 'Execution was cancelled by the user.',
+        retryable: false,
+      },
+      cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
+    }, recoveryEmit);
+  } else if (finalStatus === 'completed') {
+    await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, recoveryEmit);
+  } else if (finalStatus === 'capped') {
+    await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, recoveryEmit);
+  } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
+    await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, recoveryEmit);
+  } else if (finalStatus === 'error') {
+    const classified = classifyRecoveryFailure(sharedState.lastResponse);
+    await commitRecoveryTransition(storageKey, sharedState, classified.classification, {
+      failure: classified.failure,
+      retryAfterAt: classified.retryAfterAt,
+      manualActionRequired: classified.failure.category === 'tool_failure'
+        ? true
+        : sharedState.recovery?.manualActionRequired,
+    }, recoveryEmit);
+  }
+
   // Flush any trailing messages and signal terminal completion to live consumers.
   emitNewMessages();
-  if (finalStatus === 'completed' || finalStatus === 'error') {
-    emit({ type: 'run:done', status: finalStatus });
+  if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
+    emit({
+      type: 'run:done',
+      status: finalStatus,
+      ...(finalStatus === 'error' && sharedState.lastError ? { error: sharedState.lastError } : {}),
+    });
     // Flow-run event bus (issue #116): announce terminal runs so `flow-event`
     // triggers can react to chat/API/manual runs. Scheduler-fired runs are
     // announced by SchedulerService.fire() instead (de-dup), and subflow stages
     // (runDepth > 0) must NOT emit or a composed flow sprays one event per stage.
-    if (sharedState.source !== 'schedule' && (sharedState.runDepth ?? 0) === 0) {
+    if (
+      sharedState.source !== 'schedule' &&
+      sharedState.source !== 'trigger' &&
+      sharedState.source !== 'meeting' &&
+      (sharedState.runDepth ?? 0) === 0
+    ) {
       const lastMsg = sharedState.messages[sharedState.messages.length - 1];
       const outputText =
         lastMsg && lastMsg.role === 'assistant' && typeof lastMsg.content === 'string'
           ? lastMsg.content
           : undefined;
-      void publishRunFlowEvent(sharedState, finalStatus, outputText);
+      // A capped run is a successful terminal run for flow-event/chaining
+      // purposes (issue #253): the summary IS the output, so report it as
+      // 'completed' to the flow-run bus.
+      void publishRunFlowEvent(sharedState, finalStatus === 'capped' ? 'completed' : finalStatus, outputText);
     }
   }
 
+  let finalSnapshotPersisted = false;
   try {
     sharedState.updatedAt = Date.now();
-    if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+    if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
       const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
       if (firstUserMessage && typeof firstUserMessage.content === 'string') {
         sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -1499,6 +3357,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       }
     }
     await persistState(storageKey, sharedState); // chokepoint refuses ephemeral + deleted states
+    finalSnapshotPersisted = true;
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
@@ -1509,15 +3368,55 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // descendant subflows walking the ancestor chain — could observe the cancel).
   if (isConversationDeleted(effectiveConvId)) {
     FlowExecutor.conversationStates.delete(effectiveConvId);
+    forgetConversationCacheEntry(effectiveConvId);
   } else {
     FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    noteConversationWrite(effectiveConvId, sharedState);
+  }
+
+  // --- Run-owned resource release + bounded conversation memory (issue #413) ---
+  // A terminal run must not leave anything of its own alive. Two distinct leaks
+  // were fixed here:
+  //  1. Bash background/PTY sessions the run started stayed alive for the
+  //     process lifetime, because nothing ever told the Bash server the owning
+  //     run had ended. `release_owner` kills the run's non-detached sessions and
+  //     their descendant trees; a session explicitly started `detached` survives
+  //     on purpose.
+  //  2. The conversation stayed in the global state map forever. Marking it
+  //     terminal makes it evictable ONLY after its durable snapshot exists, so a
+  //     later resume/inspect transparently reloads it from storage.
+  // Both are best-effort and deliberately not awaited: neither may delay or fail
+  // the run's result.
+  const terminalStatus =
+    sharedState.status === 'completed' ||
+    sharedState.status === 'error' ||
+    sharedState.status === 'capped';
+  if (terminalStatus) {
+    const runOwnerScope = ownerScopeForRun({
+      runId: sharedState.logicalRunId,
+      conversationId: sharedState.conversationId || effectiveConvId,
+    });
+    void releaseRunOwnedBashSessions(runOwnerScope);
+    if (!isConversationDeleted(effectiveConvId) && !ephemeral) {
+      void markConversationTerminal(effectiveConvId, sharedState, async () => {
+        // The snapshot above already succeeded in the normal case; only retry it
+        // when that write failed, so persist-before-evict still holds.
+        if (!finalSnapshotPersisted) await persistState(storageKey, sharedState);
+      });
+    }
   }
 
   // An ephemeral run is transient: drop it from the in-memory map once it
   // reaches a terminal state so isolated/subflow runs don't accumulate.
   const cleanupEphemeral = () => {
-    if (ephemeral && (sharedState.status === 'completed' || sharedState.status === 'error')) {
+    if (
+      ephemeral &&
+      (sharedState.status === 'completed' ||
+        sharedState.status === 'error' ||
+        sharedState.status === 'capped')
+    ) {
       FlowExecutor.conversationStates.delete(effectiveConvId);
+      forgetConversationCacheEntry(effectiveConvId);
     }
   };
 
@@ -1532,12 +3431,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // --- Paused debug ---
   if (sharedState.status === 'paused_debug') {
     log.info(`Returning paused debug state for conv ${effectiveConvId}`);
-    return {
+    return finalizeRun({
       ...baseResult,
       status: 'paused_debug',
       outputText: '',
       pendingToolCalls: sharedState.pendingToolCalls,
-    };
+    });
   }
 
   // --- Error ---
@@ -1588,12 +3487,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
 
     cleanupEphemeral();
-    return {
+    return finalizeRun({
       ...baseResult,
       status: 'error',
       outputText: '',
       error: { message: errorMessage, details: errorDetails, statusCode },
-    };
+    });
   }
 
   // --- Success (Final, Tool Call, Stay, or Awaiting Approval) ---
@@ -1624,14 +3523,30 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     ? undefined
     : (lastMessage?.role === 'assistant' ? lastMessage.tool_calls : undefined);
 
+  // A child flow may generate media and then finish with a text-only process or
+  // handoff message. Returning media only from the literal last message drops
+  // those artifacts at the subflow boundary, so SubflowNode never gets a chance
+  // to promote them into the parent run. Preserve the most recent assistant
+  // artifact set instead; this also naturally prefers a later replacement over
+  // an earlier draft without returning every historical attachment.
+  let outputMedia: ModelMediaPart[] | undefined;
+  for (let i = sharedState.messages.length - 1; i >= 0; i--) {
+    const message = sharedState.messages[i];
+    if (message.role === 'assistant' && message.media?.length) {
+      outputMedia = message.media;
+      break;
+    }
+  }
+
   log.info(`Returning success result for conv ${effectiveConvId}`, { action: currentAction, status: sharedState.status, flujo, requireApproval, flujodebug });
 
   cleanupEphemeral();
-  return {
+  return finalizeRun({
     ...baseResult,
     status: (sharedState.status as FlowRunStatus) || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     outputText: responseContent,
+    ...(outputMedia ? { outputMedia } : {}),
     toolCalls,
     pendingToolCalls: sharedState.pendingToolCalls,
-  };
+  });
 }

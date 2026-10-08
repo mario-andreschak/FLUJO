@@ -1,10 +1,17 @@
 'use client';
 
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import type {
+  FlowPlausibilityResult,
+  StepAgentSuggestion,
+  StepAgentSuggestionResult,
+  StepPromptImprovementResult,
+  StepToolSuggestion,
+  StepToolSuggestionResult,
+} from '@/shared/types/flow/assistance';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/flow/index');
@@ -26,6 +33,23 @@ export interface FlowVersionRecord {
   flow: Flow;
 }
 
+export type ConvertProcessToSubflowResult =
+  | { success: true; parentFlow: Flow; childFlow: Flow }
+  | { success: false; error: string };
+
+export interface CreateModelAgentSelection {
+  creationId: string;
+  modelId: string;
+  name: string;
+  servers: Array<{ name: string; enabledTools?: string[] }>;
+  systemPrompt?: string;
+}
+
+export interface CreatedModelAgent {
+  flowId: string;
+  name: string;
+}
+
 /**
  * FlowService class provides a client-side API for UI components
  * This service makes API calls to the server-side API layer
@@ -36,11 +60,11 @@ class FlowService {
   /**
    * Load all flows
    */
-  async loadFlows(): Promise<Flow[]> {
+  async loadFlows(options: { refresh?: boolean } = {}): Promise<Flow[]> {
     log.debug('loadFlows: Entering method');
     try {
       // Try to use cache first
-      if (this.flowsCache) {
+      if (this.flowsCache && !options.refresh) {
         log.debug('loadFlows: Using cached flows', { count: this.flowsCache.length });
         return this.flowsCache;
       }
@@ -61,6 +85,122 @@ class FlowService {
       log.warn('loadFlows: Failed to load flows:', error);
       return [];
     }
+  }
+
+  async suggestToolsForStep(payload: {
+    flow: Flow;
+    relatedFlows?: Flow[];
+    nodeId: string;
+    modelId: string;
+    goal?: string;
+    feedback?: string[];
+    previousSuggestion?: StepToolSuggestionResult;
+  }): Promise<StepToolSuggestionResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'suggest-tools', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not suggest connected tools.');
+    return data as StepToolSuggestionResult;
+  }
+
+  async generateNameForFlow(payload: {
+    flow: Flow;
+    modelId: string;
+    existingNames?: string[];
+  }): Promise<{ name: string }> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'generate-name', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || typeof data?.name !== 'string') {
+      throw new Error(data?.error || 'Could not generate a workflow name.');
+    }
+    return { name: data.name };
+  }
+
+  async applyToolsToStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    selections: StepToolSuggestion[];
+    proposedPrompt?: string;
+  }): Promise<Flow> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply-tools', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not connect the approved tools.');
+    return data.flow as Flow;
+  }
+
+  async suggestAgentsForStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    modelId: string;
+    goal?: string;
+  }): Promise<StepAgentSuggestionResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'suggest-agents', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not suggest connected agents.');
+    return data as StepAgentSuggestionResult;
+  }
+
+  async applyAgentsToStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    selections: StepAgentSuggestion[];
+  }): Promise<Flow> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply-agents', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not connect the approved agents.');
+    return data.flow as Flow;
+  }
+
+  async improvePromptForStep(payload: {
+    flow: Flow;
+    relatedFlows?: Flow[];
+    nodeId: string;
+    modelId: string;
+    draftPrompt?: string;
+  }): Promise<StepPromptImprovementResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'improve-prompt', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not improve this prompt.');
+    return data as StepPromptImprovementResult;
+  }
+
+  async checkPlausibility(payload: {
+    flow: Flow;
+    relatedFlows?: Flow[];
+    modelId?: string;
+    intendedContext?: 'chat' | 'headless';
+  }): Promise<FlowPlausibilityResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check-plausibility', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not check flow plausibility.');
+    return data as FlowPlausibilityResult;
   }
 
   /**
@@ -98,6 +238,26 @@ class FlowService {
       log.warn(`getFlow: Failed to get flow ${flowId}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Create and persist an agent from a model + connected-app selection. The
+   * browser sends intent only; graph synthesis and validation stay backend-owned.
+   */
+  async createModelAgent(selection: CreateModelAgentSelection): Promise<CreatedModelAgent> {
+    const response = await fetch('/api/flow/model-agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selection),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || typeof data?.flowId !== 'string' || typeof data?.name !== 'string') {
+      throw new Error(data?.error || 'Could not create the agent.');
+    }
+    // The endpoint persisted a new flow outside the generic addFlow path.
+    // Invalidate the list cache so /flows loads the saved record after navigation.
+    this.flowsCache = null;
+    return { flowId: data.flowId, name: data.name };
   }
 
   /**
@@ -187,7 +347,7 @@ class FlowService {
           description,
           modelId,
           allowInstall: options?.allowInstall === true,
-          allowSubflows: options?.allowSubflows === true,
+          allowSubflows: options?.allowSubflows !== false,
           ...(typeof options?.maxDepth === 'number' ? { maxDepth: options.maxDepth } : {}),
         })
       });
@@ -241,12 +401,15 @@ class FlowService {
     flow: Flow,
     description: string,
     modelId: string,
-    options?: { allowInstall?: boolean }
+    options?: { allowInstall?: boolean; relatedFlows?: Flow[] }
   ): Promise<
     | {
         success: true;
         flow: Flow;
         validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean };
+        /** The preserved draft bundle, dependency order (descendants first). */
+        flows: Array<{ flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean } }>;
+        rootFlowId: string;
         attempts: number;
         installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
       }
@@ -261,6 +424,7 @@ class FlowService {
         },
         body: JSON.stringify({
           flow,
+          relatedFlows: options?.relatedFlows,
           description,
           modelId,
           allowInstall: options?.allowInstall === true,
@@ -285,6 +449,10 @@ class FlowService {
         success: true,
         flow: data.flow as Flow,
         validation: data.validation,
+        flows: Array.isArray(data.flows) && data.flows.length > 0
+          ? data.flows
+          : [{ flow: data.flow as Flow, validation: data.validation }],
+        rootFlowId: data.rootFlowId ?? (data.flow as Flow)?.id,
         attempts: data.attempts,
         installedServers: data.installedServers ?? []
       };
@@ -293,6 +461,48 @@ class FlowService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to improve flow'
+      };
+    }
+  }
+
+  /**
+   * Atomically (with server-side compensation) persist a child flow and its
+   * rewritten parent after the user accepts a Process conversion preview.
+   */
+  async convertProcessToSubflow(
+    parentFlow: Flow,
+    childFlow: Flow,
+    processNodeId: string,
+    expectedUpdatedAt?: number,
+  ): Promise<ConvertProcessToSubflowResult> {
+    try {
+      const response = await fetch(
+        `/api/flow/${encodeURIComponent(parentFlow.id)}/convert-process-to-subflow`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parentFlow, childFlow, processNodeId, expectedUpdatedAt }),
+        },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { success: false, error: data?.error || 'Failed to convert Process to Subflow.' };
+      }
+      const savedParent = data.parentFlow as Flow;
+      const savedChild = data.childFlow as Flow;
+      if (this.flowsCache) {
+        const parentIndex = this.flowsCache.findIndex(flow => flow.id === savedParent.id);
+        if (parentIndex >= 0) this.flowsCache[parentIndex] = savedParent;
+        else this.flowsCache.push(savedParent);
+        if (!this.flowsCache.some(flow => flow.id === savedChild.id)) {
+          this.flowsCache.push(savedChild);
+        }
+      }
+      return { success: true, parentFlow: savedParent, childFlow: savedChild };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to convert Process to Subflow.',
       };
     }
   }
@@ -437,7 +647,22 @@ class FlowService {
       data: {
         label: `${type === 'mcp' ? 'MCP' : type.charAt(0).toUpperCase() + type.slice(1)} Node`,
         type,
-        properties: {},
+        // Guided FlowBuilder does not expose process input modes. Persist its
+        // intended "Full conversation" choice explicitly so a newly-created
+        // process node can never inherit or be mistaken for latest-message.
+        properties:
+          type === 'process'
+            ? { inputMode: 'full-history' }
+            // Static nodes (issue #358) always carry an entries list so the
+            // properties modal and validation never see an undefined array.
+            : type === 'static'
+            ? { entries: [] }
+            : type === 'subflow'
+            ? {
+                resultPresentation: 'separate',
+                sessionScope: 'per-key',
+              }
+            : {},
       },
     };
   }

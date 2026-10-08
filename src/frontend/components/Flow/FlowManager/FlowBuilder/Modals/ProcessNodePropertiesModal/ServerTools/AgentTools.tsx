@@ -15,6 +15,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
 import { createLogger } from '@/utils/logger';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools/AgentTools');
 
@@ -24,7 +25,7 @@ interface HandoffTool {
   description: string;
   inputSchema: {
     type: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required: string[];
   };
 }
@@ -42,6 +43,7 @@ const AgentTools: React.FC<AgentToolsProps> = ({
   handleInsertToolBinding,
   promptBuilderRef
 }) => {
+  const { t, formatList } = useI18n();
   // State to track search query
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -64,7 +66,7 @@ const AgentTools: React.FC<AgentToolsProps> = ({
       return (
         <Box sx={{ mt: 1 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-            No parameters required.
+            {t('flows.agentTools.noParameters')}
           </Typography>
         </Box>
       );
@@ -74,11 +76,19 @@ const AgentTools: React.FC<AgentToolsProps> = ({
     return (
       <Box sx={{ mt: 1 }}>
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 'medium' }}>
-          Parameters:
+          {t('flows.agentTools.parameters')}
         </Typography>
         <Box sx={{ pl: 1, mt: 0.5 }}>
-          {Object.entries(inputSchema.properties).map(([paramName, paramDetails]: [string, any]) => (
-            <Box key={paramName} sx={{ mb: 0.5 }}>
+          {Object.entries(inputSchema.properties).map(([paramName, paramDetails]) => {
+            const details = paramDetails && typeof paramDetails === 'object'
+              ? paramDetails as Record<string, unknown>
+              : {};
+            const description = typeof details.description === 'string' ? details.description : undefined;
+            const type = typeof details.type === 'string' ? details.type : undefined;
+            const enumValues = Array.isArray(details.enum)
+              ? details.enum.filter((value): value is string => typeof value === 'string')
+              : [];
+            return <Box key={paramName} sx={{ mb: 0.5 }}>
               <Typography variant="caption" component="span" sx={{ fontWeight: 'medium' }}>
                 {paramName}
                 {inputSchema.required?.includes(paramName) &&
@@ -87,17 +97,17 @@ const AgentTools: React.FC<AgentToolsProps> = ({
                 {': '}
               </Typography>
               <Typography variant="caption" component="span" color="text.secondary">
-                {paramDetails.description || paramDetails.type || 'No description'}
+                {description || type || t('flows.agentTools.noDescription')}
               </Typography>
-              {paramDetails.enum && (
+              {enumValues.length > 0 && (
                 <Box sx={{ pl: 2, mt: 0.5 }}>
                   <Typography variant="caption" color="text.secondary">
-                    Options: {paramDetails.enum.join(', ')}
+                    {t('flows.agentTools.options', { options: formatList(enumValues) })}
                   </Typography>
                 </Box>
               )}
-            </Box>
-          ))}
+            </Box>;
+          })}
         </Box>
       </Box>
     );
@@ -106,28 +116,28 @@ const AgentTools: React.FC<AgentToolsProps> = ({
   return (
     <Box sx={{ mt: 4, display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Typography variant="subtitle1" gutterBottom>
-        Agent Handoff Tools
+        {t('flows.agentTools.title')}
       </Typography>
 
       {isLoadingHandoffTools ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
-          <Typography color="text.secondary">Loading handoff tools...</Typography>
+          <Typography color="text.secondary">{t('flows.agentTools.loading')}</Typography>
         </Box>
       ) : handoffTools.length === 0 ? (
         <Box sx={{ p: 2, border: '1px dashed rgba(0, 0, 0, 0.12)', borderRadius: 1 }}>
           <Typography color="text.secondary" align="center">
-            No handoff tools available for this node.
+            {t('flows.agentTools.none')}
           </Typography>
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
-            Connect this Process node to other nodes to enable handoff tools.
+            {t('flows.agentTools.connectHelp')}
           </Typography>
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, height: 'calc(100% - 40px)' }}>
           {/* Search input */}
           <TextField
-            placeholder="Search handoff tools..."
+            placeholder={t('flows.agentTools.search')}
             variant="outlined"
             size="small"
             fullWidth
@@ -157,8 +167,8 @@ const AgentTools: React.FC<AgentToolsProps> = ({
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography color="text.secondary">
                   {searchQuery.trim()
-                    ? `No handoff tools match "${searchQuery}".`
-                    : "No handoff tools available."}
+                    ? t('flows.agentTools.noMatch', { search: searchQuery })
+                    : t('flows.agentTools.none')}
                 </Typography>
               </Box>
             ) : (
@@ -202,14 +212,14 @@ const AgentTools: React.FC<AgentToolsProps> = ({
                           </Typography>
 
                           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                            {tool.description || "No description available"}
+                            {tool.description || t('flows.agentTools.noDescription')}
                           </Typography>
 
                           {tool.inputSchema && formatParameterSchema(tool.inputSchema)}
                         </Box>
                       </Box>
                     </CardContent>
-                    <Tooltip title={`Add ${tool.name} handoff tool to prompt`}>
+                    <Tooltip title={t('flows.agentTools.insert', { tool: tool.name })}>
                       <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
                     </Tooltip>
                   </Card>

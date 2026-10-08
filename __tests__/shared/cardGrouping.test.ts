@@ -5,6 +5,7 @@ import {
   collectFolders,
   UNGROUPED_LABEL,
   UNGROUPED_KEY,
+  DEFAULT_CARD_GROUP_MODE,
   CardGroup,
 } from '@/utils/shared/cardGrouping';
 
@@ -14,6 +15,10 @@ interface Item {
 }
 
 const labels = (groups: CardGroup<unknown>[]) => groups.map((g) => g.label);
+
+it('defaults fresh card views to folder grouping', () => {
+  expect(DEFAULT_CARD_GROUP_MODE).toBe('folder');
+});
 
 describe('alphaBucket', () => {
   it('uses the upper-cased first letter', () => {

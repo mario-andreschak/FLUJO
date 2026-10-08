@@ -98,6 +98,9 @@ describe('git route streaming Install/Build (#65)', () => {
 
     // shell:true is preserved so compound user commands keep working.
     expect(spawnMock).toHaveBeenCalledWith('npm install', expect.objectContaining({ shell: true }));
+    expect(spawnMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      env: expect.objectContaining({ npm_config_include: 'dev' }),
+    }));
   });
 
   it('buildStream reports failure (success:false) on a non-zero exit code', async () => {

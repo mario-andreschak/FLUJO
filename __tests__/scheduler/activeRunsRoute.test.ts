@@ -8,8 +8,12 @@
  * messages / variables — runs for real.
  */
 const assertUnlockedMock = jest.fn(async () => null);
+const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...a: unknown[]) => assertUnlockedMock(...(a as [])),
+}));
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
 }));
 
 const conversationStates = new Map<string, unknown>();
@@ -43,6 +47,7 @@ const makeState = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   assertUnlockedMock.mockReset().mockResolvedValue(null);
+  assertLocalRequestMock.mockReset().mockReturnValue(null);
   getFlowMock.mockReset().mockImplementation(async (id: string) => ({ id, name: `Flow ${id}` }));
   conversationStates.clear();
 });
@@ -117,5 +122,48 @@ describe('active runs route', () => {
     assertUnlockedMock.mockResolvedValueOnce(locked as never);
     const response = await GET();
     expect(response.status).toBe(423);
+  });
+
+  it('omits Persona-owned active runs outside the strict control plane', async () => {
+    conversationStates.set('legacy', makeState({ conversationId: 'legacy' }));
+    conversationStates.set('persona', makeState({
+      conversationId: 'persona',
+      flowId: 'persona-flow-snapshot',
+      personaAttribution: {
+        personaId: 'persona_1',
+        activityId: 'activity_1',
+        behaviorRevisionId: 'revision_1',
+      },
+    }));
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+
+    const response = await GET(new Request('https://flujo.example.com/api/runs/active'));
+    const body = await response.json();
+
+    expect(body.runs.map((run: { conversationId?: string }) => run.conversationId)).toEqual(['legacy']);
+    expect(getFlowMock).not.toHaveBeenCalledWith('persona-flow-snapshot');
+  });
+
+  it('projects the trusted Persona attribution triple on the strict control plane', async () => {
+    conversationStates.set('persona', makeState({
+      conversationId: 'persona',
+      flowId: 'persona-flow-snapshot',
+      personaAttribution: {
+        personaId: 'persona_1',
+        activityId: 'activity_1',
+        behaviorRevisionId: 'revision_1',
+      },
+    }));
+
+    const response = await GET(new Request('http://localhost:4200/api/runs/active'));
+    const body = await response.json();
+
+    expect(body.runs).toHaveLength(1);
+    expect(body.runs[0]).toMatchObject({
+      conversationId: 'persona',
+      personaId: 'persona_1',
+      activityId: 'activity_1',
+      behaviorRevisionId: 'revision_1',
+    });
   });
 });

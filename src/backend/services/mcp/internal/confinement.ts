@@ -1,8 +1,8 @@
 /**
- * Shared filesystem-confinement helpers for the built-in MCP servers
+ * Shared filesystem-confinement helpers for local MCP server packages
  * (issues #170 + #175).
  *
- * Both the `filesystem` and `bash` built-in servers confine host access with the
+ * The shipped `filesystem` and `bash` packages confine host access with the
  * SAME two-layer model, so the logic lives here once instead of being duplicated
  * (and drifting) across the two tool modules:
  *
@@ -11,11 +11,20 @@
  *  - user-configured roots persisted via the MCP manager UI, which may only
  *    NARROW within the env ceiling (never widen it).
  *
- * When neither is set the server is unconfined (full host access).
+ * Access-control priority (highest wins):
+ *  - FLUJO_FS_ROOTS (or server-specific) env variable sets a hard ceiling.
+ *  - User-configured roots must fall within that ceiling.
+ *  - No env, no configured roots → falls back to [getDataDir()] (the FLUJO data
+ *    directory) so the file browser works out-of-the-box in a fresh Docker container.
+ *  - No env, configured roots   → confine to those roots only.
+ *  - Env set                    → configured roots may only NARROW within the
+ *                                  ceiling; any root outside is dropped, and if
+ *                                  none remain the env roots themselves are used.
  */
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createLogger } from '@/utils/logger';
-import { getInternalServerRoots } from './registry';
+import { loadServerRoots } from '../config';
 
 const log = createLogger('backend/services/mcp/internal/confinement');
 
@@ -47,28 +56,100 @@ export function envRoots(envVarNames: string | string[]): string[] | null {
 }
 
 /**
- * The effective confinement roots for a built-in server, or null when unconfined.
+ * Resolve one raw root entry (a filesystem path, a `file://` URI, or a string
+ * containing `${global:VAR}` references) into an absolute host path. Relative
+ * paths resolve against the FLUJO data directory — the same posture the tools
+ * themselves use for relative user paths. Returns null for blank/invalid input.
+ */
+async function resolveRootToPath(entry: string, dataDir: string): Promise<string | null> {
+  const { resolveGlobalVars } = await import('@/backend/utils/resolveGlobalVars');
+  const resolved = ((await resolveGlobalVars(entry)) as string).trim();
+  if (!resolved) return null;
+  if (resolved.startsWith('file://')) {
+    try {
+      return path.resolve(fileURLToPath(resolved));
+    } catch (err) {
+      log.warn(`resolveRootToPath: could not parse file URI "${resolved}"`, err);
+      return null;
+    }
+  }
+  return path.isAbsolute(resolved) ? path.resolve(resolved) : path.resolve(dataDir, resolved);
+}
+
+/**
+ * The effective confinement roots for a persisted local server.
+ *
+ * The candidate set is the UNION of two sources:
+ *  - persisted server-level roots (MCP manager override, issue #170), and
+ *  - node-level roots contributed by FlowBuilder MCP nodes bound to this server
+ *    (issue 46). Confined server packages enforce this directly (they never go
+ *    through the `roots/list` protocol handler), so without this merge a root
+ *    added on an MCP node would be silently ignored.
  *
  * Precedence (per issue #170 D5): the env var(s) are a HARD CEILING.
- *  - No env, no persisted roots  -> null (full host access).
- *  - No env, persisted roots     -> confine to the persisted roots.
- *  - Env set                     -> persisted roots may only NARROW within the
- *                                   ceiling; any persisted root outside the env
- *                                   is dropped, and if none remain the env roots
- *                                   themselves are the effective set.
+ *  - No env, no configured roots -> [getDataDir()] (default: the FLUJO working
+ *                                   directory, e.g. /app in Docker).
+ *  - No env, configured roots    -> confine to those roots.
+ *  - Env set                     -> configured roots may only NARROW within the
+ *                                   ceiling; any root outside the env is dropped,
+ *                                   and if none remain the env roots themselves
+ *                                   are the effective set.
  */
 export async function loadEffectiveRoots(
   serverName: string,
-  envVarNames: string | string[]
-): Promise<string[] | null> {
+  envVarNames: string | string[],
+  callerNodeId?: string
+): Promise<string[]> {
+  // The confinement fallback root is the SELECTED workspace's data root (#406),
+  // never the parent installation root — otherwise a server in workspace A would
+  // fall back to a root that also contains workspace B.
+  const { getWorkspaceDataDir } = await import('@/utils/workspace');
+  const dataDir = getWorkspaceDataDir();
   const env = envRoots(envVarNames);
-  let persisted: string[] = [];
+
+  const candidates: string[] = [];
   try {
-    persisted = (await getInternalServerRoots(serverName)).map((r) => path.resolve(r));
+    for (const r of await loadServerRoots(serverName)) {
+      candidates.push(path.isAbsolute(r) ? path.resolve(r) : path.resolve(dataDir, r));
+    }
   } catch (err) {
     log.warn('loadEffectiveRoots: could not read persisted roots', err);
   }
-  if (!env) return persisted.length ? persisted : null;
-  const confined = persisted.filter((p) => env.some((root) => isInside(root, p)));
+  try {
+    // Node-level roots (issue 46) are contributed by FlowBuilder MCP nodes and may
+    // be paths, file:// URIs, or contain ${global:VAR} references — resolve them the
+    // same way the roots/list handler does so both consumers agree.
+    //
+    // Issue #266 — per-call per-node confinement: when a callerNodeId is supplied
+    // AND that specific node has registered roots for this server, confine this call
+    // to ONLY that node's roots instead of the global union across all nodes. When
+    // the node has no registered roots we fall back to the global union so legacy
+    // call sites and nodes that omit roots are unaffected.
+    const { getNodeRoots, getNodeRootsForId } = await import('@/backend/services/mcp/roots');
+    const nodeRawRoots =
+      callerNodeId !== undefined
+        ? (() => {
+            const perNode = getNodeRootsForId(serverName, callerNodeId);
+            return perNode.length > 0 ? perNode : getNodeRoots(serverName);
+          })()
+        : getNodeRoots(serverName);
+    for (const raw of nodeRawRoots) {
+      const resolved = await resolveRootToPath(raw, dataDir);
+      if (resolved) candidates.push(resolved);
+    }
+  } catch (err) {
+    log.warn('loadEffectiveRoots: could not read node roots', err);
+  }
+
+  const configured = Array.from(new Set(candidates));
+  if (!env) {
+    if (configured.length === 0) {
+      // No env ceiling, no user-configured roots → fall back to the data directory
+      // so the file browser is usable by default (e.g. in a fresh Docker container).
+      return [dataDir];
+    }
+    return configured;
+  }
+  const confined = configured.filter((p) => env.some((root) => isInside(root, p)));
   return confined.length ? confined : env;
 }

@@ -49,10 +49,11 @@ The Environment Variables API follows a clean architecture pattern with integrat
 
 The API automatically detects and encrypts sensitive environment variables:
 
-1. Variables with names containing "key", "secret", "password", "token", or "auth" are considered sensitive
+1. When `metadata.isSecret` is omitted, names containing "key", "secret", "password", "token", or "auth" are considered sensitive. An explicit `metadata.isSecret` value overrides that default; for `setAll`, supply metadata in each variable's `{ value, metadata }` object
 2. Sensitive variables are encrypted before storage
 3. Encrypted values are stored with an `encrypted:` prefix
-4. Failed encryptions are marked with an `encrypted_failed:` prefix
+4. Failed encryption or initialization aborts the save, including the entire `setAll` batch, and retains the previous stored values
+5. Historical `encrypted_failed:` values contain plaintext; re-enter and save affected secrets to replace them. An unchanged `********` placeholder preserves the old value
 
 ### Secure Retrieval
 
@@ -78,8 +79,14 @@ Retrieves environment variables.
 ```json
 {
   "variables": {
-    "PUBLIC_VAR": "public value",
-    "API_KEY": "********" // Placeholder for sensitive data
+    "PUBLIC_VAR": {
+      "value": "public value",
+      "metadata": { "isSecret": false }
+    },
+    "API_KEY": {
+      "value": "********",
+      "metadata": { "isSecret": true }
+    }
   }
 }
 ```
@@ -88,7 +95,8 @@ Retrieves environment variables.
 
 ```json
 {
-  "value": "variable value"
+  "value": "variable value",
+  "metadata": { "isSecret": false }
 }
 ```
 

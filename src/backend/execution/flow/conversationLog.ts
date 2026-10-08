@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs';
+import { promises as fs, readFileSync } from 'fs';
 import path from 'path';
 import {
   ExecutionEvent,
@@ -7,9 +7,13 @@ import {
 } from '@/shared/types/execution/events';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
+import { commitExecutionExtensionMutation, isExecutionProtectedState } from '@/backend/execution/extensions';
+import { persistConversationState } from './persistConversationState';
+import type { StorageKey } from '@/shared/types/storage';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -24,10 +28,13 @@ const log = createLogger('backend/execution/flow/conversationLog');
  * ExecutionEventBus taps every emit into appendFromBus, so "the live stream is
  * the log being appended".
  *
- * Ordering is FILE ORDER. Event `seq` is advisory here: the bus resets seq when
- * a channel is garbage-collected between runs, and log-only events (turn-start
- * reconcile, see appendRawForState) carry seq -1 because they were never on the
- * bus. Consumers must not sort by seq.
+ * Ordering is FILE ORDER, and (since issue #261) `seq` is AUTHORITATIVE and
+ * MONOTONIC: the log allocates the per-conversation sequence number itself (see
+ * allocateSeq), so it is durable, never reset between runs, survives channel
+ * garbage-collection and process restarts, and is stamped on log-only events
+ * too (no more seq -1). Append order equals seq order, so a persisted `seq` is
+ * a valid resume cursor for the SSE stream. Readers may still project by file
+ * order (the two agree); consumers MAY now sort by / resume from seq.
  */
 
 // Event types worth persisting. Excluded on purpose:
@@ -41,8 +48,15 @@ const log = createLogger('backend/execution/flow/conversationLog');
 const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<ExecutionEventType>([
   'run:start',
   'run:done',
+  'recovery:checkpoint',
+  'recovery:transition',
+  'recovery:retry',
   'node:enter',
   'node:exit',
+  'node:snapshot',
+  'node:changed-files',
+  'model:dispatch',
+  'model:dispatch-result',
   'handoff',
   'message',
   'message:removed',
@@ -60,58 +74,166 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
 // so a hostile id can never escape the log directory.
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
-let logDir = path.join(getDataDir(), 'db', 'conversation-logs');
+// Resolved per call: conversation logs live in the selected workspace's db/
+// (#406), so this must not be captured at import time.
+let logDirOverride: string | undefined;
+const logDir = () =>
+  logDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'conversation-logs');
 
-/** Test seam: point the store at a temp directory. Returns the previous dir. */
+/**
+ * Cache/chain key for a conversation. Conversation ids are unique only WITHIN a
+ * workspace, so the process-wide seq counters and append chains must be
+ * namespaced by workspace — otherwise workspace B would continue workspace A's
+ * sequence numbering, or serialize its appends behind A's (#406).
+ */
+const ck = (conversationId: string) => workspaceCacheKey('conversation-log', conversationId);
+
+/**
+ * Test seam: point the store at a temp directory. Returns the previous
+ * override, or the newly installed directory on first setup.
+ *
+ * Install the override before resolving the return value. Global Jest setup
+ * runs after each suite's mocks are registered; asking workspace/path helpers
+ * for the production default at that point can execute an intentionally
+ * partial suite mock before the test has even started.
+ */
 export function _setConversationLogDirForTests(dir: string): string {
-  const previous = logDir;
-  logDir = dir;
-  return previous;
+  const previous = logDirOverride;
+  logDirOverride = dir;
+  // Counters are seeded from the store on cold start; switching stores must
+  // re-seed from the new directory rather than reuse a stale counter.
+  nextSeq.clear();
+  return previous ?? dir;
 }
 
 function logFilePath(conversationId: string): string {
-  return path.join(logDir, `${conversationId}.jsonl`);
+  return path.join(logDir(), `${conversationId}.jsonl`);
 }
 
 // Per-conversation append chains so concurrent appends for the same log never
 // interleave (mirrors saveItem's writeChains). Different conversations still
 // append concurrently.
-const appendChains = new Map<string, Promise<unknown>>();
+declare global {
+  var __flujo_conversation_log_state_v1: {
+    appendChains: Map<string, Promise<unknown>>;
+    nextSeq: Map<string, number>;
+    pendingCommits: Map<string, Set<Promise<unknown>>>;
+  } | undefined;
+}
+// Next's request and execution bundles can evaluate this module independently.
+// Separate counters let one bundle append seq 1 after another had reached 52;
+// separate chains also fail to serialize their writes. Share both for the whole
+// process, retaining the existing workspace-qualified keys and disk cold start.
+const processLogState = globalThis.__flujo_conversation_log_state_v1
+  ??= { appendChains: new Map(), nextSeq: new Map(), pendingCommits: new Map() };
+const appendChains = processLogState.appendChains;
+const pendingCommits = processLogState.pendingCommits;
+
+function trackCommit(conversationId: string, pending: Promise<void>): Promise<void> {
+  const key = ck(conversationId);
+  const commits = pendingCommits.get(key) ?? new Set<Promise<unknown>>();
+  commits.add(pending);
+  pendingCommits.set(key, commits);
+  return pending.finally(() => {
+    commits.delete(pending);
+    if (!commits.size && pendingCommits.get(key) === commits) pendingCommits.delete(key);
+  });
+}
+
+// --- Authoritative per-conversation sequence (issue #261) --------------------
+// The JSONL file is the source of truth for ordering, so the LOG allocates the
+// event `seq`: a durable, per-conversation, never-reset monotonic counter. Both
+// the bus (ExecutionEventBus.emit) and the log-only append paths draw the seq
+// they persist from here (allocateSeq), so the number written to disk — and
+// used as an SSE resume cursor — is authoritative and strictly increasing
+// across runs, channel garbage-collection, and process restarts.
+//
+// In-memory: Map<conversationId, nextSeq>. Cold-start (first allocation for a
+// conversation this process has not seen, e.g. after restart) seeds the counter
+// by tail-reading the existing .jsonl and resuming at max(seq)+1, ignoring
+// legacy sentinel/non-numeric values — so pre-#261 logs are tolerated, never
+// rewritten. The counter then stays in memory for the process lifetime.
+const nextSeq = processLogState.nextSeq;
+
+/** Cold-start init of the durable counter from the persisted log tail. Runs at
+ *  most once per conversation per process; a one-time synchronous read keeps
+ *  allocateSeq usable from the bus's synchronous emit path. */
+function initSeqIfNeeded(conversationId: string): void {
+  if (nextSeq.has(ck(conversationId))) return;
+  let max = -1;
+  try {
+    const content = readFileSync(logFilePath(conversationId), 'utf-8');
+    for (const line of content.split('\n')) {
+      if (line.trim().length === 0) continue;
+      try {
+        const seq = (JSON.parse(line) as { seq?: unknown }).seq;
+        if (typeof seq === 'number' && Number.isFinite(seq) && seq > max) max = seq;
+      } catch {
+        /* skip a truncated/garbled tail line */
+      }
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn(`Could not read conversation log ${conversationId} to seed seq; starting at 0.`, { err });
+    }
+  }
+  nextSeq.set(ck(conversationId), max + 1);
+}
+
+/**
+ * Allocate the next authoritative monotonic seq for a conversation. Synchronous
+ * (safe from the bus's emit path); the returned value is strictly greater than
+ * every previously allocated/persisted seq for this conversation this process
+ * lifetime, seeded from disk on cold start.
+ */
+export function allocateSeq(conversationId: string): number {
+  initSeqIfNeeded(conversationId);
+  const seq = nextSeq.get(ck(conversationId))!;
+  nextSeq.set(ck(conversationId), seq + 1);
+  return seq;
+}
+
+/**
+ * Highest authoritative seq allocated/persisted for a conversation, or -1 when
+ * nothing exists yet. Seeds from disk on cold start. Callers that must observe
+ * in-flight bus-tap appends should flushConversationLog() first.
+ */
+export async function latestSequence(conversationId: string): Promise<number> {
+  if (!SAFE_ID.test(conversationId)) return -1;
+  initSeqIfNeeded(conversationId);
+  return nextSeq.get(ck(conversationId))! - 1;
+}
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
-  const previous = appendChains.get(conversationId) ?? Promise.resolve();
-  const run = previous
-    .catch(() => { /* prior append's error was logged by its own caller */ })
-    .then(async () => {
-      await fs.mkdir(logDir, { recursive: true });
-      await fs.appendFile(logFilePath(conversationId), lines);
-    });
-  appendChains.set(conversationId, run);
+  return chainLogMutation(conversationId, async () => {
+        await fs.mkdir(logDir(), { recursive: true });
+        await fs.appendFile(logFilePath(conversationId), lines);
+  });
+}
+
+function chainLogMutation(conversationId: string, task: () => Promise<void>): Promise<void> {
+  const key = ck(conversationId);
+  const previous = appendChains.get(key) ?? Promise.resolve();
+  // Reserve order synchronously. Cross-process workspace admission performs I/O
+  // and must not let later events overtake an earlier submitted append.
+  const run = withWorkspaceMutation(async () => {
+    await previous.catch(() => undefined);
+    await task();
+  });
+  appendChains.set(key, run);
   return run.finally(() => {
-    if (appendChains.get(conversationId) === run) {
-      appendChains.delete(conversationId);
-    }
-  }) as Promise<void>;
+    if (appendChains.get(key) === run) appendChains.delete(key);
+  });
 }
 
 // Truncating rewrite of a whole log, serialized through the SAME per-conversation
-// chain as appends so it never interleaves with an in-flight append. Used only
-// by the self-heal repair (repairTruncatedConversationLog) to replace a log that
-// lost events with one rebuilt from the authoritative SharedState snapshot.
+// chain as appends so it never interleaves with an in-flight append. Used by the
+// transactional transcript-replacement path so it can roll back atomically.
 function chainWrite(conversationId: string, content: string): Promise<void> {
-  const previous = appendChains.get(conversationId) ?? Promise.resolve();
-  const run = previous
-    .catch(() => { /* prior op's error was logged by its own caller */ })
-    .then(async () => {
-      await fs.mkdir(logDir, { recursive: true });
-      await fs.writeFile(logFilePath(conversationId), content);
-    });
-  appendChains.set(conversationId, run);
-  return run.finally(() => {
-    if (appendChains.get(conversationId) === run) {
-      appendChains.delete(conversationId);
-    }
-  }) as Promise<void>;
+  return chainLogMutation(conversationId, async () => {
+        await fs.mkdir(logDir(), { recursive: true });
+        await fs.writeFile(logFilePath(conversationId), content);
+  });
 }
 
 /**
@@ -122,22 +244,41 @@ function chainWrite(conversationId: string, content: string): Promise<void> {
  * default, since every legitimate emitter has the state registered before it
  * emits (runFlow registers it before run:start; control routes load it first).
  */
-function isPersistable(conversationId: string): boolean {
+function persistableState(conversationId: string): SharedState | undefined {
   try {
     // A deleted conversation's in-flight run keeps emitting until its next
     // cancellation check; those events must not re-create the just-deleted log.
-    if (isConversationDeleted(conversationId)) return false;
+    if (isConversationDeleted(conversationId)) return undefined;
     // Lazy require to avoid a static import cycle (FlowExecutor → engine →
     // nodes → handlers → executionEventBus → this module).
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
     const state: SharedState | undefined = FlowExecutor.conversationStates.get(conversationId);
-    if (!state) return false;
-    return !state.ephemeral;
+    if (!state || state.ephemeral) return undefined;
+    return state;
   } catch (err) {
     log.warn(`Could not resolve persistence policy for ${conversationId}; not persisting.`, { err });
-    return false;
+    return undefined;
   }
+}
+
+async function commitConversationWrite<T>(
+  state: SharedState,
+  task: () => Promise<T>,
+): Promise<T> {
+  if (isExecutionProtectedState(state) && !state.executionExtensionContext) throw new Error('trusted_execution_context_required');
+  if (state.executionExtensionContext) return commitExecutionExtensionMutation(state.executionExtensionContext, task);
+  if (state.personaAttribution && !state.executionAuthority) {
+    throw new Error(
+      'Persona-attributed transcript persistence requires current execution authority.',
+    );
+  }
+  if (!state.executionAuthority) return task();
+  if (state.executionAuthority?.commitWhileCurrent) {
+    return state.executionAuthority.commitWhileCurrent(task);
+  }
+  await state.executionAuthority.assertCurrent();
+  return task();
 }
 
 function serialize(event: ExecutionEvent): string {
@@ -157,8 +298,12 @@ export function appendFromBus(event: ExecutionEvent): void {
     log.warn(`Refusing to log event for unsafe conversation id`, { conversationId: event.conversationId });
     return;
   }
-  if (!isPersistable(event.conversationId)) return;
-  void chainAppend(event.conversationId, serialize(event)).catch((err) =>
+  const state = persistableState(event.conversationId);
+  if (!state) return;
+  void trackCommit(event.conversationId, commitConversationWrite(
+    state,
+    () => chainAppend(event.conversationId, serialize(event)),
+  )).catch((err) =>
     log.warn(`Failed to append event to conversation log ${event.conversationId}`, { err })
   );
 }
@@ -166,9 +311,11 @@ export function appendFromBus(event: ExecutionEvent): void {
 /**
  * Direct append of log-only events for a run whose state we hold (turn-start
  * reconcile, incremental streamed-message persistence). These never touch the
- * live bus, so they are stamped here with seq -1. The ephemeral policy is
- * checked on the state itself. Awaitable so callers that need durability
- * (reconcile before a run) can wait; errors are logged, not thrown.
+ * live bus, so they are stamped here with a freshly allocated authoritative
+ * seq (issue #261 — no more seq -1), drawn from the same durable per-conversation
+ * counter as bus events. The ephemeral policy is checked on the state itself.
+ * Awaitable so callers that need durability (reconcile before a run) can wait;
+ * errors are logged, not thrown.
  */
 export async function appendRawForState(state: SharedState, raws: RawExecutionEvent[]): Promise<void> {
   if (raws.length === 0) return;
@@ -177,12 +324,15 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
   if (!conversationId || !SAFE_ID.test(conversationId)) return;
   if (isConversationDeleted(conversationId)) return;
   const lines = raws
-    .map((raw) => serialize({ ...raw, conversationId, seq: -1, timestamp: Date.now() } as ExecutionEvent))
+    .map((raw) => serialize({ ...raw, conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() } as ExecutionEvent))
     .join('');
   try {
-    await chainAppend(conversationId, lines);
+    await trackCommit(conversationId, commitConversationWrite(state, () => chainAppend(conversationId, lines)));
   } catch (err) {
     log.warn(`Failed to append ${raws.length} event(s) to conversation log ${conversationId}`, { err });
+    // Persona-related input is acknowledged only after this append succeeds;
+    // surface the failure so runFlow can requeue the stable message ids.
+    if (state.executionExtensionContext || state.executionAuthority || state.personaAttribution) throw err;
   }
 }
 
@@ -192,8 +342,86 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
  * observe them (projection reads, tests) can flush first. Never rejects.
  */
 export function flushConversationLog(conversationId: string): Promise<void> {
-  const pending = appendChains.get(conversationId);
-  return pending ? pending.then(() => undefined, () => undefined) : Promise.resolve();
+  const key = ck(conversationId);
+  // Admission and Activity-authority checks may await before reaching the disk
+  // chain. A flush must include those already-submitted commits too.
+  const pending = [...pendingCommits.get(key) ?? []];
+  const append = appendChains.get(key);
+  if (append) pending.push(append);
+  return Promise.allSettled(pending).then(() => undefined);
+}
+
+/**
+ * Authoritatively replace a persisted conversation transcript while preserving
+ * the append-only audit log. The log receives removals for every prior projected
+ * message followed by the replacement in canonical order; the SharedState
+ * snapshot is then persisted. If snapshot persistence fails, both the log bytes
+ * and in-memory transcript are rolled back before the error is rethrown.
+ */
+export async function replaceConversationTranscript(
+  state: SharedState,
+  replacement: FlujoChatMessage[],
+): Promise<void> {
+  if (state.ephemeral) throw new Error('Cannot rewrite an ephemeral conversation transcript.');
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) {
+    throw new Error('Cannot rewrite a transcript without a safe conversation id.');
+  }
+
+  await flushConversationLog(conversationId);
+  const file = logFilePath(conversationId);
+  let originalLog = '';
+  try {
+    originalLog = await fs.readFile(file, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
+  const originalMessages = state.messages;
+  const existingEvents = originalLog
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      try { return [JSON.parse(line) as ExecutionEvent]; } catch { return []; }
+    });
+  const projected = projectModelContextMessages(existingEvents);
+  const baseline = projected.length > 0
+    ? projected
+    : originalMessages.filter((message) => message.role !== 'system');
+  const raws: RawExecutionEvent[] = [
+    ...baseline.map((message) => ({ type: 'message:removed' as const, messageId: message.id })),
+    ...replacement
+      .filter((message) => message.role !== 'system')
+      .map((message) => ({ type: 'message' as const, message })),
+  ];
+  const appended = raws
+    .map((raw) => serialize({
+      ...raw,
+      conversationId,
+      seq: allocateSeq(conversationId),
+      timestamp: Date.now(),
+    } as ExecutionEvent))
+    .join('');
+
+  await commitConversationWrite(state, () => chainWrite(conversationId, originalLog + appended));
+  state.messages = structuredClone(replacement);
+  try {
+    await persistConversationState(
+      `conversations/${conversationId}` as StorageKey,
+      state,
+    );
+  } catch (error) {
+    state.messages = originalMessages;
+    try {
+      await commitConversationWrite(state, () => chainWrite(conversationId, originalLog));
+    } catch (rollbackError) {
+      log.error('Failed to roll back conversation log after transcript rewrite failure', {
+        conversationId,
+        rollbackError,
+      });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -231,17 +459,20 @@ export async function readConversationLog(conversationId: string): Promise<Execu
 /** Remove a conversation's log file (conversation deletion). Idempotent. */
 export async function deleteConversationLog(conversationId: string): Promise<void> {
   if (!SAFE_ID.test(conversationId)) return;
-  try {
-    await fs.unlink(logFilePath(conversationId));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn(`Error deleting conversation log ${conversationId}:`, error);
+  await chainLogMutation(conversationId, async () => {
+    try {
+      await fs.unlink(logFilePath(conversationId));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log.warn(`Error deleting conversation log ${conversationId}:`, error);
+      }
     }
-  }
+  });
 }
 
 /**
- * Project a conversation's displayed messages from its event log.
+ * Project a conversation's durable, displayed Chat transcript from its event
+ * log.
  *
  * Pure fold over 'message' / 'message:removed' events:
  *  - upsert by message id — a message that appears again (streamed live then
@@ -252,12 +483,36 @@ export async function deleteConversationLog(conversationId: string): Promise<voi
  *  - subflow child messages (event depth > 0) are inlined in order, tagged
  *    with `depth` for nested display — they are display-only and never part
  *    of the parent's model context;
- *  - 'message:removed' deletes (the chat client prunes/disables messages and
- *    sends the reduced history; the turn-start reconcile records removals).
+ *  - 'message:removed' is deliberately ignored. It is a model-context
+ *    tombstone emitted when a message is pruned from the next on-wire request;
+ *    it must never erase the canonical Chat transcript.
  */
 export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
+  return projectMessageEvents(events, false);
+}
+
+/**
+ * Project the active model-context transcript. Unlike the durable Chat
+ * projection, this fold applies `message:removed` tombstones. Execution and
+ * wire-context recovery use this view; UI/history readers must use
+ * projectMessages instead.
+ */
+export function projectModelContextMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
+  return projectMessageEvents(events, true);
+}
+
+function projectMessageEvents(
+  events: ExecutionEvent[],
+  applyContextRemovals: boolean,
+): FlujoChatMessage[] {
   const messages: FlujoChatMessage[] = [];
   const indexById = new Map<string, number>();
+  // The first Codex live-streaming release used SDK-local ids such as
+  // `stream_codex_item_0`. Codex restarts that numbering on later model calls,
+  // so distinct durable messages written during that release can share an id.
+  // New messages carry a per-call namespace; preserve every legacy collision
+  // here so old conversations recover on their next detail fetch.
+  const legacyCodexIdOccurrences = new Map<string, number>();
 
   for (const event of events) {
     if (event.type === 'message') {
@@ -265,15 +520,38 @@ export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
       if (!incoming || !incoming.id) continue;
       if (incoming.role === 'system') continue;
       const depth = event.depth ?? 0;
-      const projected: FlujoChatMessage = depth > 0 ? { ...incoming, depth } : { ...incoming };
-      const existingIndex = indexById.get(incoming.id);
+      let projectedId = incoming.id;
+      let existingIndex = indexById.get(projectedId);
+      if (existingIndex !== undefined && /^stream_codex_item_/.test(projectedId)) {
+        const occurrence = (legacyCodexIdOccurrences.get(projectedId) ?? 1) + 1;
+        legacyCodexIdOccurrences.set(projectedId, occurrence);
+        projectedId = `${projectedId}_legacy_${occurrence}`;
+        existingIndex = undefined;
+      } else if (!legacyCodexIdOccurrences.has(projectedId)) {
+        legacyCodexIdOccurrences.set(projectedId, 1);
+      }
+      const withRecoveredId =
+        projectedId === incoming.id ? incoming : { ...incoming, id: projectedId };
+      const projected: FlujoChatMessage =
+        depth > 0 ? { ...withRecoveredId, depth } : { ...withRecoveredId };
       if (existingIndex !== undefined) {
         messages[existingIndex] = projected;
       } else {
-        indexById.set(incoming.id, messages.length);
+        indexById.set(projectedId, messages.length);
         messages.push(projected);
       }
-    } else if (event.type === 'message:removed') {
+    } else if (event.type === 'node:changed-files') {
+      const nodeId = event.node?.nodeId;
+      if (!nodeId || event.changedFiles.length === 0) continue;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].processNodeId !== nodeId) continue;
+        messages[i] = {
+          ...messages[i],
+          changedFiles: event.changedFiles.map(({ path, status }) => ({ path, status })),
+        };
+        break;
+      }
+    } else if (applyContextRemovals && event.type === 'message:removed') {
       const existingIndex = indexById.get(event.messageId);
       if (existingIndex === undefined) continue;
       messages.splice(existingIndex, 1);
@@ -347,6 +625,105 @@ export async function reconcileConversationLog(
 }
 
 /**
+ * Default synthetic result wording for a tool call that was emitted but never
+ * answered because FLUJO died mid-tool (crash, dev-server restart, deploy).
+ * Kept as one exported const so the run-start, load, cancel and resume paths
+ * plus the tests all reuse the exact string; callers may pass a cause-specific
+ * variant (e.g. the cancellation path) without touching call sites (issue #256).
+ */
+export const INTERRUPTED_TOOL_RESULT_CONTENT =
+  'Tool execution interrupted (FLUJO restarted before this tool finished)';
+
+/**
+ * Reconcile dangling tool calls (issue #256). If a crash/restart lands between
+ * "the assistant emitted tool_calls" and "the tool results were appended", the
+ * persisted history keeps an assistant `tool_calls` turn whose calls are
+ * unanswered — a shape every provider rejects with a 400 on the next request.
+ *
+ * This is a pure, in-place repair: it derives GROUND TRUTH strictly from the
+ * message history (which tool_call_ids already have a matching role:'tool'
+ * result) — never from `pendingToolCalls`, which can be out of sync after a
+ * crash — synthesizes a role:'tool' "interrupted" result for each unanswered
+ * call, and inserts it immediately after the owning assistant turn's existing
+ * result block (or right after the assistant turn if it has none) so ordering
+ * stays valid for providers. `processNodeId`/`depth` are carried over from the
+ * owning assistant message so subflow projection tagging stays correct.
+ *
+ * Mutates `state.messages` and RETURNS the synthesized messages (empty array =
+ * nothing to do). It does NOT persist them itself — callers decide persistence
+ * (via appendRawForState), mirroring applyApprovalDecision's contract.
+ */
+export function repairDanglingToolCalls(
+  state: SharedState,
+  content: string = INTERRUPTED_TOOL_RESULT_CONTENT,
+): FlujoChatMessage[] {
+  // An approval/debug pause intentionally persists an unanswered assistant
+  // tool-call turn. It is not crash damage: the parked state carries the exact
+  // calls/action that resume must process. Repairing it here would insert fake
+  // "interrupted" results before Step/Continue and either duplicate execution
+  // or erase the approval boundary.
+  const intentionallyPending =
+    (state.status === 'paused_debug'
+      && (!!state.debugPendingAction || !!state.debugPendingToolCalls?.length))
+    || (state.status === 'awaiting_tool_approval' && !!state.pendingToolCalls?.length)
+    // A mixed tool batch keeps its handoff unanswered until all ordinary calls
+    // finish. runFlow resumes this persisted staged operation deterministically.
+    || !!state.handoffRequested;
+  if (intentionallyPending) return [];
+
+  const messages = state.messages ?? [];
+  if (messages.length === 0) return [];
+
+  // Ground truth: every tool_call_id that already has a role:'tool' result.
+  const answered = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      const id = (m as { tool_call_id?: string }).tool_call_id;
+      if (id) answered.add(id);
+    }
+  }
+
+  const synthesized: FlujoChatMessage[] = [];
+  // Rebuild so each synthetic result lands right after the owning assistant
+  // turn's existing (contiguous) tool-result block, not blindly at the end.
+  const rebuilt: FlujoChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    rebuilt.push(m);
+    const toolCalls = (m as { tool_calls?: Array<{ id?: string }> }).tool_calls;
+    if (m.role !== 'assistant' || !Array.isArray(toolCalls) || toolCalls.length === 0) continue;
+    const unanswered = toolCalls.filter((tc) => !!tc.id && !answered.has(tc.id));
+    if (unanswered.length === 0) continue;
+    // Copy this turn's existing contiguous tool-result block first so the
+    // synthetic results are appended AFTER them.
+    let j = i + 1;
+    while (j < messages.length && messages[j].role === 'tool') {
+      rebuilt.push(messages[j]);
+      j++;
+    }
+    for (const tc of unanswered) {
+      const synthetic: FlujoChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'tool',
+        tool_call_id: tc.id!,
+        content,
+        timestamp: Date.now(),
+        ...(m.processNodeId !== undefined ? { processNodeId: m.processNodeId } : {}),
+        ...(m.depth !== undefined ? { depth: m.depth } : {}),
+      };
+      rebuilt.push(synthetic);
+      synthesized.push(synthetic);
+      answered.add(tc.id!);
+    }
+    i = j - 1; // skip the tool block already copied
+  }
+
+  if (synthesized.length === 0) return [];
+  state.messages = rebuilt;
+  return synthesized;
+}
+
+/**
  * Crash recovery: fold log messages missing from a storage-loaded snapshot
  * back into the state. Per-step durability is the LOG (appends); the full
  * SharedState snapshot is only written at run boundaries, so a crash mid-run
@@ -364,7 +741,7 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
   const events = await readConversationLog(conversationId);
   if (!events) return false;
 
-  const projectedParent = projectMessages(events).filter((m) => !((m.depth ?? 0) > 0));
+  const projectedParent = projectModelContextMessages(events).filter((m) => !((m.depth ?? 0) > 0));
   const snapshotIds = (state.messages ?? [])
     .filter((m) => m.role !== 'system' && !!m.id)
     .map((m) => m.id);
@@ -396,22 +773,28 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
  *  - every projected id still exists in the snapshot (a subset) — so we are
  *    extending a truncated prefix, not clobbering a legitimately diverged log
  *    (edited/pruned history, where lengths match or ids differ).
- * On a match the `.jsonl` is rewritten as a sequence of `message` events from
- * the snapshot (system messages excluded, matching projection semantics) and
- * the authoritative messages are returned for display. Otherwise returns
- * undefined and the log is left untouched. Never throws.
+ * On a match the snapshot-only messages are APPENDED as `message` events
+ * (system messages excluded). Existing audit history and context tombstones
+ * remain intact. The authoritative active messages are returned for display;
+ * otherwise this returns undefined and leaves the log untouched. Never throws.
  */
 export async function repairTruncatedConversationLog(
   state: SharedState,
 ): Promise<FlujoChatMessage[] | undefined> {
   if (state.ephemeral) return undefined;
+  if (isExecutionProtectedState(state) && !state.executionExtensionContext) return undefined;
+  if (state.personaAttribution && !state.executionAuthority) {
+    // A read/detail route must never rewrite a Persona-owned transcript. The
+    // dispatcher may perform this repair only after reinstalling live authority.
+    return undefined;
+  }
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return undefined;
 
   const events = await readConversationLog(conversationId);
   if (!events) return undefined; // no log — route falls back to the snapshot itself
 
-  const projectedParent = projectMessages(events).filter((m) => !((m.depth ?? 0) > 0));
+  const projectedParent = projectModelContextMessages(events).filter((m) => !((m.depth ?? 0) > 0));
   const snapshot = (state.messages ?? []).filter((m) => m.role !== 'system' && !!m.id);
   // Not the truncation signature: log is level with / ahead of the snapshot.
   if (projectedParent.length >= snapshot.length) return undefined;
@@ -419,19 +802,66 @@ export async function repairTruncatedConversationLog(
   // Diverged (not a truncated prefix) — don't clobber a legitimately edited log.
   if (!projectedParent.every((m) => snapshotIds.has(m.id))) return undefined;
 
-  const content = snapshot
-    .map((m) => serialize({ type: 'message', message: m, conversationId, seq: -1, timestamp: Date.now() } as ExecutionEvent))
-    .join('');
+  const projectedIds = new Set(projectedParent.map((message) => message.id));
+  const missing = snapshot.filter((message) => !projectedIds.has(message.id));
   try {
-    await chainWrite(conversationId, content);
+    await appendRawForState(
+      state,
+      missing.map((message) => ({ type: 'message' as const, message })),
+    );
     log.info(
-      `Rebuilt truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} message(s)); issue #49 self-heal.`
+      `Repaired truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} active message(s), ${missing.length} append(s)); issue #49 self-heal.`
     );
   } catch (err) {
-    log.warn(`Failed to rebuild truncated conversation log ${conversationId}`, { err });
-    // Still return the snapshot for display; the rewrite can retry next read.
+    log.warn(`Failed to repair truncated conversation log ${conversationId}`, { err });
+    // Still return the snapshot for display; the append can retry next read.
   }
   return snapshot;
+}
+
+export interface RecoveredConversationTranscript {
+  messages: FlujoChatMessage[];
+  source: 'snapshot' | 'durable-log';
+}
+
+/**
+ * Resolve the canonical Chat transcript and self-heal recoverable persistence
+ * gaps. The JSONL is the durable source of truth for anything it observed;
+ * context tombstones are ignored, and snapshot-only messages are merged as a
+ * crash/legacy fallback. This function never mutates `state.messages`, because
+ * that array is the active model-context view.
+ */
+export async function recoverConversationTranscript(
+  state: SharedState,
+): Promise<RecoveredConversationTranscript> {
+  const snapshot = (state.messages ?? [])
+    .filter((message) => message.role !== 'system')
+    .map((message) => ({
+      ...message,
+      id: message.id || crypto.randomUUID(),
+    }));
+  if (state.ephemeral) return { messages: snapshot, source: 'snapshot' };
+
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) {
+    return { messages: snapshot, source: 'snapshot' };
+  }
+
+  await flushConversationLog(conversationId);
+  await repairTruncatedConversationLog(state);
+  const events = await readConversationLog(conversationId);
+  const durable = events ? projectMessages(events) : [];
+  if (durable.length === 0) return { messages: snapshot, source: 'snapshot' };
+
+  // A crash can leave the materialized snapshot one append ahead of a damaged
+  // log tail. Keep all durable history, then surface any snapshot-only messages
+  // until a later successful self-heal makes them durable too.
+  const durableIds = new Set(durable.map((message) => message.id));
+  const snapshotOnly = snapshot.filter((message) => !durableIds.has(message.id));
+  return {
+    messages: [...durable, ...snapshotOnly],
+    source: 'durable-log',
+  };
 }
 
 /** True if a persisted log exists for this conversation. */

@@ -18,6 +18,11 @@ import {
 } from '@/utils/mcp/registry';
 import { REGISTRY_ORIGIN, registryGetJson } from '@/backend/utils/registryClient';
 import { createLogger } from '@/utils/logger';
+import {
+  bindToCurrentWorkspace,
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+} from '@/utils/workspace';
 
 const log = createLogger('backend/services/spotlight');
 
@@ -30,8 +35,9 @@ declare global {
   // Deduplicates concurrent refreshes (startup + a manual refresh click).
   // Global-backed for the same reason as __flujo_init_promise: in dev, route
   // bundles can instantiate this module more than once.
-  // eslint-disable-next-line no-var
   var __flujo_spotlight_refresh: Promise<SpotlightCache> | undefined;
+  var __flujo_spotlight_refresh_by_workspace:
+    Map<string, Promise<SpotlightCache>> | undefined;
 }
 
 /** Apply shipped endpoint corrections without mutating cached registry data. */
@@ -72,12 +78,25 @@ export async function loadSpotlightCache(): Promise<SpotlightCache | null> {
  * so one dead URL can't blank the whole tab.
  */
 export function refreshSpotlightServers(): Promise<SpotlightCache> {
-  if (!global.__flujo_spotlight_refresh) {
-    global.__flujo_spotlight_refresh = doRefresh().finally(() => {
-      global.__flujo_spotlight_refresh = undefined;
-    });
+  const workspace = getCurrentWorkspace();
+  const refreshes = global.__flujo_spotlight_refresh_by_workspace ??
+    (global.__flujo_spotlight_refresh_by_workspace = new Map());
+  const existing = workspace === DEFAULT_WORKSPACE
+    ? global.__flujo_spotlight_refresh
+    : refreshes.get(workspace);
+  if (existing) return existing;
+
+  const refresh = bindToCurrentWorkspace(doRefresh)();
+  const guarded = refresh.finally(bindToCurrentWorkspace(() => {
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_spotlight_refresh = undefined;
+    else refreshes.delete(workspace);
+  }));
+  if (workspace === DEFAULT_WORKSPACE) {
+    global.__flujo_spotlight_refresh = guarded;
+  } else {
+    refreshes.set(workspace, guarded);
   }
-  return global.__flujo_spotlight_refresh;
+  return guarded;
 }
 
 async function doRefresh(): Promise<SpotlightCache> {

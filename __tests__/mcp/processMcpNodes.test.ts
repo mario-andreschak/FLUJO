@@ -19,19 +19,40 @@ jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     connectServer: jest.fn(),
     listServerTools: jest.fn(),
+    listServerResources: jest.fn(),
+    listServerResourceTemplates: jest.fn(),
     getServerStatus: jest.fn(),
     setNodeRoots: jest.fn(),
+    setToolSchemaHash: jest.fn(),
+    getClientGeneration: jest.fn(() => 1),
+    loadServerConfigs: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/types/runResources', () => ({
+  DEFAULT_RUN_RESOURCE_SETTINGS: {
+    textThresholdChars: 8192,
+    autoCaptureEnabled: true,
+    maxResourceBytes: 50 * 1024 * 1024,
+    maxConversationBytes: 256 * 1024 * 1024,
+    replaceLargeTextWithStub: false,
   },
 }));
 
 import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
+import { LIST_MCP_RESOURCES_TOOL_NAME } from '@/backend/execution/flow/handlers/mcpResourceTools';
 
 const mockService = mcpService as unknown as {
   connectServer: jest.Mock;
   listServerTools: jest.Mock;
+  listServerResources: jest.Mock;
+  listServerResourceTemplates: jest.Mock;
   getServerStatus: jest.Mock;
+  setToolSchemaHash: jest.Mock;
+  getClientGeneration: jest.Mock;
+  loadServerConfigs: jest.Mock;
 };
 
 const mcpNode = (boundServer: string, enabledTools: string[]) => ({
@@ -41,6 +62,10 @@ const mcpNode = (boundServer: string, enabledTools: string[]) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default: no resources (graceful fallback for all existing tests)
+  mockService.listServerResources?.mockResolvedValue({ resources: [] });
+  mockService.listServerResourceTemplates?.mockResolvedValue({ resourceTemplates: [] });
+  mockService.loadServerConfigs.mockResolvedValue([]);
 });
 
 describe('ToolHandler.processMCPNodes', () => {
@@ -48,7 +73,12 @@ describe('ToolHandler.processMCPNodes', () => {
     mockService.connectServer.mockResolvedValue({ success: true });
     mockService.listServerTools.mockResolvedValue({
       tools: [
-        { name: 'demo_read', description: 'read source', inputSchema: { type: 'object' } },
+        {
+          name: 'demo_read',
+          description: 'read source',
+          inputSchema: { type: 'object' },
+          annotations: { readOnlyHint: true, openWorldHint: false },
+        },
         { name: 'demo_search', description: 'search', inputSchema: { type: 'object' } },
         { name: 'not_enabled', description: 'nope', inputSchema: {} },
       ],
@@ -71,6 +101,10 @@ describe('ToolHandler.processMCPNodes', () => {
       { server: 'demo-mcp-server', originalName: 'demo_read' },
       { server: 'demo-mcp-server', originalName: 'demo_search' },
     ]);
+    expect(result.value.availableTools[0]).toMatchObject({
+      nodeId: 'mcp-node-1',
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    });
     for (const name of names) {
       expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
     }
@@ -88,6 +122,50 @@ describe('ToolHandler.processMCPNodes', () => {
     expect(result.error.code).toBe('server_connection_failed');
     // We must NOT have proceeded to list tools after a failed connect.
     expect(mockService.listServerTools).not.toHaveBeenCalled();
+  });
+
+  it('hides merged fixed parameters from the model schema and carries their effective values', async () => {
+    mockService.connectServer.mockResolvedValue({ success: true });
+    mockService.loadServerConfigs.mockResolvedValue([{
+      name: 'demo-mcp-server',
+      toolParameterPresets: { demo_search: { tenant: '${global:TENANT}', limit: 10 } },
+    }]);
+    mockService.listServerTools.mockResolvedValue({
+      tools: [{
+        name: 'demo_search',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tenant: { type: 'string' },
+            limit: { type: 'integer' },
+            query: { type: 'string' },
+          },
+          required: ['tenant', 'query'],
+        },
+      }],
+    });
+
+    const result = await ToolHandler.processMCPNodes({
+      mcpNodes: [{
+        id: 'mcp-node-1',
+        properties: {
+          boundServer: 'demo-mcp-server',
+          enabledTools: ['demo_search'],
+          toolParameterPresets: { demo_search: { limit: 25 } },
+        },
+      }] as any,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('expected success');
+    expect(result.value.availableTools[0]).toMatchObject({
+      presetArgs: { tenant: '${global:TENANT}', limit: 25 },
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    });
   });
 
   it('propagates a tool-listing failure instead of silently returning no tools', async () => {
@@ -115,5 +193,56 @@ describe('ToolHandler.processMCPNodes', () => {
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('expected success');
     expect(result.value.availableTools).toEqual([]);
+  });
+
+  it('includes list_mcp_resources when server has resources and enabledResources is all', async () => {
+    mockService.connectServer.mockResolvedValue({ success: true });
+    mockService.listServerTools.mockResolvedValue({ tools: [] });
+    mockService.listServerResources.mockResolvedValue({
+      resources: [{ uri: 'file://test.txt', name: 'test', description: '', mimeType: 'text/plain' }],
+    });
+
+    const result = await ToolHandler.processMCPNodes({
+      mcpNodes: [{ id: 'n1', properties: { boundServer: 'demo-mcp-server', enabledTools: [], enabledResources: 'all' } }] as any,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('expected success');
+    const names = result.value.availableTools.map((t) => t.name);
+    expect(names).toContain(LIST_MCP_RESOURCES_TOOL_NAME);
+  });
+
+  it('does NOT include list_mcp_resources when enabledResources is []', async () => {
+    mockService.connectServer.mockResolvedValue({ success: true });
+    mockService.listServerTools.mockResolvedValue({ tools: [] });
+    mockService.listServerResources.mockResolvedValue({
+      resources: [{ uri: 'file://test.txt', name: 'test', description: '', mimeType: 'text/plain' }],
+    });
+
+    const result = await ToolHandler.processMCPNodes({
+      mcpNodes: [{ id: 'n1', properties: { boundServer: 'demo-mcp-server', enabledTools: [], enabledResources: [] } }] as any,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('expected success');
+    const names = result.value.availableTools.map((t) => t.name);
+    expect(names).not.toContain(LIST_MCP_RESOURCES_TOOL_NAME);
+  });
+
+  it('listServerResources failure logs warning but does not abort the step', async () => {
+    mockService.connectServer.mockResolvedValue({ success: true });
+    mockService.listServerTools.mockResolvedValue({ tools: [] });
+    mockService.listServerResources.mockRejectedValue(new Error('resources listing failed'));
+
+    const result = await ToolHandler.processMCPNodes({
+      mcpNodes: [mcpNode('demo-mcp-server', [])] as any,
+    });
+
+    // Step should NOT be aborted — resource listing is additive
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('expected success');
+    // And list_mcp_resources should not appear (since listing failed)
+    const names = result.value.availableTools.map((t) => t.name);
+    expect(names).not.toContain(LIST_MCP_RESOURCES_TOOL_NAME);
   });
 });

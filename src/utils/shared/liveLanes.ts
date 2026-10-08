@@ -1,5 +1,5 @@
 /**
- * Live lane-row model for parallel subflow fan-outs (issue #157).
+ * Live child-job rows for the Subflow worker queue (issue #157).
  *
  * Chat's SSE consumer folds lane-stamped execution events (laneIndex/laneCount,
  * issue #102) into this structure; LiveRunIndicator renders it as one progress
@@ -25,6 +25,10 @@ export interface LiveLane {
   label: string;
   /** The lane's persisted sidebar conversation, when saveConversation is on. */
   laneConversationId?: string;
+  /** Resolved display key for a reusable child session. */
+  sessionKey?: string;
+  /** 1-based ordinal of the current visit to that session. */
+  sessionVisit?: number;
   /** pending = known from laneCount but not yet started (bounded worker pool). */
   status: 'pending' | 'running' | 'completed' | 'error';
   /** Current node/tool inside the lane, shown as secondary text while running. */
@@ -33,9 +37,9 @@ export interface LiveLane {
 }
 
 export interface LiveLanes {
-  /** The parallel SubflowNode these rows belong to. A depth-1 subflow:start
-   *  from a DIFFERENT node means a second fan-out started in the same run —
-   *  all rows are cleared so sequential fan-outs never collide on laneIndex. */
+  /** The SubflowNode queue these rows belong to. A depth-1 subflow:start from a
+   *  different node means another queue started in the same run, so stale rows
+   *  are cleared before lane indices are reused. */
   ownerNodeId?: string;
   byIndex: Record<number, LiveLane>;
 }
@@ -79,7 +83,7 @@ function deriveActivity(event: ExecutionEvent): string | undefined {
  *  all three lane kinds — so the expected pool size is known from the FIRST
  *  lane event. Pre-create missing rows as `pending` ("queued"): the bounded
  *  worker pool (and the sequential-spawn path) starts lanes staggered, and
- *  rows-only-on-start would misrepresent a fan-out whose size is known. */
+ *  rows-only-on-start would misrepresent a queue whose size is known. */
 function ensureRows(byIndex: Record<number, LiveLane>, laneCount: number, now: number): void {
   for (let i = 0; i < laneCount; i++) {
     if (!byIndex[i]) {
@@ -109,8 +113,8 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
 
   if (boundaryAtLaneDepth && event.type === 'subflow:start') {
     const ownerNodeId = event.node?.nodeId;
-    // Fan-out-group switch: a depth-1 start from a different parallel node
-    // means the previous fan-out's rows are stale — drop them wholesale.
+    // Queue-group switch: a depth-1 start from a different Subflow node means
+    // the previous queue's rows are stale — drop them wholesale.
     const sameOwner = !prev.ownerNodeId || !ownerNodeId || prev.ownerNodeId === ownerNodeId;
     const byIndex = sameOwner ? { ...prev.byIndex } : {};
     ensureRows(byIndex, count, now);
@@ -119,6 +123,8 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
       laneCount: count,
       label: event.laneTitle || fallbackLabel(event, index, count),
       laneConversationId: event.laneConversationId ?? byIndex[index]?.laneConversationId,
+      sessionKey: event.sessionKey ?? byIndex[index]?.sessionKey,
+      sessionVisit: event.sessionVisit ?? byIndex[index]?.sessionVisit,
       status: 'running',
       lastEventAt: now,
     };
@@ -134,7 +140,11 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
       // Backfill label/link for a late-joining client that missed start.
       label: row.label && row.status !== 'pending' ? row.label : event.laneTitle || row.label,
       laneConversationId: row.laneConversationId ?? event.laneConversationId,
-      status: event.status,
+      sessionKey: event.sessionKey ?? row.sessionKey,
+      sessionVisit: event.sessionVisit ?? row.sessionVisit,
+      // A capped lane (issue #253) landed successfully with a summary; show it as
+      // completed in the lane row (which has no dedicated 'capped' state).
+      status: event.status === 'capped' ? 'completed' : event.status,
       activity: undefined,
       lastEventAt: now,
     };

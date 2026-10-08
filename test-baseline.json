@@ -1,0 +1,99 @@
+{
+  "$comment": [
+    "Execution baseline reviewed on 2026-09-16 from complete remediation main results, passing focused corrections, and the passing isolated stage. Historical reference: verify run 34763333121 at commit 26cd39856fd8a5580c77025ee0ec95732572045d.",
+    "Only assertions with passed/failed status and suites with completed assertions count. Pending/todo tests require an exact, reasoned intentionalSkips entry; a quarantine never excuses a suite failing to execute.",
+    "Reviewed Windows main scope is 763 suites and 6874 tests; portable minima subtract one suite and five Windows-only tests, which have explicit Unix intentionalSkips below. Isolated executed 9 suites and 101 tests. Browser capture, snapshot Git integration and memory lifecycle run in the isolated stage. All nine quarantines are retired; see docs/audits/quarantine-status.md for evidence.",
+    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression."
+  ],
+  "stages": {
+    "ci": {
+      "description": "npm run test:ci — both Jest projects, isolated process-boundary and intensive integration suites excluded.",
+      "minSuites": 762,
+      "minTests": 6869,
+      "intentionalSkips": [
+        {
+          "suite": "__tests__/enduringAgents/goalEnduranceAcceptance.test.ts",
+          "name": "Persona goal endurance across OS process epochs continues the same ordinary ongoing goal through graceful and forced restarts",
+          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
+        },
+        {
+          "suite": "__tests__/enduringAgents/goalAcceptance.test.ts",
+          "name": "one-goal Persona product acceptance loads the native SDK without substituting its implementation",
+          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
+        },
+        {
+          "suite": "__tests__/enduringAgents/goalAcceptance.test.ts",
+          "name": "one-goal Persona product acceptance continues through durable rounds, a controller restart and a recoverable external outage",
+          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
+        },
+        {
+          "suite": "__tests__/workspace/mcpRuntimeHomeIsolation.test.ts",
+          "name": "stdio MCP runtime homes passes the Windows launch essentials a child needs to spawn its own tools",
+          "reason": "Windows process-launch contract runs on Windows; inapplicable on Unix.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/workspace/mcpRuntimeHomeIsolation.test.ts",
+          "name": "stdio MCP runtime homes replaces a blank Windows essential instead of shadowing it with a second spelling",
+          "reason": "Windows process-launch contract runs on Windows; inapplicable on Unix.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/enduringAgents/memorySemanticRecallPerf.test.ts",
+          "name": "semantic memory recall 50k performance (opt-in) keeps production hybrid recall below 150ms p95 with a proven warm query cache",
+          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        },
+        {
+          "suite": "__tests__/mcp/bashNpmRunEnv.test.ts",
+          "name": "bash MCP server hands children a launchable Windows environment supplies a real ComSpec even when its own env has none",
+          "reason": "Windows process-launch contract runs on Windows; inapplicable on Unix.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/mcp/bashNpmRunEnv.test.ts",
+          "name": "bash MCP server hands children a launchable Windows environment never overwrites a ComSpec the caller asked for",
+          "reason": "Windows process-launch contract runs on Windows; inapplicable on Unix.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/mcp/bashNpmRunEnv.test.ts",
+          "name": "bash MCP server hands children a launchable Windows environment runs a real `npm run` script end to end",
+          "reason": "Windows process-launch contract runs on Windows; inapplicable on Unix.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
+          "name": "Persona record index performance (opt-in) keeps 50k-memory warm Persona reads below the reference p95",
+          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        },
+        {
+          "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
+          "name": "Persona record index performance (opt-in) keeps 20k-mailbox warm reads scale-invariant with foreign records",
+          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        }
+      ]
+    },
+    "isolated": {
+      "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
+      "minSuites": 9,
+      "minTests": 101,
+      "intentionalSkips": []
+    }
+  },
+  "quarantined": []
+}

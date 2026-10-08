@@ -15,6 +15,9 @@ import {
   listRunResources,
   listAllRunResources,
   readRunResource,
+  readRunResourceRange,
+  copyRunResourceToConversation,
+  getRunResourceLocalPath,
   findRunResourceByName,
   deleteRunResources,
   buildRunResourceUri,
@@ -22,7 +25,13 @@ import {
   _setRunResourcesDirForTests,
   _clearRunResourceSettingsCache,
 } from '@/backend/services/runResources';
-import type { RunResourceEntry } from '@/shared/types/runResources';
+import { captureToolResult } from '@/backend/services/runResources/capture';
+import {
+  executeRunResourceTool,
+  READ_RESOURCE_TOOL_NAME,
+} from '@/backend/execution/flow/handlers/runResourceTools';
+import { DEFAULT_RUN_RESOURCE_SETTINGS, type RunResourceEntry } from '@/shared/types/runResources';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // Settings come from storage (loadItem). Pin them to defaults with a tight
 // per-resource cap so the cap paths are testable without megabyte payloads.
@@ -117,9 +126,127 @@ describe('write/read/list round-trip', () => {
     expect(read!.entry.readBy).toEqual([]);
   });
 
+  it('reads exact byte pages without hydrating the complete resource', async () => {
+    const payload = '0123456789abcdefghijklmnopqrstuvwxyz';
+    const written = await writeRunResource({
+      conversationId: 'convRange',
+      mimeType: 'text/plain',
+      kind: 'text',
+      data: { text: payload },
+      producedBy,
+    }) as RunResourceEntry;
+
+    const page = await readRunResourceRange(
+      written.uri,
+      10,
+      19,
+      { at: 456, source: 'res-ref' },
+    );
+    expect(page).not.toBeNull();
+    expect(page!.data.toString('utf8')).toBe('abcdefghij');
+    expect(page).toMatchObject({ start: 10, end: 19, total: payload.length });
+    expect((await listRunResources('convRange'))[0].readBy).toContainEqual({
+      at: 456,
+      source: 'res-ref',
+    });
+  });
+
   it('unknown uri reads as null', async () => {
     expect(await readRunResource(buildRunResourceUri('convA', 'no-such-id'))).toBeNull();
     expect(await readRunResource('flujo://run/never-seen-conv/no-such-id')).toBeNull();
+  });
+});
+
+describe('capture → durable reload → read_resource round-trip (#368)', () => {
+  it('reads the exact substituted payload after a cold reload and keeps conversation authorization', async () => {
+    const conversationId = 'capture-resume-conv';
+    const originalText = 'durable tool output '.repeat(20);
+    const result: CallToolResult = { content: [{ type: 'text', text: originalText }] };
+    const captured = await captureToolResult({
+      conversationId,
+      server: 'filesystem',
+      toolName: 'read_file',
+      toolCallId: 'call-capture-resume',
+      result,
+      settings: {
+        ...DEFAULT_RUN_RESOURCE_SETTINGS,
+        textThresholdChars: 10,
+        replaceLargeTextWithStub: true,
+      },
+    });
+
+    expect(captured.captured).toHaveLength(1);
+    const marker = (captured.result.content[0] as { text?: string }).text ?? '';
+    const uri = marker.match(/flujo:\/\/run\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/)?.[0];
+    expect(uri).toBe(captured.captured[0].uri);
+    expect(parseRunResourceUri(uri!)).toEqual({
+      conversationId,
+      id: captured.captured[0].id,
+    });
+
+    // Simulate process-memory loss at a resume boundary. Pointing the store at
+    // the same durable directory clears its in-memory index cache.
+    _setRunResourcesDirForTests(tmpDir);
+
+    const resumed = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId },
+    );
+    expect(resumed).toMatchObject({ success: true, data: { uri, content: originalText } });
+
+    const denied = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId: 'different-conversation' },
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.error).toContain('not part of this run');
+  });
+});
+
+describe('cross-conversation promotion', () => {
+  it('copies binary bytes into the parent scope and exposes a validated local path', async () => {
+    const payloadBytes = Buffer.from([0, 1, 2, 3, 250, 251, 252]);
+    const source = await writeRunResource({
+      conversationId: 'child-media',
+      mimeType: 'video/mp4',
+      kind: 'blob',
+      data: { base64: payloadBytes.toString('base64') },
+      producedBy: { source: 'model-output', nodeId: 'video-node' },
+    }) as RunResourceEntry;
+
+    const promoted = await copyRunResourceToConversation({
+      uri: source.uri,
+      conversationId: 'parent-media',
+      producedBy: { source: 'capture', nodeId: 'subflow-node' },
+    }) as RunResourceEntry;
+
+    expect(promoted.uri).not.toBe(source.uri);
+    expect(promoted.conversationId).toBe('parent-media');
+    expect(promoted).toMatchObject({ mimeType: 'video/mp4', kind: 'blob', size: payloadBytes.length });
+    expect(promoted.origin).toEqual({ server: 'flujo', uri: source.uri });
+
+    const parentRead = await readRunResource(promoted.uri);
+    expect((parentRead!.contents.contents[0] as { blob?: string }).blob).toBe(payloadBytes.toString('base64'));
+
+    const localPath = await getRunResourceLocalPath(promoted.uri);
+    expect(localPath).not.toBeNull();
+    expect(path.isAbsolute(localPath!)).toBe(true);
+    expect(path.extname(localPath!)).toBe('.mp4');
+    expect(await fs.readFile(localPath!)).toEqual(payloadBytes);
+  });
+
+  it('returns null for malformed, missing, and payload-less resources', async () => {
+    expect(await getRunResourceLocalPath('file:///tmp/not-a-run-resource')).toBeNull();
+    expect(await getRunResourceLocalPath(buildRunResourceUri('missing-conv', 'missing-id'))).toBeNull();
+    const link = await writeRunResource({
+      conversationId: 'parent-media',
+      kind: 'link',
+      producedBy: { source: 'mcp-link', server: 'srv' },
+      origin: { server: 'srv', uri: 'srv://remote/item' },
+    }) as RunResourceEntry;
+    expect(await getRunResourceLocalPath(link.uri)).toBeNull();
   });
 });
 

@@ -18,6 +18,7 @@ type Backend = typeof import('@/utils/storage/backend');
 let tmpDir: string;
 let dbDir: string;
 let backend: Backend;
+let priorDataDir: string | undefined;
 
 const readJson = async (p: string) => JSON.parse(await fs.readFile(p, 'utf-8'));
 const exists = async (p: string) => {
@@ -25,16 +26,19 @@ const exists = async (p: string) => {
 };
 
 beforeEach(async () => {
+  priorDataDir = process.env.FLUJO_DATA_DIR;
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-storage-'));
-  dbDir = path.join(tmpDir, 'db');
+  dbDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db');
   process.env.FLUJO_DATA_DIR = tmpDir;
-  // STORAGE_DIR is resolved at module load, so re-import after setting the env.
+  // Re-import after setting the parent data root so this test exercises the
+  // default workspace's real on-disk collection layout.
   jest.resetModules();
   backend = await import('@/utils/storage/backend');
 });
 
 afterEach(async () => {
-  delete process.env.FLUJO_DATA_DIR;
+  if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
+  else process.env.FLUJO_DATA_DIR = priorDataDir;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -58,7 +62,7 @@ describe('collection storage helpers', () => {
       await expect(backend.deleteCollectionItem('flows', bad)).rejects.toThrow();
     }
     // A file was never created outside the collection dir.
-    expect(await exists(path.join(tmpDir, 'db', 'evil.json'))).toBe(false);
+    expect(await exists(path.join(dbDir, 'evil.json'))).toBe(false);
   });
 
   it('accepts normal UUID-like ids', () => {
@@ -155,6 +159,6 @@ describe('migrateArrayFileToCollection', () => {
     await writeLegacy([{ id: 'ok', name: 'Fine' }, { id: '../evil', name: 'Bad' }]);
     await backend.migrateArrayFileToCollection(StorageKey.FLOWS, 'flows', (f: { id: string }) => f.id);
     expect(await exists(path.join(dbDir, 'flows', 'ok.json'))).toBe(true);
-    expect(await exists(path.join(tmpDir, 'db', 'evil.json'))).toBe(false);
+    expect(await exists(path.join(dbDir, 'evil.json'))).toBe(false);
   });
 });

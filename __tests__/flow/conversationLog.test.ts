@@ -3,11 +3,11 @@
  *
  * The log is the per-conversation source of truth: every persisted step is an
  * APPEND (one JSONL line), and the displayed conversation is a pure fold of
- * 'message' / 'message:removed' events (upsert by id, system-role excluded,
- * subflow steps tagged with depth). These tests pin:
+ * message events (upsert by id, system-role excluded, subflow steps tagged
+ * with depth). Context tombstones are projected separately. These tests pin:
  *  - the store: append order, ephemeral refusal (policy chokepoint), unknown-
  *    conversation refusal, truncated-tail tolerance, idempotent delete;
- *  - the projection: upsert-by-id, system exclusion, depth tagging, removal.
+ *  - the projections: durable Chat history versus active model context.
  */
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -20,10 +20,17 @@ import {
   hasConversationLog,
   flushConversationLog,
   projectMessages,
+  projectModelContextMessages,
+  recoverConversationTranscript,
   recoverMessagesFromLog,
+  repairDanglingToolCalls,
+  INTERRUPTED_TOOL_RESULT_CONTENT,
   repairTruncatedConversationLog,
+  allocateSeq,
+  latestSequence,
   _setConversationLogDirForTests,
 } from '@/backend/execution/flow/conversationLog';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { ExecutionEvent, MessageEvent } from '@/shared/types/execution/events';
@@ -86,7 +93,7 @@ describe('conversation log store', () => {
     const convId = 'conv-store-filter';
     FlowExecutor.conversationStates.set(convId, makeState(convId));
 
-    appendFromBus({ type: 'model:delta', conversationId: convId, seq: 0, timestamp: 1, delta: 'x' } as ExecutionEvent);
+    appendFromBus({ type: 'model:delta', conversationId: convId, seq: 0, timestamp: 1, messageId: 'draft-1', delta: 'x' } as ExecutionEvent);
     appendFromBus({ type: 'run:paused', conversationId: convId, seq: 1, timestamp: 1, reason: 'debug' } as ExecutionEvent);
     appendFromBus(messageEvent(convId, msg('m1', 'assistant')));
     await flushConversationLog(convId);
@@ -148,13 +155,53 @@ describe('conversation log store', () => {
 
     const events = await readConversationLog(convId);
     expect(events?.map((e) => [e.type, e.seq])).toEqual([
-      ['message', -1],
-      ['message:removed', -1],
+      ['message', 0],
+      ['message:removed', 1],
     ]);
 
     const ephemeralState = makeState('conv-store-raw-eph', true);
     await appendRawForState(ephemeralState, [{ type: 'message', message: msg('m2', 'user') }]);
     expect(await hasConversationLog('conv-store-raw-eph')).toBe(false);
+  });
+
+  it('does not append authoritative transcript events after a Persona commit fence is lost', async () => {
+    const convId = 'conv-store-stale-persona';
+    const state = makeState(convId);
+    state.personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    const leaseLost = new Error('Persona lease is no longer current');
+    const commitWhileCurrent = jest.fn(async () => {
+      throw leaseLost;
+    });
+    state.executionAuthority = {
+      assertCurrent: jest.fn(async () => undefined),
+      signal: new AbortController().signal,
+      commitWhileCurrent,
+    };
+
+    await expect(appendRawForState(state, [
+      { type: 'message', message: msg('late-model-response', 'assistant') },
+    ])).rejects.toBe(leaseLost);
+    expect(commitWhileCurrent).toHaveBeenCalledTimes(1);
+    expect(await readConversationLog(convId)).toBeUndefined();
+  });
+
+  it('fails closed when Persona attribution is loaded without its runtime capability', async () => {
+    const convId = 'conv-store-unfenced-persona';
+    const state = makeState(convId);
+    state.personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+
+    await expect(appendRawForState(state, [
+      { type: 'message', message: msg('unfenced-response', 'assistant') },
+    ])).rejects.toThrow('requires current execution authority');
+    expect(await readConversationLog(convId)).toBeUndefined();
   });
 
   it('tolerates a truncated tail line (crash mid-append)', async () => {
@@ -211,6 +258,29 @@ describe('projectMessages (conversation-as-projection)', () => {
     expect(projected[1].content).toBe('final answer');
   });
 
+  it('preserves distinct messages that reused legacy Codex SDK-local item ids', () => {
+    const legacyId = 'stream_codex_item_0';
+    const projected = projectMessages([
+      messageEvent(convId, msg(legacyId, 'assistant', 'first model turn')),
+      messageEvent(convId, msg('tool-pair', 'assistant', 'between turns')),
+      messageEvent(convId, msg(legacyId, 'assistant', 'second model turn')),
+      messageEvent(convId, msg(legacyId, 'assistant', 'third model turn')),
+    ]);
+
+    expect(projected.map((message) => message.id)).toEqual([
+      legacyId,
+      'tool-pair',
+      `${legacyId}_legacy_2`,
+      `${legacyId}_legacy_3`,
+    ]);
+    expect(projected.map((message) => message.content)).toEqual([
+      'first model turn',
+      'between turns',
+      'second model turn',
+      'third model turn',
+    ]);
+  });
+
   it('tags subflow child messages (event depth > 0) with depth, inlined in order', () => {
     const projected = projectMessages([
       messageEvent(convId, msg('u1', 'user', 'task')),
@@ -224,16 +294,20 @@ describe('projectMessages (conversation-as-projection)', () => {
     ]);
   });
 
-  it('message:removed deletes and later upserts still land at the right place', () => {
-    const projected = projectMessages([
+  it('keeps context-removed messages in Chat while pruning them from model context', () => {
+    const events = [
       messageEvent(convId, msg('u1', 'user')),
       messageEvent(convId, msg('a1', 'assistant')),
       messageEvent(convId, msg('u2', 'user')),
       { type: 'message:removed', conversationId: convId, seq: -1, timestamp: 2, messageId: 'a1' } as ExecutionEvent,
       messageEvent(convId, msg('u2', 'user', 'edited')), // upsert after a removal shifted indices
-    ]);
-    expect(projected.map((m) => m.id)).toEqual(['u1', 'u2']);
-    expect(projected[1].content).toBe('edited');
+    ];
+    const durable = projectMessages(events);
+    const modelContext = projectModelContextMessages(events);
+    expect(durable.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(durable[2].content).toBe('edited');
+    expect(modelContext.map((m) => m.id)).toEqual(['u1', 'u2']);
+    expect(modelContext[1].content).toBe('edited');
   });
 
   it('removal of an unknown id is a no-op', () => {
@@ -242,6 +316,54 @@ describe('projectMessages (conversation-as-projection)', () => {
       { type: 'message:removed', conversationId: convId, seq: -1, timestamp: 2, messageId: 'nope' } as ExecutionEvent,
     ]);
     expect(projected.map((m) => m.id)).toEqual(['u1']);
+  });
+});
+
+describe('recoverConversationTranscript (durable Chat recovery)', () => {
+  it('restores context-tombstoned JSONL messages without changing active state', async () => {
+    const convId = 'conv-recover-canonical-chat';
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user'), msg('u2', 'user')];
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant', 'still canonical') },
+      { type: 'message:removed', messageId: 'a1' },
+      { type: 'message', message: msg('u2', 'user') },
+    ]);
+
+    const recovered = await recoverConversationTranscript(state);
+    expect(recovered.source).toBe('durable-log');
+    expect(recovered.messages.map((message) => message.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(state.messages.map((message) => message.id)).toEqual(['u1', 'u2']);
+    expect(projectModelContextMessages((await readConversationLog(convId))!).map((message) => message.id))
+      .toEqual(['u1', 'u2']);
+  });
+
+  it('preserves Gemini thought signatures through durable log reload', async () => {
+    const convId = 'conv-gemini-signature';
+    const state = makeState(convId);
+    const assistant = {
+      role: 'assistant',
+      content: null,
+      id: 'assistant-signature',
+      timestamp: 1,
+      tool_calls: [{
+        id: 'call-signature',
+        type: 'function',
+        function: { name: 'lookup', arguments: '{}' },
+        providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+      }],
+    } as FlujoChatMessage;
+
+    await appendRawForState(state, [{ type: 'message', message: assistant }]);
+
+    const recovered = await recoverConversationTranscript(state);
+    expect(recovered.source).toBe('durable-log');
+    expect(recovered.messages[0]).toMatchObject({
+      tool_calls: [{
+        providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+      }],
+    });
   });
 });
 
@@ -351,7 +473,7 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
   // the turn-start reconcile line). Because the display route prefers the
   // projection, it renders one message until the log is rebuilt.
 
-  it('rebuilds the log from the snapshot when the projection is a strict truncated subset', async () => {
+  it('repairs the log from the snapshot when the active projection is a strict truncated subset', async () => {
     const convId = 'conv-repair-truncated';
     // Truncated log: only the first (reconcile) message survived.
     await appendRawForState(makeState(convId), [{ type: 'message', message: msg('u1', 'user') }]);
@@ -363,10 +485,11 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
     const repaired = await repairTruncatedConversationLog(state);
     expect(repaired?.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
 
-    // The log itself is rebuilt so future reads project the full transcript.
+    // The repair is append-only and future reads project the full transcript.
     await flushConversationLog(convId);
     const events = await readConversationLog(convId);
     expect(projectMessages(events!).map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(events?.filter((event) => event.type === 'message')).toHaveLength(3);
   });
 
   it('does nothing when the log is level with or ahead of the snapshot', async () => {
@@ -396,5 +519,215 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
     eph.messages = [msg('u1', 'user'), msg('a1', 'assistant')];
     expect(await repairTruncatedConversationLog(eph)).toBeUndefined();
     expect(await hasConversationLog(convId)).toBe(false);
+  });
+});
+
+describe('authoritative monotonic seq (issue #261)', () => {
+  it('keeps seq strictly monotonic across a channel GC cycle (never resets to 0)', () => {
+    const convId = 'conv-seq-gc';
+    const e0 = executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any);
+    const e1 = executionEventBus.emit(convId, { type: 'usage', totalTokens: 1 } as any);
+    // Simulate the channel (and its ring buffer) being garbage-collected 5 min
+    // after run:done — historically this reset the bus seq to 0.
+    (executionEventBus as unknown as { channels: Map<string, unknown> }).channels.delete(convId);
+    const e2 = executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any);
+    const e3 = executionEventBus.emit(convId, { type: 'usage', totalTokens: 2 } as any);
+    expect([e0.seq, e1.seq, e2.seq, e3.seq]).toEqual([0, 1, 2, 3]);
+  });
+
+  it('stamps appendRawForState (log-only) events with real monotonic seqs, never -1', async () => {
+    const convId = 'conv-seq-raw';
+    const state = makeState(convId);
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant') },
+    ]);
+    await flushConversationLog(convId);
+    const events = await readConversationLog(convId);
+    expect(events?.map((e) => e.seq)).toEqual([0, 1]);
+    expect(events?.every((e) => e.seq >= 0)).toBe(true);
+  });
+
+  it('latestSequence matches the last appended event after flush', async () => {
+    const convId = 'conv-seq-latest';
+    const state = makeState(convId);
+    expect(await latestSequence(convId)).toBe(-1); // nothing persisted yet
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant') },
+      { type: 'message', message: msg('a2', 'assistant') },
+    ]);
+    await flushConversationLog(convId);
+    expect(await latestSequence(convId)).toBe(2);
+  });
+
+  it('cold-start seeds the counter at max(seq)+1 from an existing file (legacy -1 and non-monotonic tolerated)', async () => {
+    const convId = 'conv-seq-coldstart';
+    const legacy = [
+      { type: 'message', conversationId: convId, seq: -1, timestamp: 1, message: msg('u1', 'user') },
+      { type: 'message', conversationId: convId, seq: 7, timestamp: 1, message: msg('a1', 'assistant') },
+      { type: 'message', conversationId: convId, seq: 3, timestamp: 1, message: msg('a2', 'assistant') },
+    ]
+      .map((e) => `${JSON.stringify(e)}\n`)
+      .join('');
+    await fs.writeFile(path.join(tmpDir, `${convId}.jsonl`), legacy);
+    // First allocation resumes just past the highest authoritative seq (7), it
+    // does NOT reset to 0 or trip over the legacy -1.
+    expect(allocateSeq(convId)).toBe(8);
+    expect(allocateSeq(convId)).toBe(9);
+    expect(await latestSequence(convId)).toBe(9);
+  });
+
+  it('append order equals seq order (interleaved bus + log-only appends)', async () => {
+    const convId = 'conv-seq-order';
+    const state = makeState(convId);
+    FlowExecutor.conversationStates.set(convId, state);
+    executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any); // seq 0
+    await appendRawForState(state, [{ type: 'message', message: msg('u1', 'user') }]); // seq 1
+    executionEventBus.emit(convId, {
+      type: 'message',
+      message: msg('a1', 'assistant'),
+    } as any); // seq 2
+    await flushConversationLog(convId);
+    const events = await readConversationLog(convId);
+    const seqs = events!.map((e) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b)); // file order === seq order
+    expect(seqs).toEqual([0, 1, 2]);
+  });
+});
+
+// Issue #256 — reconcile dangling tool calls at run start / load / cancel.
+const asstToolCall = (
+  id: string,
+  toolCallIds: string[],
+  overrides: Partial<FlujoChatMessage> = {}
+): FlujoChatMessage =>
+  ({
+    role: 'assistant',
+    content: null,
+    tool_calls: toolCallIds.map((tid) => ({
+      id: tid,
+      type: 'function',
+      function: { name: 'do_thing', arguments: '{}' },
+    })),
+    id,
+    timestamp: 1,
+    ...overrides,
+  } as FlujoChatMessage);
+
+const toolResult = (id: string, toolCallId: string): FlujoChatMessage =>
+  ({ role: 'tool', tool_call_id: toolCallId, content: 'ok', id, timestamp: 1 } as FlujoChatMessage);
+
+describe('repairDanglingToolCalls (issue #256)', () => {
+  it('synthesizes one result per unanswered tool_call_id at the end of a turn', () => {
+    const convId = 'conv-repair-basic';
+    const state = makeState(convId);
+    state.messages = [
+      msg('u1', 'user'),
+      asstToolCall('a1', ['call_1', 'call_2'], { processNodeId: 'node-x' }),
+    ];
+
+    const synthesized = repairDanglingToolCalls(state);
+
+    expect(synthesized).toHaveLength(2);
+    expect(synthesized.map((m) => (m as any).tool_call_id).sort()).toEqual(['call_1', 'call_2']);
+    for (const m of synthesized) {
+      expect(m.role).toBe('tool');
+      expect(m.content).toBe(INTERRUPTED_TOOL_RESULT_CONTENT);
+      expect(m.id).toBeTruthy();
+      expect((m as any).processNodeId).toBe('node-x'); // carried over from the assistant turn
+    }
+    // Inserted right after the owning assistant turn.
+    expect(state.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool']);
+  });
+
+  it('only answers the calls that lack a result (mixed case), preserving existing results', () => {
+    const convId = 'conv-repair-mixed';
+    const state = makeState(convId);
+    state.messages = [
+      asstToolCall('a1', ['call_1', 'call_2']),
+      toolResult('t1', 'call_1'),
+    ];
+
+    const synthesized = repairDanglingToolCalls(state);
+
+    expect(synthesized).toHaveLength(1);
+    expect((synthesized[0] as any).tool_call_id).toBe('call_2');
+    // Existing result kept; synthetic appended after the existing result block.
+    expect(state.messages.map((m) => m.role)).toEqual(['assistant', 'tool', 'tool']);
+    expect((state.messages[1] as any).tool_call_id).toBe('call_1'); // original untouched
+    expect((state.messages[2] as any).tool_call_id).toBe('call_2'); // synthetic
+  });
+
+  it('is a no-op when every tool call is already answered', () => {
+    const convId = 'conv-repair-noop';
+    const state = makeState(convId);
+    const before: FlujoChatMessage[] = [
+      asstToolCall('a1', ['call_1']),
+      toolResult('t1', 'call_1'),
+    ];
+    state.messages = [...before];
+
+    const synthesized = repairDanglingToolCalls(state);
+
+    expect(synthesized).toEqual([]);
+    expect(state.messages).toEqual(before); // untouched
+  });
+
+  it('accepts a cause-specific message (cancellation path)', () => {
+    const convId = 'conv-repair-cancel';
+    const state = makeState(convId);
+    state.messages = [asstToolCall('a1', ['call_1'])];
+
+    const synthesized = repairDanglingToolCalls(state, 'Tool execution cancelled by user before it finished.');
+
+    expect(synthesized).toHaveLength(1);
+    expect(synthesized[0].content).toBe('Tool execution cancelled by user before it finished.');
+  });
+
+  it('does not repair tool calls intentionally parked by debugger or approval state', () => {
+    const debugState = makeState('conv-repair-debug-pause');
+    debugState.messages = [asstToolCall('a1', ['call_1'])];
+    debugState.status = 'paused_debug';
+    debugState.debugPendingAction = { action: 'TOOL_CALL', phase: 'after-model' };
+
+    expect(repairDanglingToolCalls(debugState)).toEqual([]);
+    expect(debugState.messages).toHaveLength(1);
+
+    const approvalState = makeState('conv-repair-approval-pause');
+    const pending = asstToolCall('a2', ['call_2']).tool_calls!;
+    approvalState.messages = [asstToolCall('a2', ['call_2'])];
+    approvalState.status = 'awaiting_tool_approval';
+    approvalState.pendingToolCalls = pending;
+
+    expect(repairDanglingToolCalls(approvalState)).toEqual([]);
+    expect(approvalState.messages).toHaveLength(1);
+  });
+
+  it('does not repair a persisted handoff staged behind ordinary tools', () => {
+    const state = makeState('conv-repair-staged-handoff');
+    state.messages = [asstToolCall('a1', ['ordinary_1', 'handoff_1'])];
+    state.handoffRequested = { edgeId: 'edge-worker', targetNodeId: 'worker' };
+
+    expect(repairDanglingToolCalls(state)).toEqual([]);
+    expect(state.messages).toHaveLength(1);
+  });
+
+  it('folds synthesized results into the projection via appendRawForState', async () => {
+    const convId = 'conv-repair-projection';
+    const state = makeState(convId);
+    FlowExecutor.conversationStates.set(convId, state);
+    state.messages = [msg('u1', 'user'), asstToolCall('a1', ['call_1'])];
+
+    const synthesized = repairDanglingToolCalls(state);
+    await appendRawForState(state, synthesized.map((m) => ({ type: 'message', message: m })));
+    await flushConversationLog(convId);
+
+    const events = await readConversationLog(convId);
+    const projected = projectMessages(events!);
+    const toolMsg = projected.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect((toolMsg as any).tool_call_id).toBe('call_1');
+    expect(toolMsg!.content).toBe(INTERRUPTED_TOOL_RESULT_CONTENT);
   });
 });

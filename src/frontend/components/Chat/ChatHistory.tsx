@@ -19,18 +19,44 @@ import {
   FormControl,
   Chip,
   Collapse,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  CircularProgress,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import BoltIcon from '@mui/icons-material/Bolt';
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
+import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
+import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded';
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
+import WebhookRoundedIcon from '@mui/icons-material/WebhookRounded';
+import ApiRoundedIcon from '@mui/icons-material/ApiRounded';
+import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
+import GroupsRoundedIcon from '@mui/icons-material/GroupsRounded';
+import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
+import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
+import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded';
+import FilterListRoundedIcon from '@mui/icons-material/FilterListRounded';
+import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded';
+import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded';
+import PushPinRoundedIcon from '@mui/icons-material/PushPinRounded';
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
+import type { ChatRevealRequest } from './index';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
 import { groupItems, CardGroup } from '@/utils/shared/cardGrouping';
 import {
@@ -39,15 +65,45 @@ import {
   orderWaveGroups,
 } from '@/utils/shared/waveGrouping';
 import type { WavesResponse } from '@/shared/types/waves/waves';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import ConversationTree from './ConversationTree';
 import { buildChainIndex } from '@/utils/shared/conversationChains';
+import { CONVERSATION_PINS_PREFERENCE, collectPinnedConversationIds } from '@/utils/shared/conversationPins';
+import { alpha, useTheme as useMuiTheme } from '@mui/material/styles';
+import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
+import { getConversationOrigin } from './conversationOrigin';
+import type { ConversationOriginKey } from './conversationOrigin';
+import {
+  conversationCardSplitBackground,
+  conversationOriginColor,
+  conversationStatusColor,
+} from './conversationCardPalette';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
+import { chatService } from '@/frontend/services/chat';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
+  /** Total persisted rows matching the unfiltered sidebar, including unloaded pages. */
+  totalConversations?: number;
+  hasMoreConversations?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => Promise<void>;
+  /** Explicitly materialize all pages for complete bulk-action semantics. */
+  onLoadAll?: () => Promise<ConversationListItem[]>;
+  /** Refresh pinned families that may live outside the loaded history pages. */
+  onPinsChanged?: () => void;
   currentConversationId: string | null;
+  /** One-shot, URL-originated request to reveal a conversation (issue #397):
+   *  expands the group/chain that contains it and scrolls its row into view
+   *  exactly once. Ordinary selection changes intentionally do NOT scroll. */
+  revealRequest?: ChatRevealRequest | null;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
+  /** Bulk-delete a set of conversations by id (Delete All / Delete Visible). */
+  onBulkDelete: (ids: string[]) => Promise<void>;
   /** Stop the run of a conversation that is running or awaiting tool approval.
    *  Rendered as a stop button on those list items — including background
    *  conversations, which otherwise have no reachable Stop at all. */
@@ -58,15 +114,31 @@ interface ChatHistoryProps {
   /** Optional: collapse/hide the sidebar. When provided, a toggle button is
    *  rendered next to the header. State is owned by the parent. */
   onCollapse?: () => void;
+  /** Whether the sidebar is currently collapsed — flips the toggle button's
+   *  tooltip/aria-label between "collapse" and "expand". Defaults to false so
+   *  existing call sites that don't pass it keep the previous "hide" wording. */
+  collapsed?: boolean;
   /** Map of flowId → flow name, so the sidebar can show which flow each
    *  conversation used (issue #147). Quick-chat pseudo-flows are detected from
    *  their id and labelled "Quick Chat" regardless of this map. */
   flowNames?: Record<string, string>;
+  /** Current workspace Persona names, shared with the target selector. */
+  personaNames?: Record<string, string>;
 }
 
-type GroupMode = 'none' | 'date' | 'flow' | 'wave' | 'chain';
+type GroupMode = 'none' | 'date' | 'flow' | 'origin' | 'wave' | 'chain';
 type StatusFilter = 'all' | NonNullable<ConversationListItem['status']>;
 type DateFilter = 'all' | 'today' | '7d' | '30d';
+type SearchDimension = 'title' | 'content';
+type OriginFilter = 'all' | 'chat' | 'schedule' | 'subflow' | 'meeting';
+
+interface ConversationSearchPage {
+  key: string;
+  items: ConversationListItem[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
+}
 
 // Persisted per-browser UI preferences (issue #147). Namespaced with the app's
 // existing `flujo-ui:` convention so they sit alongside the other list-surface
@@ -76,73 +148,150 @@ const PREF = {
   status: 'flujo-ui:chat-sidebar:status',
   flow: 'flujo-ui:chat-sidebar:flow',
   date: 'flujo-ui:chat-sidebar:date',
+  origin: 'flujo-ui:chat-sidebar:origin',
+  filtersOpen: 'flujo-ui:chat-sidebar:filters-open',
   collapsed: 'flujo-ui:chat-sidebar:collapsed',
   searchDim: 'flujo-ui:chat-sidebar:search-dim',
 } as const;
 
-const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'Any status' },
-  { value: 'running', label: 'Processing' },
-  { value: 'awaiting_tool_approval', label: 'Awaiting approval' },
-  { value: 'paused_debug', label: 'Paused (debug)' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'error', label: 'Error' },
-];
+// Bounded retry budget for a URL reveal (issue #397). A row can be one frame
+// late (Collapse mount, list re-render); it must never retry forever when a
+// filter or a closed mobile drawer keeps it unmounted.
+const MAX_REVEAL_ATTEMPTS = 10;
+const SEARCH_PAGE_SIZE = 50;
 
-const DATE_OPTIONS: { value: DateFilter; label: string }[] = [
-  { value: 'all', label: 'Any time' },
-  { value: 'today', label: 'Last 24h' },
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-];
+const STATUS_OPTIONS: StatusFilter[] = ['all', 'running', 'awaiting_tool_approval', 'paused_debug', 'completed', 'error'];
+const DATE_OPTIONS: DateFilter[] = ['all', 'today', '7d', '30d'];
+const GROUP_OPTIONS: GroupMode[] = ['none', 'date', 'flow', 'origin', 'wave', 'chain'];
+const ORIGIN_FILTER_OPTIONS: OriginFilter[] = ['all', 'chat', 'schedule', 'subflow', 'meeting'];
 
-const GROUP_OPTIONS: { value: GroupMode; label: string }[] = [
-  { value: 'none', label: 'No grouping' },
-  { value: 'date', label: 'Group by date' },
-  { value: 'flow', label: 'Group by flow' },
-  { value: 'wave', label: 'Group by wave' },
-  { value: 'chain', label: 'Group by chain' },
-];
+function collectLoadedDescendantIds(
+  items: ConversationListItem[],
+  ancestorId: string,
+): string[] {
+  const childrenByParent = new Map<string, string[]>();
+  for (const item of items) {
+    const parentId = item.parentConversationId;
+    if (!parentId || parentId === item.id) continue;
+    const children = childrenByParent.get(parentId) ?? [];
+    children.push(item.id);
+    childrenByParent.set(parentId, children);
+  }
+  const descendants = new Set<string>();
+  const pending = [...(childrenByParent.get(ancestorId) ?? [])];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (id === ancestorId || descendants.has(id)) continue;
+    descendants.add(id);
+    pending.push(...(childrenByParent.get(id) ?? []));
+  }
+  return [...descendants];
+}
+
+const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
+  chat: ChatBubbleOutlineRoundedIcon,
+  api: ApiRoundedIcon,
+  schedule: ScheduleRoundedIcon,
+  trigger: WebhookRoundedIcon,
+  subflow: AccountTreeRoundedIcon,
+  mcp: ExtensionRoundedIcon,
+  internal: AutoAwesomeRoundedIcon,
+  meeting: GroupsRoundedIcon,
+  unknown: HelpOutlineRoundedIcon,
+};
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
   conversations,
+  totalConversations = conversations.length,
+  hasMoreConversations = false,
+  isLoadingMore = false,
+  onLoadMore,
+  onLoadAll,
+  onPinsChanged,
   currentConversationId,
+  revealRequest = null,
   onSelectConversation,
   onDeleteConversation,
+  onBulkDelete,
   onStopConversation,
   onNewConversation,
   onQuickChat,
   onCollapse,
+  collapsed = false,
   flowNames = {},
+  personaNames = {},
 }) => {
+  const { t, tp, formatDate: formatLocalizedDate } = useI18n();
+  const muiTheme = useMuiTheme();
+  const { visualStyle } = useAppTheme();
+  const modern = visualStyle === 'modern';
   // Search text is intentionally ephemeral (not persisted): a stale filter
   // silently hiding conversations after a reload would be surprising.
   const [search, setSearch] = React.useState('');
-  // Search dimension (issue #182): 'title' filters client-side over titles+flow
-  // (Phase 1); 'content' resolves matches server-side against message bodies
-  // (which aren't all resident on the client). Persisted so the choice sticks.
-  const [searchDimension, setSearchDimension] = useUiPreference<'title' | 'content'>(
+  const searchInputRef = useAutoFocusSearch();
+  // Confirmation dialog state for bulk delete (Delete All / Delete Visible).
+  const [bulkDeleteDialog, setBulkDeleteDialog] = React.useState<{
+    open: boolean; ids: string[]; label: string;
+  }>({ open: false, ids: [], label: '' });
+  const [bulkResolving, setBulkResolving] = React.useState(false);
+  const [deleteLookupId, setDeleteLookupId] = React.useState<string | null>(null);
+  const [deleteFamilyDialog, setDeleteFamilyDialog] = React.useState<{
+    open: boolean;
+    parent: ConversationListItem | null;
+    descendantIds: string[];
+    lookupFailed: boolean;
+  }>({ open: false, parent: null, descendantIds: [], lookupFailed: false });
+  // Search dimension (issue #182). Matching and pagination live on the server;
+  // the browser only holds the result pages the user has asked to see.
+  const [searchDimension, setSearchDimension] = useWorkspaceUiPreference<SearchDimension>(
     PREF.searchDim,
     'title',
   );
-  // Ids the backend content-search matched; null while a request is in flight
-  // (or when content search is inactive) so `filtered` shows nothing until the
-  // result lands rather than flashing the whole list.
-  const [contentMatchIds, setContentMatchIds] = React.useState<Set<string> | null>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>(PREF.group, 'none');
-  const [statusFilter, setStatusFilter] = useUiPreference<StatusFilter>(PREF.status, 'all');
-  const [flowFilter, setFlowFilter] = useUiPreference<string>(PREF.flow, 'all');
-  const [dateFilter, setDateFilter] = useUiPreference<DateFilter>(PREF.date, 'all');
-  const [collapsedGroups, setCollapsedGroups] = useUiPreference<Record<string, boolean>>(
+  const [searchPage, setSearchPage] = React.useState<ConversationSearchPage | null>(null);
+  const [isSearching, setIsSearching] = React.useState(false);
+  const [isLoadingMoreSearch, setIsLoadingMoreSearch] = React.useState(false);
+  const [searchErrorKey, setSearchErrorKey] = React.useState<string | null>(null);
+  const searchAbortRef = React.useRef<AbortController | null>(null);
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(PREF.group, 'none');
+  const [pinnedConversationIds, setPinnedConversationIds] = useWorkspaceUiPreference<string[]>(
+    CONVERSATION_PINS_PREFERENCE,
+    [],
+  );
+  const previousPinsRef = React.useRef(pinnedConversationIds);
+  React.useEffect(() => {
+    if (previousPinsRef.current === pinnedConversationIds) return;
+    previousPinsRef.current = pinnedConversationIds;
+    onPinsChanged?.();
+  }, [pinnedConversationIds, onPinsChanged]);
+  const [statusFilter, setStatusFilter] = useWorkspaceUiPreference<StatusFilter>(PREF.status, 'all');
+  const [flowFilter, setFlowFilter] = useWorkspaceUiPreference<string>(PREF.flow, 'all');
+  const [dateFilter, setDateFilter] = useWorkspaceUiPreference<DateFilter>(PREF.date, 'all');
+  const [originFilter, setOriginFilter] = useWorkspaceUiPreference<OriginFilter>(PREF.origin, 'all');
+  const [filtersOpen, setFiltersOpen] = useWorkspaceUiPreference<boolean>(PREF.filtersOpen, false);
+  const [collapsedGroups, setCollapsedGroups] = useWorkspaceUiPreference<Record<string, boolean>>(
     PREF.collapsed,
     {},
   );
+  const trimmedSearch = search.trim();
+  const searchKey = `${searchDimension}\u0000${originFilter}\u0000${trimmedSearch}`;
+  const currentSearchPage = trimmedSearch.length > 0 && searchPage?.key === searchKey
+    ? searchPage
+    : null;
+  const sourceConversations = trimmedSearch.length > 0
+    ? (currentSearchPage?.items ?? [])
+    : conversations;
 
   // Wave grouping (issue #181): the wave graph is only needed while grouping by
-  // wave, so fetch it lazily and refresh it when the conversation list changes
-  // (the sidebar polls periodically). Failures / empty responses are tolerated
+  // wave, so fetch it lazily and refresh it when wave membership changes.
+  // Status/title updates do not need another wave request. Failures are tolerated
   // silently — grouping just falls back to the Ad-hoc / Archived buckets.
   const [waves, setWaves] = React.useState<WavesResponse | null>(null);
+  const waveMembershipKey = useMemo(
+    () => sourceConversations
+      .map((conversation) => `${conversation.id}:${conversation.plannedExecutionId ?? ''}`)
+      .join('\u0000'),
+    [sourceConversations],
+  );
   React.useEffect(() => {
     if (groupMode !== 'wave') return;
     let cancelled = false;
@@ -151,99 +300,193 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       .then((data) => { if (!cancelled && data) setWaves(data as WavesResponse); })
       .catch(() => { /* ignore — sidebar still renders fallback buckets */ });
     return () => { cancelled = true; };
-  }, [groupMode, conversations]);
+  }, [groupMode, waveMembershipKey]);
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
 
-  // Content search (issue #182): when the search dimension is 'content', message
-  // bodies must be matched server-side (they aren't all resident here). Debounce
-  // the request so a scan doesn't fire on every keystroke, and ignore stale
-  // responses. Non-content mode clears the id set so `filtered` falls back to
-  // the client-side title filter.
+  // Debounce the query, cancel the superseded request, and fetch only the first
+  // matching page. Further pages are explicit via the same Load more control as
+  // normal sidebar browsing. This prevents a single keystroke from launching a
+  // full cursor traversal of the entire conversation collection.
   React.useEffect(() => {
-    const q = search.trim();
-    if (searchDimension !== 'content' || q.length === 0) {
-      setContentMatchIds(null);
+    const q = trimmedSearch;
+    if (q.length === 0) {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
+      setSearchPage(null);
+      setSearchErrorKey(null);
+      setIsSearching(false);
+      setIsLoadingMoreSearch(false);
       return;
     }
-    let cancelled = false;
+    const key = `${searchDimension}\u0000${originFilter}\u0000${q}`;
+    const controller = new AbortController();
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = controller;
+    setSearchPage(null);
+    setSearchErrorKey(null);
+    setIsSearching(true);
+    setIsLoadingMoreSearch(false);
     const timer = setTimeout(() => {
-      fetch(`/v1/chat/conversations?search=${encodeURIComponent(q)}&dimension=content`)
-        .then((r) => (r.ok ? r.json() : []))
-        .then((data: ConversationListItem[]) => {
-          if (cancelled) return;
-          setContentMatchIds(new Set(Array.isArray(data) ? data.map((c) => c.id) : []));
+      chatService.listConversationPage({
+        limit: SEARCH_PAGE_SIZE,
+        search: q,
+        dimension: searchDimension,
+        ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+        signal: controller.signal,
+      })
+        .then((page) => {
+          if (controller.signal.aborted) return;
+          setSearchPage({ key, ...page });
         })
-        .catch(() => { if (!cancelled) setContentMatchIds(new Set()); });
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || (error as { name?: string })?.name === 'AbortError') return;
+          setSearchPage({ key, items: [], total: 0, hasMore: false });
+          setSearchErrorKey(key);
+        })
+        .finally(() => {
+          if (searchAbortRef.current === controller && !controller.signal.aborted) {
+            setIsSearching(false);
+          }
+        });
     }, 300);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [search, searchDimension]);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      if (searchAbortRef.current === controller) searchAbortRef.current = null;
+    };
+  }, [trimmedSearch, searchDimension, originFilter]);
+
+  const loadMoreSearchResults = React.useCallback(async () => {
+    const page = currentSearchPage;
+    const controller = searchAbortRef.current;
+    if (!page?.hasMore || !page.nextCursor || !controller || controller.signal.aborted || isLoadingMoreSearch) {
+      return;
+    }
+    setIsLoadingMoreSearch(true);
+    setSearchErrorKey(null);
+    try {
+      const next = await chatService.listConversationPage({
+        limit: SEARCH_PAGE_SIZE,
+        cursor: page.nextCursor,
+        search: trimmedSearch,
+        dimension: searchDimension,
+        ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setSearchPage((previous) => {
+        if (!previous || previous.key !== searchKey) return previous;
+        const seen = new Set(previous.items.map((item) => item.id));
+        const additions = next.items.filter((item) => !seen.has(item.id));
+        return { key: searchKey, ...next, items: [...previous.items, ...additions] };
+      });
+    } catch (error) {
+      if (controller.signal.aborted || (error as { name?: string })?.name === 'AbortError') return;
+      setSearchErrorKey(searchKey);
+    } finally {
+      if (searchAbortRef.current === controller && !controller.signal.aborted) {
+        setIsLoadingMoreSearch(false);
+      }
+    }
+  }, [currentSearchPage, isLoadingMoreSearch, originFilter, searchDimension, searchKey, trimmedSearch]);
 
   // Format date for display
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleDateString(undefined, {
+  const formatTimestamp = (timestamp: number) =>
+    formatLocalizedDate(timestamp, {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
-  };
 
-  // Get color based on conversation status
-  const getStatusColor = (status?: ConversationListItem['status']) => {
-    switch (status) {
-      case 'running': return 'primary.main';
-      case 'awaiting_tool_approval': return 'warning.main';
-      case 'paused_debug': return 'secondary.main';
-      case 'completed': return 'success.main';
-      case 'error': return 'error.main';
-      default: return 'transparent';
-    }
-  };
+  const statusLabel = (status: StatusFilter) => ({
+    all: t('chat.status.any'),
+    running: t('chat.status.processing'),
+    awaiting_tool_approval: t('chat.status.awaiting'),
+    paused_debug: t('chat.status.paused'),
+    completed: t('chat.status.completed'),
+    capped: t('chat.status.capped'),
+    error: t('chat.status.error'),
+  })[status];
+
+  const dateLabel = (filter: DateFilter) => ({
+    all: t('chat.date.any'),
+    today: t('chat.date.day'),
+    '7d': t('chat.date.week'),
+    '30d': t('chat.date.month'),
+  })[filter];
+
+  const groupLabel = (mode: GroupMode) => ({
+    none: t('chat.group.none'),
+    date: t('chat.group.date'),
+    flow: t('chat.group.agent'),
+    origin: t('chat.group.origin'),
+    wave: t('chat.group.wave'),
+    chain: t('chat.group.chain'),
+  })[mode];
+
+  const originLabel = React.useCallback(
+    (key: ConversationOriginKey) => t(`chat.origin.${key}` as TranslationKey),
+    [t],
+  );
+
+  const originDescription = React.useCallback(
+    (key: ConversationOriginKey) => t(`chat.origin.description.${key}` as TranslationKey),
+    [t],
+  );
+
+  const originFilterLabel = React.useCallback(
+    (key: OriginFilter) => key === 'all'
+      ? t('chat.history.anyOrigin')
+      : key === 'subflow'
+        ? t('chat.history.originSubflow')
+        : originLabel(key),
+    [originLabel, t],
+  );
 
   // Get status description for tooltip
   const getStatusDescription = (status?: ConversationListItem['status']) => {
     switch (status) {
-      case 'running': return 'Processing';
-      case 'awaiting_tool_approval': return 'Waiting for tool approval';
-      case 'paused_debug': return 'Paused in debug mode';
-      case 'completed': return 'Completed';
-      case 'error': return 'Error';
+      case 'running': return t('chat.status.processing');
+      case 'awaiting_tool_approval': return t('chat.status.waitingTooltip');
+      case 'paused_debug': return t('chat.status.pausedTooltip');
+      case 'completed': return t('chat.status.completed');
+      case 'capped': return t('chat.status.capped');
+      case 'error': return t('chat.status.error');
       default: return '';
     }
   };
 
-  // Resolve a conversation's flow into a stable grouping key + display label.
-  // Quick-chat snapshots share one bucket ("Quick Chat"); a flowId not present
-  // in the loaded flows map (e.g. a since-deleted flow) is shown as "Unknown
-  // flow" rather than dropped, so the conversation stays discoverable.
-  const flowMeta = React.useCallback(
-    (flowId: string | null): { key: string; label: string } => {
-      if (!flowId) return { key: 'flow:__none__', label: 'No flow' };
-      if (isQuickChatFlowId(flowId)) return { key: 'flow:__quickchat__', label: 'Quick Chat' };
-      return { key: `flow:${flowId}`, label: flowNames[flowId] ?? 'Unknown flow' };
+  // Persona identity survives Core changes and exists before the first run.
+  // Archived evidence must never resolve a retained id back to a live name.
+  const targetMeta = React.useCallback(
+    ({ flowId, personaId, personaArchived }: ConversationListItem): { key: string; label: string } => {
+      if (personaArchived) return { key: 'persona:__archived__', label: t('chat.history.archivedPersona') };
+      if (personaId) return { key: `persona:${personaId}`, label: personaNames[personaId] ?? t('chat.target.persona') };
+      if (!flowId) return { key: 'flow:__none__', label: t('chat.history.noAgent') };
+      if (isQuickChatFlowId(flowId)) return { key: 'flow:__quickchat__', label: t('chat.quick.title') };
+      return { key: `flow:${flowId}`, label: flowNames[flowId] ?? t('chat.history.unknownAgent') };
     },
-    [flowNames],
+    [flowNames, personaNames, t],
   );
 
   // Distinct flow options for the flow filter, derived from the conversations
   // actually present (deduped by grouping key), sorted A–Z by label.
   const flowOptions = useMemo(() => {
     const map = new Map<string, string>();
-    for (const c of conversations) {
-      const meta = flowMeta(c.flowId);
+    for (const c of sourceConversations) {
+      const meta = targetMeta(c);
       if (!map.has(meta.key)) map.set(meta.key, meta.label);
     }
     return Array.from(map.entries())
       .map(([key, label]) => ({ key, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [conversations, flowMeta]);
+  }, [sourceConversations, targetMeta]);
 
-  // Apply search + filters, then sort most-recent-first. Memoized so SSE-driven
-  // re-renders of the parent don't re-run the whole pipeline needlessly.
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+  // Search is already resolved by the server. Apply the remaining presentation
+  // filters to the loaded result page, then sort most-recent-first.
+  const filterConversations = React.useCallback((source: ConversationListItem[]) => {
     const now = Date.now();
     const DAY = 24 * 60 * 60 * 1000;
     const dateCutoff =
@@ -252,42 +495,68 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       : dateFilter === '30d' ? now - 30 * DAY
       : 0;
 
-    return conversations
+    return source
       .filter((c) => {
         if (statusFilter !== 'all' && c.status !== statusFilter) return false;
-        if (flowFilter !== 'all' && flowMeta(c.flowId).key !== flowFilter) return false;
+        if (flowFilter !== 'all' && targetMeta(c).key !== flowFilter) return false;
+        if (originFilter !== 'all' && getConversationOrigin(c).key !== originFilter) return false;
         if (dateCutoff && c.updatedAt < dateCutoff) return false;
-        if (q) {
-          if (searchDimension === 'content') {
-            // Content search is resolved server-side (issue #182). While the
-            // debounced request is in flight (contentMatchIds === null) show no
-            // matches yet; otherwise keep only the ids the backend matched.
-            if (!contentMatchIds || !contentMatchIds.has(c.id)) return false;
-          } else {
-            const haystack = `${c.title} ${flowMeta(c.flowId).label}`.toLowerCase();
-            if (!haystack.includes(q)) return false;
-          }
-        }
         return true;
       })
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [conversations, search, searchDimension, contentMatchIds, statusFilter, flowFilter, dateFilter, flowMeta]);
+      .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+  }, [statusFilter, flowFilter, originFilter, dateFilter, targetMeta]);
+
+  const filtered = useMemo(
+    () => filterConversations(sourceConversations),
+    [filterConversations, sourceConversations],
+  );
+
+  // Resolve membership before filtering so a hidden parent still pins its children.
+  const pinnedIds = useMemo(
+    () => collectPinnedConversationIds([...conversations, ...sourceConversations], pinnedConversationIds),
+    [conversations, sourceConversations, pinnedConversationIds],
+  );
+  const pinnedConversations = useMemo(() => filtered.filter((c) => pinnedIds.has(c.id)), [filtered, pinnedIds]);
+  const unpinnedConversations = useMemo(() => filtered.filter((c) => !pinnedIds.has(c.id)), [filtered, pinnedIds]);
+  const pinnedChainIndex = useMemo(() => buildChainIndex(pinnedConversations), [pinnedConversations]);
 
   // Build the (optionally grouped) sections to render.
   const groups: CardGroup<ConversationListItem>[] = useMemo(() => {
     if (groupMode === 'none') {
-      return [{ key: 'all', label: '', items: filtered }];
+      return [{ key: 'all', label: '', items: unpinnedConversations }];
     }
     if (groupMode === 'wave') {
       // Bucket by wave; keep the Ad-hoc / Archived fallback buckets last.
       return orderWaveGroups(
-        groupItems(filtered, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
-      );
+        groupItems(unpinnedConversations, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
+      ).map((group) => ({
+        ...group,
+        label: group.key === 'wave:__adhoc__'
+          ? t('chat.group.adhoc')
+          : group.key === 'wave:__archived__'
+            ? t('chat.group.archived')
+            : group.label,
+      }));
     }
-    return groupItems(filtered, (c) =>
-      groupMode === 'date' ? recencyBucket(c.updatedAt) : flowMeta(c.flowId),
-    );
-  }, [filtered, groupMode, flowMeta, waveLookup]);
+    return groupItems(unpinnedConversations, (c) => {
+       if (groupMode === 'date') {
+         const bucket = recencyBucket(c.updatedAt);
+         const labels: Record<string, string> = {
+           'recency:unknown': t('flows.group.noDate'),
+           'recency:today': t('flows.group.today'),
+           'recency:week': t('flows.group.week'),
+           'recency:month': t('flows.group.month'),
+           'recency:older': t('flows.group.older'),
+         };
+         return { ...bucket, label: labels[bucket.key] ?? bucket.label };
+       }
+      if (groupMode === 'origin') {
+        const origin = getConversationOrigin(c);
+         return { key: `origin:${origin.key}`, label: originLabel(origin.key) };
+      }
+      return targetMeta(c);
+    });
+  }, [unpinnedConversations, groupMode, targetMeta, waveLookup, originLabel, t]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -295,11 +564,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   // "By chain" grouping (issue #182): nest child conversations under the parent
   // that spawned them, using the persisted parentConversationId links. The
-  // index is only built while that mode is active; a filter that hides a parent
-  // but keeps a child renders the child as a root (see buildChainIndex).
+  // index is only built while that mode is active. When a parent is missing
+  // from this page/filter the child falls back to its chain root, and if that
+  // is missing too it renders at the top level flagged as detached, so a
+  // subagent run is never mistaken for a real chain root (see buildChainIndex).
   const chainIndex = useMemo(
-    () => (groupMode === 'chain' ? buildChainIndex(filtered) : { roots: [], childrenByParent: new Map() }),
-    [groupMode, filtered],
+    () =>
+      groupMode === 'chain'
+        ? buildChainIndex(unpinnedConversations)
+        : { roots: [], childrenByParent: new Map(), detachedIds: new Set<string>() },
+    [groupMode, unpinnedConversations],
   );
   // Per-node expand state is session-only (not persisted): a node is expanded
   // unless explicitly collapsed, so chains are visible by default.
@@ -322,83 +596,350 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     return map;
   }, [groupMode, groups]);
 
+  const expandableChainIds = useMemo(() => {
+    const ids = new Set<string>(pinnedChainIndex.childrenByParent.keys());
+    if (groupMode === 'chain') {
+      chainIndex.childrenByParent.forEach((_children, parentId) => ids.add(parentId));
+    } else if (groupMode === 'wave') {
+      waveChainByGroup.forEach((index) => {
+        index.childrenByParent.forEach((_children, parentId) => ids.add(parentId));
+      });
+    }
+    return [...ids];
+  }, [chainIndex, groupMode, waveChainByGroup, pinnedChainIndex]);
+
+  const setAllHierarchyExpanded = React.useCallback((expanded: boolean) => {
+    setExpandedChains((previous) => {
+      const next = { ...previous };
+      expandableChainIds.forEach((id) => { next[id] = expanded; });
+      return next;
+    });
+    if (groupMode === 'wave') {
+      setCollapsedGroups((previous) => {
+        const next = { ...previous };
+        groups.forEach((group) => { next[group.key] = !expanded; });
+        return next;
+      });
+    }
+  }, [expandableChainIds, groupMode, groups, setCollapsedGroups]);
+
+  const showHierarchyControls =
+    expandableChainIds.length > 0
+    || (groupMode === 'wave' && groups.length > 0);
+
+  // --- URL reveal (issue #397) ---------------------------------------------
+  // Opening a chat through `/chat?conversation=<id>` must actually SHOW that
+  // row: un-collapse the group / chain ancestors hiding it, then scroll it into
+  // view exactly once per request. Everything is keyed to the parent's
+  // monotonic `requestKey`, so ordinary clicks, streamed status updates and
+  // unrelated rerenders never scroll the sidebar (and nothing ever calls
+  // `.focus()`, which would steal focus from the chat composer).
+  const listRef = React.useRef<HTMLUListElement | null>(null);
+  const revealedKeyRef = React.useRef<number | null>(null);
+  const pendingRevealKeyRef = React.useRef<number | null>(null);
+  const revealAttemptsRef = React.useRef(0);
+  const [revealAttempt, setRevealAttempt] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!revealRequest) return;
+    const { id, requestKey } = revealRequest;
+    if (revealedKeyRef.current === requestKey) return; // already revealed once
+    // The reveal follows the selection: a mismatch means the request is stale,
+    // or the parent's selection has not committed yet (this effect re-runs).
+    if (id !== currentConversationId) return;
+    if (typeof window === 'undefined') return;
+
+    if (pendingRevealKeyRef.current !== requestKey) {
+      pendingRevealKeyRef.current = requestKey;
+      revealAttemptsRef.current = 0;
+    }
+
+    // Search/filters may legitimately exclude the row. Never silently clear the
+    // user's persisted preferences -- stay pending (without burning the retry
+    // budget) until the effective list contains the target again.
+    if (!filtered.some((c) => c.id === id)) return;
+
+    // 1. Grouped modes: explicitly OPEN the containing group (never toggle, so
+    //    the effect is idempotent). The key comes from the same `groups` memo
+    //    that renders the sections, so it cannot drift from what is rendered.
+    const group = groupMode !== 'none' && groupMode !== 'chain'
+      ? groups.find((g) => g.items.some((item) => item.id === id))
+      : undefined;
+    if (group && collapsedGroups[group.key]) {
+      setCollapsedGroups((prev) => (prev[group.key] ? { ...prev, [group.key]: false } : prev));
+      return; // re-runs once the group has committed open
+    }
+
+    // 2. Tree modes (chain, and the per-wave trees): expand every collapsed
+    //    ancestor on the rendered path. `ConversationTree` unmounts collapsed
+    //    children, so an ancestor left closed keeps the row out of the DOM.
+    const tree = pinnedIds.has(id)
+      ? pinnedChainIndex
+      : groupMode === 'chain' ? chainIndex
+      : group
+        ? waveChainByGroup.get(group.key)
+        : undefined;
+    if (tree) {
+      const parentOf = new Map<string, string>();
+      const childrenByParent = tree.childrenByParent as Map<string, ConversationListItem[]>;
+      for (const [parentId, children] of childrenByParent) {
+        for (const child of children) parentOf.set(child.id, parentId);
+      }
+      const collapsedAncestors: string[] = [];
+      const seen = new Set<string>([id]);
+      let cursor = parentOf.get(id);
+      while (cursor && !seen.has(cursor)) {
+        seen.add(cursor);
+        if (expandedChains[cursor] === false) collapsedAncestors.push(cursor);
+        cursor = parentOf.get(cursor);
+      }
+      if (collapsedAncestors.length > 0) {
+        setExpandedChains((prev) => {
+          const next = { ...prev };
+          for (const ancestor of collapsedAncestors) next[ancestor] = true;
+          return next;
+        });
+        return; // re-runs once the ancestors have committed open
+      }
+    }
+
+    // 3. Scroll the mounted row once. `block: 'nearest'` keeps an already
+    //    visible row exactly where it is instead of re-centering the list.
+    const frame = window.requestAnimationFrame(() => {
+      const row = listRef.current
+        ? Array.from(listRef.current.querySelectorAll<HTMLElement>('[data-conversation-id]'))
+            .find((element) => element.getAttribute('data-conversation-id') === id)
+        : undefined;
+      if (row) {
+        revealedKeyRef.current = requestKey;
+        row.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+        return;
+      }
+      revealAttemptsRef.current += 1;
+      if (revealAttemptsRef.current >= MAX_REVEAL_ATTEMPTS) {
+        // Bounded: e.g. a closed mobile drawer never mounts the row. Consume
+        // the request rather than spinning frames forever.
+        revealedKeyRef.current = requestKey;
+        return;
+      }
+      setRevealAttempt((attempt) => attempt + 1);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    revealRequest,
+    currentConversationId,
+    filtered,
+    groups,
+    groupMode,
+    collapsedGroups,
+    setCollapsedGroups,
+    chainIndex,
+    pinnedIds,
+    pinnedChainIndex,
+    waveChainByGroup,
+    expandedChains,
+    revealAttempt,
+  ]);
+
   const activeFilterCount =
     (statusFilter !== 'all' ? 1 : 0) +
     (flowFilter !== 'all' ? 1 : 0) +
+    (originFilter !== 'all' ? 1 : 0) +
     (dateFilter !== 'all' ? 1 : 0);
+  const activeControlCount = activeFilterCount + (groupMode !== 'none' ? 1 : 0);
 
-  const renderConversation = (conversation: ConversationListItem) => {
+  // `detached` = this row's parent chain could not be resolved in the current
+  // view; the tree placement is a fallback, so the card says so explicitly.
+  const renderConversation = (
+    conversation: ConversationListItem,
+    opts?: { detached?: boolean },
+  ) => {
+    const detached = opts?.detached === true;
+    const directlyPinned = pinnedConversationIds.includes(conversation.id);
+    const pinLabel = t(directlyPinned ? 'chat.history.unpin' : 'chat.history.pin');
     // Any conversation whose run is still alive — executing or holding
     // tool calls (awaiting approval) — gets a stop button, so a run can
     // be stopped without first switching to its conversation.
     const stoppable =
       !!onStopConversation &&
       (conversation.status === 'running' || conversation.status === 'awaiting_tool_approval');
-    const meta = flowMeta(conversation.flowId);
+    const meta = targetMeta(conversation);
+    const isPersona = meta.key.startsWith('persona:');
     const isQuickChat = meta.key === 'flow:__quickchat__';
+    const selected = conversation.id === currentConversationId;
+    const origin = getConversationOrigin(conversation);
+    const localizedOriginLabel = originLabel(origin.key);
+    const localizedOriginDescription = originDescription(origin.key);
+    const OriginIcon = ORIGIN_ICONS[origin.key];
+    const originColor = conversationOriginColor(origin.key, muiTheme);
+    const statusColor = conversationStatusColor(conversation.status, muiTheme);
+    const surfaceStrength = selected
+      ? (muiTheme.palette.mode === 'dark' ? 0.38 : 0.3)
+      : (muiTheme.palette.mode === 'dark' ? 0.3 : 0.23);
+
     return (
       <ListItem
         key={conversation.id}
+        // Stable reveal target for URL deep links (issue #397). Looked up by
+        // attribute comparison (not selector interpolation) so an arbitrary id
+        // can never break or inject into the query.
+        data-conversation-id={conversation.id}
+        data-conversation-origin={origin.key}
         disablePadding
         secondaryAction={
-          <>
+          <Box
+            className="conversation-card-actions"
+            sx={modern ? {
+              display: 'flex',
+              zIndex: 2,
+              gap: 0.25,
+              opacity: selected ? 1 : 0,
+              transition: 'opacity 160ms ease',
+              bgcolor: alpha(muiTheme.palette.background.paper, 0.72),
+              borderRadius: 2,
+              backdropFilter: 'blur(12px)',
+              '& .MuiIconButton-root': { width: 30, height: 30 },
+            } : { display: 'flex' }}
+          >
+            <Tooltip title={pinLabel}>
+              <IconButton
+                size="small"
+                aria-label={pinLabel}
+                aria-pressed={directlyPinned}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPinnedConversationIds((previous) => previous.includes(conversation.id)
+                    ? previous.filter((id) => id !== conversation.id)
+                    : [...previous, conversation.id]);
+                }}
+              >
+                {directlyPinned
+                  ? <PushPinRoundedIcon color="primary" fontSize="small" />
+                  : <PushPinOutlinedIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
             {stoppable && (
-              <Tooltip title="Stop this run">
+              <Tooltip title={t('chat.history.stop')}>
                 <IconButton
                   edge="end"
-                  aria-label="stop run"
+                  size="small"
+                  aria-label={t('chat.history.stop')}
                   onClick={(e) => {
                     e.stopPropagation();
                     onStopConversation!(conversation.id);
                   }}
                 >
-                  <StopCircleIcon color="error" />
+                  <StopCircleIcon color="error" fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
-            <IconButton
-              edge="end"
-              aria-label="delete"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteConversation(conversation.id);
-              }}
-            >
-              <DeleteIcon />
-            </IconButton>
-          </>
+            <CopyLinkButton target={{ kind: 'conversation', id: conversation.id }} />
+            <Tooltip title={t('chat.history.delete')}>
+              <IconButton
+                edge="end"
+                size="small"
+                aria-label={t('chat.history.delete')}
+                disabled={deleteLookupId === conversation.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void requestDeleteConversation(conversation);
+                }}
+              >
+                {deleteLookupId === conversation.id
+                  ? <CircularProgress size={16} />
+                  : <DeleteIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+          </Box>
         }
-        sx={{
-          opacity: conversation.id === currentConversationId ? 1 : 0.7,
+        sx={modern ? {
+          // Keep the 50-row hierarchy searchable and scrollable without paying
+          // layout/paint costs for cards far outside the sidebar viewport.
+          contentVisibility: 'auto',
+          contain: 'layout paint style',
+          containIntrinsicSize: '0 104px',
+          position: 'relative',
+          mb: 0.9,
+          border: '1px solid',
+          borderColor: selected
+            ? alpha(originColor, 0.68)
+            : alpha(originColor, 0.32),
+          borderRadius: 2.5,
+          overflow: 'hidden',
+          opacity: 1,
+          bgcolor: alpha(muiTheme.palette.background.paper, muiTheme.palette.mode === 'dark' ? 0.72 : 0.82),
+          backgroundImage: conversationCardSplitBackground(originColor, statusColor, surfaceStrength),
+          boxShadow: selected
+            ? `0 10px 30px ${alpha(originColor, 0.24)}`
+            : `0 5px 20px ${alpha(originColor, muiTheme.palette.mode === 'dark' ? 0.12 : 0.08)}`,
+          transition: 'transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease',
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            inset: '10px auto 10px 0',
+            width: selected ? 4 : 3,
+            borderRadius: '0 4px 4px 0',
+            bgcolor: originColor,
+          },
+          '&::after': {
+            content: '""',
+            position: 'absolute',
+            zIndex: 0,
+            top: 0,
+            bottom: 0,
+            left: '90%',
+            width: 1,
+            bgcolor: alpha(statusColor, 0.5),
+            pointerEvents: 'none',
+          },
+          '&:hover': {
+            transform: 'translateY(-1px)',
+            borderColor: alpha(originColor, 0.58),
+            boxShadow: `0 10px 28px ${alpha(originColor, muiTheme.palette.mode === 'dark' ? 0.2 : 0.14)}`,
+            '& .conversation-card-actions': { opacity: 1 },
+          },
+          '&:focus-within .conversation-card-actions': { opacity: 1 },
+          '@media (hover: none)': { '& .conversation-card-actions': { opacity: 1 } },
+          // The row button is deliberately raised above the decorative card
+          // layers. Raise MUI's absolutely-positioned secondary-action wrapper
+          // one step further so it remains the pointer target over that button.
+          '& > .MuiListItemSecondaryAction-root': { zIndex: 2 },
+        } : {
+          contentVisibility: 'auto',
+          contain: 'layout paint style',
+          containIntrinsicSize: '0 88px',
+          opacity: selected ? 1 : 0.7,
+          '& > .MuiListItemSecondaryAction-root': { zIndex: 2 },
         }}
       >
         <ListItemButton
-          selected={conversation.id === currentConversationId}
+          selected={selected}
           onClick={() => onSelectConversation(conversation.id)}
-          sx={{ pr: stoppable ? 12 : 7 }} // Make room for the action buttons
+          aria-label={t('chat.history.openAria', {
+            title: conversation.title,
+            origin: localizedOriginLabel,
+            status: getStatusDescription(conversation.status) || t('chat.history.unknown'),
+          })}
+          sx={{
+            position: 'relative',
+            zIndex: 1,
+            px: modern ? 1.5 : 2,
+            pr: stoppable ? 17 : 13,
+            py: modern ? 1.25 : 1,
+            alignItems: 'flex-start',
+            borderRadius: 'inherit',
+            '&.Mui-selected': { bgcolor: 'transparent' },
+            '&.Mui-selected:hover': { bgcolor: alpha(muiTheme.palette.primary.main, 0.04) },
+          }}
         >
           <ListItemText
+            sx={{ my: 0, minWidth: 0 }}
             primary={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {conversation.status && (
-                  <Tooltip title={getStatusDescription(conversation.status)}>
-                    <Box
-                      component="span"
-                      sx={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        bgcolor: getStatusColor(conversation.status),
-                        display: 'inline-block',
-                        flexShrink: 0
-                      }}
-                    />
-                  </Tooltip>
-                )}
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
                 <Tooltip title={conversation.title} enterDelay={500}>
                   <Typography
                     component="span"
-                    fontWeight={conversation.id === currentConversationId ? 'bold' : 'normal'}
+                    fontWeight={selected ? 760 : modern ? 650 : 'normal'}
                     sx={{
                       // Allow the title to wrap to two lines with an
                       // ellipsis (issue #134) instead of the old single-
@@ -409,6 +950,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                       WebkitBoxOrient: 'vertical',
                       overflow: 'hidden',
                       wordBreak: 'break-word',
+                      fontSize: modern ? '0.9rem' : undefined,
+                      lineHeight: modern ? 1.35 : undefined,
                     }}
                   >
                     {conversation.title}
@@ -419,25 +962,116 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             secondary={
               <Box
                 component="span"
-                sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.5, flexWrap: 'wrap' }}
+                sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.8, flexWrap: 'wrap' }}
               >
+                {groupMode !== 'origin' && (
+                  <Tooltip
+                    title={`${localizedOriginDescription}${origin.inferred ? ` (${t('chat.history.inferred')})` : ''}`}
+                  >
+                    <Chip
+                      icon={<OriginIcon />}
+                      label={localizedOriginLabel}
+                      size="small"
+                      variant="outlined"
+                      sx={{
+                        height: modern ? 22 : 20,
+                        color: modern ? originColor : undefined,
+                        borderColor: modern ? alpha(originColor, 0.72) : undefined,
+                        bgcolor: modern ? alpha(originColor, 0.13) : undefined,
+                        '& .MuiChip-icon': { fontSize: 14, color: modern ? originColor : undefined },
+                        '& .MuiChip-label': {
+                          px: 0.75,
+                          fontSize: '0.68rem',
+                          fontWeight: modern ? 700 : 500,
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                {conversation.sessionKey && (
+                  <Tooltip title={t('chat.history.session', { key: conversation.sessionKey })}>
+                    <Chip
+                      label={t('chat.history.session', { key: conversation.sessionKey })}
+                      size="small"
+                      variant="outlined"
+                      sx={{
+                        minWidth: 0,
+                        maxWidth: '100%',
+                        height: modern ? 22 : 20,
+                        '& .MuiChip-label': {
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          px: 0.75,
+                          fontSize: '0.68rem',
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                {/* Parent chain unresolved in this view (paginated off the page,
+                    hidden by a filter, deleted, or an ephemeral parent that was
+                    never persisted). Without this the row is indistinguishable
+                    from a genuine top-level automation/user chat. */}
+                {detached && (
+                  <Tooltip title={t('chat.chain.detachedHelp')}>
+                    <Chip
+                      icon={<LinkOffRoundedIcon />}
+                      label={t('chat.chain.detached')}
+                      size="small"
+                      variant="outlined"
+                      sx={{
+                        height: modern ? 22 : 20,
+                        color: muiTheme.palette.text.secondary,
+                        borderColor: alpha(muiTheme.palette.text.secondary, 0.45),
+                        borderStyle: 'dashed',
+                        '& .MuiChip-icon': { fontSize: 14, color: muiTheme.palette.text.secondary },
+                        '& .MuiChip-label': {
+                          px: 0.75,
+                          fontSize: '0.68rem',
+                          fontWeight: modern ? 700 : 500,
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                )}
                 {/* Which flow this conversation used (issue #147) — hidden when
                     grouping by flow to avoid redundancy with the section header. */}
                 {groupMode !== 'flow' && (
-                  <Tooltip title={isQuickChat ? 'Quick Chat (no saved flow)' : `Flow: ${meta.label}`}>
+                  <Tooltip title={isQuickChat ? t('chat.history.quickNoAgent') : isPersona ? t('chat.history.personaNamed', { persona: meta.label }) : t('chat.history.agentNamed', { agent: meta.label })}>
                     <Chip
                       icon={isQuickChat ? <BoltIcon /> : undefined}
                       label={meta.label}
                       size="small"
                       variant="outlined"
                       color={isQuickChat ? 'secondary' : 'default'}
-                      sx={{ maxWidth: '100%', height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+                      sx={{
+                        maxWidth: '100%',
+                        height: modern ? 22 : 20,
+                        '& .MuiChip-icon': { fontSize: 14 },
+                        '& .MuiChip-label': { px: 0.75, fontSize: '0.68rem' },
+                      }}
                     />
                   </Tooltip>
                 )}
-                <Typography component="span" variant="caption" color="text.secondary">
-                  {formatDate(conversation.updatedAt)}
-                </Typography>
+                <Box
+                  component="span"
+                  sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35, ml: 'auto' }}
+                >
+                  {modern && (
+                    <AccessTimeRoundedIcon
+                      aria-hidden="true"
+                      sx={{ fontSize: 13, color: 'text.disabled' }}
+                    />
+                  )}
+                  <Typography
+                    component="span"
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ whiteSpace: 'nowrap' }}
+                  >
+                    {formatTimestamp(conversation.updatedAt)}
+                  </Typography>
+                </Box>
               </Box>
             }
             secondaryTypographyProps={{ component: 'div' }}
@@ -447,22 +1081,144 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     );
   };
 
-  const totalCount = conversations.length;
+  const searchActive = trimmedSearch.length > 0;
+  const searchFailed = searchErrorKey === searchKey;
+  const searchPending = searchActive && !currentSearchPage && !searchFailed;
+  const totalCount = searchActive ? (currentSearchPage?.total ?? 0) : totalConversations;
   const matchCount = filtered.length;
+
+  const requestDeleteConversation = async (conversation: ConversationListItem) => {
+    if (deleteLookupId) return;
+    setDeleteLookupId(conversation.id);
+    const locallyAvailable = Array.from(
+      new Map([...conversations, ...sourceConversations].map((item) => [item.id, item])).values(),
+    );
+    const loadedIds = new Set(collectLoadedDescendantIds(locallyAvailable, conversation.id));
+    const collectionIsComplete = !hasMoreConversations && conversations.length >= totalConversations;
+    try {
+      if (!collectionIsComplete) {
+        const serverDescendants = await chatService.listAllConversationPages({
+          descendantsOf: conversation.id,
+        });
+        serverDescendants.forEach((item) => loadedIds.add(item.id));
+      }
+      const descendantIds = [...loadedIds];
+      if (descendantIds.length === 0) {
+        onDeleteConversation(conversation.id);
+        return;
+      }
+      setDeleteFamilyDialog({
+        open: true,
+        parent: conversation,
+        descendantIds,
+        lookupFailed: false,
+      });
+    } catch {
+      setDeleteFamilyDialog({
+        open: true,
+        parent: conversation,
+        descendantIds: [...loadedIds],
+        lookupFailed: true,
+      });
+    } finally {
+      setDeleteLookupId(null);
+    }
+  };
+
+  const openDeleteAllDialog = async () => {
+    setBulkResolving(true);
+    try {
+      const all = onLoadAll ? await onLoadAll() : conversations;
+      setBulkDeleteDialog({
+        open: true,
+        ids: all.map(c => c.id),
+        label: tp('chat.history.deleteAllQuestion', all.length),
+      });
+    } finally {
+      setBulkResolving(false);
+    }
+  };
+
+  const openDeleteVisibleDialog = async () => {
+    setBulkResolving(true);
+    try {
+      const completeSource = searchActive
+        ? await chatService.listAllConversationPages({
+          search: trimmedSearch,
+          dimension: searchDimension,
+          ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+        })
+        : (onLoadAll ? await onLoadAll() : conversations);
+      const visible = filterConversations(completeSource);
+      setBulkDeleteDialog({
+        open: true,
+        ids: visible.map(c => c.id),
+        label: tp('chat.history.deleteVisibleQuestion', visible.length),
+      });
+    } finally {
+      setBulkResolving(false);
+    }
+  };
 
   return (
     <>
-      <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+      <Box
+        sx={{
+          p: modern ? 2 : 1.5,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: modern ? 1 : 0.7,
+          background: modern
+            ? `linear-gradient(135deg, ${alpha(muiTheme.palette.primary.main, 0.14)}, ${alpha(muiTheme.palette.secondary.main, 0.05)} 58%, transparent)`
+            : 'linear-gradient(120deg, rgba(139,124,255,.09), transparent 62%)',
+        }}
+      >
         {onCollapse && (
-          <Tooltip title="Hide sidebar">
-            <IconButton size="small" onClick={onCollapse} aria-label="Hide conversation sidebar">
-              <ChevronLeftIcon />
+          <Tooltip title={collapsed ? t('chat.history.expand') : t('chat.history.collapse')}>
+            <IconButton size="small" onClick={onCollapse} aria-label={collapsed ? t('chat.history.expand') : t('chat.history.collapse')}>
+              <ViewSidebarIcon />
             </IconButton>
           </Tooltip>
         )}
-        <Typography variant="h6" sx={{ flex: 1 }} noWrap>Conversations</Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="caption" sx={{ display: 'block', color: 'primary.light', fontWeight: 760, letterSpacing: '.1em' }}>
+            {t('chat.history.agentRuns')}
+          </Typography>
+          <Typography variant="h6" noWrap>{t('chat.history.title')}</Typography>
+        </Box>
+        {totalConversations > 0 && (
+          <Tooltip title={t('chat.history.deleteAll')}>
+            <span>{/* span wrapper needed for Tooltip on (potentially) disabled buttons */}
+              <IconButton
+                size="small"
+                color="error"
+                aria-label={t('chat.history.deleteAll')}
+                disabled={bulkResolving}
+                onClick={() => void openDeleteAllDialog()}
+              >
+                <DeleteForeverIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {filtered.length > 0 && (searchActive || activeFilterCount > 0) && (
+          <Tooltip title={t('chat.history.deleteVisible')}>
+            <span>
+              <IconButton
+                size="small"
+                color="error"
+                aria-label={t('chat.history.deleteVisible')}
+                disabled={bulkResolving}
+                onClick={() => void openDeleteVisibleDialog()}
+              >
+                <DeleteSweepIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         {onQuickChat && (
-          <Tooltip title="Quick Chat: a model + optional MCP servers, no saved flow">
+          <Tooltip title={t('chat.history.quickHelp')}>
             <Button
               variant="outlined"
               color="primary"
@@ -470,109 +1226,163 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               onClick={onQuickChat}
               size="small"
             >
-              Quick
+              {t('chat.history.quick')}
             </Button>
           </Tooltip>
         )}
         <Button
           variant="contained"
           color="primary"
+          data-tour="chat-new-conversation"
           startIcon={<AddIcon />}
           onClick={onNewConversation}
           size="small"
         >
-          New
+          {t('chat.history.new')}
         </Button>
       </Box>
 
       <Divider />
 
       {/* Search + filter + group controls (issue #147). */}
-      <Box sx={{ px: 2, pt: 1.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-        <TextField
+      <Box
+        sx={{
+          px: 1.5,
+          pt: 1.5,
+          pb: 1.2,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          bgcolor: modern ? alpha(muiTheme.palette.background.paper, 0.22) : 'rgba(127,127,160,.035)',
+        }}
+      >
+        <StickySearchBar mode="container">
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField
+              size="small"
+              sx={{ flex: 1 }}
+              inputRef={searchInputRef}
+              placeholder={searchDimension === 'content' ? t('chat.history.searchContent') : t('chat.history.searchTitle')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: search || isSearching ? (
+                  <InputAdornment position="end">
+                    {isSearching && <CircularProgress size={16} aria-label={t('chat.history.searching')} />}
+                    {search && (
+                      <IconButton size="small" aria-label={t('chat.history.clearSearch')} onClick={() => setSearch('')}>
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </InputAdornment>
+                ) : undefined,
+              }}
+            />
+            <FormControl size="small" sx={{ minWidth: 100 }}>
+              <Select
+                value={searchDimension}
+                onChange={(e) => setSearchDimension(e.target.value as SearchDimension)}
+                inputProps={{ 'aria-label': t('chat.history.searchDimension') }}
+              >
+                <MenuItem value="title">{t('chat.history.searchTitleOption')}</MenuItem>
+                <MenuItem value="content">{t('chat.history.searchContentOption')}</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+        </StickySearchBar>
+        <Button
           size="small"
-          sx={{ flex: 1 }}
-          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title or flow…'}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon fontSize="small" />
-              </InputAdornment>
-            ),
-            endAdornment: search ? (
-              <InputAdornment position="end">
-                <IconButton size="small" aria-label="Clear search" onClick={() => setSearch('')}>
-                  <ClearIcon fontSize="small" />
-                </IconButton>
-              </InputAdornment>
-            ) : undefined,
-          }}
-        />
-        <FormControl size="small" sx={{ minWidth: 100 }}>
-          <Select
-            value={searchDimension}
-            onChange={(e) => setSearchDimension(e.target.value as 'title' | 'content')}
-            aria-label="Search dimension"
-          >
-            <MenuItem value="title">Title</MenuItem>
-            <MenuItem value="content">Content</MenuItem>
-          </Select>
-        </FormControl>
-        </Box>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={groupMode}
-              onChange={(e) => setGroupMode(e.target.value as GroupMode)}
-              aria-label="Group conversations"
-            >
-              {GROUP_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              aria-label="Filter by status"
-            >
-              {STATUS_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={flowOptions.some((o) => o.key === flowFilter) ? flowFilter : 'all'}
-              onChange={(e) => setFlowFilter(e.target.value)}
-              aria-label="Filter by flow"
-            >
-              <MenuItem value="all">Any flow</MenuItem>
-              {flowOptions.map((o) => (
-                <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              aria-label="Filter by date"
-            >
-              {DATE_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </Box>
-        {(search || activeFilterCount > 0) && (
+          color="inherit"
+          startIcon={<FilterListRoundedIcon />}
+          endIcon={filtersOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          aria-expanded={filtersOpen}
+          aria-controls="chat-sidebar-filter-controls"
+          onClick={() => setFiltersOpen((open) => !open)}
+          sx={{ alignSelf: 'stretch', justifyContent: 'flex-start', color: 'text.secondary' }}
+        >
+          {t('chat.history.filters')}
+          {activeControlCount > 0 && (
+            <Chip
+              label={activeControlCount}
+              size="small"
+              color="primary"
+              sx={{ ml: 1, height: 20, '& .MuiChip-label': { px: 0.75 } }}
+            />
+          )}
+        </Button>
+        <Collapse in={filtersOpen} timeout="auto">
+          <Box id="chat-sidebar-filter-controls" sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={groupMode}
+                onChange={(e) => setGroupMode(e.target.value as GroupMode)}
+                inputProps={{ 'aria-label': t('chat.history.groupAria') }}
+              >
+                {GROUP_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{groupLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                inputProps={{ 'aria-label': t('chat.history.filterStatus') }}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{statusLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={flowOptions.some((o) => o.key === flowFilter) ? flowFilter : 'all'}
+                onChange={(e) => setFlowFilter(e.target.value)}
+                inputProps={{ 'aria-label': t('chat.history.filterAgent') }}
+              >
+                <MenuItem value="all">{t('chat.history.anyAgent')}</MenuItem>
+                {flowOptions.map((o) => (
+                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={originFilter}
+                onChange={(e) => setOriginFilter(e.target.value as OriginFilter)}
+                inputProps={{ 'aria-label': t('chat.history.filterOrigin') }}
+              >
+                {ORIGIN_FILTER_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{originFilterLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+                inputProps={{ 'aria-label': t('chat.history.filterDate') }}
+              >
+                {DATE_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{dateLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+        </Collapse>
+        {(searchActive || activeFilterCount > 0) && (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="caption" color="text.secondary">
-              {matchCount} of {totalCount}
+              {searchPending || isSearching
+                ? t('chat.history.searching')
+                : searchFailed
+                  ? t('chat.history.searchFailed')
+                  : t('chat.history.matchCount', { shown: matchCount, total: totalCount })}
             </Typography>
             <Button
               size="small"
@@ -580,10 +1390,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 setSearch('');
                 setStatusFilter('all');
                 setFlowFilter('all');
+                setOriginFilter('all');
                 setDateFilter('all');
               }}
             >
-              Clear filters
+              {t('chat.history.clearFilters')}
             </Button>
           </Box>
         )}
@@ -591,12 +1402,89 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
       <Divider />
 
-      <List sx={{ overflow: 'auto', flex: 1 }}>
-        {totalCount === 0 ? (
+      {showHierarchyControls && (
+        <Box
+          sx={{
+            px: 1.5,
+            py: 0.75,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            bgcolor: alpha(muiTheme.palette.primary.main, modern ? 0.055 : 0.025),
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+            {t('chat.chain.hierarchy')}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Button
+              size="small"
+              startIcon={<UnfoldMoreRoundedIcon />}
+              onClick={() => setAllHierarchyExpanded(true)}
+            >
+              {t('chat.chain.expandAll')}
+            </Button>
+            <Button
+              size="small"
+              startIcon={<UnfoldLessRoundedIcon />}
+              onClick={() => setAllHierarchyExpanded(false)}
+            >
+              {t('chat.chain.collapseAll')}
+            </Button>
+          </Box>
+        </Box>
+      )}
+
+      <List
+        ref={listRef}
+        aria-label={t('chat.history.title')}
+        aria-busy={searchPending || isSearching || isLoadingMoreSearch}
+        sx={{
+          overflow: 'auto',
+          flex: 1,
+          px: modern ? 1.25 : 1,
+          py: modern ? 1.5 : 1,
+          scrollbarGutter: 'stable',
+        }}
+      >
+        {pinnedConversations.length > 0 && !searchPending && !isSearching && (
+          <Box role="group" aria-label={t('chat.history.pinned')} sx={{ mb: 1 }}>
+            <Typography variant="overline" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 1, mb: 0.5 }}>
+              <PushPinRoundedIcon sx={{ fontSize: 16 }} />
+              {t('chat.history.pinned')}
+            </Typography>
+            <ConversationTree
+              nodes={pinnedChainIndex.roots}
+              childrenByParent={pinnedChainIndex.childrenByParent}
+              renderItem={(c) => renderConversation(c, { detached: pinnedChainIndex.detachedIds.has(c.id) })}
+              expanded={expandedChains}
+              onToggle={toggleChain}
+            />
+            {unpinnedConversations.length > 0 && <Divider sx={{ my: 1 }} />}
+          </Box>
+        )}
+        {searchPending || isSearching ? (
+          <ListItem sx={{ justifyContent: 'center', gap: 1, py: 3 }}>
+            <CircularProgress size={18} />
+            <Typography variant="body2" color="text.secondary">
+              {t('chat.history.searching')}
+            </Typography>
+          </ListItem>
+        ) : searchFailed && sourceConversations.length === 0 ? (
           <ListItem>
             <ListItemText
-              primary="No conversations yet"
-              secondary="Start a new conversation"
+              primary={t('chat.history.searchFailed')}
+              secondary={t('chat.history.searchFailedHelp')}
+              primaryTypographyProps={{ align: 'center' }}
+              secondaryTypographyProps={{ align: 'center' }}
+            />
+          </ListItem>
+        ) : !searchActive && totalCount === 0 ? (
+          <ListItem>
+            <ListItemText
+              primary={t('chat.history.empty')}
+              secondary={t('chat.history.emptyHelp')}
               primaryTypographyProps={{ align: 'center' }}
               secondaryTypographyProps={{ align: 'center' }}
             />
@@ -604,8 +1492,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         ) : matchCount === 0 ? (
           <ListItem>
             <ListItemText
-              primary="No matching conversations"
-              secondary="Try a different search or filter"
+              primary={t('chat.history.noMatch')}
+              secondary={t('chat.history.noMatchHelp')}
               primaryTypographyProps={{ align: 'center' }}
               secondaryTypographyProps={{ align: 'center' }}
             />
@@ -614,12 +1502,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           <ConversationTree
             nodes={chainIndex.roots}
             childrenByParent={chainIndex.childrenByParent}
-            renderItem={(c) => renderConversation(c)}
+            renderItem={(c) => renderConversation(c, { detached: chainIndex.detachedIds.has(c.id) })}
             expanded={expandedChains}
             onToggle={toggleChain}
           />
         ) : groupMode === 'none' ? (
-          filtered.map(renderConversation)
+          // NB: wrap the call — Array.map would pass the index as `opts`.
+          unpinnedConversations.map((c) => renderConversation(c))
         ) : (
           groups.map((group) => {
             const collapsed = !!collapsedGroups[group.key];
@@ -647,21 +1536,128 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                     <ConversationTree
                       nodes={waveChain.roots}
                       childrenByParent={waveChain.childrenByParent}
-                      renderItem={(c) => renderConversation(c)}
+                      renderItem={(c) => renderConversation(c, { detached: waveChain.detachedIds.has(c.id) })}
                       expanded={expandedChains}
                       onToggle={toggleChain}
                     />
                   ) : (
-                    group.items.map(renderConversation)
+                    group.items.map((c) => renderConversation(c))
                   )}
                 </Collapse>
               </Box>
             );
           })
         )}
+        {searchActive && currentSearchPage?.hasMore && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}>
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={isLoadingMoreSearch}
+              startIcon={isLoadingMoreSearch ? <CircularProgress size={14} /> : undefined}
+              onClick={() => void loadMoreSearchResults()}
+            >
+              {t('chat.history.loadMore')}
+            </Button>
+          </Box>
+        )}
+        {!searchActive && hasMoreConversations && onLoadMore && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}>
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={isLoadingMore}
+              startIcon={isLoadingMore ? <CircularProgress size={14} /> : undefined}
+              onClick={() => void onLoadMore()}
+            >
+              {t('chat.history.loadMore')}
+            </Button>
+          </Box>
+        )}
       </List>
+
+      <Dialog
+        open={deleteFamilyDialog.open}
+        onClose={() => setDeleteFamilyDialog((previous) => ({ ...previous, open: false }))}
+        aria-labelledby="delete-family-dialog-title"
+      >
+        <DialogTitle id="delete-family-dialog-title">
+          {t('chat.history.deleteFamilyTitle')}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {deleteFamilyDialog.lookupFailed
+              ? t('chat.history.deleteFamilyLookupFailed')
+              : t('chat.history.deleteFamilyQuestion', {
+                  title: deleteFamilyDialog.parent?.title ?? '',
+                  count: deleteFamilyDialog.descendantIds.length,
+                })}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteFamilyDialog((previous) => ({ ...previous, open: false }))}>
+            {t('common.cancel')}
+          </Button>
+          {!deleteFamilyDialog.lookupFailed && deleteFamilyDialog.parent && (
+            <>
+              <Button
+                color="error"
+                onClick={() => {
+                  const parentId = deleteFamilyDialog.parent!.id;
+                  setDeleteFamilyDialog((previous) => ({ ...previous, open: false }));
+                  void onDeleteConversation(parentId);
+                }}
+              >
+                {t('chat.history.deleteParentOnly')}
+              </Button>
+              <Button
+                variant="contained"
+                color="error"
+                onClick={() => {
+                  const ids = [deleteFamilyDialog.parent!.id, ...deleteFamilyDialog.descendantIds];
+                  setDeleteFamilyDialog((previous) => ({ ...previous, open: false }));
+                  void onBulkDelete(ids);
+                }}
+              >
+                {t('chat.history.deleteFamilyAction', { count: deleteFamilyDialog.descendantIds.length })}
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={bulkDeleteDialog.open}
+        onClose={() => setBulkDeleteDialog(prev => ({ ...prev, open: false }))}
+        aria-labelledby="bulk-delete-dialog-title"
+      >
+        <DialogTitle id="bulk-delete-dialog-title">{t('chat.history.confirmDelete')}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {bulkDeleteDialog.label} {t('chat.history.cannotUndo')}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDeleteDialog(prev => ({ ...prev, open: false }))}>
+            {t('common.cancel')}
+          </Button>
+          <Button
+            color="error"
+            onClick={async () => {
+              setBulkDeleteDialog(prev => ({ ...prev, open: false }));
+              await onBulkDelete(bulkDeleteDialog.ids);
+            }}
+            autoFocus
+          >
+            {t('chat.history.deleteAction')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };
 
-export default ChatHistory;
+// The parent chat updates on every streamed message/debug event. Keeping this
+// subtree memoized prevents rebuilding and reconciling the entire sidebar when
+// its summaries and controls have not changed.
+export default React.memo(ChatHistory);

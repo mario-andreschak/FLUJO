@@ -3,7 +3,6 @@
 import React from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -17,6 +16,8 @@ import {
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 export interface ModelTestDialogProps {
   open: boolean;
@@ -28,10 +29,13 @@ export interface ModelTestDialogProps {
   onRetry: () => void;
 }
 
-const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAttempt }) => (
-  <Box sx={{ mb: 2 }}>
+const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAttempt }) => {
+  const { t, formatNumber } = useI18n();
+  return <Box sx={{ mb: 2 }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-      {attempt.ok ? (
+      {attempt.skipped ? (
+        <Chip size="small" label={t('models.test.skipped')} />
+      ) : attempt.ok ? (
         <CheckCircleIcon color="success" fontSize="small" />
       ) : (
         <ErrorIcon color="error" fontSize="small" />
@@ -40,12 +44,14 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
       {typeof attempt.status === 'number' && (
         <Chip size="small" label={`HTTP ${attempt.status}`} />
       )}
-      <Chip size="small" variant="outlined" label={`${attempt.durationMs} ms`} />
+      <Chip size="small" variant="outlined" label={`${formatNumber(attempt.durationMs)} ms`} />
     </Box>
 
-    {attempt.ok ? (
+    {attempt.skipped ? (
+      <Typography variant="body2" color="text.secondary" sx={{ pl: 3 }}>{attempt.content}</Typography>
+    ) : attempt.ok ? (
       <Typography variant="body2" color="text.secondary" sx={{ pl: 3 }}>
-        Response: {attempt.content ? `"${attempt.content}"` : '(empty)'}
+        {t('models.test.response', { response: attempt.content ? `"${attempt.content}"` : t('models.test.empty') })}
       </Typography>
     ) : (
       <Box sx={{ pl: 3 }}>
@@ -82,8 +88,8 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
         )}
       </Box>
     )}
-  </Box>
-);
+  </Box>;
+};
 
 export const ModelTestDialog = ({
   open,
@@ -94,15 +100,20 @@ export const ModelTestDialog = ({
   onClose,
   onRetry,
 }: ModelTestDialogProps) => {
+  const { t } = useI18n();
+  const sdkTitle = result?.provider === 'codex'
+    ? t('models.test.codexSdk')
+    : t('models.test.openaiSdk');
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Test model: {modelLabel}</DialogTitle>
+      <DialogHeaderActions title={t('models.test.title', { model: modelLabel })} onClose={onClose} />
       <DialogContent dividers>
         {loading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3 }}>
             <CircularProgress size={24} />
             <Typography variant="body2">
-              Sending a direct test request (SDK + axios)…
+              {t('models.test.sending')}
             </Typography>
           </Box>
         ) : error ? (
@@ -113,22 +124,46 @@ export const ModelTestDialog = ({
               {result.diagnosis}
             </Alert>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
-              model: {result.model}
+              {t('models.test.modelLabel', { model: result.model })}
               {result.baseUrl ? ` · ${result.baseUrl}` : ''}
               {result.provider ? ` · ${result.provider}` : ''}
             </Typography>
+            {result.adapterRoute && (
+              <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('models.test.adapterRoute')}:
+                  </Typography>
+                  <Chip size="small" label={result.adapterRoute.adapterId} />
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={t('models.test.adapterEndpoint', { endpoint: result.adapterRoute.endpoint })}
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {t('models.test.adapterReason', { reason: result.adapterRoute.reason })}
+                </Typography>
+              </Box>
+            )}
             <Divider sx={{ mb: 2 }} />
-            <AttemptBlock title="OpenAI SDK (used by flows)" attempt={result.sdk} />
-            <AttemptBlock title="axios (independent cross-check)" attempt={result.axios} />
+            <AttemptBlock title={sdkTitle} attempt={result.sdk} />
+            <AttemptBlock title={t('models.test.axios')} attempt={result.axios} />
+            {result.adapter && (
+              <AttemptBlock title={t('models.test.adapterAttempt')} attempt={result.adapter} />
+            )}
+            {result.tool && (
+              <AttemptBlock title={t('models.test.toolAttempt')} attempt={result.tool} />
+            )}
           </>
         ) : null}
       </DialogContent>
       <DialogActions>
         <Button onClick={onRetry} disabled={loading}>
-          Run again
+          {t('models.test.runAgain')}
         </Button>
         <Button onClick={onClose} variant="contained">
-          Close
+          {t('common.close')}
         </Button>
       </DialogActions>
     </Dialog>

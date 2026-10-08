@@ -17,7 +17,7 @@ export interface HandoffTool {
   description: string;
   inputSchema: {
     type: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required: string[];
   };
 }
@@ -35,7 +35,7 @@ function buildPreviewSummary(node: FlowNode): HandoffNodeSummary {
   const type = node.type || node.data.type || 'unknown';
   const label = node.data.label || 'Unknown Node';
   const userDescription = node.data.description;
-  const properties = (node.data.properties || {}) as Record<string, any>;
+  const properties = (node.data.properties || {}) as Record<string, unknown>;
 
   const summary: HandoffNodeSummary = { label, type, userDescription };
   if (userDescription && userDescription.trim()) return summary;

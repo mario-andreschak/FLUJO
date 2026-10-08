@@ -6,23 +6,17 @@ import path from 'path';
 import fs from 'fs/promises';
 import { execSync, spawn, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
 import { isSafeRepoUrl, isSafeBranchName, buildRepoCommand } from '@/utils/git/validation';
-import { getAppDir, getDataDir } from '@/utils/paths';
+import { getAppDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { killProcessTree } from '@/utils/process/killProcessTree';
+import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
 
 const log = createLogger('app/api/git/route');
-
-// Single-flight guard for heavy install/build streams. streamCommandInRepo is used
-// ONLY by the installStream and buildStream actions, so this one module-level flag
-// caps concurrent install/build to 1. The Next.js route module is a per-process
-// singleton, so the flag is process-wide. It is reset in finish() (and on every early
-// return), covering success, error, timeout and client-abort, so it can't get stuck.
-// This stops two heavy npm jobs from stacking on the (single) vCPU of a small host.
-let installBuildInFlight = false;
 
 // Hard ceiling for install/build streams: a runaway or hanging npm install|build can
 // otherwise pin the core forever. On timeout we kill the process tree (reusing the
@@ -43,18 +37,20 @@ type CommandExecutionOptions = {
 // data dir (see utils/paths) so a packaged install (npm/Docker) clones servers
 // into the writable data dir; defaults to the app dir, so a git checkout is
 // unchanged (<repo>/mcp-servers).
-const REPOS_BASE_DIR = path.join(getDataDir(), 'mcp-servers');
-log.debug(`Repository base directory: ${REPOS_BASE_DIR}`);
+// Workspaces (#406): resolved per call, since mcp-servers/ belongs to the
+// SELECTED workspace and a module constant would pin the route to whichever
+// workspace happened to load it first.
+const reposBaseDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
 // Ensure the base directory exists
 async function ensureReposDir() {
   log.debug('Ensuring repository base directory exists');
   try {
-    await fs.access(REPOS_BASE_DIR);
+    await fs.access(reposBaseDir());
     log.debug('Repository base directory already exists');
   } catch {
     log.debug('Creating repository base directory');
-    await fs.mkdir(REPOS_BASE_DIR, { recursive: true });
+    await fs.mkdir(reposBaseDir(), { recursive: true });
     log.debug('Repository base directory created successfully');
   }
 }
@@ -234,10 +230,10 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
           cwd: savePath,
           stdio: 'pipe' as const, // Capture output instead of inheriting
           encoding: 'utf8', // Specify encoding to get string output directly
-          env: {
-            ...process.env,
-            ...env
-          }
+          // Install/build commands can contain a plain or compound `npm install`.
+          // Force devDependencies at the execution boundary so production mode cannot
+          // silently prune the compiler/bundler required by an MCP server build.
+          env: withNpmDevDependencies(process.env, env),
         };
         
         // Add timeout for "Run" action
@@ -356,27 +352,8 @@ function streamCommandInRepo(
   request: NextRequest
 ): Response {
   return createNdjsonStreamResponse(async (emit, signal) => {
-    // Single-flight cap: reject a second install/build while one is already running so
-    // two heavy npm jobs can't stack on one core. We emit a terminal `result` error
-    // (rather than an HTTP status) so the existing streaming client handles it exactly
-    // like any other terminal error. Set the flag SYNCHRONOUSLY right after the check
-    // (no await in between) so two near-simultaneous requests can't both pass the guard.
-    if (installBuildInFlight) {
-      log.warn(`Rejecting ${actionName}: another install/build is already running [${requestId}]`);
-      emit({ type: 'result', success: false, error: 'Another install/build is already running. Please wait for it to finish.', commandOutput: '' });
-      return;
-    }
-    installBuildInFlight = true;
-    let inFlightReleased = false;
-    const releaseInFlight = () => {
-      if (inFlightReleased) return;
-      inFlightReleased = true;
-      installBuildInFlight = false;
-    };
-
     if (!savePath) {
       log.error(`Missing repository path [${requestId}]`);
-      releaseInFlight();
       emit({ type: 'result', success: false, error: 'Missing repository path', commandOutput: 'Missing repository path' });
       return;
     }
@@ -386,7 +363,6 @@ function streamCommandInRepo(
     } catch {
       const message = `Directory does not exist: ${savePath}`;
       log.error(`${message} [${requestId}]`);
-      releaseInFlight();
       emit({ type: 'result', success: false, error: message, commandOutput: message });
       return;
     }
@@ -401,14 +377,12 @@ function streamCommandInRepo(
     await new Promise<void>((resolve) => {
       let settled = false;
       let buffer = '';
-      let timer: ReturnType<typeof setTimeout> | undefined;
-
       // POSIX: detached so the shell wrapper leads its own process group and
       // killProcessTree can signal the whole group on abort (Windows uses taskkill /T).
       const child = spawn(finalCommand, {
         cwd: savePath,
         shell: true,
-        env: { ...process.env, ...env },
+        env: withNpmDevDependencies(process.env, env),
         detached: process.platform !== 'win32',
       });
 
@@ -424,10 +398,9 @@ function streamCommandInRepo(
       const finish = (result: { success: boolean; error?: string }) => {
         if (settled) return;
         settled = true;
-        if (timer) clearTimeout(timer); // stop the ceiling firing on normal completion/abort
+        clearTimeout(timer); // stop the ceiling firing on normal completion/abort
         signal.removeEventListener('abort', onAbort);
         cancelEscalation?.();
-        releaseInFlight(); // single-point release: success, error, timeout and abort all pass here
         emit({ type: 'result', success: result.success, error: result.error, commandOutput: buffer });
         resolve();
       };
@@ -436,7 +409,7 @@ function streamCommandInRepo(
       // error if the command outlives GIT_STREAM_TIMEOUT_MS. finish() clears this timer
       // on normal completion, client-abort or start-failure so it can't fire late.
       const timeoutMinutes = Math.round(GIT_STREAM_TIMEOUT_MS / 60000);
-      timer = setTimeout(() => {
+      const timer = setTimeout(() => {
         log.warn(`${actionName} exceeded ${GIT_STREAM_TIMEOUT_MS}ms timeout, killing process tree [${requestId}]`);
         const message = `\n${actionName} exceeded ${timeoutMinutes} min timeout; aborting.\n`;
         buffer += message;
@@ -474,7 +447,7 @@ function streamCommandInRepo(
   }, { signal: request.signal });
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -757,7 +730,7 @@ export async function POST(request: NextRequest) {
         const isAbsolutePath = path.isAbsolute(savePath);
         
         // Construct the full path - if savePath is absolute, use it directly; otherwise join with base dir
-        const fullFilePath = isAbsolutePath ? savePath : path.join(REPOS_BASE_DIR, savePath);
+        const fullFilePath = isAbsolutePath ? savePath : path.join(reposBaseDir(), savePath);
         log.debug(`Constructed full file path: ${fullFilePath} [${requestId}] (path is ${isAbsolutePath ? 'absolute' : 'relative'})`);
         
         try {
@@ -824,8 +797,8 @@ export async function POST(request: NextRequest) {
       case 'list': {
         log.info(`Starting list action [${requestId}]`);
         try {
-          log.debug(`Reading directory: ${REPOS_BASE_DIR} [${requestId}]`);
-          const entries = await fs.readdir(REPOS_BASE_DIR, { withFileTypes: true });
+          log.debug(`Reading directory: ${reposBaseDir()} [${requestId}]`);
+          const entries = await fs.readdir(reposBaseDir(), { withFileTypes: true });
           const directories = entries
             .filter(entry => entry.isDirectory())
             .map(dir => dir.name);
@@ -937,3 +910,7 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+
+
+// Workspaces (#406): clones land in the selected workspace's mcp-servers/.
+export const POST = withWorkspaceRoute(POST_handler);

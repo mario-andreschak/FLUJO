@@ -16,14 +16,39 @@
  */
 
 import type OpenAI from 'openai';
-import type { FlujoChatMessage } from '@/shared/types/chat';
+import type { FlujoChatMessage, LazyToolPayloadRef } from '@/shared/types/chat';
 import { HANDOFF_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
+
+/** Compact metadata used by Chat to identify an auto-captured tool result. */
+export interface CapturedToolResource {
+  uri: string;
+  size?: number;
+  mimeType?: string;
+}
+
+// Exact persisted marker fallback for conversations created before Chat retained
+// structured resource:write events. This helper is called only with role=tool
+// result content; arbitrary user/model text is never scanned.
+const RUN_RESOURCE_MARKER = /(?:^|[^A-Za-z0-9_:/.-])(flujo:\/\/run\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+)(?![A-Za-z0-9_\/-])/;
+
+export function capturedResourceFromToolResult(content: unknown): CapturedToolResource | undefined {
+  if (typeof content !== 'string') return undefined;
+  const match = RUN_RESOURCE_MARKER.exec(content);
+  return match ? { uri: match[1] } : undefined;
+}
 
 /** A single assistant tool call paired with the tool result that answered it (if any yet). */
 export interface ToolCallPair<TMessage extends FlujoChatMessage = FlujoChatMessage> {
-  toolCall: OpenAI.ChatCompletionMessageToolCall;
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall;
   /** The matching `role: 'tool'` message, or undefined while the result is still pending. */
   result?: TMessage;
+  /** Resolved MCP Tool Tester destination, present only for persisted MCP calls. */
+  mcpDestination?: { serverName: string; toolName: string };
+  /** Exact parameters/result fetched only when this pair is expanded. */
+  argumentPayload?: LazyToolPayloadRef;
+  resultPayload?: LazyToolPayloadRef;
+  /** Structured live metadata, or an exact-marker fallback for hydrated history. */
+  capturedResource?: CapturedToolResource;
 }
 
 export interface ToolCallPairing<TMessage extends FlujoChatMessage = FlujoChatMessage> {
@@ -131,7 +156,14 @@ export function pairToolCallsWithResults<TMessage extends FlujoChatMessage>(
       const id = toolCall.id;
       const result = id ? resultByToolCallId.get(id) : undefined;
       if (id) consumedToolCallIds.add(id);
-      pairs.push({ toolCall, result });
+      pairs.push({
+        toolCall,
+        result,
+        mcpDestination: id ? message.mcpToolCalls?.[id] : undefined,
+        argumentPayload: id ? message.toolPayloads?.[id]?.arguments : undefined,
+        resultPayload: id ? result?.toolPayloads?.[id]?.result : undefined,
+        capturedResource: capturedResourceFromToolResult(result?.content),
+      });
     }
 
     if (pairs.length > 0) {
@@ -168,7 +200,7 @@ export interface AnchoredToolCallGrouping<TMessage extends FlujoChatMessage = Fl
   /** For each anchor message id, its aggregated ordered non-handoff tool-call/result pairs. */
   pairsByAnchorId: Map<string, ToolCallPair<TMessage>[]>;
   /** For each anchor message id, the ordered handoff tool calls hoisted onto it. */
-  handoffsByAnchorId: Map<string, OpenAI.ChatCompletionMessageToolCall[]>;
+  handoffsByAnchorId: Map<string, OpenAI.ChatCompletionMessageFunctionToolCall[]>;
   /** Ids of assistant messages whose bubbles must be suppressed (calls hoisted, no own content). */
   hoistedAssistantIds: Set<string>;
   /** `tool_call_id`s whose standalone `role:'tool'` result bubble must be skipped. */
@@ -220,7 +252,7 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
   messages: TMessage[]
 ): AnchoredToolCallGrouping<TMessage> {
   const pairsByAnchorId = new Map<string, ToolCallPair<TMessage>[]>();
-  const handoffsByAnchorId = new Map<string, OpenAI.ChatCompletionMessageToolCall[]>();
+  const handoffsByAnchorId = new Map<string, OpenAI.ChatCompletionMessageFunctionToolCall[]>();
   const hoistedAssistantIds = new Set<string>();
   const consumedToolCallIds = new Set<string>();
   const groupByAnchorId = new Map<string, ToolCallGroup>();
@@ -270,7 +302,7 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
 
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     const pairs: ToolCallPair<TMessage>[] = [];
-    const handoffCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const handoffCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
     for (const toolCall of toolCalls) {
       if (toolCall.type !== 'function') continue;
       if (isHandoffToolName(toolCall.function?.name)) {
@@ -280,7 +312,14 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
       const id = toolCall.id;
       const result = id ? resultByToolCallId.get(id) : undefined;
       if (id) consumedToolCallIds.add(id);
-      pairs.push({ toolCall, result });
+      pairs.push({
+        toolCall,
+        result,
+        mcpDestination: id ? message.mcpToolCalls?.[id] : undefined,
+        argumentPayload: id ? message.toolPayloads?.[id]?.arguments : undefined,
+        resultPayload: id ? result?.toolPayloads?.[id]?.result : undefined,
+        capturedResource: capturedResourceFromToolResult(result?.content),
+      });
     }
 
     const hasText = hasMeaningfulTextContent(message);

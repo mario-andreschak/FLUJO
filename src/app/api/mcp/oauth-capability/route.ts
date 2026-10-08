@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
@@ -19,7 +20,7 @@ export const runtime = 'nodejs';
  * Body: `{ serverUrl: string }`. Runs server-side (like test-connection) because the probe
  * reaches out to the remote host, so it must not be driven by cross-origin callers.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
 
@@ -42,3 +43,5 @@ export async function POST(request: NextRequest) {
   const result = await probeOAuthSupport(serverUrl);
   return json(result);
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

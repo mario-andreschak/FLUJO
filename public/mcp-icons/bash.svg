@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Bash MCP</title>
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="57" y2="59" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#262B4A"/>
+      <stop offset="1" stop-color="#111528"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="17" y1="21" x2="48" y2="45" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B8CFF"/>
+      <stop offset="1" stop-color="#46D8EA"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+  <rect x="11" y="14" width="42" height="36" rx="8" fill="#FFFFFF" opacity=".08" stroke="#FFFFFF" stroke-opacity=".18"/>
+  <circle cx="18" cy="21" r="2" fill="#FF8298"/>
+  <circle cx="24" cy="21" r="2" fill="#F6BC66"/>
+  <circle cx="30" cy="21" r="2" fill="#57D59B"/>
+  <path d="m19 31 7 6-7 6M31 43h13" fill="none" stroke="url(#accent)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

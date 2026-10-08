@@ -128,6 +128,7 @@ describe('compileFlowSpec — happy path', () => {
       subflowId: 'flow-1',
       inputMode: 'latest-message',
       outputMode: 'final-only',
+      resultPresentation: 'separate',
     });
   });
 
@@ -431,6 +432,57 @@ describe('compileFlowSpec — subflow resolution', () => {
     const { issues } = compileFlowSpec(subflowSpec(undefined), context);
     expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-missing-flow', severity: 'error' }));
   });
+
+  it('round-trips keyed child-conversation persistence', () => {
+    const spec = subflowSpec('flow-1');
+    Object.assign(spec.nodes[1], {
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+
+    const { flow, issues } = compileFlowSpec(spec, context);
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'invalid-session-scope' }));
+    const properties = flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(properties).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+
+    const serialized = flowToSpec(flow!);
+    expect(serialized.nodes.find((node) => node.type === 'subflow')).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+  });
+
+  it('always defaults Subflow results to separate while session defaults remain opt-in', () => {
+    const legacy = compileFlowSpec(subflowSpec('flow-1'), context).flow!
+      .nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(legacy.resultPresentation).toBe('separate');
+    expect(legacy).not.toHaveProperty('sessionScope');
+
+    const authored = compileFlowSpec(subflowSpec('flow-1'), context, {
+      newSubflowDefaults: true,
+    }).flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(authored).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
+  });
+
+  it('honors explicit legacy-mode opt-outs when new defaults are enabled', () => {
+    const spec = subflowSpec('flow-1');
+    Object.assign(spec.nodes[1], {
+      resultPresentation: 'joined',
+      sessionScope: 'per-visit',
+    });
+
+    const properties = compileFlowSpec(spec, context, {
+      newSubflowDefaults: true,
+    }).flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(properties).not.toHaveProperty('resultPresentation');
+    expect(properties).not.toHaveProperty('sessionScope');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -496,7 +548,7 @@ describe('compileFlowSpec — servers and tools', () => {
     expect(mcps.map((m) => m.data.properties!.enabledTools)).toEqual([['read_file'], ['write_file']]);
   });
 
-  it('servers on a non-process node are ignored with a warning', () => {
+  it('servers on an unsupported node are ignored with a warning', () => {
     const spec: FlowSpec = {
       nodes: [
         { key: 's', type: 'start', servers: [{ name: 'filesystem' }] } as any,
@@ -505,7 +557,7 @@ describe('compileFlowSpec — servers and tools', () => {
       edges: [{ from: 's', to: 'f' }],
     };
     const { flow, issues } = compileFlowSpec(spec, context);
-    expect(issues).toContainEqual(expect.objectContaining({ code: 'servers-on-non-process' }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'servers-on-unsupported-node' }));
     expect(flow!.nodes.filter((n) => n.type === 'mcp')).toHaveLength(0);
   });
 });
@@ -681,17 +733,34 @@ describe('compileFlowSpec — node rules', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyGenerationDefaults', () => {
-  it("fills inputMode/outputMode 'latest-message' on process nodes that left them unset", () => {
+  it("fills process inputMode 'full-history' and outputMode 'latest-message' when unset", () => {
     const { flow } = compileFlowSpec(happySpec, context);
     applyGenerationDefaults(flow!);
     const research = flow!.nodes.find((n) => n.data.label === 'Researcher')!;
-    expect(research.data.properties!.inputMode).toBe('latest-message');
+    expect(research.data.properties!.inputMode).toBe('full-history');
     expect(research.data.properties!.outputMode).toBe('latest-message');
     // Non-process nodes are untouched.
     const sub = flow!.nodes.find((n) => n.type === 'subflow')!;
     expect(sub.data.properties!.outputMode).toBe('final-only');
     const finish = flow!.nodes.find((n) => n.type === 'finish')!;
     expect(finish.data.properties).not.toHaveProperty('inputMode');
+  });
+
+  it("upgrades an explicitly generated process inputMode 'latest-message' to full history", () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'p', type: 'process', model: 'model-abc', inputMode: 'latest-message' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p' },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const { flow } = compileFlowSpec(spec, context);
+    applyGenerationDefaults(flow!);
+    expect(flow!.nodes.find((n) => n.type === 'process')!.data.properties!.inputMode).toBe('full-history');
   });
 
   it('never overrides modes the spec set explicitly', () => {
@@ -717,6 +786,23 @@ describe('applyGenerationDefaults', () => {
     const p = flow!.nodes.find((n) => n.type === 'process')!;
     expect(p.data.properties!.inputMode).toBe('full-history');
     expect(p.data.properties!.outputMode).toBe('full-conversation');
+  });
+
+  it("preserves the advanced process inputMode 'isolated'", () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'p', type: 'process', model: 'model-abc', inputMode: 'isolated', isolatedPrompt: 'Only this.' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p' },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const { flow } = compileFlowSpec(spec, context);
+    applyGenerationDefaults(flow!);
+    expect(flow!.nodes.find((n) => n.type === 'process')!.data.properties!.inputMode).toBe('isolated');
   });
 });
 
@@ -1349,6 +1435,10 @@ describe('compileFlowSpec — process maxTurns / prompt flags / allowedTools (1b
     expect(proc(compileFlowSpec(procWrap({ maxTurns: 999999 }), context).flow!).data.properties!.maxTurns).toBe(1000);
   });
 
+  it('preserves an explicit 255 (the new system default) without clamping (#399)', () => {
+    expect(proc(compileFlowSpec(procWrap({ maxTurns: 255 }), context).flow!).data.properties!.maxTurns).toBe(255);
+  });
+
   it('warns and omits a non-numeric maxTurns', () => {
     const { flow, issues } = compileFlowSpec(procWrap({ maxTurns: 'many' as any }), context);
     expect(issues).toContainEqual(expect.objectContaining({ code: 'invalid-max-turns', severity: 'warning' }));
@@ -1433,5 +1523,208 @@ describe('compileFlowSpec — agentic fan-out (allowCallerFanout, issue #130 Pha
     const { flow } = compileFlowSpec(subflowWrap({ flow: 'Summarizer' }), parallelContext);
     const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
     expect(gate.data.properties).not.toHaveProperty('allowCallerFanout');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// keepPills option (issue #264)
+// ---------------------------------------------------------------------------
+
+describe('compileFlowSpec — keepPills option (issue #264)', () => {
+  const pillContext: CompileContext = {
+    models: [{ id: 'model-abc', name: 'gpt-4o' }],
+    servers: [{ name: 'github-mcp-server' }, { name: 'brave-search' }],
+    serverTools: {
+      'github-mcp-server': ['issue_read', 'list_issues'],
+      'brave-search': ['web_search'],
+    },
+    flows: [{ id: 'flow-1', name: 'Summarizer' }],
+  };
+
+  function makeSpec(processPrompt: string, extraServers: Array<{ name: string; tools?: string[] }> = []): FlowSpec {
+    return {
+      name: 'test_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'System prompt.' },
+        {
+          key: 'step',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: processPrompt,
+          servers: [{ name: 'github-mcp-server', tools: ['issue_read'] }, ...extraServers],
+        },
+        { key: 'end', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'step' },
+        { from: 'step', to: 'end' },
+      ],
+    };
+  }
+
+  it('default (no keepPills): strips all pills with pill-stripped warning', () => {
+    const spec = makeSpec('Use ${tool:github-mcp-server__issue_read} to read the issue.');
+    const { flow, issues } = compileFlowSpec(spec, pillContext);
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    // pill stripped to bare name
+    expect(step.data.properties!.promptTemplate).toBe('Use issue_read to read the issue.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-stripped', severity: 'warning' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: preserves a pill that resolves against a wired server', () => {
+    const spec = makeSpec('Use ${tool:github-mcp-server__issue_read} to read the issue.');
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(step.data.properties!.promptTemplate).toBe('Use ${tool:github-mcp-server__issue_read} to read the issue.');
+    // no pill-stripped warning
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: strips an unwired server pill with pill-unresolved warning', () => {
+    // brave-search pill but server NOT in specNode.servers (only github-mcp-server is wired)
+    const spec = makeSpec('Search with ${tool:brave-search__web_search} please.');
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    // stripped to bare name
+    expect(step.data.properties!.promptTemplate).toBe('Search with web_search please.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-unresolved', severity: 'warning' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+  });
+
+  it('keepPills true: preserves a valid handoff pill matching an outgoing edge target', () => {
+    const spec: FlowSpec = {
+      name: 'handoff_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'router',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Hand off via ${tool:handoff__handoff_to_finish_node}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish', label: 'Finish Node' },
+      ],
+      edges: [
+        { from: 'start', to: 'router' },
+        { from: 'router', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const router = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(router.data.properties!.promptTemplate).toBe('Hand off via ${tool:handoff__handoff_to_finish_node}.');
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: strips a handoff pill referencing a non-existent target', () => {
+    const spec: FlowSpec = {
+      name: 'bad_handoff_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'router',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Hand off via ${tool:handoff__handoff_to_nonexistent_node}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish', label: 'Finish Node' },
+      ],
+      edges: [
+        { from: 'start', to: 'router' },
+        { from: 'router', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const router = flow!.nodes.find((n) => n.type === 'process')!;
+    // stripped: handoff_to_nonexistent_node is not in the outgoing edge targets
+    expect(router.data.properties!.promptTemplate).toBe('Hand off via handoff_to_nonexistent_node.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-unresolved', severity: 'warning' }));
+  });
+
+  it('default (no keepPills): strips handoff pills with pill-stripped, not pill-unresolved', () => {
+    const spec: FlowSpec = {
+      name: 'default_strip_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'router',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Hand off via ${tool:handoff__handoff_to_finish_node}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish', label: 'Finish Node' },
+      ],
+      edges: [
+        { from: 'start', to: 'router' },
+        { from: 'router', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext);
+    const router = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(router.data.properties!.promptTemplate).toBe('Hand off via handoff_to_finish_node.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-stripped', severity: 'warning' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: non-binding tokens (${var:}, ${global:}, ${kv:}) are never touched', () => {
+    const spec: FlowSpec = {
+      name: 'var_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'step',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Input: ${var:TASK}, global: ${global:ENV}, kv: ${kv:COUNTER}, res: ${res:artifact}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'step' },
+        { from: 'step', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    // Non-binding tokens should pass through completely unchanged
+    expect(step.data.properties!.promptTemplate).toBe(
+      'Input: ${var:TASK}, global: ${global:ENV}, kv: ${kv:COUNTER}, res: ${res:artifact}.'
+    );
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: wired server pill on a start node is preserved', () => {
+    const spec: FlowSpec = {
+      name: 'start_pill_flow',
+      nodes: [
+        {
+          key: 'start',
+          type: 'start',
+          prompt: 'You can use ${tool:github-mcp-server__issue_read} for issues.',
+          // start nodes can also declare servers in the spec
+          servers: [{ name: 'github-mcp-server', tools: ['issue_read'] }],
+        },
+        { key: 'step', type: 'process', model: 'gpt-4o', prompt: 'Do work.', servers: [] },
+        { key: 'end', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'step' },
+        { from: 'step', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const startNode = flow!.nodes.find((n) => n.type === 'start')!;
+    expect(startNode.data.properties!.promptTemplate).toBe(
+      'You can use ${tool:github-mcp-server__issue_read} for issues.'
+    );
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
   });
 });

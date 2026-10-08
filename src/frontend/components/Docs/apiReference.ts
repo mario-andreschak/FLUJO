@@ -45,7 +45,61 @@ export interface ApiGroup {
   endpoints: ApiEndpoint[];
 }
 
+/**
+ * Render an endpoint for the selected workspace without URL-normalizing path
+ * placeholders such as `{conversationId}`. Default-workspace keeps the legacy
+ * compact spelling; sibling workspaces are always explicit so a copied example
+ * cannot silently fall back to default-workspace.
+ */
+export function workspaceAwareEndpointPath(path: string, workspace: string): string {
+  if (!workspace || workspace === 'default-workspace') return path;
+  const hashAt = path.indexOf('#');
+  const beforeHash = hashAt >= 0 ? path.slice(0, hashAt) : path;
+  const hash = hashAt >= 0 ? path.slice(hashAt) : '';
+  const separator = beforeHash.includes('?') ? '&' : '?';
+  return `${beforeHash}${separator}workspace=${encodeURIComponent(workspace)}${hash}`;
+}
+
+/** Header form for SDKs whose base URL cannot safely carry a query string. */
+export function workspaceHeaderForReference(workspace: string): string | null {
+  return !workspace || workspace === 'default-workspace'
+    ? null
+    : `x-flujo-workspace: ${workspace}`;
+}
+
 export const API_GROUPS: ApiGroup[] = [
+  {
+    id: 'workspaces',
+    name: 'Workspaces',
+    description: 'Installation-wide workspace administration. Logical workspaces are not separate user accounts.',
+    endpoints: [
+      { method: 'GET', path: '/api/workspaces', summary: 'List available workspaces and the default workspace.', response: '{ workspaces, defaultWorkspace }', notes: ['Returns 503 while the workspace layout is unavailable.'] },
+      { method: 'POST', path: '/api/workspaces', summary: 'Create an empty workspace.', paramsLabel: 'Body', params: [{ name: 'name', type: 'string', required: true, description: '1–64 letters, numbers, underscores, or hyphens; start with an alphanumeric character.' }], response: '201 { workspace, workspaces }' },
+      { method: 'PATCH', path: '/api/workspaces', summary: 'Rename a workspace or update its configured filesystem roots.', notes: ['Body contains name, newName, and optional roots. Mutation conflicts are reported without silently switching workspace ownership.'] },
+      { method: 'DELETE', path: '/api/workspaces', summary: 'Delete a non-default workspace and its stored data.', notes: ['Body contains name. Back up needed data first; this is an administrative operation.'] },
+    ],
+  },
+  {
+    id: 'tickets',
+    name: 'Tickets',
+    description: 'Workspace-scoped messages and follow-up tasks left by agents.',
+    endpoints: [
+      { method: 'GET', path: '/api/tickets', summary: 'List tickets with status, label, search, limit, and offset filters.', notes: ['presence=1 returns a count for the selected status. Requires local access and an unlocked workspace.'] },
+      { method: 'POST', path: '/api/tickets', summary: 'Create a ticket using the current ticket input schema.', response: '201 ticket or 400 validation error.' },
+      { method: 'DELETE', path: '/api/tickets', summary: 'Delete tickets by ID.', notes: ['Body: { ids: string[] }, at most 500 IDs.'] },
+    ],
+  },
+  {
+    id: 'persistent-agents',
+    name: 'Personas and Roles (experimental)',
+    description: 'Persistent agents and reusable role definitions. These are guarded administration endpoints, not ordinary OpenAI-compatible model calls.',
+    endpoints: [
+      { method: 'GET', path: '/v1/personas', summary: 'List Personas in the selected workspace.' },
+      { method: 'POST', path: '/v1/personas', summary: 'Create a Persona from a Role using the current Persona factory schema.', notes: ['Requires local access and an unlocked workspace. Invalid configuration returns 400; missing role version returns 404; conflicts return 409.'] },
+      { method: 'GET', path: '/v1/roles', summary: 'List role definitions, versions, and public role projections.', notes: ['includeArchived=true includes archived definitions.'] },
+      { method: 'POST', path: '/v1/roles', summary: 'Create a Role using the current role administration schema.', notes: ['Requires local access and an unlocked workspace. Consult the source-derived inventory for lifecycle and goal child routes.'] },
+    ],
+  },
   {
     id: 'openai',
     name: 'Chat — OpenAI-compatible',
@@ -112,7 +166,7 @@ export const API_GROUPS: ApiGroup[] = [
         paramsLabel: 'Body',
         params: [{ name: 'flowId', type: 'string', description: 'New flow id (PATCH only).' }],
         response:
-          'Conversation with messages, plus usage (token totals, per-node breakdown), status, and contextInfo (latest prompt-token count + the bound model\'s context window — what the chat token counter and context meter display).',
+          'Conversation with messages, plus usage (accumulated input/output totals, including cached input, and per-node breakdown), status, and contextInfo (latest individual model request and context limit, when available). contextWindowSource distinguishes runtime-reported limits from model settings. Context counts are omitted when unknown; accumulated agent usage is never a context measurement.',
         notes: [
           'Messages are a projection of the append-only conversation log when one exists (legacy conversations without a log are served as stored). Node system prompts are never included.',
           'Subflow steps appear inline as depth-tagged, display-only messages (nested in the chat UI); they are never part of the parent\'s model context.',
@@ -269,9 +323,9 @@ export const API_GROUPS: ApiGroup[] = [
   },
   {
     id: 'planned-executions',
-    name: 'Planned Executions',
+    name: 'Automation — Triggers',
     description:
-      'Run flows headlessly on triggers: schedules (cron), inbound webhooks, and more. Managed from the Executions page; each run is recorded in a per-execution run history.',
+      'Run flows headlessly on triggers: schedules (cron), inbound webhooks, and more. Managed from Automation > Triggers; each run is recorded in a per-trigger run history. The compatibility API remains /api/planned-executions.',
     endpoints: [
       {
         method: 'GET',
@@ -416,7 +470,7 @@ export const API_GROUPS: ApiGroup[] = [
         alsoMethods: ['GET', 'DELETE'],
         path: '/mcp-flows',
         summary:
-          'MCP server with two tool families. Flow tools: one per saved flow (name = slug of the flow name; input = a single "input" string sent as the user turn; runs are ephemeral and never appear in the chat sidebar). Authoring tools: list_flow_building_blocks (models, MCP servers + tools, and existing flows a spec may reference — call first), validate_flow_spec (compile + validate without saving; iterate on the returned issues), create_flow (compile + validate + save; only saves when validation finds zero errors), plus capability acquisition: search_mcp_marketplace (search the public registry) and install_mcp_server (install + connect a registry server — downloads and RUNS third-party packages on the FLUJO host; required keys can be passed via its env argument). The FlowSpec format is documented on POST /api/flow/compile above and inside the tools\' own descriptions.',
+          'MCP server with flow tools plus authoring and connector acquisition. find_mcp_server and find_best_mcp_server are read-only discovery tools. install_mcp_server installs a specified Registry name, GitHub URL, hosted URL, command, server.json, or MCP config; install_best_mcp_server researches and installs for a capability. Install tools may download and run third-party code and remain consent-gated and audited. The FlowSpec format is documented on POST /api/flow/compile and in the tools\' descriptions.',
         response: 'MCP JSON-RPC over Streamable HTTP (handled by your MCP client, not called directly).',
       },
     ],

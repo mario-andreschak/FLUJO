@@ -1,8 +1,9 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * Registry account auth (issue #197): sign up / log in / log out / status.
  *
  *   GET    -> masked account status
- *   POST   -> { action: 'signup' | 'login', email, password }
+ *   POST   -> { action: 'signup' | 'login', email, password, handle? } (handle required for signup)
  *   DELETE -> log out (clears stored tokens)
  *
  * Local-only + unlock-gated (secrets at rest). NOT on the middleware public
@@ -17,7 +18,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/registry/auth/route');
 
-export async function GET() {
+async function GET_handler(_request: Request) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   try {
@@ -28,7 +29,7 @@ export async function GET() {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -45,6 +46,7 @@ export async function POST(request: NextRequest) {
   const action = raw.action;
   const email = typeof raw.email === 'string' ? raw.email.trim() : '';
   const password = typeof raw.password === 'string' ? raw.password : '';
+  const handle = typeof raw.handle === 'string' ? raw.handle.trim() : '';
 
   if (action !== 'signup' && action !== 'login') {
     return NextResponse.json({ error: "action must be 'signup' or 'login'" }, { status: 400 });
@@ -52,9 +54,12 @@ export async function POST(request: NextRequest) {
   if (!email || !password) {
     return NextResponse.json({ error: 'email and password are required' }, { status: 400 });
   }
+  if (action === 'signup' && !handle) {
+    return NextResponse.json({ error: 'handle is required for signup' }, { status: 400 });
+  }
 
   try {
-    const result = await authenticate(email, password, action as RegistryAuthAction);
+    const result = await authenticate(email, password, action as RegistryAuthAction, handle);
     const httpStatus = result.status === 'error' ? 400 : 200;
     return NextResponse.json(result, { status: httpStatus });
   } catch (err) {
@@ -63,7 +68,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function DELETE(request: NextRequest) {
+async function DELETE_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -76,3 +81,12 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to log out' }, { status: 500 });
   }
 }
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

@@ -13,20 +13,35 @@ services:
     # image: ghcr.io/mario-andreschak/flujo:latest
     ports:
       - "127.0.0.1:4200:4200"
+      # MCP Apps transport for isolated `<originKey>.localhost` browser origins.
+      - "127.0.0.1:4201:4201"
     volumes:
-      # User data persists across `down`/`up` in named volumes.
-      - flujo-db:/app/db
-      - flujo-mcp-servers:/app/mcp-servers
+      # Persist the complete workspace namespace, including non-default
+      # workspaces and runtime artifacts. The two established volume names are
+      # intentionally reused at their new default-workspace paths, so upgrading
+      # an existing Compose install exposes its old DB and MCP clones directly
+      # in the migrated layout without renaming a Docker mount point or copying
+      # secrets through the container layer. These mounts do not hide
+      # /app/mcp-servers, which contains the immutable offline built-ins.
+      - flujo-workspaces:/app/data/workspaces
+      - flujo-db:/app/data/workspaces/default-workspace/db
+      - flujo-mcp-servers:/app/data/workspaces/default-workspace/mcp-servers
       # To use the fileWatch trigger, bind-mount the watched host folder, e.g.:
       # - /path/on/host/watched:/data/watched
+      # To browse host files via the filesystem file-browser MCP App, bind-mount a
+      # host directory and uncomment FLUJO_FS_ROOTS below, e.g.:
+      # - /path/on/host/files:/data/files:ro
     # Uncomment to pass configuration into the container:
     # environment:
     #   # Trust a private/corporate CA for MCP servers over HTTPS (mount the file too):
     #   - FLUJO_EXTRA_CA_CERTS=/certs/root-ca.crt
     #   # Claude Subscription in-container (generate on the host with `claude setup-token`):
     #   - CLAUDE_CODE_OAUTH_TOKEN=...
+    #   # Filesystem roots for the in-chat file-browser MCP tool (matches bind-mount above):
+    #   - FLUJO_FS_ROOTS=/data/files
     restart: unless-stopped
 
 volumes:
+  flujo-workspaces:
   flujo-db:
   flujo-mcp-servers:

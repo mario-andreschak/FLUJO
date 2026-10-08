@@ -1,0 +1,187 @@
+{
+  "alphaPresenceMeaning": "True means the PNG has an embedded alpha channel according to its decoded pixel format; it does not guarantee visibly transparent pixels.",
+  "issues": [
+    "flujo-logo.png has no alpha channel. Its checkerboard is baked into the image outside the teal medallion, so apply a circular CSS mask or clip-path.",
+    "The user-supplied home, MCP marketplace, and flow dashboard references are preserved alongside newer README captures. Filenames ending in -current identify the newer versions where both exist.",
+    "flujo-flows-dashboard-current.png is a tall scrolling capture and should be placed in a clipped viewport before camera or scroll animation.",
+    "flujo-whatsapp-demo.png is only 361 x 240 and is best used as a small inset rather than a full-screen plate."
+  ],
+  "assets": [
+    {
+      "filename": "flujo-logo.png",
+      "purpose": "User-supplied FLUJO medallion and primary brand reveal source.",
+      "width": 1024,
+      "height": 1024,
+      "alphaPresence": false,
+      "suggestedScene": "Center-of-gravity reveal at 0:24 and final end-card mark at 2:38."
+    },
+    {
+      "filename": "flujo-home.png",
+      "purpose": "User-supplied FLUJO home-screen reference.",
+      "width": 1286,
+      "height": 889,
+      "alphaPresence": true,
+      "suggestedScene": "Final zoom-out into the recognizable FLUJO application shell."
+    },
+    {
+      "filename": "flujo-home-current.png",
+      "purpose": "Current README home-screen capture with the latest application styling.",
+      "width": 1440,
+      "height": 900,
+      "alphaPresence": false,
+      "suggestedScene": "Current app-shell reference for the final ecosystem reveal."
+    },
+    {
+      "filename": "flujo-mcp-marketplace.png",
+      "purpose": "User-supplied MCP Marketplace reference showing discoverable servers.",
+      "width": 1287,
+      "height": 750,
+      "alphaPresence": false,
+      "suggestedScene": "MCP-server expansion during the FLUJO system-map assembly."
+    },
+    {
+      "filename": "flujo-mcp-marketplace-current.png",
+      "purpose": "Current README MCP Marketplace capture.",
+      "width": 1440,
+      "height": 900,
+      "alphaPresence": false,
+      "suggestedScene": "Brief UI plate behind the MCP-server constellation at 0:38-0:46."
+    },
+    {
+      "filename": "flujo-flows-dashboard.png",
+      "purpose": "User-supplied Flow Dashboard reference with a grid of compact flow cards.",
+      "width": 1480,
+      "height": 819,
+      "alphaPresence": true,
+      "suggestedScene": "Build-a-team transition as one flow compacts and more flows appear."
+    },
+    {
+      "filename": "flujo-flows-dashboard-current.png",
+      "purpose": "Current README Flow Dashboard scrolling capture.",
+      "width": 1425,
+      "height": 1712,
+      "alphaPresence": false,
+      "suggestedScene": "Clipped scrolling dashboard texture during the build-a-team scene."
+    },
+    {
+      "filename": "flujo-workflow-reference.png",
+      "purpose": "User-supplied workflow canvas reference with process, MCP, subflow, event, start, and finish nodes.",
+      "width": 1251,
+      "height": 733,
+      "alphaPresence": true,
+      "suggestedScene": "Primary visual reference for the animated flow construction at 0:46-1:14."
+    },
+    {
+      "filename": "flujo-flow-builder.png",
+      "purpose": "Current README flow-builder canvas capture.",
+      "width": 1440,
+      "height": 900,
+      "alphaPresence": false,
+      "suggestedScene": "Full-canvas plate or styling reference for the control-every-step sequence."
+    },
+    {
+      "filename": "flujo-flow-branching-config.png",
+      "purpose": "Current branching configuration UI reference.",
+      "width": 1480,
+      "height": 819,
+      "alphaPresence": false,
+      "suggestedScene": "Quick config inset while a branch draws itself from the planner."
+    },
+    {
+      "filename": "flujo-flow-subflow-config.png",
+      "purpose": "Current subflow configuration UI reference.",
+      "width": 1480,
+      "height": 819,
+      "alphaPresence": true,
+      "suggestedScene": "Visual reference when an entire workflow becomes a reusable subflow."
+    },
+    {
+      "filename": "flujo-chat-debugger.png",
+      "purpose": "Current chat debugger capture showing interactive flow execution.",
+      "width": 1480,
+      "height": 819,
+      "alphaPresence": true,
+      "suggestedScene": "Primary UI reference for the interactive chat and breakpoint scene at 1:56."
+    },
+    {
+      "filename": "flujo-chat-handoff.png",
+      "purpose": "Current chat handoff capture showing work passed between agents.",
+      "width": 1480,
+      "height": 819,
+      "alphaPresence": true,
+      "suggestedScene": "Short insert as research hands work to implementation and QA."
+    },
+    {
+      "filename": "flujo-planned-executions.png",
+      "purpose": "Current planned-executions list showing scheduled or automated work.",
+      "width": 1440,
+      "height": 900,
+      "alphaPresence": false,
+      "suggestedScene": "Background UI plate for the triggers and headless execution scene."
+    },
+    {
+      "filename": "flujo-planned-execution-new.png",
+      "purpose": "Current new planned-execution form.",
+      "width": 1381,
+      "height": 849,
+      "alphaPresence": true,
+      "suggestedScene": "Brief inset as schedule and event trigger cards are configured."
+    },
+    {
+      "filename": "flujo-planned-execution-detail.png",
+      "purpose": "Current planned-execution detail and run-history view.",
+      "width": 1381,
+      "height": 849,
+      "alphaPresence": true,
+      "suggestedScene": "Run-history insert after automated flows light up and complete."
+    },
+    {
+      "filename": "flujo-settings.png",
+      "purpose": "Current settings capture for security and integration configuration.",
+      "width": 1425,
+      "height": 964,
+      "alphaPresence": false,
+      "suggestedScene": "Security and external-app integration reference near the vault and final app reveal."
+    },
+    {
+      "filename": "flujo-models.png",
+      "purpose": "Current models screen showing configured model providers.",
+      "width": 1440,
+      "height": 900,
+      "alphaPresence": false,
+      "suggestedScene": "Models constellation and subscription/API/local-model setup sequence."
+    },
+    {
+      "filename": "flujo-model-edit.png",
+      "purpose": "Current model configuration editor reference.",
+      "width": 1286,
+      "height": 749,
+      "alphaPresence": false,
+      "suggestedScene": "Fast configuration inset when model cards bind to credentials."
+    },
+    {
+      "filename": "flujo-mcp-server-setup.png",
+      "purpose": "Current MCP server setup form reference.",
+      "width": 1284,
+      "height": 748,
+      "alphaPresence": false,
+      "suggestedScene": "Configure-once inset before MCP servers fan out to external apps."
+    },
+    {
+      "filename": "flujo-mcp-tool-tester.png",
+      "purpose": "Current MCP tool tester capture.",
+      "width": 1480,
+      "height": 819,
+      "alphaPresence": false,
+      "suggestedScene": "Tool-permission sequence where only two of five tools are enabled."
+    },
+    {
+      "filename": "flujo-whatsapp-demo.png",
+      "purpose": "Current small WhatsApp integration demo capture.",
+      "width": 361,
+      "height": 240,
+      "alphaPresence": true,
+      "suggestedScene": "Small trigger-card inset for a new WhatsApp message event."
+    }
+  ]
+}

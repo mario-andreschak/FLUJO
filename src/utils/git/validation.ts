@@ -18,7 +18,6 @@ export function isSafeRepoUrl(url: unknown): boolean {
   // Anything starting with '-' could be interpreted as a git option.
   if (trimmed.startsWith('-')) return false;
   // No embedded whitespace or control characters in a remote URL.
-  // eslint-disable-next-line no-control-regex
   if (/[\s\x00-\x1f]/.test(trimmed)) return false;
   // scp-like syntax: user@host:path (no scheme). Host and user are restricted to
   // hostname-safe characters; the path must not look like an option.
@@ -43,7 +42,6 @@ export function isSafeBranchName(branch: unknown): boolean {
   const trimmed = branch.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('-')) return false;
-  // eslint-disable-next-line no-control-regex
   if (/[\s\x00-\x1f]/.test(trimmed)) return false;
   return true;
 }

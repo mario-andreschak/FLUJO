@@ -8,6 +8,17 @@ import path from 'path';
 import os from 'os';
 import { promises as fsp } from 'fs';
 import type { Flow } from '@/shared/types/flow';
+// This suite models collections in memory; disk ownership/concurrency is covered
+// by personaOwnedFlows.test.ts against the real authoring boundary.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { clearFlowCache: jest.fn() },
@@ -26,6 +37,8 @@ jest.mock('@/utils/storage/backend', () => ({
     if (collections[c]) delete collections[c][id];
   }),
   listCollectionItems: jest.fn(async (c: string) => Object.values(collections[c] ?? {})),
+  listCollectionItemsWithStats: jest.fn(async (c: string) =>
+    Object.values(collections[c] ?? {}).map((item) => ({ item, mtimeMs: 1 }))),
   assertSafeCollectionId: jest.fn((id: string) => {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
       throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);
@@ -34,20 +47,23 @@ jest.mock('@/utils/storage/backend', () => ({
   migrateArrayFileToCollection: jest.fn(async () => 0),
 }));
 
-// wipeFlowVersions removes the history directory on the real filesystem —
-// point the data dir at a temp location so tests never touch the repo's db/.
-jest.mock('@/utils/paths', () => {
-  const actual = jest.requireActual('@/utils/paths');
-  return {
-    ...actual,
-    getDataDir: () =>
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('path').join(require('os').tmpdir(), 'flujo-flowversions-test'),
-  };
-});
-
 import { FlowService } from '@/backend/services/flow';
 import { MAX_VERSIONS_PER_FLOW } from '@/backend/services/flow/flowVersions';
+
+let testDataDir: string;
+let priorDataDir: string | undefined;
+
+beforeAll(async () => {
+  priorDataDir = process.env.FLUJO_DATA_DIR;
+  testDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-flowversions-test-'));
+  process.env.FLUJO_DATA_DIR = testDataDir;
+});
+
+afterAll(async () => {
+  if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
+  else process.env.FLUJO_DATA_DIR = priorDataDir;
+  await fsp.rm(testDataDir, { recursive: true, force: true });
+});
 
 const flowFixture = (id: string, name: string, label = 'Start Node'): Flow =>
   ({
@@ -88,6 +104,80 @@ describe('flow version history', () => {
     await svc.saveFlow(flowFixture('f1', 'one'));
     await svc.saveFlow(flowFixture('f1', 'one'));
     expect(await svc.listFlowVersions('f1')).toEqual([]);
+  });
+
+  it('canonicalizes a legacy-only save without creating alias-only history', async () => {
+    const rules = [{ effect: 'deny', action: 'question', resource: '*' }];
+    (collections.flows ??= {}).f1 = {
+      ...flowFixture('f1', 'one'),
+      permissionRules: rules,
+    };
+    const incoming = {
+      ...flowFixture('f1', 'one'),
+      behaviorRules: rules,
+    } as Flow;
+
+    const svc = new FlowService();
+    expect((await svc.saveFlow(incoming)).success).toBe(true);
+
+    expect(await svc.listFlowVersions('f1')).toEqual([]);
+    expect(collections.flows.f1).toMatchObject({ behaviorRules: rules });
+    expect(collections.flows.f1).not.toHaveProperty('permissionRules');
+  });
+
+  it('normalizes historical legacy version records on read', async () => {
+    const rules = [{ effect: 'deny', action: 'question', resource: '*' }];
+    (collections['flow-versions/f1'] ??= {}).legacy = {
+      versionId: 'legacy',
+      flowId: 'f1',
+      savedAt: 1,
+      flow: {
+        ...flowFixture('f1', 'one'),
+        permissionRules: rules,
+      },
+    };
+
+    const record = await new FlowService().getFlowVersion('f1', 'legacy');
+    expect(record?.flow.behaviorRules).toEqual(rules);
+    expect(record?.flow).not.toHaveProperty('permissionRules');
+  });
+
+  it('backs up and idempotently migrates legacy Behavior-rule fields', async () => {
+    const rules = [{ effect: 'deny', action: 'question', resource: '*' }];
+    (collections.flows ??= {}).legacy = {
+      ...flowFixture('legacy', 'legacy'),
+      permissionRules: rules,
+    };
+    collections.flows.canonical = {
+      ...flowFixture('canonical', 'canonical'),
+      behaviorRules: rules,
+    };
+    collections.flows.conflict = {
+      ...flowFixture('conflict', 'conflict'),
+      behaviorRules: rules,
+      permissionRules: [{ effect: 'allow', action: 'question', resource: '*' }],
+    };
+
+    const svc = new FlowService();
+    await expect(svc.migrateBehaviorRulesField()).resolves.toEqual({
+      migrated: 1,
+      alreadyCanonical: 1,
+      failed: 1,
+      failedFlowIds: ['conflict'],
+    });
+    expect(collections.flows.legacy).toMatchObject({ behaviorRules: rules });
+    expect(collections.flows.legacy).not.toHaveProperty('permissionRules');
+    expect(collections['flow-behavior-rules-backups'].legacy).toMatchObject({
+      flowId: 'legacy',
+      flow: { permissionRules: rules },
+    });
+
+    await expect(svc.migrateBehaviorRulesField()).resolves.toEqual({
+      migrated: 0,
+      alreadyCanonical: 2,
+      failed: 1,
+      failedFlowIds: ['conflict'],
+    });
   });
 
   it('lists versions newest first', async () => {
@@ -147,7 +237,7 @@ describe('flow version history', () => {
 
   it('deleteFlow removes the version-history directory', async () => {
     const svc = new FlowService();
-    const dir = path.join(os.tmpdir(), 'flujo-flowversions-test', 'db', 'flow-versions', 'f1');
+    const dir = path.join(getWorkspaceDataDir(), 'db', 'flow-versions', 'f1');
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(path.join(dir, 'marker.json'), '{}');
 

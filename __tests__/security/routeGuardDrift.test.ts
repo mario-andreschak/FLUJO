@@ -21,7 +21,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { config as middlewareConfig } from '@/middleware';
+import { config as middlewareConfig } from '@/proxy';
 import {
   isPublicApiPath,
   PUBLIC_API_EXACT_PATHS,

@@ -39,7 +39,7 @@ describe('sanitizeBugContext', () => {
       installMode: 'git',
       os: 'Windows',
       browser: 'Chrome',
-      mcpServerNames: ['a', 'b', 5],
+      mcpServerNames: ['legacy-server', 'another-server'],
       pageUrl: '/chat#thread',
       timestamp: '2026-07-17T18:00:00.000Z',
       apiKey: 'sk-SECRET',
@@ -50,12 +50,13 @@ describe('sanitizeBugContext', () => {
       installMode: 'git',
       os: 'Windows',
       browser: 'Chrome',
-      mcpServerNames: ['a', 'b'],
       pageUrl: '/chat#thread',
       timestamp: '2026-07-17T18:00:00.000Z',
     });
     expect(JSON.stringify(ctx)).not.toContain('sk-SECRET');
     expect(JSON.stringify(ctx)).not.toContain('shh');
+    expect(JSON.stringify(ctx)).not.toContain('legacy-server');
+    expect(JSON.stringify(ctx)).not.toContain('another-server');
   });
 
   it('coerces missing/garbage input to safe defaults', () => {
@@ -64,7 +65,6 @@ describe('sanitizeBugContext', () => {
       installMode: 'unknown',
       os: 'unknown',
       browser: 'unknown',
-      mcpServerNames: [],
       pageUrl: 'unknown',
       timestamp: 'unknown',
     });

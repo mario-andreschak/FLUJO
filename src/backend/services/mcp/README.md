@@ -139,6 +139,10 @@ await mcpService.deleteServerConfig('serverName');
 - `updateServerConfig(serverName, updates)`: Update a server configuration
 - `deleteServerConfig(serverName)`: Delete a server configuration
 
+#### Experimental MCP Skills
+
+Skills are default-off per server (`enableMcpSkills`). The service validates the negotiated `io.modelcontextprotocol/skills` extension before exposing `listServerSkills`, `getServerSkill`, `readVerifiedSkillResource`, or `loadVerifiedSkill`. The adapter is frozen to `SEP-2640@a3e147ca2710f68214247aecc729731ee1ae8d03`; remote text remains provenance-labelled, untrusted content and is never inserted into Persona instructions automatically. See `docs/features/mcp-skills.md`.
+
 #### Tool Management
 
 - `listServerTools(serverName)`: List tools available from an MCP server

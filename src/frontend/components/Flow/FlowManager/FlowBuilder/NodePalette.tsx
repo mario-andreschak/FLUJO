@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useCallback } from 'react';
-import { styled, useTheme } from '@mui/material/styles';
-import { Paper, Typography, Box } from '@mui/material';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { alpha, styled } from '@mui/material/styles';
+import { Paper, Typography, Box, InputAdornment, TextField } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import { NodeType } from '@/frontend/types/flow/flow';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -10,7 +10,15 @@ import OutputIcon from '@mui/icons-material/Output';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
-import { RESOURCE_COLOR, SIGNAL_COLOR } from './CustomNodes';
+import BoltIcon from '@mui/icons-material/Bolt';
+import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
+import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT, STATIC_COLOR, STATIC_COLOR_LIGHT } from './CustomNodes';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { getNodeTypes } from './nodeTypeCatalog';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -18,24 +26,47 @@ const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
 const COMPONENT_NAME = 'NodePalette';
 
 const PaletteContainer = styled(Paper)(({ theme }) => ({
-  padding: theme.spacing(2),
-  width: '200px',
-  height: '80vh', // Match Canvas height
+  padding: theme.spacing(1.4),
+  width: '218px',
+  height: '100%',
+  minHeight: 0,
+  flexShrink: 0,
   display: 'flex',
   flexDirection: 'column',
-  gap: theme.spacing(2),
+  gap: theme.spacing(1.2),
+  overflowY: 'auto',
+  border: `1px solid ${theme.palette.divider}`,
+  borderRadius: 16,
+  backgroundColor: theme.palette.mode === 'dark'
+    ? 'rgba(17, 22, 41, 0.86)'
+    : 'rgba(255, 255, 255, 0.9)',
+  boxShadow: theme.palette.mode === 'dark'
+    ? '0 16px 45px rgba(0,0,0,.22)'
+    : '0 16px 45px rgba(49,45,99,.09)',
+  backdropFilter: 'blur(18px)',
+  [theme.breakpoints.down('md')]: {
+    width: '100%',
+    height: '68px',
+    padding: theme.spacing(0.65),
+    gap: theme.spacing(0.6),
+    alignItems: 'flex-start',
+    overflowX: 'auto',
+    overflowY: 'hidden',
+  },
 }));
 
 const NodeItem = styled(Paper, {
   shouldForwardProp: (prop) => prop !== 'nodeType',
 })<{ nodeType: NodeType }>(({ theme, nodeType }) => ({
-  padding: theme.spacing(1.5),
-  minWidth: '180px',
-  borderRadius: '8px',
-  backgroundColor: theme.palette.background.paper,
-  border: `2px solid ${
+  padding: theme.spacing(1.25),
+  width: '100%',
+  minWidth: 0,
+  borderRadius: '12px',
+  backgroundColor: alpha(theme.palette.background.paper, 0.72),
+  border: `1px solid ${theme.palette.divider}`,
+  borderLeft: `3px solid ${
     nodeType === 'process'
-      ? theme.palette.secondary.main
+      ? theme.palette.primary.main
       : nodeType === 'finish'
       ? theme.palette.success.main
       : nodeType === 'subflow'
@@ -44,15 +75,20 @@ const NodeItem = styled(Paper, {
       ? RESOURCE_COLOR
       : nodeType === 'signal'
       ? SIGNAL_COLOR
+      : nodeType === 'trigger'
+      ? TRIGGER_COLOR
+      : nodeType === 'static'
+      ? STATIC_COLOR
       : theme.palette.info.main
   }`,
-  boxShadow: theme.shadows[2],
-  transition: 'all 0.2s ease',
+  boxShadow: 'none',
+  transition: 'transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease',
   cursor: 'grab',
   '&:hover': {
-    boxShadow: `0 0 0 1px ${
+    transform: 'translateY(-2px)',
+    borderColor: alpha(
       nodeType === 'process'
-        ? theme.palette.secondary.main
+        ? theme.palette.primary.main
         : nodeType === 'finish'
         ? theme.palette.success.main
         : nodeType === 'subflow'
@@ -61,11 +97,44 @@ const NodeItem = styled(Paper, {
         ? RESOURCE_COLOR
         : nodeType === 'signal'
         ? SIGNAL_COLOR
+        : nodeType === 'trigger'
+        ? TRIGGER_COLOR
+        : nodeType === 'static'
+        ? STATIC_COLOR
+        : theme.palette.info.main,
+      0.55,
+    ),
+    boxShadow: `0 0 0 1px ${
+      nodeType === 'process'
+        ? theme.palette.primary.main
+        : nodeType === 'finish'
+        ? theme.palette.success.main
+        : nodeType === 'subflow'
+        ? theme.palette.warning.main
+        : nodeType === 'resource'
+        ? RESOURCE_COLOR
+        : nodeType === 'signal'
+        ? SIGNAL_COLOR
+        : nodeType === 'trigger'
+        ? TRIGGER_COLOR
+        : nodeType === 'static'
+        ? STATIC_COLOR
         : theme.palette.info.main
-    }, 0 3px 10px rgba(0,0,0,0.1)`
+    }, 0 14px 30px rgba(0,0,0,0.12)`
   },
   '&:active': {
     cursor: 'grabbing',
+  },
+  [theme.breakpoints.down('md')]: {
+    width: 64,
+    minWidth: 64,
+    minHeight: 54,
+    padding: theme.spacing(0.55),
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: 2,
   },
 }));
 
@@ -77,7 +146,7 @@ const NodeHeader = styled(Box, {
   justifyContent: 'space-between',
   borderBottom: `1px solid ${
     nodeType === 'process'
-      ? theme.palette.secondary.light
+      ? theme.palette.primary.light
       : nodeType === 'finish'
       ? theme.palette.success.light
       : nodeType === 'subflow'
@@ -86,92 +155,95 @@ const NodeHeader = styled(Box, {
       ? '#4DB6AC' // RESOURCE_COLOR light
       : nodeType === 'signal'
       ? '#B39DDB' // SIGNAL_COLOR light
+      : nodeType === 'trigger'
+      ? TRIGGER_COLOR_LIGHT
+      : nodeType === 'static'
+      ? STATIC_COLOR_LIGHT
       : theme.palette.info.light
   }`,
   marginBottom: theme.spacing(1),
   paddingBottom: theme.spacing(0.5),
+  [theme.breakpoints.down('md')]: {
+    width: '100%',
+    marginBottom: 0,
+    paddingBottom: 0,
+    borderBottom: 0,
+    justifyContent: 'center',
+  },
 }));
 
-const NodeContent = styled(Box)({
+const NodeContent = styled(Box)(({ theme }) => ({
   display: 'flex',
   alignItems: 'center',
   gap: '8px',
-});
-
-const nodeTypes: Array<{
-  type: NodeType;
-  label: string;
-  description: string;
-}> = [
-  // Start node is automatically added to new flows and not available in the palette
-  {
-    type: 'process',
-    label: 'Process Node',
-    description: 'Let a LLM do your work',
+  [theme.breakpoints.down('md')]: {
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: 2,
   },
-  {
-    type: 'finish',
-    label: 'Finish Node',
-    description: 'End your flow here',
-  },
-  {
-    type: 'mcp',
-    label: 'MCP Node',
-    description: 'Add functionality',
-  },
-  {
-    type: 'subflow',
-    label: 'Subflow Node',
-    description: 'Run another flow as a step',
-  },
-  {
-    type: 'resource',
-    label: 'Resource Node',
-    description: 'A data artifact steps read or write',
-  },
-  {
-    type: 'signal',
-    label: 'Signal Node',
-    description: 'Emit a named signal to trigger another flow',
-  },
-];
+}));
 
 // Helper function to get the appropriate icon for each node type
 const getNodeIcon = (type: NodeType) => {
   switch (type) {
     case 'process':
-      return <SettingsIcon color="secondary" />;
+      return <MemoryRoundedIcon color="primary" />;
     case 'finish':
       return <OutputIcon color="success" />;
     case 'mcp':
-      return <SettingsIcon color="info" />;
+      return <ExtensionRoundedIcon color="info" />;
     case 'subflow':
       return <AccountTreeIcon color="warning" />;
     case 'resource':
       return <DescriptionIcon sx={{ color: RESOURCE_COLOR }} />;
     case 'signal':
       return <NotificationsActiveIcon sx={{ color: SIGNAL_COLOR }} />;
+    case 'trigger':
+      return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
+    case 'static':
+      return <NoteAddIcon sx={{ color: STATIC_COLOR }} />;
     default:
-      return <SettingsIcon color="secondary" />;
+      return <SettingsIcon color="primary" />;
   }
 };
 
-export const NodePalette: React.FC = () => {
+export const NodePalette: React.FC<{
+  authoringMode?: FlowAuthoringMode;
+  onAddNode?: (nodeType: NodeType) => void;
+}> = ({
+  authoringMode = 'guided',
+  onAddNode,
+}) => {
   log.debug(`${COMPONENT_NAME}: Entering component`);
-  const theme = useTheme();
-  
-  // Handle double-click on a node in the palette
-  const onNodeDoubleClick = useCallback((nodeType: NodeType) => {
-    log.debug(`${COMPONENT_NAME}.onNodeDoubleClick: Double-clicked on ${nodeType} node`);
-    
-    // Create and dispatch a custom event to notify the Canvas component
-    const event = new CustomEvent('addNodeFromPalette', {
-      detail: { nodeType, position: { x: 250, y: 150 } }
-    });
-    document.dispatchEvent(event);
-    
-    log.info(`${COMPONENT_NAME}.onNodeDoubleClick: Dispatched addNodeFromPalette event for ${nodeType} node`);
+  const { t } = useI18n();
+  const nodeTypes = useMemo(() => getNodeTypes(t), [t]);
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const focusQuickAdd = () => {
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    document.addEventListener('openFlowQuickAdd', focusQuickAdd);
+    return () => document.removeEventListener('openFlowQuickAdd', focusQuickAdd);
   }, []);
+
+  // Add a node from touch, pointer, or keyboard without requiring drag support.
+  const addNodeFromPalette = useCallback((nodeType: NodeType) => {
+    log.debug(`${COMPONENT_NAME}.addNodeFromPalette: Adding ${nodeType} node`);
+    onAddNode?.(nodeType);
+    log.info(`${COMPONENT_NAME}.addNodeFromPalette: Requested ${nodeType} node`);
+  }, [onAddNode]);
+
+  const visibleNodeTypes = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return nodeTypes
+      .filter((node) => authoringMode === 'advanced' || node.type === 'process')
+      .filter((node) => !normalizedQuery || `${node.label} ${node.description} ${node.shortLabel}`
+        .toLowerCase()
+        .includes(normalizedQuery));
+  }, [authoringMode, nodeTypes, query]);
   
   const onDragStart = (event: React.DragEvent, nodeType: NodeType) => {
     log.debug(`${COMPONENT_NAME}.onDragStart: Entering method with nodeType=${nodeType}`);
@@ -182,7 +254,14 @@ export const NodePalette: React.FC = () => {
     
     // Add a drag image to make the drag operation more visible
     const dragPreview = document.createElement('div');
-    dragPreview.innerHTML = `<div style="padding: 10px; background: white; border: 1px solid #ccc; border-radius: 4px;">${nodeType} Node</div>`;
+    const friendlyNode = nodeTypes.find(node => node.type === nodeType);
+    dragPreview.textContent = friendlyNode?.label ?? t('flows.palette.step');
+    Object.assign(dragPreview.style, {
+      padding: '10px',
+      background: 'white',
+      border: '1px solid #ccc',
+      borderRadius: '8px',
+    });
     document.body.appendChild(dragPreview);
     
     log.debug(`${COMPONENT_NAME}.onDragStart: Created drag preview element`);
@@ -212,33 +291,89 @@ export const NodePalette: React.FC = () => {
   log.debug(`${COMPONENT_NAME}: Rendering component`);
   return (
     <PaletteContainer elevation={2}>
-      <Typography variant="h6" gutterBottom>
-        Node Types
-      </Typography>
-      <Box display="flex" flexDirection="column" gap={2}>
-        {nodeTypes.map((node) => (
+      <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <Typography className="node-palette-title" variant="subtitle1" fontWeight={800}>
+          {t('flows.palette.title')}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">A</Typography>
+      </Box>
+      <TextField
+        inputRef={searchRef}
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        size="small"
+        placeholder={t('flows.palette.search')}
+        inputProps={{ 'aria-label': t('flows.palette.searchAria') }}
+        sx={{ display: { xs: 'none', md: 'flex' } }}
+        InputProps={{
+          startAdornment: (
+            <InputAdornment position="start">
+              <SearchRoundedIcon fontSize="small" />
+            </InputAdornment>
+          ),
+        }}
+      />
+      <Box
+        display="flex"
+        flexDirection={{ xs: 'row', md: 'column' }}
+        gap={{ xs: 0.75, md: 1 }}
+        width={{ xs: 'max-content', md: '100%' }}
+      >
+        {visibleNodeTypes.map((node) => (
           <NodeItem
             key={node.type}
             nodeType={node.type}
             elevation={1}
             draggable
+            role="button"
+            tabIndex={0}
+            aria-label={`${node.label}: ${node.description}`}
+            title={`${node.label} â€” ${node.description}`}
             onDragStart={(e) => onDragStart(e, node.type)}
             onDragEnd={(e) => onDragEnd(e, node.type)}
-            onDoubleClick={() => onNodeDoubleClick(node.type)}
+            onClick={() => addNodeFromPalette(node.type)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                addNodeFromPalette(node.type);
+              }
+            }}
           >
             <NodeHeader nodeType={node.type}>
               <NodeContent>
                 {getNodeIcon(node.type)}
-                <Typography variant="subtitle2" fontWeight="bold">
+                <Typography
+                  variant="caption"
+                  fontWeight="bold"
+                  sx={{
+                    display: { xs: '-webkit-box', md: 'none' },
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    WebkitBoxOrient: 'vertical',
+                    WebkitLineClamp: 2,
+                    overflowWrap: 'anywhere',
+                    textAlign: 'center',
+                    fontSize: '0.6rem',
+                    lineHeight: 1,
+                  }}
+                >
+                  {node.shortLabel}
+                </Typography>
+                <Typography variant="subtitle2" fontWeight="bold" sx={{ display: { xs: 'none', md: 'block' } }}>
                   {node.label}
                 </Typography>
               </NodeContent>
             </NodeHeader>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
               {node.description}
             </Typography>
           </NodeItem>
         ))}
+        {visibleNodeTypes.length === 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, py: 1 }}>
+            {t('flows.palette.noMatches')}
+          </Typography>
+        )}
       </Box>
     </PaletteContainer>
   );

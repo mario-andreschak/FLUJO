@@ -2,18 +2,27 @@
 
 This section provides detailed documentation for Flujo's features.
 
+- **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets
+
+## Workspaces
+
+- **[Workspaces](./workspaces.md)**: Independent sets of flows, models, conversations and MCP servers inside one installation — on-disk layout, migration from a pre-workspace install, the optional `workspace` API parameter, and the navbar tabs (Issue #406)
+
 ## Model Context Protocol (MCP)
 
 - **[Overview](./mcp/overview.md)**: Introduction to the Model Context Protocol
 - **[Local Servers](./mcp/local-servers.md)**: Running local MCP servers
 - **[GitHub Servers](./mcp/github-servers.md)**: Using GitHub MCP servers
+- **[Launch-and-connect servers](./mcp/launch-and-connect.md)**: Registry packages you run locally but talk to over HTTP — the `launch` field, loopback-only URL templating, and the ServerModal flow (Issue #392)
 
 ## Flows
 
-- **[Creating Flows](./flows/creating-flows.md)**: How to create and design flows
+- **[Flow Node Types](./flows/README.md)**: Reference guides for individual FlowBuilder nodes
+- **[Static node](./flows/static-node.md)**: Inject authored messages and synthetic tool exchanges into a conversation
 - **[Running Flows](./flows/running-flows.md)**: How to run and monitor flows
 - **[FlowSpec ↔ FlowBuilder UI Coverage](./flowspec-ui-coverage.md)**: Which DSL capabilities the visual FlowBuilder can author vs. what still requires the generator / `POST /api/flow/compile` (Issue #186)
 - **[Flow Templates](./flows/templates.md)**: Using and creating flow templates
+- **[Resumable Subflow Sessions](./subflow-session-scope.md)**: Experimental `per-run` and caller-addressable `per-key` scopes that let a Subflow resume a child conversation across repeat visits inside one parent run (Issue #363/#391)
 
 ### Process Node vs Subflow Node: input/output modes
 
@@ -37,15 +46,16 @@ Informal words people use map to specific, differently-named settings:
 | (full history in)    | **inputMode** default (both)           | `full-history`                             |
 | (subflow output)     | Subflow Node **outputMode**            | `steps` \| `final-only`                    |
 
-`latest-message` means **"everything from the most recent user message onward"** — it
-is **NOT** "the last user message + the last assistant message".
+`latest-message` means the most recent exchange: the last user message plus the last
+settled assistant response after it. Process nodes also retain their current in-flight
+tool tail so an agentic loop can continue safely.
 
 #### Input mode comparison (what the step receives)
 
 | inputMode        | Process Node                                                                 | Subflow Node                                                                                       |
 |------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
 | `full-history`   | The whole assembled context, unchanged.                                      | The whole parent transcript, **sanitized** (see below).                                             |
-| `latest-message` | System prompt(s) + everything from the most recent user message onward, **including the current turn's in-flight tool calls/results**. | The **sanitized** transcript sliced from the most recent user message onward.                       |
+| `latest-message` | System prompt(s) + the most recent exchange, **including the current turn's in-flight tool calls/results**. | The most recent exchange from the **sanitized** transcript.                                         |
 | `isolated`       | System prompt(s) + `isolatedPrompt` as a single synthetic user message; prior conversation dropped. | The parent conversation is ignored; the child receives `promptTemplate`/`prompt` as its only user message. |
 
 **Key difference — Subflow sanitizing:** in *every* history mode, a Subflow node first
@@ -67,11 +77,39 @@ does **not** do this — it keeps the current turn's tool exchange.
   model request; a Subflow node passes `{ messages }` (history modes) or `{ prompt }`
   (isolated) to the child, and the child's final answer is injected back into the
   parent transcript as an assistant message attributed to the node.
-- **Tool-call parameters (opt-in):** an **isolated** Subflow node with
-  `allowCallerPrompt: true` exposes an optional `prompt` argument on its *handoff tool*,
-  so a routing model passes the child's instruction as a tool-call parameter (Issue #96).
-  Likewise `allowCallerFanout: true` exposes a per-call `task` brief for spawning parallel
-  copies (Issue #156). Every other handoff tool stays parameter-less.
+- **Tool-call parameters:** every Subflow handoff tool accepts a `task` for that child
+  job. A routing model may call the same handoff repeatedly in one response; every call
+  is queued. For an isolated Subflow, the configured prompt is the default when `task`
+  is omitted and `task` overrides it when supplied. Process-to-Process handoffs keep
+  their existing caller-prompt behavior.
+
+#### Session scope (experimental)
+
+By default, every visit to a Subflow node starts a brand-new, memory-less child
+conversation. An experimental **session scope** setting lets a node opt into resuming
+the same child conversation across repeat visits within one parent run — useful for
+retry loops (e.g. produce → validate → re-produce) where re-stating the whole task on
+every retry is wasteful. `per-run` keeps one conversation for the node; `per-key` lets
+an incoming Process handoff choose a stable `sessionKey` and later send follow-ups to
+that specific finished child chat. It is off by default and requires both an
+experimental-features toggle and a `sessionScope` set on the node. See
+[Resumable Subflow Sessions](./subflow-session-scope.md) for the full picture, including
+current limitations.
+
+#### Subflow execution queue
+
+A Subflow node references exactly one child flow. One visit is always represented as a
+job queue: an ordinary traversal creates one job, while repeated model handoff calls
+create multiple jobs for that same child.
+
+`Maximum simultaneous children` controls active workers, not accepted work. A value of
+`1` runs jobs sequentially; a higher value runs up to that many in parallel. Additional
+jobs wait in the queue, available worker slots are kept full, and all results are folded
+in request order after the queue drains.
+
+Afterward, graph topology controls the handoff. A terminal Subflow returns to the
+Process node that actually invoked it. A Subflow with an explicit outgoing edge follows
+that successor instead.
 
 #### Worked example (Issue #152)
 
@@ -82,9 +120,8 @@ This is expected behavior, not a bug:
 
 1. The tool calls/results were removed by the Subflow **sanitizer**, which runs in every
    history mode independently of the input mode.
-2. With a single user turn, "from the last user message onward" is effectively the entire
-   (sanitized) conversation — so it looked like "the whole conversation" rather than
-   "last user + last assistant".
+2. With a single user turn, the most recent exchange can look like the entire sanitized
+   conversation even though intermediate assistant turns are dropped.
 
 ## Models
 

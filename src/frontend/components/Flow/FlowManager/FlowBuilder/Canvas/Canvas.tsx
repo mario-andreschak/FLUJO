@@ -1,10 +1,20 @@
 "use client";
 
 import React, { useCallback, forwardRef, useRef, useEffect, useMemo, useState } from 'react';
-import { Modal, Box, Typography } from '@mui/material';
+import {
+  Box,
+  ClickAwayListener,
+  InputAdornment,
+  Paper,
+  Portal,
+  TextField,
+  Typography,
+  useMediaQuery,
+} from '@mui/material';
 import {
   ReactFlow,
   ConnectionLineType,
+  ConnectionMode,
   ReactFlowInstance,
   Connection,
   Edge,
@@ -17,42 +27,61 @@ import {
   useStoreApi,
   OnConnectEnd
 } from '@xyflow/react';
-import { styled, useTheme } from '@mui/material/styles';
+import { alpha, styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode, RESOURCE_COLOR, SIGNAL_COLOR } from '../CustomNodes';
+import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
+import {
+  StartNode,
+  ProcessNode,
+  FinishNode,
+  MCPNode,
+  SubflowNode,
+  ResourceNode,
+  SignalNode,
+  TriggerNode,
+  StaticNode,
+  RESOURCE_COLOR,
+  SIGNAL_COLOR,
+  TRIGGER_COLOR,
+  STATIC_COLOR,
+  FLOW_QUICK_CONNECT_EVENT,
+  type FlowQuickConnectEventDetail,
+} from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge, ResourceEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
-import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
+import { validateConnection, isConnectionAllowed, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
 import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
-import { shouldOpenNodePicker } from './utils/nodePickerGate';
+import { directConfigurationTargetFor, shouldOpenNodePicker } from './utils/nodePickerGate';
 import { findNodeById } from './utils/nodeUtils';
-import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
 import { createLogger } from '@/utils/logger';
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
+import { flowClipboardStorageKey } from '@/frontend/utils/workspaceContentKeys';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/Canvas.tsx');
 
 // Clipboard for copy/paste of nodes. localStorage backs cross-flow paste (and
 // survives reloads); the in-tab variable is the fast path within a session.
-const FLOW_CLIPBOARD_KEY = 'flujo:flowClipboard';
 interface FlowClipboard {
   nodes: FlowNode[];
-  edges: any[];
+  edges: Edge[];
 }
-let flowClipboardMemory: FlowClipboard | null = null;
+const flowClipboardMemory = new Map<string, FlowClipboard>();
 
 // The single write path for the flow clipboard — every copy source must use
 // this so the in-memory and localStorage payloads never diverge.
 function writeFlowClipboard(payload: FlowClipboard) {
-  flowClipboardMemory = payload;
+  flowClipboardMemory.set(getSelectedWorkspace(), payload);
   try {
-    localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
+    localStorage.setItem(flowClipboardStorageKey(), JSON.stringify(payload));
   } catch (err) {
     log.warn('Could not persist flow clipboard to localStorage', err);
   }
@@ -68,6 +97,8 @@ export const nodeTypes = {
   subflow: SubflowNode,
   resource: ResourceNode,
   signal: SignalNode,
+  trigger: TriggerNode,
+  static: StaticNode,
 };
 
 export const edgeTypes = {
@@ -80,16 +111,24 @@ export const edgeTypes = {
 const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   open,
   position,
+  anchorPosition,
   onClose,
   onSelectNodeType,
   sourceNodeType,
   sourceHandleId,
 }) => {
   const theme = useTheme();
+  const { t } = useI18n();
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    if (open) setQuery('');
+  }, [open]);
 
   // Valid target node types come from the shared connection rules, so the
   // picker always agrees with validateConnection.
   const validNodeTypes = validTargetTypesFor(sourceNodeType, sourceHandleId);
+  const directConfigurationTarget = directConfigurationTargetFor(sourceNodeType, sourceHandleId);
 
   // Log the validation for debugging
   log.debug(`NodeSelectionModal: Source node type: ${sourceNodeType}, Source handle ID: ${sourceHandleId}`);
@@ -103,44 +142,59 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   }> = [
     {
       type: 'process',
-      label: 'Process Node',
-      description: 'Let a LLM do your work',
+      label: t('flows.canvas.processNode'),
+      description: t('flows.canvas.processDescription'),
     },
     {
       type: 'finish',
-      label: 'Finish Node',
-      description: 'End your flow here',
+      label: t('flows.canvas.finishNode'),
+      description: t('flows.canvas.finishDescription'),
     },
     {
       type: 'mcp',
-      label: 'MCP Node',
-      description: 'Add functionality',
+      label: t('flows.canvas.mcpNode'),
+      description: t('flows.canvas.mcpDescription'),
     },
     {
       type: 'subflow',
-      label: 'Subflow Node',
-      description: 'Run another flow',
+      label: t('flows.canvas.subflowNode'),
+      description: t('flows.canvas.subflowDescription'),
     },
     {
       type: 'resource',
-      label: 'Resource Node',
-      description: 'A data artifact steps read or write',
+      label: t('flows.canvas.resourceNode'),
+      description: t('flows.canvas.resourceDescription'),
     },
     {
       type: 'signal',
-      label: 'Signal Node',
-      description: 'Emit an event to trigger another flow',
+      label: t('flows.canvas.signalNode'),
+      description: t('flows.canvas.signalDescription'),
+    },
+    {
+      type: 'trigger',
+      label: t('flows.canvas.triggerNode'),
+      description: t('flows.canvas.triggerDescription'),
+    },
+    {
+      type: 'static',
+      label: t('flows.canvas.staticNode'),
+      description: t('flows.canvas.staticDescription'),
     },
   ];
 
   // Filter node types based on validation
-  const availableNodeTypes = allNodeTypes.filter(node => validNodeTypes.includes(node.type));
+  const availableNodeTypes = allNodeTypes
+    .filter(node => validNodeTypes.includes(node.type))
+    .filter(node => {
+      const normalized = query.trim().toLowerCase();
+      return !normalized || `${node.label} ${node.description}`.toLowerCase().includes(normalized);
+    });
 
   // Helper function to get the appropriate icon for each node type
   const getNodeIcon = (type: NodeType) => {
     switch (type) {
       case 'process':
-        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
+        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.primary.main, borderRadius: '50%' }}></div>;
       case 'finish':
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.success.main, borderRadius: '50%' }}></div>;
       case 'mcp':
@@ -151,89 +205,177 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         return <div style={{ width: 24, height: 24, backgroundColor: RESOURCE_COLOR, borderRadius: '50%' }}></div>;
       case 'signal':
         return <div style={{ width: 24, height: 24, backgroundColor: SIGNAL_COLOR, borderRadius: '50%' }}></div>;
+      case 'trigger':
+        return <div style={{ width: 24, height: 24, backgroundColor: TRIGGER_COLOR, borderRadius: '50%' }}></div>;
+      case 'static':
+        return <div style={{ width: 24, height: 24, backgroundColor: STATIC_COLOR, borderRadius: '50%' }}></div>;
       default:
-        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
+        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.primary.main, borderRadius: '50%' }}></div>;
     }
   };
 
-  if (!position) return null;
+  // A one-item MCP/Resource choice is consumed by Canvas and routed directly
+  // to that node's specialized picker; never flash the redundant type picker.
+  if (!open || !position || directConfigurationTarget) return null;
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      aria-labelledby="node-selection-modal"
-    >
-      <Box
-        sx={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 300,
-          bgcolor: 'background.paper',
-          borderRadius: 2,
-          boxShadow: 24,
-          p: 4,
+    <Portal>
+      <ClickAwayListener onClickAway={onClose}>
+        <Paper
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="node-selection-title"
+        elevation={16}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onClose();
+          }
         }}
-      >
-        <Typography variant="h6" component="h2" gutterBottom>
-          Select Node Type
+        sx={{
+          position: 'fixed',
+          top: {
+            xs: 'auto',
+            sm: anchorPosition
+              ? `clamp(12px, ${anchorPosition.y + 10}px, calc(100dvh - 460px))`
+              : '50%',
+          },
+          bottom: { xs: 12, sm: 'auto' },
+          left: {
+            xs: 12,
+            sm: anchorPosition
+              ? `clamp(12px, ${anchorPosition.x + 10}px, calc(100vw - 392px))`
+              : '50%',
+          },
+          right: { xs: 12, sm: 'auto' },
+          transform: { xs: 'none', sm: anchorPosition ? 'none' : 'translate(-50%, -50%)' },
+          zIndex: (muiTheme) => muiTheme.zIndex.modal + 1,
+          width: { xs: 'auto', sm: 380 },
+          maxHeight: 'min(70dvh, 520px)',
+          overflow: 'hidden',
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 3.5,
+          bgcolor: 'background.paper',
+          boxShadow: theme.palette.mode === 'dark'
+            ? '0 28px 80px rgba(0,0,0,.55)'
+            : '0 28px 80px rgba(31,27,74,.22)',
+          p: 1.5,
+        }}
+        >
+        <Typography id="node-selection-title" variant="subtitle1" fontWeight={800}>
+          {t('flows.canvas.addNext')}
         </Typography>
-        <Box display="flex" flexDirection="column" gap={2}>
+        <Typography variant="caption" color="text.secondary">
+          {t('flows.canvas.autoConnect')}
+        </Typography>
+        <TextField
+          autoFocus
+          fullWidth
+          size="small"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={t('flows.canvas.searchTypes')}
+          inputProps={{ 'aria-label': t('flows.canvas.searchTypes') }}
+          sx={{ my: 1.25 }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchRoundedIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <Box display="flex" flexDirection="column" gap={0.75} sx={{ overflowY: 'auto', maxHeight: 360 }}>
           {availableNodeTypes.map((node) => (
-            <Box
+            <Paper
+              component="button"
+              type="button"
               key={node.type}
+              onClick={() => onSelectNodeType(node.type, position)}
               sx={{
-                padding: 2,
-                borderRadius: 1,
-                border: `2px solid ${
-                  node.type === 'process'
-                    ? theme.palette.secondary.main
-                    : node.type === 'finish'
-                    ? theme.palette.success.main
-                    : node.type === 'subflow'
-                    ? theme.palette.warning.main
-                    : node.type === 'resource'
-                    ? RESOURCE_COLOR
-                    : theme.palette.info.main
-                }`,
+                appearance: 'none',
+                width: '100%',
+                p: 1.1,
+                textAlign: 'left',
+                color: 'text.primary',
+                bgcolor: 'transparent',
+                borderRadius: 2.5,
+                border: 1,
+                borderColor: 'divider',
                 cursor: 'pointer',
-                '&:hover': {
-                  boxShadow: 3,
+                transition: 'border-color 160ms ease, background-color 160ms ease, transform 160ms ease',
+                '&:hover, &:focus-visible': {
+                  outline: 'none',
+                  borderColor:
+                    node.type === 'finish'
+                      ? theme.palette.success.main
+                      : node.type === 'subflow'
+                      ? theme.palette.warning.main
+                      : node.type === 'resource'
+                      ? RESOURCE_COLOR
+                      : theme.palette.primary.main,
+                  bgcolor: alpha(theme.palette.primary.main, 0.06),
+                  transform: 'translateX(2px)',
                 },
               }}
-              onClick={() => onSelectNodeType(node.type, position)}
             >
-              <Box display="flex" alignItems="center" gap={1} mb={1}>
+              <Box display="flex" alignItems="center" gap={1.25}>
                 {getNodeIcon(node.type)}
-                <Typography variant="subtitle1" fontWeight="bold">
-                  {node.label}
-                </Typography>
+                <Box>
+                  <Typography variant="subtitle2" fontWeight={800}>
+                    {node.label}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {node.description}
+                  </Typography>
+                </Box>
               </Box>
-              <Typography variant="body2" color="text.secondary">
-                {node.description}
-              </Typography>
-            </Box>
+            </Paper>
           ))}
+          {availableNodeTypes.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+              {t('flows.canvas.noTypes')}
+            </Typography>
+          )}
         </Box>
-      </Box>
-    </Modal>
+        </Paper>
+      </ClickAwayListener>
+    </Portal>
   );
 };
 
 const FlowContainer = styled('div')(({ theme }) => ({
+  flex: '1 1 0',
+  height: '100%',
+  minHeight: 0,
   width: '100%',
-  height: '80vh',
   border: `1px solid ${theme.palette.divider}`,
-  borderRadius: '4px',
-  background: theme.palette.background.paper,
+  borderRadius: '18px',
+  overflow: 'hidden',
+  backgroundColor: theme.palette.background.paper,
+  backgroundImage: `
+    linear-gradient(${theme.palette.divider} 1px, transparent 1px),
+    linear-gradient(90deg, ${theme.palette.divider} 1px, transparent 1px),
+    radial-gradient(circle at 22% 0%, ${alpha(theme.palette.primary.main, 0.1)}, transparent 38%)
+  `,
+  backgroundSize: '28px 28px, 28px 28px, auto',
+  boxShadow: theme.palette.mode === 'dark'
+    ? 'inset 0 1px 0 rgba(255,255,255,.035), 0 22px 65px rgba(0,0,0,.24)'
+    : 'inset 0 1px 0 rgba(255,255,255,.7), 0 22px 65px rgba(53,48,105,.1)',
   position: 'relative',
+  [theme.breakpoints.down('sm')]: {
+    flex: 'none',
+    height: 440,
+    minHeight: 440,
+    maxWidth: '100%',
+  },
 }));
 
 
 export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const theme = useTheme();
+  const isCompactCanvas = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const {
     nodes,
     edges,
@@ -244,6 +386,10 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onInit,
     reactFlowWrapper,
     onEditNode,
+    onCreateNode,
+    onSelectNode,
+    onConfigureNode,
+    onConvertProcessToSubflow,
     onEditEdge,
   } = props;
 
@@ -269,6 +415,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const [nodeSelectionModal, setNodeSelectionModal] = useState<{
     open: boolean;
     position: { x: number; y: number } | null;
+    screenPosition?: { x: number; y: number } | null;
     sourceNodeId?: string;
     sourceNodeType?: NodeType;
     sourceHandleId?: string;
@@ -306,6 +453,77 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       document.removeEventListener('editNode', handleEditNodeEvent);
     };
   }, [nodes, onEditNode]);
+
+  // Validation and other non-modal surfaces use this event to reveal a node
+  // in the persistent inspector. It deliberately selects instead of opening
+  // the full properties editor.
+  useEffect(() => {
+    const handleSelectNodeEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<EditNodeEventDetail>;
+      const nodeId = customEvent.detail?.nodeId;
+      if (!nodeId) return;
+      const node = findNodeById(nodeId, nodes);
+      if (!node) return;
+      onNodesChange([
+        ...nodes
+          .filter(candidate => candidate.selected && candidate.id !== nodeId)
+          .map(candidate => ({ type: 'select' as const, id: candidate.id, selected: false })),
+        { type: 'select' as const, id: nodeId, selected: true },
+      ]);
+      onSelectNode?.(node);
+    };
+    document.addEventListener('selectNode', handleSelectNodeEvent);
+    return () => document.removeEventListener('selectNode', handleSelectNodeEvent);
+  }, [nodes, onNodesChange, onSelectNode]);
+
+  // Selected (or deliberately hovered) nodes expose small directional arrows.
+  // Clicking one opens the exact same add-and-connect picker as releasing a
+  // connection drag on the pane, with a sensible drop position synthesized
+  // from that side of the node.
+  useEffect(() => {
+    const handleQuickConnect = (event: Event) => {
+      const detail = (event as CustomEvent<FlowQuickConnectEventDetail>).detail;
+      if (!detail?.nodeId || !detail.handleId) return;
+      const sourceNode = findNodeById(detail.nodeId, nodes);
+      if (!sourceNode) return;
+
+      const sourceType = (sourceNode.type ?? sourceNode.data.type) as NodeType;
+      const subflowHasOutgoing = sourceType === 'subflow' && edges.some(edge => {
+        const data = edge.data as { edgeType?: string; bidirectional?: boolean } | undefined;
+        if (data?.edgeType === 'mcp' || data?.edgeType === 'resource') return false;
+        return edge.source === sourceNode.id
+          || (edge.target === sourceNode.id && !!data?.bidirectional);
+      });
+      if (subflowHasOutgoing) return;
+
+      const measured = (sourceNode as { measured?: { width?: number; height?: number } }).measured;
+      const width = measured?.width ?? 210;
+      const height = measured?.height ?? 90;
+      const gap = 120;
+      const nextNodeWidth = 210;
+      const nextNodeHeight = 90;
+      let position = { x: sourceNode.position.x, y: sourceNode.position.y + height + gap };
+      if (detail.side === 'top') {
+        position = { x: sourceNode.position.x, y: sourceNode.position.y - nextNodeHeight - gap };
+      } else if (detail.side === 'right') {
+        position = { x: sourceNode.position.x + width + gap, y: sourceNode.position.y };
+      } else if (detail.side === 'left') {
+        position = { x: sourceNode.position.x - nextNodeWidth - gap, y: sourceNode.position.y };
+      }
+
+      setNodeSelectionModal({
+        open: true,
+        position,
+        screenPosition: { x: detail.clientX, y: detail.clientY },
+        sourceNodeId: sourceNode.id,
+        sourceNodeType: sourceType,
+        sourceHandleId: detail.handleId,
+      });
+    };
+
+    document.addEventListener(FLOW_QUICK_CONNECT_EVENT, handleQuickConnect);
+    return () => document.removeEventListener(FLOW_QUICK_CONNECT_EVENT, handleQuickConnect);
+  }, [edges, nodes]);
 
   // Enhanced onConnect handler with edge type determination and validation.
   // A new edge replaces any edge it logically duplicates (one MCP connection
@@ -413,6 +631,20 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     [nodes, edges, onEdgesChange, storeApi, theme.palette.text.secondary]
   );
 
+  // Live-drag gate. The canvas runs in ConnectionMode.Loose so ReactFlow's
+  // built-in source→target handle-type check is off — that is what lets a
+  // producer edge be drawn from a Process node's left resource handle to a
+  // Resource node (issue #210). With that gate off, THIS callback is the only
+  // thing keeping illegal draws invalid, so it defers to the shared
+  // connection rules (via the silent isConnectionAllowed) exactly as the
+  // commit-time validateConnection does. ReactFlow calls this with a
+  // Connection on every pointer move, so the check must stay side-effect free.
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) =>
+      isConnectionAllowed(connection as Connection, nodes, edges),
+    [nodes, edges]
+  );
+
   // Commit edge re-route gestures (bend drag end, waypoint move/removal)
   // into the controlled store — one undo entry per gesture.
   useEffect(() => {
@@ -451,6 +683,28 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         return !(requestedIds.has(e.source) || requestedIds.has(e.target));
       });
 
+      // Disarm any Trigger node being deleted: set the linked PlannedExecution
+      // to enabled=false so the SchedulerService stops firing it, but preserve
+      // the record for audit purposes (issue #241, Phase 4.6.3).
+      const triggerNodesToDelete = deletableNodes.filter(n => n.type === 'trigger');
+      if (triggerNodesToDelete.length > 0) {
+        await Promise.all(
+          triggerNodesToDelete.map(async (tn) => {
+            const execId = tn.data?.properties?.executionId;
+            if (typeof execId === 'string' && execId) {
+              try {
+                await plannedExecutionsService.update(execId, { enabled: false });
+              } catch (e) {
+                // Best-effort: if the API call fails, still allow the node to be
+                // deleted from the canvas. The execution record will remain armed
+                // but the canvas-level link is gone.
+                console.warn('TriggerNode: failed to disarm PlannedExecution', execId, e);
+              }
+            }
+          })
+        );
+      }
+
       if (deletableNodes.length === 0 && deletableEdges.length === 0) {
         return false;
       }
@@ -466,32 +720,6 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       onInit(instance);
     }
   }, [onInit]);
-
-  // Add event listener for adding nodes from palette via double-click
-  useEffect(() => {
-    const handleAddNodeFromPalette = (e: Event) => {
-      const customEvent = e as CustomEvent<{ nodeType: string; position: { x: number; y: number } }>;
-      if (!customEvent.detail || !reactFlowInstance) return;
-
-      const { nodeType, position } = customEvent.detail;
-
-      // Create the new node
-      const newNode = flowService.createNode(nodeType, position);
-
-      onNodesChange(buildAddNodeChanges(newNode));
-
-      // Select the newly created node in the properties panel
-      if (onEditNode) {
-        onEditNode(newNode);
-      }
-    };
-
-    document.addEventListener('addNodeFromPalette', handleAddNodeFromPalette);
-
-    return () => {
-      document.removeEventListener('addNodeFromPalette', handleAddNodeFromPalette);
-    };
-  }, [reactFlowInstance, onNodesChange, buildAddNodeChanges, onEditNode]);
 
   // Handle edit properties from context menu. Branches on whether the menu
   // targets a node or an edge — an edge opens the EdgePropertiesModal (Tier 2b
@@ -509,6 +737,14 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       }
     }
   }, [contextMenu.nodeId, contextMenu.edgeId, nodes, edges, onEditNode, onEditEdge]);
+
+  const handleConvertToSubflow = useCallback(() => {
+    if (!contextMenu.nodeId || !onConvertProcessToSubflow) return;
+    const node = findNodeById(contextMenu.nodeId, nodes);
+    if (node?.type === 'process' || node?.data?.type === 'process') {
+      onConvertProcessToSubflow(node);
+    }
+  }, [contextMenu.nodeId, nodes, onConvertProcessToSubflow]);
 
   // Toggle a flow-control edge between one-way and bidirectional from the edge
   // context menu. Reuses the exact marker logic of the bidirectional drag path
@@ -553,7 +789,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
   // Handle double-click on nodes to open edit properties
   const onNodeDoubleClick = useCallback(
-    (event: React.MouseEvent, node: any) => {
+    (event: React.MouseEvent, node: unknown) => {
       // Prevent default behavior
       event.preventDefault();
 
@@ -624,6 +860,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       setNodeSelectionModal({
         open: true,
         position,
+        screenPosition: { x: point.clientX, y: point.clientY },
         sourceNodeId: fromNode.id,
         sourceNodeType: fromNode.type as NodeType,
         sourceHandleId: fromHandle.id,
@@ -637,51 +874,96 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     (nodeType: NodeType, position: { x: number; y: number }) => {
       log.debug(`handleNodeTypeSelection: Selected node type ${nodeType} at position (${position.x}, ${position.y})`);
 
-      // Create a new node of the selected type
-      const newNode = flowService.createNode(nodeType, position);
+      // Create through the parent-owned factory so every creation path shares
+      // constraints (notably the one-Trigger limit) and selection behavior.
+      if (nodeType === 'trigger' && nodes.some(node => node.type === 'trigger')) {
+        setNodeSelectionModal({ open: false, position: null });
+        return;
+      }
 
-      onNodesChange(buildAddNodeChanges(newNode));
-
-      // Get the pending connection source captured when the drag was dropped
+      // Validate the proposed edge before committing the node. The picker is a
+      // one-click "insert and connect" action; if that insertion is no longer
+      // legal (for example because the source gained a successor), it must not
+      // leave a disconnected node behind.
+      const preparedNode = flowService.createNode(nodeType, position);
       const { sourceNodeId, sourceHandleId } = nodeSelectionModal;
       const sourceNode = sourceNodeId ? findNodeById(sourceNodeId, nodes) : undefined;
-
+      let pendingConnection: Connection | null = null;
       if (sourceNode && sourceHandleId) {
-        const targetHandle = defaultTargetHandleFor(nodeType, sourceHandleId);
-
-        // Create a connection from the source node to the new node
-        const connection = {
+        pendingConnection = {
           source: sourceNode.id,
           sourceHandle: sourceHandleId,
-          target: newNode.id,
-          targetHandle,
+          target: preparedNode.id,
+          targetHandle: defaultTargetHandleFor(nodeType, sourceHandleId),
         };
-
-        log.debug(`handleNodeTypeSelection: Creating connection from ${connection.source} to ${connection.target}`);
-
-        // Create and add the edge if the connection is valid
-        if (validateConnection(connection, [...nodes, newNode], edges)) {
-          const edge = createEdgeFromConnection(connection, [...nodes, newNode]);
-          const replaced = getReplacedEdgeIds(edge, edges);
-          onEdgesChange([
-            ...replaced.map(id => ({ type: 'remove' as const, id })),
-            { type: 'add' as const, item: edge },
-          ]);
-
-          log.debug(`handleNodeTypeSelection: Edge created with id ${edge.id}`);
+        if (!validateConnection(pendingConnection, [...nodes, preparedNode], edges)) {
+          setNodeSelectionModal({ open: false, position: null });
+          return;
         }
+      }
+
+      const newNode = onCreateNode
+        ? onCreateNode(nodeType, position, preparedNode)
+        : preparedNode;
+      if (!newNode) {
+        setNodeSelectionModal({ open: false, position: null });
+        return;
+      }
+      if (!onCreateNode) {
+        onNodesChange(buildAddNodeChanges(newNode));
+      }
+
+      if (pendingConnection) {
+        log.debug(`handleNodeTypeSelection: Creating connection from ${pendingConnection.source} to ${pendingConnection.target}`);
+        const edge = createEdgeFromConnection(pendingConnection, [...nodes, newNode]);
+        const replaced = getReplacedEdgeIds(edge, edges);
+        onEdgesChange([
+          ...replaced.map(id => ({ type: 'remove' as const, id })),
+          { type: 'add' as const, item: edge },
+        ]);
+
+        log.debug(`handleNodeTypeSelection: Edge created with id ${edge.id}`);
       }
 
       // Close the modal; this also discards the consumed connection source.
       setNodeSelectionModal({ open: false, position: null });
 
-      // Select the newly created node in the properties panel
-      if (onEditNode) {
-        onEditNode(newNode);
+      const directConfigurationTarget = directConfigurationTargetFor(
+        nodeSelectionModal.sourceNodeType,
+        nodeSelectionModal.sourceHandleId,
+      );
+      if (directConfigurationTarget === nodeType) {
+        onConfigureNode?.(newNode);
+      } else {
+        // The persistent inspector follows ordinary additions; only singleton
+        // attachment targets open a blocking configuration picker.
+        onSelectNode?.(newNode);
       }
     },
-    [nodeSelectionModal, nodes, edges, buildAddNodeChanges, onNodesChange, onEdgesChange, onEditNode]
+    [
+      nodeSelectionModal,
+      nodes,
+      edges,
+      buildAddNodeChanges,
+      onNodesChange,
+      onEdgesChange,
+      onCreateNode,
+      onSelectNode,
+      onConfigureNode,
+    ]
   );
+
+  // MCP and Resource connection handles have only one valid target. Consume
+  // that deterministic choice immediately, for both drag-to-pane and the
+  // floating quick-connect buttons.
+  useEffect(() => {
+    if (!nodeSelectionModal.open || !nodeSelectionModal.position) return;
+    const target = directConfigurationTargetFor(
+      nodeSelectionModal.sourceNodeType,
+      nodeSelectionModal.sourceHandleId,
+    );
+    if (target) handleNodeTypeSelection(target, nodeSelectionModal.position);
+  }, [handleNodeTypeSelection, nodeSelectionModal]);
 
   // Close the node selection modal, abandoning the pending connection.
   const handleCloseNodeSelectionModal = useCallback(() => {
@@ -710,10 +992,10 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   // Paste clipboard contents as new, independent nodes/edges (regenerated ids,
   // offset position), emitted as 'add' changes to the parent store.
   const handlePaste = useCallback(() => {
-    let payload = flowClipboardMemory;
+    let payload = flowClipboardMemory.get(getSelectedWorkspace());
     if (!payload) {
       try {
-        const raw = localStorage.getItem(FLOW_CLIPBOARD_KEY);
+        const raw = localStorage.getItem(flowClipboardStorageKey());
         if (raw) payload = JSON.parse(raw) as FlowClipboard;
       } catch (err) {
         log.warn('Could not read flow clipboard from localStorage', err);
@@ -805,9 +1087,9 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
   // Whether there is anything to paste (re-checked each time the menu opens).
   const canPaste = useMemo(() => {
-    if (flowClipboardMemory) return true;
+    if (flowClipboardMemory.has(getSelectedWorkspace())) return true;
     try {
-      return !!localStorage.getItem(FLOW_CLIPBOARD_KEY);
+      return !!localStorage.getItem(flowClipboardStorageKey());
     } catch {
       return false;
     }
@@ -830,6 +1112,13 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
   return (
     <FlowContainer
+      style={isCompactCanvas ? {
+        flex: 'none',
+        width: '100%',
+        maxWidth: '100%',
+        height: 440,
+        minHeight: 440,
+      } : undefined}
       ref={(el) => {
         // Set both refs
         if (ref) {
@@ -854,7 +1143,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         edgeTypes={edgeTypes}
         defaultEdgeOptions={useMemo(() => ({
           type: 'custom',
-          animated: true,
+          animated: false,
           style: { stroke: theme.palette.text.secondary, strokeWidth: 2 },
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -864,6 +1153,14 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
           },
         }), [theme.palette.text.secondary])}
         connectionLineType={ConnectionLineType.SmoothStep}
+        // Loose mode drops ReactFlow's built-in source→target handle-type gate
+        // so a producer edge (Process → Resource) can be drawn from the
+        // Process node's left resource handle (issue #210). Legality is
+        // re-imposed by isValidConnection, which defers to the shared
+        // connection rules.
+        connectionMode={ConnectionMode.Loose}
+        connectionRadius={isCompactCanvas ? 44 : 30}
+        isValidConnection={isValidConnection}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
@@ -878,6 +1175,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onSelectionContextMenu={onSelectionContextMenu}
         onKeyDown={handleCanvasKeyDown}
         onNodeDoubleClick={onNodeDoubleClick}
+        onNodeClick={(_event, node) => onSelectNode?.(node as FlowNode)}
         onConnectEnd={onConnectEnd}
         tabIndex={0}
         fitView
@@ -892,8 +1190,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         // overlaps the handles at the endpoints, making stray clicks easy.
         connectOnClick={false}
       >
-        <CanvasToolbar />
-        <CanvasControls />
+        <CanvasControls showMiniMap={!isCompactCanvas} />
       </ReactFlow>
 
       <ContextMenu
@@ -902,6 +1199,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onClose={closeContextMenu}
         onDelete={handleDelete}
         onEditProperties={handleEditProperties}
+        onConvertToSubflow={
+          onConvertProcessToSubflow && contextMenu.nodeId && nodes.find(node => node.id === contextMenu.nodeId)?.type === 'process'
+            ? handleConvertToSubflow
+            : undefined
+        }
         onToggleBidirectional={handleToggleBidirectional}
         onCopy={handleContextCopy}
         onPaste={handlePaste}
@@ -915,6 +1217,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       <NodeSelectionModal
         open={nodeSelectionModal.open}
         position={nodeSelectionModal.position}
+        anchorPosition={nodeSelectionModal.screenPosition}
         onClose={handleCloseNodeSelectionModal}
         onSelectNodeType={handleNodeTypeSelection}
         sourceNodeType={nodeSelectionModal.sourceNodeType}

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "legacy-meeting",
+  "title": "Legacy architecture council",
+  "openingPrompt": "Review the legacy system and agree on a recommendation.",
+  "status": "draft",
+  "phase": "draft",
+  "participants": [
+    {
+      "id": "legacy-alice",
+      "name": "Alice",
+      "flowId": "legacy-tool-flow",
+      "conversationId": "legacy-alice-conversation",
+      "role": "participant",
+      "status": "idle",
+      "lastDeliveredSeq": -1
+    },
+    {
+      "id": "legacy-bob",
+      "name": "Bob",
+      "flowId": "legacy-tool-flow",
+      "conversationId": "legacy-bob-conversation",
+      "role": "participant",
+      "status": "idle",
+      "lastDeliveredSeq": -1
+    }
+  ],
+  "policy": {
+    "roundMode": "barrier",
+    "entryMode": "start-each-round",
+    "maxRounds": 6,
+    "concurrencyLimit": 2,
+    "errorStrategy": "collect-all",
+    "moderatorMode": "none",
+    "finishThreshold": "majority",
+    "allSilentBehavior": "finish"
+  },
+  "roundNumber": 0,
+  "motions": [],
+  "lastEventSeq": -1,
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000
+}

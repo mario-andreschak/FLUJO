@@ -1,14 +1,22 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-// eslint-disable-next-line import/named
-import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs/promises';
-import path from 'path';
-import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
-import { runWithConcurrency } from './utils/boundedConcurrency';
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { v4 as uuidv4 } from "uuid";
+import fs from "fs/promises";
+import path from "path";
+import { createLogger } from "@/utils/logger";
+import {
+  bindToCurrentWorkspace,
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+} from "@/utils/workspace";
+import { runWithConcurrency } from "./utils/boundedConcurrency";
+import { isProtectedExecutionServer } from '@/backend/execution/extensions';
+import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { ExecutionExtensionError } from '@/backend/execution/extensions';
+import { shippedDescriptorForConfig } from './shippedServers';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -23,7 +31,6 @@ declare global {
   // (e.g. after an OAuth token refresh changed the transport's config key) left every
   // other instance holding the closed client, whose aborted transport made each tool
   // call fail instantly with "This operation was aborted" until FLUJO was restarted.
-  // eslint-disable-next-line no-var
   var __mcp_clients: Map<string, Client> | undefined;
   // Names of servers whose connection attempt is currently in flight (initial
   // startup sweep or a reconnect). Global-backed for the same reason as
@@ -31,11 +38,10 @@ declare global {
   // one that later serves getServerStatus(), and the status route must still be
   // able to see that a startup is in progress so it can report "connecting"
   // instead of a misleading "configured but not connected" error.
-  // eslint-disable-next-line no-var
   var __mcp_connecting: Set<string> | undefined;
   // True from process boot until startEnabledServers() finishes its first sweep.
-  // eslint-disable-next-line no-var
   var __mcp_starting_up: boolean | undefined;
+  var __mcp_starting_up_by_workspace: Map<string, boolean> | undefined;
   // The CURRENT transport per server name. onclose/onerror handlers close over the
   // transport they were registered on and fire for ANY instance — including a zombie
   // process exiting minutes after it was replaced, and closes FLUJO itself initiated.
@@ -43,97 +49,375 @@ declare global {
   // registered here; FLUJO-initiated closes deregister BEFORE closing, so their close
   // events are ignored. Global-backed for the same cross-module-instance reason as
   // __mcp_clients.
-  // eslint-disable-next-line no-var
   var __mcp_active_transports: Map<string, Transport> | undefined;
+  // Issue #255: monotonic per-server "generation" counter, bumped every time a
+  // client is (re)registered in __mcp_clients. A tool advertised to the model
+  // records the generation in force at advertise time; at dispatch time a
+  // mismatch means the client was re-created (reconnect / config change) and the
+  // call is rejected as stale instead of being run against a different instance.
+  // A numeric counter (not the Client reference) survives SharedState persistence.
+  var __mcp_client_generation: Map<string, number> | undefined;
+  // Issue #255: the CURRENT advertised input-schema hash per (server\0tool). Set
+  // whenever a tool set is advertised; compared at dispatch time against the hash
+  // frozen in the call's toolNameMap entry to detect a schema change.
+  var __mcp_tool_schema_hash: Map<string, string> | undefined;
 }
 
 // Initialize the global client map if it doesn't exist
-if (typeof global.__mcp_clients === 'undefined') {
+if (typeof global.__mcp_clients === "undefined") {
   global.__mcp_clients = new Map<string, Client>();
 }
-if (typeof global.__mcp_connecting === 'undefined') {
+if (typeof global.__mcp_connecting === "undefined") {
   global.__mcp_connecting = new Set<string>();
 }
-if (typeof global.__mcp_starting_up === 'undefined') {
+if (typeof global.__mcp_starting_up === "undefined") {
   global.__mcp_starting_up = true;
 }
-if (typeof global.__mcp_active_transports === 'undefined') {
+if (typeof global.__mcp_active_transports === "undefined") {
   global.__mcp_active_transports = new Map<string, Transport>();
+}
+if (typeof global.__mcp_client_generation === "undefined") {
+  global.__mcp_client_generation = new Map<string, number>();
+}
+if (typeof global.__mcp_tool_schema_hash === "undefined") {
+  global.__mcp_tool_schema_hash = new Map<string, string>();
+}
+
+// Per-workspace copies of the server-name-keyed registries above (#406). Only
+// NON-default workspaces get an entry here: the default workspace keeps using
+// the original objects, so every pre-existing consumer (including tests that
+// manipulate global.__mcp_clients directly) is completely unaffected.
+declare global {
+  var __mcp_workspace_registries:
+    | Map<string, Map<string, unknown>>
+    | undefined;
+}
+
+/**
+ * Return the registry `name` for the currently selected workspace.
+ *
+ * `base` is the pre-workspace object and is returned as-is for the default
+ * workspace. For any other workspace an empty registry of the same kind (Map or
+ * Set) is created on first use and then reused for the life of the process,
+ * shared across MCPService instances exactly like the globals are.
+ */
+function scopedRegistry<T extends Map<unknown, unknown> | Set<unknown>>(
+  name: string,
+  base: T,
+): T {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) return base;
+  const all = (global.__mcp_workspace_registries ??= new Map<
+    string,
+    Map<string, unknown>
+  >());
+  let perWorkspace = all.get(workspace);
+  if (!perWorkspace) {
+    perWorkspace = new Map<string, unknown>();
+    all.set(workspace, perWorkspace);
+  }
+  let registry = perWorkspace.get(name);
+  if (!registry) {
+    registry = base instanceof Set ? new Set() : new Map();
+    perWorkspace.set(name, registry);
+  }
+  return registry as T;
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPStreamableConfig, MCPSSEConfig, MCPHeaderValue, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
-import { TestConnectionEvent } from '@/shared/types/streaming';
-import { loadServerConfigs, saveConfig } from './config';
-import { listServerTools as listTools, callTool as callToolFunction, ToolCallProgress } from './tools';
+import {
+  MCPServerConfig,
+  MCPStreamableConfig,
+  MCPSSEConfig,
+  MCPHeaderValue,
+  EnvVarValue,
+  MCPServiceResponse,
+  MCPToolResponse as ToolResponse,
+  MCPStdioOAuthStatus,
+  MCP_SKILLS_EXTENSION_ID,
+  parseMcpSkillUri,
+  type McpGetSkillResult,
+  type McpLoadedSkill,
+  type McpReadSkillDirectoryResult,
+  type McpServerSkillsResult,
+  type McpSkillsExtensionCapability,
+  type McpVerifiedSkillResource,
+} from "@/shared/types/mcp";
+import { TestConnectionEvent } from "@/shared/types/streaming";
+import { loadServerConfigs, saveConfig } from "./config";
+import {
+  beginConnect,
+  beginTeardown,
+  getLifecycleDiagnostics,
+  markConnectFailed,
+  markConnected,
+} from "./lifecycleCoordinator";
+import {
+  acquireLease,
+  enforceWarmCapacity,
+  getPoolDiagnostics,
+  pinServer,
+  sweepIdleServers,
+  unpinServer,
+  type AcquireResult,
+} from "./mcpLeasePool";
+import {
+  listServerTools as listTools,
+  callTool as callToolFunction,
+  ToolCallProgress,
+} from "./tools";
 import {
   listServerResources as listResources,
   listServerResourceTemplates as listResourceTemplates,
   readResource as readResourceFn,
-} from './resources';
-import { listServerPrompts as listPrompts, getPrompt as getPromptFn } from './prompts';
+} from "./resources";
+import {
+  listServerPrompts as listPrompts,
+  getPrompt as getPromptFn,
+} from "./prompts";
+import {
+  McpSkillsUnsupportedError,
+  getMcpSkill,
+  getMcpSkillsCapability,
+  listMcpSkills,
+  loadVerifiedMcpSkill,
+  readMcpSkillDirectory,
+  readVerifiedMcpSkillResource,
+} from "./skills";
+import { getApprovedMcpSkill } from "./skillApprovalRegistry";
+import { resolveRuntimeHomeIsolation } from "./runtimeHomeIsolation";
 import {
   MCPResource,
   MCPResourceTemplate,
   MCPReadResourceResult,
   MCPPrompt,
   MCPGetPromptResult,
-} from '@/shared/types/mcp';
+} from "@/shared/types/mcp";
 import {
   enhanceConnectionErrorMessage,
   formatErrorChain,
   formatErrorResponse,
   isAuthRequiredError,
+  isOAuthAuthenticationError,
   isClientConnectionClosed,
-  isTransientStreamError
-} from '@/utils/mcp/utils';
-import { encryptApiKey } from '@/backend/services/model/encryption';
-import { MASKED_API_KEY } from '@/shared/types/constants';
-import { normalizeHeaderValue, isMaskedHeaderValue, isGlobalBinding, hydrateMaskedHeaders } from '@/utils/mcp/headers';
-import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
-import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
-import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
+  isTransientStreamError,
+} from "@/utils/mcp/utils";
+import { encryptApiKey } from "@/backend/services/model/encryption";
+import { isSecretEnvVar } from "@/utils/shared/common";
+import { mcpValueRecord } from "@/utils/mcp/values";
+import {
+  normalizeHeaderValue,
+  isMaskedHeaderValue,
+  isGlobalBinding,
+  hydrateMaskedHeaders,
+} from "@/utils/mcp/headers";
+import {
+  getTestConnectionTimeoutMs,
+  isRunnerStdioConfig,
+} from "@/utils/mcp/testConnectionTimeout";
+import { probeOAuthSupport } from "@/utils/mcp/oauthProbe";
 import {
   createNewClient,
   createTransport,
   resolveConfigHeaders,
   shouldRecreateClient,
-  safelyCloseClient
-} from './connection';
-import { setNodeRoots as setNodeRootsOverlay } from './roots';
-import { INTERNAL_SERVER_NAME } from './internalServerConfig';
+  safelyCloseClient,
+} from "./connection";
+import { registerResourceNotificationHandlers } from "./resourceNotifications";
 import {
-  isBuiltInServerName,
-  builtInServerConfigsWithOverrides,
-  setInternalServerDisabled,
-  setInternalServerRoots,
-  FILESYSTEM_SERVER_NAME,
-  BASH_SERVER_NAME,
-} from './internal/registry';
+  isMcpBetaProtocolEnabled,
+  createNewBetaClient,
+  createBetaTransport,
+  activateStdioOAuthMrtrController,
+  getStdioOAuthMrtrController,
+  negotiatedProtocolVersion,
+} from "./betaClient";
+import { setNodeRoots as setNodeRootsOverlay } from "./roots";
+import { ToolCallSource, ToolListAudience } from "./appsProtocol";
+import {
+  createdTicketIdFromMcpResult,
+  injectTrustedFlujoToolContext,
+  trustedFlujoTicketConversationId,
+  type TrustedMcpToolInvocationContext,
+} from "./trustedToolContext";
+import {
+  cancelExternalAuthorization,
+  clearExternalAuthorizationState,
+  confirmExternalAuthorization,
+  declineExternalAuthorization,
+  getExternalAuthorizationStatus,
+  prepareExternalAuthorization,
+  registerExternalAuthorizationClient,
+  serverSupportsExternalAuthorization,
+} from "./externalAuthorization";
+import { revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
+
+function mcpFailure<T>(response: MCPServiceResponse): MCPServiceResponse<T> {
+  return {
+    success: false,
+    error: response.error,
+    statusCode: response.statusCode,
+    errorType: response.errorType,
+  };
+}
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
 
 // Create a logger instance for this file
-const log = createLogger('backend/services/mcp/index');
+const log = createLogger("backend/services/mcp/index");
+
+function transportForHostInspection(transport: unknown): unknown {
+  let current = transport;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const inner = (current as { __flujoInnerTransport?: unknown })
+      .__flujoInnerTransport;
+    if (!inner) break;
+    current = inner;
+  }
+  return current;
+}
+
+/** Whether a remote config explicitly selects static Authorization-header auth. */
+function hasConfiguredAuthorizationHeader(config: MCPServerConfig): boolean {
+  if (config.transport !== "streamable" && config.transport !== "sse")
+    return false;
+  const headers = (config as MCPStreamableConfig | MCPSSEConfig).headers;
+  if (!headers) return false;
+
+  return Object.entries(headers).some(([key, raw]) => {
+    if (key.toLowerCase() !== "authorization") return false;
+    return normalizeHeaderValue(raw, key).value.trim().length > 0;
+  });
+}
+
+/**
+ * The legacy OAuth inference path persisted exactly this default. Restrict cleanup to that
+ * signature so user-authored scope lists are never removed speculatively.
+ */
+function hasLegacyInferredOAuthScopes(config: MCPStreamableConfig): boolean {
+  return config.oauthScopes?.length === 1 && config.oauthScopes[0] === "read";
+}
+
+/** Whether a config contains durable or in-progress FLUJO-managed OAuth state. */
+function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
+  return !!(
+    config.oauthClientId ||
+    config.oauthClientSecret ||
+    config.oauthClientMetadata ||
+    config.oauthClientInformation ||
+    config.oauthTokens ||
+    config.oauthCodeVerifier ||
+    config.oauthState ||
+    config.authorizationUrl
+  );
+}
 
 /**
  * Main service class for MCP server management
- * 
+ *
  * This simplified version focuses on providing a clean interface for server management
  * while maintaining compatibility with the MCP SDK.
  */
 export class MCPService {
-  private stderrLogs: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  // --- Workspace-scoped registries (#406) -----------------------------------
+  // Every registry below is keyed by SERVER NAME, and a server name is only
+  // unique WITHIN a workspace: "github" in workspace A and "github" in workspace
+  // B are two different servers with two different clone directories, configs
+  // and processes. Sharing one registry would mean connecting one implicitly
+  // "connects" the other, and stopping one would tear down the other's client.
+  //
+  // `scopedRegistry` therefore returns a per-workspace registry — EXCEPT for the
+  // default workspace, which keeps using the exact same object as before. That
+  // preserves the cross-module-instance sharing the global maps exist for, and
+  // keeps every existing caller (and test that pokes global.__mcp_clients
+  // directly) behaving byte-for-byte as it did before workspaces existed.
+  private stderrLogsBase: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  private get stderrLogs(): Map<string, string[]> {
+    return scopedRegistry("stderrLogs", this.stderrLogsBase);
+  }
   // Last connection failure per server. Unlike stderrLogs (which is reset at the start of
   // every connection attempt to capture a fresh run), this persists until the server next
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
-  private lastConnectionError: Map<string, string> = new Map();
+  private lastConnectionErrorBase: Map<string, string> = new Map();
+  private get lastConnectionError(): Map<string, string> {
+    return scopedRegistry("lastConnectionError", this.lastConnectionErrorBase);
+  }
   // De-dupes concurrent connectServer() calls for the same server (see connectServer below).
-  private inFlightConnects: Map<string, Promise<MCPServiceResponse>> = new Map();
-  private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
-  private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
+  private inFlightConnectsBase: Map<string, Promise<MCPServiceResponse>> =
+    new Map();
+  private get inFlightConnects(): Map<string, Promise<MCPServiceResponse>> {
+    return scopedRegistry("inFlightConnects", this.inFlightConnectsBase);
+  }
+  private connectionRetryTimersBase: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
+  private get connectionRetryTimers(): Map<string, NodeJS.Timeout> {
+    return scopedRegistry("connectionRetryTimers", this.connectionRetryTimersBase);
+  }
+  private connectionRetryAttemptsBase: Map<string, number> = new Map(); // Track retry attempts for each server
+  private get connectionRetryAttempts(): Map<string, number> {
+    return scopedRegistry("connectionRetryAttempts", this.connectionRetryAttemptsBase);
+  }
+
+  // Per-server resource list version counter (incremented on notifications/resources/list_changed).
+  // Exposed via getResourceListVersion() so the server-status API can include it in its
+  // response, and the frontend can detect a stale resource listing and auto-refresh.
+  private resourceListVersionBase: Map<string, number> = new Map();
+  private get resourceListVersion(): Map<string, number> {
+    return scopedRegistry("resourceListVersion", this.resourceListVersionBase);
+  }
+  // Per-server set of URIs that have received a notifications/resources/updated notification
+  // (sent by servers that support resources/subscribe, registered via subscribeToResource).
+  // ResourceHandler checks this before re-reading a bound resource node.
+  private pendingResourceUpdatesBase: Map<string, Set<string>> = new Map();
+  private get pendingResourceUpdates(): Map<string, Set<string>> {
+    return scopedRegistry("pendingResourceUpdates", this.pendingResourceUpdatesBase);
+  }
+
+  /**
+   * Remove the exact stale marker written by the old auth-inference path once a static
+   * Authorization header has proved it can establish a real connection. Reload from storage
+   * before saving so resolved/decrypted connection material is never persisted accidentally.
+   */
+  private async clearLegacyInferredOAuthScopesForHeaderAuth(
+    serverName: string,
+  ): Promise<void> {
+    try {
+      const configs = await this.loadServerConfigs();
+      if (!Array.isArray(configs)) return;
+
+      const index = configs.findIndex((c) => c.name === serverName);
+      if (index === -1 || configs[index].transport !== "streamable") return;
+
+      const stored = configs[index] as MCPStreamableConfig;
+      if (
+        !hasConfiguredAuthorizationHeader(stored) ||
+        !hasLegacyInferredOAuthScopes(stored) ||
+        hasManagedOAuthState(stored)
+      ) {
+        return;
+      }
+
+      configs[index] = { ...stored, oauthScopes: undefined };
+      const result = await saveConfig(new Map(configs.map((c) => [c.name, c])));
+      if (result.success) {
+        log.info(
+          `Removed stale inferred OAuth scopes from header-authenticated server ${serverName}`,
+        );
+      } else {
+        log.warn(
+          `Failed to remove stale inferred OAuth scopes from ${serverName}: ${result.error}`,
+        );
+      }
+    } catch (error) {
+      // Cleanup is best-effort and must never turn a successful MCP connection into a failure.
+      log.warn(
+        `Failed to clean inferred OAuth scopes for ${serverName}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   // Connected clients per server name. Global-backed (see __mcp_clients) so EVERY
   // MCPService instance shares the one map: a client registered or deregistered by any
@@ -142,20 +426,31 @@ export class MCPService {
   // closed clients ("This operation was aborted") after another instance rebuilt a
   // connection.
   private get clients(): Map<string, Client> {
-    return global.__mcp_clients!;
+    return scopedRegistry("clients", global.__mcp_clients!);
   }
 
   // Servers with an in-flight connection attempt. Global-backed (see __mcp_connecting)
   // so the set is shared across module instances / hot reloads.
   private get connectingServers(): Set<string> {
-    return global.__mcp_connecting!;
+    return scopedRegistry("connectingServers", global.__mcp_connecting!);
   }
 
   // The currently-registered transport per server. Global-backed (see
   // __mcp_active_transports) so a deregistration in one module instance is visible to
   // the onclose/onerror handlers that were registered by another.
   private get activeTransports(): Map<string, Transport> {
-    return global.__mcp_active_transports!;
+    return scopedRegistry("activeTransports", global.__mcp_active_transports!);
+  }
+
+  // Issue #255: per-server client-(re)registration generation. Global-backed for
+  // the same cross-module-instance reason as __mcp_clients.
+  private get clientGenerations(): Map<string, number> {
+    return scopedRegistry("clientGenerations", global.__mcp_client_generation!);
+  }
+
+  // Issue #255: current advertised input-schema hash per (server\0tool).
+  private get toolSchemaHashes(): Map<string, string> {
+    return scopedRegistry("toolSchemaHashes", global.__mcp_tool_schema_hash!);
   }
 
   // Cap per-server stderr retention: a chatty or crash-looping server would otherwise
@@ -183,6 +478,67 @@ export class MCPService {
   private deregisterClient(serverName: string): void {
     this.clients.delete(serverName);
     this.activeTransports.delete(serverName);
+    clearExternalAuthorizationState(serverName);
+    revokeMcpAppRuntimeBrokerForServer(serverName);
+  }
+
+  // -------------------------------------------------------------------------
+  // Resource notification callbacks (registered at connect time)
+  // -------------------------------------------------------------------------
+
+  private onResourceListChanged(serverName: string): void {
+    const prev = this.resourceListVersion.get(serverName) ?? 0;
+    this.resourceListVersion.set(serverName, prev + 1);
+    log.debug(
+      `onResourceListChanged: server=${serverName} version=${prev + 1}`,
+    );
+  }
+
+  private onResourceUpdated(serverName: string, uri: string): void {
+    const set =
+      this.pendingResourceUpdates.get(serverName) ?? new Set<string>();
+    set.add(uri);
+    this.pendingResourceUpdates.set(serverName, set);
+    log.debug(`onResourceUpdated: server=${serverName} uri=${uri}`);
+  }
+
+  /**
+   * The current monotonically-increasing resource list version for a server.
+   * Incremented every time the server sends a `notifications/resources/list_changed`
+   * notification. Called by the server-status API to expose the version to the frontend,
+   * which uses it to detect stale resource listings and auto-refresh.
+   */
+  getResourceListVersion(serverName: string): number {
+    return this.resourceListVersion.get(serverName) ?? 0;
+  }
+
+  /**
+   * Subscribe to change notifications for a specific resource URI on a server.
+   * Best-effort: silently skipped if the server doesn't advertise `resources.subscribe`
+   * capability, or if no live client exists.
+   *
+   * Called from ResourceHandler after successfully reading a bound resource node so that
+   * subsequent `notifications/resources/updated` events for that URI are tracked in
+   * `pendingResourceUpdates` — useful for long-running flows where the resource may
+   * update between steps.
+   */
+  async subscribeToResource(serverName: string, uri: string): Promise<void> {
+    try {
+      const client = this.getClient(serverName);
+      if (!client) return;
+      const caps = client.getServerCapabilities?.();
+      if (!caps?.resources?.subscribe) return;
+      await client.subscribeResource({ uri });
+      log.debug(`subscribeToResource: server=${serverName} uri=${uri}`);
+    } catch (err) {
+      // Non-fatal — subscription is best-effort. The server may not support it, or the
+      // resource URI may have no subscription handler. Swallow silently so a missing
+      // capability never breaks a flow run.
+      log.debug(
+        `subscribeToResource: ignored error for ${serverName}/${uri}:`,
+        err,
+      );
+    }
   }
 
   /**
@@ -200,41 +556,54 @@ export class MCPService {
   /**
    * Schedule connection retry with exponential backoff
    */
-  private scheduleConnectionRetry(serverName: string, config: MCPServerConfig): void {
+  private scheduleConnectionRetry(
+    serverName: string,
+    config: MCPServerConfig,
+  ): void {
     // Clear any existing timer
     this.clearRetryTimer(serverName);
-    
+
     // Get current retry attempt count
     const currentAttempts = this.connectionRetryAttempts.get(serverName) || 0;
     const maxAttempts = 5; // Maximum retry attempts
-    
+
     if (currentAttempts >= maxAttempts) {
-      log.warn(`Maximum retry attempts (${maxAttempts}) reached for server ${serverName}, stopping retries`);
+      log.warn(
+        `Maximum retry attempts (${maxAttempts}) reached for server ${serverName}, stopping retries`,
+      );
       this.connectionRetryAttempts.delete(serverName);
       return;
     }
-    
+
     // Calculate delay with exponential backoff: 2^attempt * 5000ms, max 5 minutes
     const baseDelay = 5000; // 5 seconds
     const maxDelay = 300000; // 5 minutes
     const delay = Math.min(Math.pow(2, currentAttempts) * baseDelay, maxDelay);
-    
-    log.info(`Scheduling connection retry for server ${serverName} in ${delay}ms (attempt ${currentAttempts + 1}/${maxAttempts})`);
-    
-    const timer = setTimeout(async () => {
-      log.info(`Attempting to reconnect server ${serverName} (attempt ${currentAttempts + 1}/${maxAttempts})`);
-      
+
+    log.info(
+      `Scheduling connection retry for server ${serverName} in ${delay}ms (attempt ${currentAttempts + 1}/${maxAttempts})`,
+    );
+
+    const timer = setTimeout(bindToCurrentWorkspace(async () => {
+      log.info(
+        `Attempting to reconnect server ${serverName} (attempt ${currentAttempts + 1}/${maxAttempts})`,
+      );
+
       // Check current server configuration before attempting retry
       const currentConfig = await this.getServerConfig(serverName);
       if (!currentConfig) {
-        log.info(`Server ${serverName} configuration not found, stopping retry attempts`);
+        log.info(
+          `Server ${serverName} configuration not found, stopping retry attempts`,
+        );
         this.connectionRetryAttempts.delete(serverName);
         return;
       }
-      
+
       // Check if server is now disabled
       if (currentConfig.disabled) {
-        log.info(`Server ${serverName} is now disabled, stopping retry attempts`);
+        log.info(
+          `Server ${serverName} is now disabled, stopping retry attempts`,
+        );
         this.connectionRetryAttempts.delete(serverName);
         return;
       }
@@ -247,11 +616,15 @@ export class MCPService {
       if (existingClient) {
         try {
           await existingClient.ping({ timeout: 5000 });
-          log.info(`Server ${serverName} is already connected and responsive, cancelling retry`);
+          log.info(
+            `Server ${serverName} is already connected and responsive, cancelling retry`,
+          );
           this.connectionRetryAttempts.delete(serverName);
           return;
         } catch (pingError) {
-          log.warn(`Server ${serverName} has a registered client but ping failed (${pingError instanceof Error ? pingError.message : String(pingError)}); reconnecting from scratch`);
+          log.warn(
+            `Server ${serverName} has a registered client but ping failed (${pingError instanceof Error ? pingError.message : String(pingError)}); reconnecting from scratch`,
+          );
         }
       }
 
@@ -265,14 +638,18 @@ export class MCPService {
           ? await this.forceReconnect(serverName)
           : await this.connectServer(currentConfig);
         if (result.success) {
-          log.info(`Successfully reconnected server ${serverName} after ${currentAttempts + 1} attempts`);
+          log.info(
+            `Successfully reconnected server ${serverName} after ${currentAttempts + 1} attempts`,
+          );
           // Reset retry count on successful connection
           this.connectionRetryAttempts.delete(serverName);
         } else {
           log.warn(`Failed to reconnect server ${serverName}: ${result.error}`);
           // Don't retry if authentication is required
           if (result.requiresAuthentication) {
-            log.info(`Server ${serverName} requires authentication, stopping retry attempts`);
+            log.info(
+              `Server ${serverName} requires authentication, stopping retry attempts`,
+            );
             this.connectionRetryAttempts.delete(serverName);
             return;
           }
@@ -280,28 +657,67 @@ export class MCPService {
           this.scheduleConnectionRetry(serverName, currentConfig);
         }
       } catch (error) {
-        log.error(`Error during retry connection for server ${serverName}:`, error);
+        log.error(
+          `Error during retry connection for server ${serverName}:`,
+          error,
+        );
         // Schedule another retry if we haven't reached max attempts
         this.scheduleConnectionRetry(serverName, currentConfig);
       }
-    }, delay);
-    
+    }), delay);
+
     this.connectionRetryTimers.set(serverName, timer);
   }
-  
+
   /**
    * Check if the backend is currently starting up
    */
   isStartingUp(): boolean {
-    return global.__mcp_starting_up === true;
+    const workspace = getCurrentWorkspace();
+    return workspace === DEFAULT_WORKSPACE
+      ? global.__mcp_starting_up === true
+      : global.__mcp_starting_up_by_workspace?.get(workspace) === true;
   }
 
   /**
    * Set the backend startup state
    */
   private setStartingUp(value: boolean): void {
-    global.__mcp_starting_up = value;
-    log.info(`Backend startup state set to: ${value ? 'starting' : 'complete'}`);
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      global.__mcp_starting_up = value;
+    } else {
+      const states = global.__mcp_starting_up_by_workspace ??=
+        new Map<string, boolean>();
+      states.set(workspace, value);
+    }
+    log.info(
+      `Backend startup state set to: ${value ? "starting" : "complete"}`,
+    );
+  }
+
+  /**
+   * Issue #255: current client-(re)registration generation for a server. Returns
+   * 0 when the server has never registered a client. Advertise-time code records
+   * this on each tool's identity token; the dispatch-time staleness guard
+   * (assertToolIdentityFresh) compares against it.
+   */
+  getClientGeneration(serverName: string): number {
+    return this.clientGenerations.get(serverName) ?? 0;
+  }
+
+  /**
+   * Issue #255: record the input-schema hash currently advertised for a tool, so
+   * a later dispatch can detect a schema change against the hash frozen in the
+   * call's toolNameMap entry.
+   */
+  setToolSchemaHash(serverName: string, toolName: string, hash: string): void {
+    this.toolSchemaHashes.set(`${serverName}\0${toolName}`, hash);
+  }
+
+  /** Issue #255: current advertised input-schema hash for (server, tool), if known. */
+  getToolSchemaHash(serverName: string, toolName: string): string | undefined {
+    return this.toolSchemaHashes.get(`${serverName}\0${toolName}`);
   }
 
   /**
@@ -319,12 +735,17 @@ export class MCPService {
     // The map is shared across instances, so if another instance already replaced the
     // entry with a fresh client, we naturally see the fresh one here — never evict it.
     if (client && isClientConnectionClosed(client)) {
-      log.warn(`getClient: client for ${serverName} has a closed/aborted connection — evicting it`);
+      log.warn(
+        `getClient: client for ${serverName} has a closed/aborted connection — evicting it`,
+      );
       this.clients.delete(serverName);
       return undefined;
     }
 
-    log.debug(`getClient: Looking for client: ${serverName}`, client ? 'Found' : 'Not found');
+    log.debug(
+      `getClient: Looking for client: ${serverName}`,
+      client ? "Found" : "Not found",
+    );
     return client;
   }
 
@@ -332,38 +753,28 @@ export class MCPService {
    * Load MCP server configurations from storage
    */
   async loadServerConfigs(): Promise<MCPServerConfig[] | MCPServiceResponse> {
-    log.debug('loadServerConfigs: Entering method');
+    log.debug("loadServerConfigs: Entering method");
 
     try {
       const serverConfigs = await loadServerConfigs();
 
       if (!Array.isArray(serverConfigs)) {
-        log.warn('loadServerConfigs: Received non-array response', serverConfigs);
+        log.warn(
+          "loadServerConfigs: Received non-array response",
+          serverConfigs,
+        );
         return serverConfigs;
       }
 
-      // The built-in internal servers (FLUJO's backend API, filesystem, bash) are
-      // synthesized here rather than stored, so they are always present and always
-      // up to date. A stored config that claims one of the reserved names wins
-      // (legacy user server) and simply shadows the built-in one. Never persisted:
-      // saveConfig() drops builtIn entries. The per-server enable/disable override
-      // (issue #170) is applied here (only the tiny { disabled } flag is stored).
-      const builtIns = await builtInServerConfigsWithOverrides();
-      for (const builtIn of builtIns) {
-        if (serverConfigs.some(c => c.name === builtIn.name)) {
-          log.warn(`loadServerConfigs: A stored server is named "${builtIn.name}" — it shadows FLUJO's built-in server`);
-          continue;
-        }
-        serverConfigs.push(builtIn);
-      }
-
-      log.debug(`loadServerConfigs: Loaded ${serverConfigs.length} server configs`);
+      log.debug(
+        `loadServerConfigs: Loaded ${serverConfigs.length} server configs`,
+      );
       return serverConfigs;
     } catch (error) {
-      log.warn('loadServerConfigs: Failed to load server configs:', error);
+      log.warn("loadServerConfigs: Failed to load server configs:", error);
       return {
         success: false,
-        error: `Failed to load server configs: ${error instanceof Error ? error.message : 'Unknown error'}`
+        error: `Failed to load server configs: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
   }
@@ -371,23 +782,28 @@ export class MCPService {
   /**
    * Get a server configuration by name
    */
-  private async getServerConfig(serverName: string): Promise<MCPServerConfig | null> {
+  private async getServerConfig(
+    serverName: string,
+  ): Promise<MCPServerConfig | null> {
     log.debug(`getServerConfig: Looking up config for server ${serverName}`);
-    
+
     const configs = await this.loadServerConfigs();
-    
+
     if (!Array.isArray(configs)) {
-      log.warn(`getServerConfig: Failed to load configs for ${serverName}:`, configs.error);
+      log.warn(
+        `getServerConfig: Failed to load configs for ${serverName}:`,
+        configs.error,
+      );
       return null;
     }
-    
-    const config = configs.find(c => c.name === serverName);
-    
+
+    const config = configs.find((c) => c.name === serverName);
+
     if (!config) {
       log.warn(`getServerConfig: Server ${serverName} not found in configs`);
       return null;
     }
-    
+
     return config;
   }
 
@@ -403,29 +819,15 @@ export class MCPService {
   }
 
   /**
-   * Is this name the built-in internal server (and not shadowed by a stored
-   * config)? The storage check keeps a pre-existing user server that happens to
-   * be named like the built-in one fully functional: for such a name every
-   * short-circuit below steps aside and the normal client/transport path runs.
-   * Names other than the reserved one return false at a string compare — the
-   * storage read only ever happens for the reserved name itself.
-   */
-  private async isInternalServer(serverName: string): Promise<boolean> {
-    if (!isBuiltInServerName(serverName)) return false;
-    const stored = await loadServerConfigs();
-    return !Array.isArray(stored) || !stored.some(c => c.name === serverName);
-  }
-
-  /**
    * Connect to an MCP server by name
    */
   async connectServer(serverName: string): Promise<MCPServiceResponse>;
-  
+
   /**
    * Connect to an MCP server using a configuration object
    */
   async connectServer(config: MCPServerConfig): Promise<MCPServiceResponse>;
-  
+
   /**
    * Implementation of connectServer that handles both parameter types.
    *
@@ -437,56 +839,93 @@ export class MCPService {
    * previously left the stored refresh token permanently poisoned (see isAuthRequiredError
    * and MCPOAuthClientProvider.invalidateCredentials for the recovery half of this fix).
    */
-  async connectServer(configOrName: MCPServerConfig | string): Promise<MCPServiceResponse> {
-    const serverName = typeof configOrName === 'string' ? configOrName : configOrName.name;
+  async connectServer(
+    configOrName: MCPServerConfig | string,
+  ): Promise<MCPServiceResponse> {
+    const serverName =
+      typeof configOrName === "string" ? configOrName : configOrName.name;
 
-    // The built-in internal server has no client or transport to establish — it is
-    // "connected" by definition. Short-circuit BEFORE the in-flight machinery so the
-    // startup sweep (which includes the synthetic config) and flow handlers get an
-    // instant success, and clear any "connecting" marker the sweep set for it.
-    if (isBuiltInServerName(serverName)) {
-      const isBuiltIn =
-        typeof configOrName !== 'string'
-          ? configOrName.builtIn === true
-          : await this.isInternalServer(serverName);
-      if (isBuiltIn) {
-        this.connectingServers.delete(serverName);
-        return { success: true };
+    // Issue #413: de-duplication and teardown ordering now live in the
+    // process-wide lifecycle coordinator rather than in this instance's map.
+    // `inFlightConnects` was INSTANCE-local, so two Next.js module instances each
+    // believed they were the only connector and forked two child trees for one
+    // config. beginConnect also awaits any pending teardown first, so a
+    // replacement connection can never be built while its predecessor's child is
+    // still exiting.
+    return beginConnect(serverName, async () => {
+      // Keep the legacy instance-local map populated: existing tests and
+      // status/diagnostic call sites still read it.
+      const attempt = this.connectServerInternal(configOrName).finally(() => {
+        this.inFlightConnects.delete(serverName);
+      });
+      this.inFlightConnects.set(serverName, attempt);
+      const result = await attempt;
+      if (result.success) {
+        markConnected(serverName, this.configFingerprint(configOrName));
+      } else {
+        // A transport that is still registered while no client landed means the
+        // failure happened DURING the handshake (post-spawn), which is the case
+        // that leaks a half-initialized child if teardown is skipped.
+        const handshakeFailure =
+          this.activeTransports.has(serverName) && !this.clients.has(serverName);
+        markConnectFailed(
+          serverName,
+          result.error ?? "unknown connection failure",
+          handshakeFailure,
+        );
       }
-    }
-
-    const inFlight = this.inFlightConnects.get(serverName);
-    if (inFlight) {
-      log.debug(`connectServer: reusing in-flight connection attempt for ${serverName}`);
-      return inFlight;
-    }
-
-    const attempt = this.connectServerInternal(configOrName).finally(() => {
-      this.inFlightConnects.delete(serverName);
+      return result;
     });
-    this.inFlightConnects.set(serverName, attempt);
-    return attempt;
   }
 
-  private async connectServerInternal(configOrName: MCPServerConfig | string): Promise<MCPServiceResponse> {
+  /**
+   * Cheap identity fingerprint of the configuration a runtime was built from.
+   *
+   * Used only to detect that a runtime belongs to a superseded configuration
+   * generation, so it never needs to be stable across processes or reversible.
+   * Never includes resolved secrets: only the shape that decides WHAT is spawned.
+   */
+  private configFingerprint(configOrName: MCPServerConfig | string): string | undefined {
+    if (typeof configOrName === "string") return undefined;
+    const config = configOrName as MCPServerConfig & {
+      command?: string;
+      args?: string[];
+      url?: string;
+      websocketUrl?: string;
+      rootPath?: string;
+    };
+    return [
+      config.transport,
+      config.command ?? "",
+      (config.args ?? []).join(" "),
+      config.url ?? "",
+      config.websocketUrl ?? "",
+      config.rootPath ?? "",
+      config.disabled ? "disabled" : "enabled",
+    ].join("\0");
+  }
+
+  private async connectServerInternal(
+    configOrName: MCPServerConfig | string,
+  ): Promise<MCPServiceResponse> {
     // Determine if we're connecting by name or by config
     let config: MCPServerConfig;
-    
-    if (typeof configOrName === 'string') {
+
+    if (typeof configOrName === "string") {
       // We're connecting by server name
       const serverName = configOrName;
       log.info(`connectServer: Looking up config for server ${serverName}`);
-      
+
       // Look up the configuration directly from storage
       const existingConfig = await this.getServerConfig(serverName);
       if (!existingConfig) {
         log.warn(`connectServer: Server ${serverName} not found in configs`);
         return {
           success: false,
-          error: `Server configuration for "${serverName}" not found. The server may have been deleted or not properly configured.`
+          error: `Server configuration for "${serverName}" not found. The server may have been deleted or not properly configured.`,
         };
       }
-      
+
       config = existingConfig;
     } else {
       // We're connecting with a config object
@@ -501,9 +940,16 @@ export class MCPService {
     // config object: flow nodes pass node-bound snapshots that may be stale, and
     // the stored config is the source of truth for `disabled`.
     const storedConfig =
-      typeof configOrName === 'string' ? config : await this.getServerConfig(config.name);
+      typeof configOrName === "string"
+        ? config
+        : await this.getServerConfig(config.name);
+    // Keep the storage-shaped config separate from the resolved connection clone below.
+    // Auth-mode decisions and cleanup must never operate on decrypted header material.
+    const persistedConfig = storedConfig ?? config;
     if ((storedConfig ?? config).disabled) {
-      log.info(`connectServer: Server ${config.name} is disabled — refusing to create a client/transport`);
+      log.info(
+        `connectServer: Server ${config.name} is disabled — refusing to create a client/transport`,
+      );
       // Disabled servers must not keep retry machinery alive either.
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
@@ -514,7 +960,9 @@ export class MCPService {
     }
 
     const requestId = uuidv4();
-    log.info(`connectServer: Starting connection for server ${config.name} [RequestID: ${requestId}]`);
+    log.info(
+      `connectServer: Starting connection for server ${config.name} [RequestID: ${requestId}]`,
+    );
 
     // Mark this server as having an in-flight connection attempt so getServerStatus()
     // reports "connecting" (spinner + auto-poll on the MCP page) instead of an error
@@ -532,6 +980,17 @@ export class MCPService {
       // header material — and thus the key — changes.
       config = await resolveConfigHeaders(config);
 
+      // Experimental v2-beta protocol (betaClient.ts). Resolved once per attempt so
+      // shouldRecreateClient and the factories below agree; websocket configs always
+      // stay on the v1 SDK (the v2 SDK has no websocket transport).
+      const useBeta =
+        !isProtectedExecutionServer(config.name) && (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
+      const isolateRuntimeHome = await resolveRuntimeHomeIsolation(config);
+      const transportOptions = {
+        enableRuntimeBroker: true,
+        isolateRuntimeHome,
+      };
+
       // Check if we already have a client for this server
       let client = this.clients.get(config.name);
 
@@ -547,7 +1006,12 @@ export class MCPService {
       // checks here are cheap and local (no network round-trip), preserving the fast
       // path for the common case.
       if (client) {
-        const { needsNewClient, reason } = shouldRecreateClient(client, config);
+        const { needsNewClient, reason } = shouldRecreateClient(
+          client,
+          config,
+          useBeta,
+          transportOptions,
+        );
         if (!needsNewClient) {
           log.info(`connectServer: Server ${config.name} is already connected`);
           this.lastConnectionError.delete(config.name);
@@ -555,35 +1019,96 @@ export class MCPService {
           // zombie's late close) must not fire against it later.
           this.clearRetryTimer(config.name);
           this.connectionRetryAttempts.delete(config.name);
+          await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
           return { success: true };
         }
 
-        log.info(`connectServer: Existing client for ${config.name} is stale (${reason}), recreating`);
+        log.info(
+          `connectServer: Existing client for ${config.name} is stale (${reason}), recreating`,
+        );
         // Deregister BEFORE closing so the transport's own close event is recognized
         // as FLUJO-initiated and does not schedule a reconnect (see deregisterClient).
         this.deregisterClient(config.name);
         try {
           await safelyCloseClient(client, config.name, config);
         } catch (closeError) {
-          log.debug(`connectServer: error closing stale client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+          log.debug(
+            `connectServer: error closing stale client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+          );
         }
         client = undefined;
       }
 
-      // Create a new client
-      client = createNewClient(config);
-      const transport = createTransport(config);
+      // Create a new client (v2-beta when the experimental toggle is on — the beta
+      // client negotiates per server and falls back to the classic handshake, so
+      // existing servers keep working either way).
+      client = useBeta ? createNewBetaClient(config) : createNewClient(config);
+      const transport = useBeta
+        ? createBetaTransport(config, transportOptions)
+        : createTransport(config, transportOptions);
+      if (config.transport === "stdio") {
+        registerExternalAuthorizationClient(
+          client,
+          config.name,
+          useBeta ? getStdioOAuthMrtrController(transport) : undefined,
+        );
+      }
 
-      // Add stderr capture
-      if (transport instanceof StdioClientTransport && transport.stderr) {
+      // Register resource-change notification handlers so FLUJO can detect when a server's
+      // resource listing changes (notifications/resources/list_changed) or a subscribed
+      // resource updates (notifications/resources/updated). Both paths use a method-string
+      // cast so they work without importing the v2 SDK types here.
+      if (!useBeta) {
+        // v1 SDK: use the Zod-schema-based setNotificationHandler from resourceNotifications.ts
+        registerResourceNotificationHandlers(
+          client,
+          config.name,
+          bindToCurrentWorkspace((name: string) => this.onResourceListChanged(name)),
+          bindToCurrentWorkspace((name: string, uri: string) => this.onResourceUpdated(name, uri)),
+        );
+      } else {
+        // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
+        // typed handler. Cast through unknown to call it without importing the beta types here.
+        const betaSetNotification = (
+          client as unknown as {
+            setNotificationHandler: (
+              method: string,
+              handler: (n: unknown) => void,
+            ) => void;
+          }
+        ).setNotificationHandler?.bind(client);
+        if (betaSetNotification) {
+          betaSetNotification("notifications/resources/list_changed", bindToCurrentWorkspace(() => {
+            this.onResourceListChanged(config.name);
+          }));
+          betaSetNotification(
+            "notifications/resources/updated",
+            bindToCurrentWorkspace((notification: unknown) => {
+              const uri = (notification as { params?: { uri?: string } })
+                ?.params?.uri;
+              if (uri) this.onResourceUpdated(config.name, uri);
+            }),
+          );
+        }
+      }
+
+      // Add stderr capture. Duck-typed on the stderr stream (present on both the v1
+      // and v2-beta stdio transports when spawned with stderr: 'pipe') instead of a
+      // v1 instanceof, so beta stdio servers get the same capture.
+      const stdioStderr = (
+        transportForHostInspection(transport) as {
+          stderr?: NodeJS.ReadableStream | null;
+        }
+      ).stderr;
+      if (stdioStderr && typeof stdioStderr.on === "function") {
         const serverName = config.name;
-        transport.stderr.on('data', (data: Buffer) => {
+        stdioStderr.on("data", bindToCurrentWorkspace((data: Buffer) => {
           const stderrMessage = data.toString();
           log.warn(`stderr: [${serverName}]: ${stderrMessage}`);
 
           // Store stderr logs (capped, see appendStderrLog)
           this.appendStderrLog(serverName, stderrMessage);
-        });
+        }));
       }
 
       // Register FLUJO's transport event handlers BEFORE client.connect(): the SDK's
@@ -593,7 +1118,7 @@ export class MCPService {
       // transport had closed: pending requests were never rejected with "Connection
       // closed", client.transport stayed attached, and later calls surfaced as the
       // cryptic AbortError "This operation was aborted" from the aborted fetch signal.
-      transport.onclose = () => {
+      transport.onclose = bindToCurrentWorkspace(() => {
         // Only act if THIS transport is still the registered one for the server.
         // Two cases must be ignored: (a) a zombie process from a replaced connection
         // finally exiting — its late close event used to delete the CURRENT healthy
@@ -601,7 +1126,9 @@ export class MCPService {
         // itself initiated (disconnect/reconnect/config change), which deregister
         // before closing and must not schedule a self-defeating reconnect.
         if (this.activeTransports.get(config.name) !== transport) {
-          log.debug(`connectServer: ignoring close event from a stale/deregistered transport for ${config.name}`);
+          log.debug(
+            `connectServer: ignoring close event from a stale/deregistered transport for ${config.name}`,
+          );
           return;
         }
 
@@ -611,21 +1138,30 @@ export class MCPService {
         this.deregisterClient(config.name);
 
         // Check if server is still enabled before scheduling reconnection
-        this.getServerConfig(config.name).then(currentConfig => {
-          if (!currentConfig || currentConfig.disabled) {
-            log.info(`Server ${config.name} is now disabled, skipping reconnection logic`);
-            return;
-          }
+        this.getServerConfig(config.name)
+          .then((currentConfig) => {
+            if (!currentConfig || currentConfig.disabled) {
+              log.info(
+                `Server ${config.name} is now disabled, skipping reconnection logic`,
+              );
+              return;
+            }
 
-          // Only schedule reconnection if server is still enabled
-          log.info(`Connection closed for enabled server ${config.name}, scheduling reconnection`);
-          this.scheduleConnectionRetry(config.name, currentConfig);
-        }).catch(error => {
-          log.warn(`Error checking server config for ${config.name} during onclose:`, error);
-        });
-      };
+            // Only schedule reconnection if server is still enabled
+            log.info(
+              `Connection closed for enabled server ${config.name}, scheduling reconnection`,
+            );
+            this.scheduleConnectionRetry(config.name, currentConfig);
+          })
+          .catch((error) => {
+            log.warn(
+              `Error checking server config for ${config.name} during onclose:`,
+              error,
+            );
+          });
+      });
 
-      transport.onerror = (error) => {
+      transport.onerror = bindToCurrentWorkspace((error: Error) => {
         // The Streamable HTTP transport keeps a long-lived SSE stream open for server->client
         // notifications; servers/proxies recycle that idle stream (e.g. Cloudflare in front of
         // Asana), which surfaces here as "SSE stream disconnected: TypeError: terminated". The
@@ -635,7 +1171,7 @@ export class MCPService {
         // transport, whose stale reconnection loop would then keep firing this handler.
         if (isTransientStreamError(error)) {
           log.debug(
-            `connectServer: transient SSE stream disconnect for ${config.name} (self-healing, ignored): ${error instanceof Error ? error.message : String(error)}`
+            `connectServer: transient SSE stream disconnect for ${config.name} (self-healing, ignored): ${error instanceof Error ? error.message : String(error)}`,
           );
           return;
         }
@@ -644,13 +1180,15 @@ export class MCPService {
         // or intentionally-closed transport must not tear down the CURRENT connection
         // or schedule a reconnect against it.
         if (this.activeTransports.get(config.name) !== transport) {
-          log.debug(`connectServer: ignoring error event from a stale/deregistered transport for ${config.name}`);
+          log.debug(
+            `connectServer: ignoring error event from a stale/deregistered transport for ${config.name}`,
+          );
           return;
         }
 
         // Enhanced error logging to capture more details about transport errors
         log.error(`connectServer: Transport error for server ${config.name}:`);
-        
+
         // Log error details in multiple ways to capture as much information as possible
         if (error instanceof Error) {
           log.error(`Error name: ${error.name}`);
@@ -665,19 +1203,28 @@ export class MCPService {
             log.error(`Error code: ${httpCode}`);
           }
           log.error(`Error chain: ${formatErrorChain(error)}`);
-        } else if (error && typeof error === 'object') {
+        } else if (error && typeof error === "object") {
+          const errorRecord = error as Record<string, unknown>;
+          const prototype = Object.getPrototypeOf(error) as {
+            constructor?: { name?: unknown };
+          } | null;
+          const constructorName = typeof prototype?.constructor?.name === "string"
+            ? prototype.constructor.name
+            : "Unknown";
           // Try to log individual properties of the error object
           log.error(`Error type: ${typeof error}`);
-          log.error(`Error constructor: ${(error as any).constructor?.name || 'Unknown'}`);
-          
+          log.error(`Error constructor: ${constructorName}`);
+
           // Log all enumerable properties
           const errorProps = Object.getOwnPropertyNames(error);
           if (errorProps.length > 0) {
-            log.error(`Error properties: ${errorProps.join(', ')}`);
-            errorProps.forEach(prop => {
+            log.error(`Error properties: ${errorProps.join(", ")}`);
+            errorProps.forEach((prop) => {
               try {
-                const value = (error as any)[prop];
-                log.error(`  ${prop}: ${typeof value === 'function' ? '[Function]' : JSON.stringify(value)}`);
+                const value = errorRecord[prop];
+                log.error(
+                  `  ${prop}: ${typeof value === "function" ? "[Function]" : JSON.stringify(value)}`,
+                );
               } catch (propError) {
                 log.error(`  ${prop}: [Unable to serialize: ${propError}]`);
               }
@@ -685,7 +1232,7 @@ export class MCPService {
           } else {
             log.error(`Error object has no enumerable properties`);
           }
-          
+
           // Try JSON.stringify as fallback
           try {
             const jsonError = JSON.stringify(error);
@@ -696,40 +1243,78 @@ export class MCPService {
         } else {
           log.error(`Error value: ${String(error)} (type: ${typeof error})`);
         }
-        
+
         // Store more detailed error information. Walk the full cause chain so a generic
         // "fetch failed" becomes the real underlying error (e.g. TLS verification failure).
-        this.appendStderrLog(config.name, `Transport error: ${formatErrorChain(error)}`);
+        this.appendStderrLog(
+          config.name,
+          `Transport error: ${formatErrorChain(error)}`,
+        );
 
         // Clean up client references for the transport that actually errored
         this.deregisterClient(config.name);
 
-
         // Check if server is still enabled before scheduling reconnection
-        this.getServerConfig(config.name).then(currentConfig => {
-          if (!currentConfig || currentConfig.disabled) {
-            log.info(`Server ${config.name} is now disabled, skipping reconnection after transport error`);
-            return;
-          }
-          
-          // Only schedule reconnection if server is still enabled
-          log.info(`Transport error for enabled server ${config.name}, scheduling reconnection`);
-          this.scheduleConnectionRetry(config.name, currentConfig);
-        }).catch(error => {
-          log.warn(`Error checking server config for ${config.name} during onerror:`, error);
-        });
-      };
+        this.getServerConfig(config.name)
+          .then((currentConfig) => {
+            if (!currentConfig || currentConfig.disabled) {
+              log.info(
+                `Server ${config.name} is now disabled, skipping reconnection after transport error`,
+              );
+              return;
+            }
+
+            // Only schedule reconnection if server is still enabled
+            log.info(
+              `Transport error for enabled server ${config.name}, scheduling reconnection`,
+            );
+            this.scheduleConnectionRetry(config.name, currentConfig);
+          })
+          .catch((error) => {
+            log.warn(
+              `Error checking server config for ${config.name} during onerror:`,
+              error,
+            );
+          });
+      });
 
       // Handshake. Both handlers above are inert until the transport is registered as
       // the CURRENT one below (their stale guard sees activeTransports unset), so a
       // failure during connect surfaces only through this call's catch.
       await client.connect(transport);
+      if (config.transport === "stdio" && useBeta) {
+        activateStdioOAuthMrtrController(transport);
+      }
 
       // Store the new client (in the shared cross-instance map) and register its
       // transport as the CURRENT one for this server — the reference the
       // onclose/onerror stale guards compare against.
       this.clients.set(config.name, client);
       this.activeTransports.set(config.name, transport);
+      // Issue #255: advance the generation on every (re)registration. Tool calls
+      // planned against the previous instance now read as stale at dispatch time.
+      this.clientGenerations.set(
+        config.name,
+        this.getClientGeneration(config.name) + 1,
+      );
+
+      // A negotiated mcp-stdio-oauth extension is a control-plane readiness
+      // contract, not a tool. Probe it immediately after the handshake so the MCP page
+      // can show required account setup before any foreground or scheduled flow runs.
+      // A malformed extension must not tear down an otherwise valid MCP connection;
+      // point-of-use checks below still fail closed before dispatching a tool.
+      if (serverSupportsExternalAuthorization(client)) {
+        try {
+          await getExternalAuthorizationStatus(client, config.name, {
+            force: true,
+          });
+        } catch (authorizationError) {
+          log.warn(
+            `mcp-stdio-oauth readiness probe failed for ${config.name}:`,
+            authorizationError,
+          );
+        }
+      }
 
       // Connected successfully - clear any persisted failure from previous attempts,
       // and cancel any pending retry so an old timer can't fire against the fresh
@@ -737,81 +1322,115 @@ export class MCPService {
       this.lastConnectionError.delete(config.name);
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
+      await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
 
-      log.info(`connectServer: Successfully connected to ${config.name}`);
+      const negotiated = negotiatedProtocolVersion(client);
+      log.info(
+        `connectServer: Successfully connected to ${config.name}` +
+          (negotiated
+            ? ` (beta SDK, negotiated MCP protocol ${negotiated})`
+            : ""),
+      );
       return { success: true };
     } catch (error) {
-      log.error(`connectServer: Failed to connect to server ${config.name}:`, error);
-      
-      // Check if this is an OAuth authentication error
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorName = error instanceof Error ? error.name : '';
-      
-      if (errorMessage.includes('OAuth authentication required') || errorName === 'OAuthAuthenticationRequired') {
-        log.info(`OAuth authentication required for server ${config.name}`);
-        
-        // Store the authorization URL if available
-        if (config.transport === 'streamable') {
-          const streamableConfig = config as MCPStreamableConfig;
-          if (streamableConfig.authorizationUrl) {
-            log.info(`Authorization URL available for ${config.name}: ${streamableConfig.authorizationUrl}`);
-          }
-        }
-        
-        return { 
-          success: false, 
-          error: errorMessage,
-          requiresAuthentication: true 
-        };
+      // A child may have registered its sidecar before the MCP handshake
+      // failed. Never leave that browser route pointing at a dead/reused port.
+      if (config.transport === 'stdio') {
+        revokeMcpAppRuntimeBrokerForServer(config.name);
       }
-      
-      // Check for other OAuth-related errors (401/403 indicating missing auth) - this also
-      // covers a freshly-added streamable server that has no OAuth config at all yet, where
-      // createTransport() never attached an auth provider and the server just rejected the
-      // unauthenticated request outright (e.g. Asana's MCP V2 API).
-      if (isAuthRequiredError(error)) {
-        log.info(`OAuth authentication error detected for server ${config.name}: ${errorMessage}`);
-        
-        // For streamable servers, dynamically enable OAuth if not already configured
-        if (config.transport === 'streamable') {
+      log.error(
+        `connectServer: Failed to connect to server ${config.name}:`,
+        error,
+      );
+
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      const oauthProviderError = isOAuthAuthenticationError(error);
+      const requiresAuthentication = isAuthRequiredError(error);
+      const usesStaticAuthorization =
+        hasConfiguredAuthorizationHeader(persistedConfig);
+      let oauthCapable: boolean | undefined;
+
+      // A transport-level 401/403 proves only that this request was rejected. It may be
+      // a static bearer/custom-header failure, so enable and persist OAuth only after the
+      // endpoint advertises OAuth capability. Provider-originated errors are already
+      // conclusive because this server was connected with a configured OAuth provider.
+      if (
+        requiresAuthentication &&
+        !usesStaticAuthorization &&
+        (config.transport === "streamable" || config.transport === "sse")
+      ) {
+        const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig)
+          .serverUrl;
+        if (serverUrl) {
+          oauthCapable = (await probeOAuthSupport(serverUrl)).oauthCapable;
+        }
+      }
+
+      if (oauthProviderError || oauthCapable) {
+        log.info(
+          `OAuth authentication error detected for server ${config.name}: ${errorMessage}`,
+        );
+
+        if (config.transport === "streamable" && oauthCapable) {
           const streamableConfig = config as MCPStreamableConfig;
-          
-          // If OAuth scopes are not set, this server needs OAuth but wasn't configured for it
-          if (!streamableConfig.oauthScopes || streamableConfig.oauthScopes.length === 0) {
-            log.info(`Dynamically enabling OAuth for server ${config.name} due to authentication error`);
-            
+          if (
+            !streamableConfig.oauthScopes ||
+            streamableConfig.oauthScopes.length === 0
+          ) {
+            log.info(
+              `Dynamically enabling OAuth for server ${config.name} after capability confirmation`,
+            );
+
             try {
-              // Update the config to include OAuth scopes
               const updatedConfig = {
                 ...streamableConfig,
-                oauthScopes: ['read'] // Set default OAuth scope
+                oauthScopes: ["read"],
               };
-              
-              // Save the updated config to storage
               const configs = await this.loadServerConfigs();
               if (Array.isArray(configs)) {
-                const configIndex = configs.findIndex(c => c.name === config.name);
+                const configIndex = configs.findIndex(
+                  (c) => c.name === config.name,
+                );
                 if (configIndex !== -1) {
                   configs[configIndex] = updatedConfig;
-                  await saveConfig(new Map(configs.map(c => [c.name, c])));
+                  await saveConfig(new Map(configs.map((c) => [c.name, c])));
                   log.info(`Updated config for ${config.name} to enable OAuth`);
                 }
               }
             } catch (updateError) {
-              log.warn(`Failed to update config for ${config.name} to enable OAuth:`, updateError);
+              log.warn(
+                `Failed to update config for ${config.name} to enable OAuth:`,
+                updateError,
+              );
             }
           }
         }
-        
-        return { 
-          success: false, 
-          error: 'OAuth authentication failed or tokens have expired. Please re-authenticate.',
-          requiresAuthentication: true 
+
+        return {
+          success: false,
+          error:
+            "OAuth authentication failed or tokens have expired. Please re-authenticate.",
+          requiresAuthentication: true,
+          oauthCapable: true,
         };
       }
-      
+
+      if (requiresAuthentication) {
+        return {
+          success: false,
+          error: errorMessage,
+          requiresAuthentication: true,
+          oauthCapable,
+        };
+      }
+
       const stderrLogs = this.stderrLogs.get(config.name) || [];
-      const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
+      const enhancedErrorMessage = enhanceConnectionErrorMessage(
+        error,
+        config,
+        stderrLogs,
+      );
 
       // Persist the failure so getServerStatus() can report a meaningful message instead of
       // the generic "configured but not connected" fallback. HTTP transports (streamable/sse)
@@ -840,9 +1459,11 @@ export class MCPService {
   async testConnection(
     config: MCPServerConfig,
     onOutput?: (event: TestConnectionEvent) => void,
-    options?: { storedName?: string }
+    options?: { storedName?: string },
   ): Promise<MCPServiceResponse> {
-    log.info(`testConnection: Testing connection to ${config.name || '(unnamed)'} via ${config.transport} transport`);
+    log.info(
+      `testConnection: Testing connection to ${config.name || "(unnamed)"} via ${config.transport} transport`,
+    );
 
     // Optional live-output sink (issue #64). When omitted, behaviour is byte-for-byte
     // identical to the original one-shot request/response probe.
@@ -856,7 +1477,10 @@ export class MCPService {
 
     const stderrLogs: string[] = [];
     let client: Client | null = null;
-    let transport: ReturnType<typeof createTransport> | null = null;
+    let transport:
+      | ReturnType<typeof createTransport>
+      | ReturnType<typeof createBetaTransport>
+      | null = null;
 
     try {
       // For remote (streamable/sse) servers the browser may send back a MASKED secret header
@@ -869,41 +1493,80 @@ export class MCPService {
       // exactly as the live connection does.
       let toTest = config;
       const lookupName = options?.storedName || config.name;
-      if ((config.transport === 'streamable' || config.transport === 'sse') && lookupName) {
+      if (
+        (config.transport === "streamable" || config.transport === "sse") &&
+        lookupName
+      ) {
         const stored = await this.loadServerConfigs();
-        const savedCfg = Array.isArray(stored) ? stored.find(c => c.name === lookupName) : undefined;
-        const savedHeaders = (savedCfg as MCPSSEConfig | MCPStreamableConfig | undefined)?.headers;
-        const incomingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
-        toTest = { ...config, headers: hydrateMaskedHeaders(incomingHeaders, savedHeaders) } as MCPServerConfig;
+        const savedCfg = Array.isArray(stored)
+          ? stored.find((c) => c.name === lookupName)
+          : undefined;
+        const savedHeaders = (
+          savedCfg as MCPSSEConfig | MCPStreamableConfig | undefined
+        )?.headers;
+        const incomingHeaders = (config as MCPSSEConfig | MCPStreamableConfig)
+          .headers;
+        toTest = {
+          ...config,
+          headers: hydrateMaskedHeaders(incomingHeaders, savedHeaders),
+        } as MCPServerConfig;
       }
 
       // Resolve + decrypt custom headers (#84) so the probe uses the same real header values
       // the live connection would (shares createTransport). Global bindings / encrypted
       // secrets are resolved here; plain values pass through unchanged.
       const connectConfig = await resolveConfigHeaders(toTest);
-      client = createNewClient(connectConfig);
-      transport = createTransport(connectConfig);
+      // Same experimental v2-beta routing as the live connection, so Test Run
+      // probes exactly what connectServer would build.
+      const useBeta =
+        !isProtectedExecutionServer(connectConfig.name) && (await isMcpBetaProtocolEnabled()) &&
+        connectConfig.transport !== "websocket";
+      const isolateRuntimeHome = await resolveRuntimeHomeIsolation(connectConfig);
+      const transportOptions = { isolateRuntimeHome };
+      client = useBeta
+        ? createNewBetaClient(connectConfig)
+        : createNewClient(connectConfig);
+      transport = useBeta
+        ? createBetaTransport(connectConfig, transportOptions)
+        : createTransport(connectConfig, transportOptions);
+      if (connectConfig.transport === "stdio") {
+        registerExternalAuthorizationClient(
+          client,
+          connectConfig.name,
+          useBeta ? getStdioOAuthMrtrController(transport) : undefined,
+        );
+      }
 
       // Capture stdio stderr (for stdio servers) and transport errors so we can build a
       // meaningful message if the handshake fails. When a live-output sink is attached
       // (issue #64), also forward each chunk AS IT ARRIVES so a slow cold `npx`/`uvx`
       // start fills the console instead of looking frozen. (The child's stdout is the
       // MCP JSON-RPC channel owned by the SDK transport, so only stderr + lifecycle
-      // markers are reliably streamable for stdio.)
-      if (transport instanceof StdioClientTransport && transport.stderr) {
-        transport.stderr.on('data', (data: Buffer) => {
+      // markers are reliably streamable for stdio.) Duck-typed on the stderr stream so
+      // the v2-beta stdio transport is covered too.
+      const probeStderr = (
+        transportForHostInspection(transport) as {
+          stderr?: NodeJS.ReadableStream | null;
+        }
+      ).stderr;
+      if (probeStderr && typeof probeStderr.on === "function") {
+        probeStderr.on("data", (data: Buffer) => {
           const chunk = data.toString();
           stderrLogs.push(chunk);
-          emit({ type: 'stderr', data: chunk });
+          emit({ type: "stderr", data: chunk });
         });
       }
       transport.onerror = (err: Error) => {
         const line = `Transport error: ${formatErrorChain(err)}`;
         stderrLogs.push(line);
-        emit({ type: 'stderr', data: line + '\n' });
+        emit({ type: "stderr", data: line + "\n" });
       };
 
-      emit({ type: 'status', phase: 'spawning', message: 'Starting server / opening transport...' });
+      emit({
+        type: "status",
+        phase: "spawning",
+        message: "Starting server / opening transport...",
+      });
 
       // Runner-aware timeout: a cold `npx`/`uvx`/`bunx`/`pnpm dlx` may need to DOWNLOAD
       // the package before the MCP handshake even starts, which routinely exceeds the 15s
@@ -913,35 +1576,53 @@ export class MCPService {
       let timeoutHandle: NodeJS.Timeout | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
-          () => reject(new Error(
-            `Connection timeout after ${timeoutMs / 1000}s`
-            + (isRunner
-              ? ' — the package may still be downloading via npx/uvx. Try running the Test again (the package is cached after the first download), or verify the command and network access.'
-              : '')
-          )),
-          timeoutMs
+          () =>
+            reject(
+              new Error(
+                `Connection timeout after ${timeoutMs / 1000}s` +
+                  (isRunner
+                    ? " — the package may still be downloading via npx/uvx. Try running the Test again (the package is cached after the first download), or verify the command and network access."
+                    : ""),
+              ),
+            ),
+          timeoutMs,
         );
       });
 
-      emit({ type: 'status', phase: 'handshaking', message: 'Performing MCP handshake...' });
+      emit({
+        type: "status",
+        phase: "handshaking",
+        message: "Performing MCP handshake...",
+      });
       try {
         await Promise.race([client.connect(transport), timeoutPromise]);
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
       }
+      if (connectConfig.transport === "stdio" && useBeta) {
+        activateStdioOAuthMrtrController(transport);
+      }
 
       // Handshake succeeded — try to list tools to confirm full protocol compatibility.
-      emit({ type: 'status', phase: 'listing-tools', message: 'Handshake OK — listing tools...' });
+      emit({
+        type: "status",
+        phase: "listing-tools",
+        message: "Handshake OK — listing tools...",
+      });
       let toolCount = 0;
       try {
         const result = await client.listTools();
         toolCount = Array.isArray(result?.tools) ? result.tools.length : 0;
       } catch (listError) {
-        log.debug(`testConnection: connected to ${config.name} but listTools failed: ${listError instanceof Error ? listError.message : String(listError)}`);
+        log.debug(
+          `testConnection: connected to ${config.name} but listTools failed: ${listError instanceof Error ? listError.message : String(listError)}`,
+        );
       }
 
-      log.info(`testConnection: Successfully connected to ${config.name} (${toolCount} tools)`);
-      emit({ type: 'result', success: true, data: { toolCount } });
+      log.info(
+        `testConnection: Successfully connected to ${config.name} (${toolCount} tools)`,
+      );
+      emit({ type: "result", success: true, data: { toolCount } });
       return { success: true, data: { toolCount } };
     } catch (error) {
       log.warn(`testConnection: Failed to connect to ${config.name}:`, error);
@@ -952,24 +1633,48 @@ export class MCPService {
       // (RFC 9728) so the UI can offer to authenticate instead of only hinting at a static
       // Authorization header. Best-effort: probeOAuthSupport never throws.
       let oauthCapable: boolean | undefined;
-      if (requiresAuthentication && (config.transport === 'streamable' || config.transport === 'sse')) {
-        const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig).serverUrl;
+      if (
+        requiresAuthentication &&
+        (config.transport === "streamable" || config.transport === "sse")
+      ) {
+        const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig)
+          .serverUrl;
         if (serverUrl) {
           oauthCapable = (await probeOAuthSupport(serverUrl)).oauthCapable;
         }
       }
 
-      const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
-      emit({ type: 'result', success: false, error: enhancedErrorMessage, requiresAuthentication, oauthCapable });
-      return { success: false, error: enhancedErrorMessage, requiresAuthentication, oauthCapable };
+      const enhancedErrorMessage = enhanceConnectionErrorMessage(
+        error,
+        config,
+        stderrLogs,
+      );
+      emit({
+        type: "result",
+        success: false,
+        error: enhancedErrorMessage,
+        requiresAuthentication,
+        oauthCapable,
+      });
+      return {
+        success: false,
+        error: enhancedErrorMessage,
+        requiresAuthentication,
+        oauthCapable,
+      };
     } finally {
       if (client) {
         try {
           // Short grace: this is a throwaway probe and the Test Run response is
           // waiting on this close - don't hold it for the full production window.
-          await safelyCloseClient(client, config.name, config, { gracePeriodMs: 3000, killEscalationMs: 2000 });
+          await safelyCloseClient(client, config.name, config, {
+            gracePeriodMs: 3000,
+            killEscalationMs: 2000,
+          });
         } catch (closeError) {
-          log.debug(`testConnection: error closing test client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+          log.debug(
+            `testConnection: error closing test client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+          );
         }
       }
     }
@@ -1000,7 +1705,9 @@ export class MCPService {
   notifyRootsChanged(serverName: string): void {
     const client = this.getClient(serverName);
     if (!client) {
-      log.debug(`notifyRootsChanged: ${serverName} not connected, skipping notification`);
+      log.debug(
+        `notifyRootsChanged: ${serverName} not connected, skipping notification`,
+      );
       return;
     }
     try {
@@ -1013,27 +1720,31 @@ export class MCPService {
     }
   }
 
+  /** Announce a workspace-level folders edit to every connected server here. */
+  notifyAllRootsChanged(): void {
+    for (const serverName of this.clients.keys()) {
+      this.notifyRootsChanged(serverName);
+    }
+  }
+
   /**
    * Disconnect from an MCP server
    */
   async disconnectServer(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`disconnectServer: Entering method for server ${serverName}`);
 
-    // The built-in internal server has no connection to tear down.
-    if (await this.isInternalServer(serverName)) {
-      return { success: true };
-    }
-
     // Clear any retry timers for this server
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
-    
+
     // Resolve via getClient: the shared map is cross-instance, and getClient also
     // evicts a client whose connection is already closed — there is nothing left to
     // "disconnect" for one of those, only references to purge.
     const client = this.getClient(serverName);
     if (!client) {
-      log.warn(`disconnectServer: Server ${serverName} not found in clients map`);
+      log.warn(
+        `disconnectServer: Server ${serverName} not found in clients map`,
+      );
       // Even without a live client, purge any lingering references so a stale entry
       // can never be observed by another instance after this call.
       this.deregisterClient(serverName);
@@ -1049,18 +1760,129 @@ export class MCPService {
       // Get the server config to pass to safelyCloseClient
       const config = await this.getServerConfig(serverName);
 
-      // Close the client following the MCP shutdown sequence
-      await safelyCloseClient(client, serverName, config || undefined);
+      // Issue #413: run the close through the ONE idempotent, awaitable teardown
+      // so overlapping shouts of "close it" (transport error + disable + shutdown
+      // arriving together) fold onto a single close instead of racing each other
+      // into a double-close that orphans grandchildren.
+      await beginTeardown(serverName, "disconnect", async () => {
+        const closed = await safelyCloseClient(client, serverName, config || undefined);
+        return { forced: closed.forced };
+      });
 
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true };
     } catch (error) {
-      log.warn(`disconnectServer: Failed to disconnect server ${serverName}:`, error);
+      log.warn(
+        `disconnectServer: Failed to disconnect server ${serverName}:`,
+        error,
+      );
       return {
         success: false,
-        error: `Failed to disconnect server: ${error instanceof Error ? error.message : 'Unknown error'}`
+        error: `Failed to disconnect server: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
+  }
+
+  /**
+   * Tear down EVERY live MCP connection, awaiting each child's exit (issue #413).
+   *
+   * FLUJO had no process-wide MCP shutdown at all: the only teardown was
+   * per-server and user-initiated, so on SIGTERM/SIGINT (or a container stop) the
+   * whole fleet of stdio servers — and everything they had spawned — was left to
+   * the OS, which reparents rather than kills. Repeated start/stop cycles
+   * therefore accumulated server trees until the machine was rebooted.
+   *
+   * Idempotent: each per-server teardown folds onto its coordinator promise, so
+   * calling this from several signal handlers at once is safe. Never rejects — a
+   * shutdown path must not be derailed by one uncooperative server.
+   */
+  async disconnectAll(reason: string): Promise<{ closed: string[]; failed: string[] }> {
+    const closed: string[] = [];
+    const failed: string[] = [];
+    // Snapshot the names first: closing mutates the shared registry.
+    const serverNames = Array.from(new Set(Array.from(this.clients.keys())));
+    log.info(`disconnectAll: tearing down ${serverNames.length} MCP server(s) (${reason})`);
+
+    for (const serverName of serverNames) {
+      // Retry timers must die first, or a pending retry fires mid-shutdown and
+      // re-forks the very server we just closed.
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
+      try {
+        const result = await this.disconnectServer(serverName);
+        if (result.success) closed.push(serverName);
+        else failed.push(serverName);
+      } catch (error) {
+        log.warn(
+          `disconnectAll: teardown of ${serverName} threw: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        failed.push(serverName);
+      }
+    }
+
+    // Any record still holding a retry timer (a server that was cold but
+    // scheduled to retry) must be silenced too, or the process cannot exit.
+    for (const [serverName] of Array.from(this.connectionRetryTimers)) {
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
+    }
+
+    log.info(
+      `disconnectAll: closed=${closed.length} failed=${failed.length} (${reason})`,
+    );
+    return { closed, failed };
+  }
+
+  /**
+   * Bounded lifecycle/pool diagnostics (issue #413).
+   *
+   * Counters, states and sizes only: never stderr, command lines or provider
+   * payloads, so the report is safe to log and cheap to keep.
+   */
+  getLifecycleReport(): {
+    runtimes: ReturnType<typeof getLifecycleDiagnostics>;
+    pool: ReturnType<typeof getPoolDiagnostics>;
+    liveClients: number;
+  } {
+    return {
+      runtimes: getLifecycleDiagnostics(),
+      pool: getPoolDiagnostics(),
+      liveClients: this.clients.size,
+    };
+  }
+
+  /**
+   * Close warm servers nothing is using, honouring leases and pins.
+   *
+   * Exposed so a caller (an idle sweep cron, a suspend hook) can reclaim memory
+   * without knowing about the pool module. Never warms a cold server.
+   */
+  async sweepIdleMcpServers(): Promise<string[]> {
+    const closed = await sweepIdleServers(this);
+    const evicted = await enforceWarmCapacity(this);
+    return [...closed, ...evicted];
+  }
+
+  /**
+   * Acquire a lease on a server, connecting it lazily if it is cold.
+   *
+   * Consumers should prefer this over `connectServer` + `getClient`: while the
+   * lease is held the idle sweep and LRU eviction cannot close the server, and
+   * `lease.isStale()` reports a config-generation replacement so a caller can
+   * never keep using a client that is being torn down.
+   */
+  acquireServerLease(serverName: string): Promise<AcquireResult> {
+    return acquireLease(this, serverName);
+  }
+
+  /** Pin a server against idle/LRU closure (subscriptions, MCP App sessions, tasks). */
+  pinServer(serverName: string, pin: string): void {
+    pinServer(serverName, pin);
+  }
+
+  /** Release a named pin. */
+  unpinServer(serverName: string, pin: string): void {
+    unpinServer(serverName, pin);
   }
 
   /**
@@ -1071,12 +1893,9 @@ export class MCPService {
    * transport rather than short-circuiting on the stale one still sitting in the map.
    */
   async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
-    log.info(`forceReconnect: Forcing fresh connection for server ${serverName}`);
-
-    // Nothing to rebuild for the built-in internal server.
-    if (await this.isInternalServer(serverName)) {
-      return { success: true };
-    }
+    log.info(
+      `forceReconnect: Forcing fresh connection for server ${serverName}`,
+    );
 
     const existing = this.clients.get(serverName);
     if (existing) {
@@ -1087,7 +1906,9 @@ export class MCPService {
       try {
         await safelyCloseClient(existing, serverName, config || undefined);
       } catch (closeError) {
-        log.debug(`forceReconnect: error closing stale client for ${serverName}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+        log.debug(
+          `forceReconnect: error closing stale client for ${serverName}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+        );
       }
     }
 
@@ -1104,22 +1925,13 @@ export class MCPService {
    * empty/failed list (which upstream silently turned into "this node has no MCP tools"),
    * we force a single reconnect-and-retry. Listing tools is idempotent, so retrying is safe.
    */
-  async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
-    log.debug(`listServerTools: Entering method for server ${serverName}`);
-
-    // The built-in internal server answers in-process — no client, no reconnect
-    // machinery. Dynamic import on purpose: internalTools transitively imports
-    // modules that import mcpService back (see internalServerConfig.ts).
-    if (await this.isInternalServer(serverName)) {
-      // A disabled built-in server behaves like any disabled server (issue #170).
-      if (await this.isServerDisabled(serverName)) {
-        const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
-        log.warn(`listServerTools: ${error}`);
-        return { tools: [], error };
-      }
-      const { internalToolDefinitionsFor } = await import('./internal/dispatch');
-      return { tools: await internalToolDefinitionsFor(serverName) };
-    }
+  async listServerTools(
+    serverName: string,
+    audience: ToolListAudience = "model",
+  ): Promise<{ tools: ToolResponse[]; error?: string }> {
+    log.debug(
+      `listServerTools: Entering method for server ${serverName}, audience ${audience}`,
+    );
 
     // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
     // loudly instead of attempting a pointless reconnect against a disabled server.
@@ -1134,55 +1946,130 @@ export class MCPService {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
 
-    let result = await listTools(client, serverName);
+    let result = await listTools(client, serverName, audience);
 
     if (result.error) {
       // The connection is likely stale/dead - reconnect from scratch and try once more
       // before giving up, so a recoverable blip does not silently strip a node's tools.
-      log.warn(`listServerTools: Listing tools for ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+      log.warn(
+        `listServerTools: Listing tools for ${serverName} failed (${result.error}); forcing reconnect and retrying once`,
+      );
 
       const reconnect = await this.forceReconnect(serverName);
       if (!reconnect.success) {
-        log.warn(`listServerTools: Reconnect for ${serverName} failed: ${reconnect.error}`);
+        log.warn(
+          `listServerTools: Reconnect for ${serverName} failed: ${reconnect.error}`,
+        );
         return { tools: [], error: reconnect.error || result.error };
       }
 
       client = this.clients.get(serverName);
-      result = await listTools(client, serverName);
+      result = await listTools(client, serverName, audience);
 
       if (result.error) {
-        log.warn(`listServerTools: Retry after reconnect still failed for ${serverName}:`, result.error);
+        log.warn(
+          `listServerTools: Retry after reconnect still failed for ${serverName}:`,
+          result.error,
+        );
       } else {
-        log.info(`listServerTools: Recovered after reconnect for ${serverName}; listed ${result.tools.length} tools`);
+        log.info(
+          `listServerTools: Recovered after reconnect for ${serverName}; listed ${result.tools.length} tools`,
+        );
       }
     } else {
-      log.info(`listServerTools: Listed ${result.tools.length} tools for ${serverName}`);
+      log.info(
+        `listServerTools: Listed ${result.tools.length} tools for ${serverName}`,
+      );
     }
 
     return result;
   }
 
   /**
+   * Read the negotiated third-party-account readiness contract. This never
+   * guesses tool names and never starts an authorization flow.
+   */
+  async getExternalAuthorizationStatus(
+    serverName: string,
+    force = false,
+  ): Promise<MCPStdioOAuthStatus> {
+    return getExternalAuthorizationStatus(
+      this.getClient(serverName),
+      serverName,
+      { force },
+    );
+  }
+
+  /** Start a user-initiated extension request and capture its browser URL. */
+  async prepareExternalAuthorization(
+    serverName: string,
+    authorizationId: string,
+    options: { signal?: AbortSignal } = {},
+  ) {
+    let client = this.getClient(serverName);
+    if (!client) {
+      const reconnect = await this.forceReconnect(serverName);
+      if (!reconnect.success) {
+        throw new Error(
+          reconnect.error || `Could not connect to ${serverName}.`,
+        );
+      }
+      client = this.getClient(serverName);
+    }
+    if (!client)
+      throw new Error(`MCP server '${serverName}' is not connected.`);
+    return prepareExternalAuthorization(
+      client,
+      serverName,
+      authorizationId,
+      options,
+    );
+  }
+
+  confirmExternalAuthorization(serverName: string, sessionId: string) {
+    return confirmExternalAuthorization(serverName, sessionId);
+  }
+
+  declineExternalAuthorization(serverName: string, sessionId: string): boolean {
+    return declineExternalAuthorization(serverName, sessionId);
+  }
+
+  cancelExternalAuthorization(serverName: string, sessionId?: string): boolean {
+    return cancelExternalAuthorization(serverName, sessionId);
+  }
+
+  /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void): Promise<MCPServiceResponse> {
-    log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
-
-    // The built-in internal server dispatches in-process. The dispatcher always
-    // resolves to a CallToolResult (tool-level failures come back as isError
-    // results), matching how a real server's tool errors flow through `data`.
-    if (await this.isInternalServer(serverName)) {
-      // A disabled built-in server must not be invoked (issue #170).
-      if (await this.isServerDisabled(serverName)) {
-        const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
-        log.warn(`callTool: ${error}`);
-        return { success: false, error };
+  async callTool(
+    serverName: string,
+    toolName: string,
+    args: ToolArgs,
+    timeout?: number,
+    onProgress?: (progress: ToolCallProgress) => void,
+    callerNodeId?: string,
+    signal?: AbortSignal,
+    source: ToolCallSource = "host",
+    ownerScope?: string,
+    trustedContext?: TrustedMcpToolInvocationContext,
+    executionExtensionContext?: ExecutionExtensionContext,
+  ): Promise<MCPServiceResponse> {
+    // Customer authority is checked before config side effects, connections or leases.
+    // Testers, Apps, proxy, scheduler and missing-context resumes cannot mint assertions.
+    try {
+      if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
+        await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
+        const config = await this.getServerConfig(serverName);
+        if (!config) throw new ExecutionExtensionError('execution_server_policy_mismatch');
+        assertExecutionServerConfig(config);
       }
-      const { internalCallToolFor } = await import('./internal/dispatch');
-      const result = await internalCallToolFor(this, serverName, toolName, args);
-      log.info(`callTool: Dispatched internal tool ${toolName} on ${serverName}`);
-      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_authorization_unavailable',
+        statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-authorization' };
     }
+    log.debug(
+      `callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`,
+    );
 
     // Disabled servers must never be invoked — even if a live client somehow
     // lingers after disabling (issue #54). This point-of-use guard sits on top of
@@ -1206,19 +2093,223 @@ export class MCPService {
     // statusCode 404, none of which mean the connection is dead. A dead-but-present client
     // (e.g. expired HTTP session) is healed by the listServerTools reconnect that the flow
     // path runs before calling tools.
-    if (!client) {
-      log.warn(`callTool: No client for ${serverName}; forcing reconnect before calling ${toolName}`);
-      const reconnect = await this.forceReconnect(serverName);
-      if (reconnect.success) {
-        client = this.clients.get(serverName);
-      } else {
-        log.warn(`callTool: Reconnect for ${serverName} failed: ${reconnect.error}`);
-      }
+    // Issue #413: hold a LEASE for the duration of the call. An in-flight tool
+    // call is demand, so while it runs neither the idle sweep nor LRU eviction may
+    // close the server underneath it. Acquiring also connects a cold server on
+    // demand, which is what makes lazy pooling transparent here.
+    const acquired = await this.acquireServerLease(serverName);
+    const lease = acquired.lease;
+    if (lease) {
+      client = lease.client;
+    } else if (!client) {
+      log.warn(
+        `callTool: Lease acquisition for ${serverName} failed: ${acquired.error}`,
+      );
     }
 
-    const result = await callToolFunction(client, serverName, toolName, args, timeout, onProgress);
-    log.info(`callTool: Called tool ${toolName} on ${serverName}`);
+    // Everything below runs while the lease is held, and the lease is released in
+    // ONE `finally` covering every exit path (including the authorization gate's
+    // early returns). An early return that skipped the release would leave a
+    // phantom lease pinning the server warm for the process lifetime.
+    try {
+      // Fail closed before invoking a side-effecting tool. This gate is shared by
+      // chat, normal flows, scheduled runs, polls, and MCP Apps, so a background
+      // execution can never discover account setup by opening UI after the fact.
+      if (client && serverSupportsExternalAuthorization(client)) {
+        try {
+          const authorization = await getExternalAuthorizationStatus(
+            client,
+            serverName,
+            { force: true },
+          );
+          if (authorization.blockingAuthorization) {
+            const requiredAuthorization = authorization.blockingAuthorization;
+            const error =
+              requiredAuthorization.message ||
+              `${requiredAuthorization.label} authorization is required. Open the MCP page to authenticate before running this flow.`;
+            log.warn(`callTool: blocked ${serverName}/${toolName}: ${error}`);
+            return {
+              success: false,
+              error,
+              errorType: "stdio-oauth-required",
+              statusCode: 428,
+              requiresAuthentication: true,
+            };
+          }
+        } catch (authorizationError) {
+          const detail =
+            authorizationError instanceof Error
+              ? authorizationError.message
+              : String(authorizationError);
+          log.warn(
+            `callTool: mcp-stdio-oauth readiness check failed for ${serverName}: ${detail}`,
+          );
+          return {
+            success: false,
+            error: `Could not verify account readiness for '${serverName}': ${detail}`,
+            errorType: "stdio-oauth-status",
+            statusCode: 503,
+          };
+        }
+      }
+
+      const trustedToolConfig = source === "model"
+        && toolName === "create_ticket_for_human"
+        && trustedContext?.conversationId
+        ? await this.getServerConfig(serverName)
+        : null;
+      const trustedTicketConversationId = trustedFlujoTicketConversationId(
+        trustedToolConfig,
+        toolName,
+        source,
+        trustedContext,
+      );
+      const effectiveArgs = trustedTicketConversationId
+        ? injectTrustedFlujoToolContext(
+            trustedToolConfig,
+            toolName,
+            args,
+            source,
+            trustedContext,
+          )
+        : args;
+      const result = await callToolFunction(
+        client,
+        serverName,
+        toolName,
+        effectiveArgs,
+        timeout,
+        onProgress,
+        signal,
+        source,
+        callerNodeId,
+        ownerScope,
+        executionExtensionContext,
+      );
+      if (result.success && trustedTicketConversationId) {
+        const ticketId = createdTicketIdFromMcpResult(result.data);
+        if (ticketId) {
+          try {
+            const { ticketService } = await import('@/backend/services/ticket');
+            await ticketService.stampPersonaAttributionFromTrustedConversation(
+              ticketId,
+              trustedTicketConversationId,
+            );
+          } catch (error) {
+            // The ticket already exists; keep the tool result truthful while
+            // surfacing a storage failure for operators instead of trusting an
+            // unverified payload at the HTTP boundary.
+            log.error(`callTool: Failed to stamp trusted ticket attribution for ${ticketId}`, error);
+          }
+        }
+      }
+      log.info(`callTool: Called tool ${toolName} on ${serverName}`);
+      return result;
+    } finally {
+      // Idempotent release: safe even when acquisition failed and this is undefined.
+      lease?.release();
+    }
+  }
+
+  /**
+   * Call a tool on behalf of an MCP App frame.
+   *
+   * The app supplies only a tool name and arguments; `serverName` comes from
+   * the host frame that instantiated it. The low-level call verifies
+   * `_meta.ui.visibility` against definitions listed from that exact client
+   * immediately before dispatch. A failed authorization listing is safe to
+   * reconnect and retry once because the tool has not executed yet.
+   */
+  async callToolFromApp(
+    serverName: string,
+    toolName: string,
+    args: ToolArgs,
+    timeout?: number,
+    signal?: AbortSignal,
+    ownerScope?: string,
+    onProgress?: (progress: ToolCallProgress) => void,
+  ): Promise<MCPServiceResponse> {
+    const appAccess = await this.checkMcpAppAccess(serverName);
+    if (appAccess) return appAccess;
+
+    let result = await this.callTool(
+      serverName,
+      toolName,
+      args,
+      timeout,
+      onProgress,
+      undefined,
+      signal,
+      "app",
+      ownerScope,
+    );
+
+    if (result.errorType !== "tool-authorization-list") {
+      return result;
+    }
+
+    log.warn(
+      `callToolFromApp: visibility lookup failed for ${serverName}/${toolName}; reconnecting and retrying once before dispatch`,
+    );
+    const reconnect = await this.forceReconnect(serverName);
+    if (!reconnect.success) {
+      return {
+        success: false,
+        error: reconnect.error || result.error,
+        statusCode: result.statusCode,
+      };
+    }
+
+    result = await this.callTool(
+      serverName,
+      toolName,
+      args,
+      timeout,
+      onProgress,
+      undefined,
+      signal,
+      "app",
+      ownerScope,
+    );
     return result;
+  }
+
+  /**
+   * Treat the per-server MCP Apps opt-in as a live authorization predicate.
+   * Historical chat messages can outlive a config change, so a persisted
+   * `ui://` marker must not keep app-originated access after the user opts out.
+   * Every persisted config follows the same opt-in rule; shipped package records
+   * are provisioned with access off until the user explicitly enables it.
+   */
+  async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
+    const config = await this.getServerConfig(serverName);
+    if (config?.disabled === true) return false;
+    return config?.enableMcpApps === true;
+  }
+
+  private async checkMcpAppAccess(
+    serverName: string,
+  ): Promise<MCPServiceResponse | null> {
+    if (await this.isMcpAppAccessEnabled(serverName)) return null;
+
+    const error = `MCP Apps are not enabled for server '${serverName}'. Enable them on the MCP page before opening or using this app.`;
+    log.warn(`MCP App access denied: ${error}`);
+    return { success: false, error, statusCode: 403 };
+  }
+
+  /**
+   * Read a resource on behalf of an MCP App View. Unlike host/control-plane
+   * resource reads, this re-checks the server's current opt-in on every request
+   * so disabling MCP Apps revokes already-persisted or already-open Views.
+   */
+  async readResourceFromApp(
+    serverName: string,
+    uri: string,
+  ): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+    const appAccess = await this.checkMcpAppAccess(serverName);
+    if (appAccess)
+      return appAccess as MCPServiceResponse<MCPReadResourceResult>;
+    return this.readResource(serverName, uri);
   }
 
   /**
@@ -1234,15 +2325,8 @@ export class MCPService {
   private async listWithReconnect<T extends { error?: string }>(
     serverName: string,
     lister: (client: Client | undefined, serverName: string) => Promise<T>,
-    emptyResult: T
+    emptyResult: T,
   ): Promise<T> {
-    // The built-in internal server never goes through client machinery. Its
-    // resources are short-circuited in listServerResources/-Templates BEFORE
-    // this method; anything else that reaches here (prompts) is empty.
-    if (await this.isInternalServer(serverName)) {
-      return emptyResult;
-    }
-
     // Point-of-use guard on top of the connect-time hard gate (issue #54).
     if (await this.isServerDisabled(serverName)) {
       const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
@@ -1260,19 +2344,28 @@ export class MCPService {
       return result;
     }
 
-    log.warn(`listWithReconnect: Listing for ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+    log.warn(
+      `listWithReconnect: Listing for ${serverName} failed (${result.error}); forcing reconnect and retrying once`,
+    );
     const reconnect = await this.forceReconnect(serverName);
     if (!reconnect.success) {
-      log.warn(`listWithReconnect: Reconnect for ${serverName} failed: ${reconnect.error}`);
+      log.warn(
+        `listWithReconnect: Reconnect for ${serverName} failed: ${reconnect.error}`,
+      );
       return { ...emptyResult, error: reconnect.error || result.error };
     }
 
     client = this.clients.get(serverName);
     result = await lister(client, serverName);
     if (result.error) {
-      log.warn(`listWithReconnect: Retry after reconnect still failed for ${serverName}:`, result.error);
+      log.warn(
+        `listWithReconnect: Retry after reconnect still failed for ${serverName}:`,
+        result.error,
+      );
     } else {
-      log.info(`listWithReconnect: Recovered after reconnect for ${serverName}`);
+      log.info(
+        `listWithReconnect: Recovered after reconnect for ${serverName}`,
+      );
     }
     return result;
   }
@@ -1280,51 +2373,40 @@ export class MCPService {
   /**
    * List the resources a server publishes (#15). Reconnect-and-retry like listServerTools.
    */
-  async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
+  async listServerResources(
+    serverName: string,
+  ): Promise<{ resources: MCPResource[]; error?: string }> {
+    if (isProtectedExecutionServer(serverName)) return { resources: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(`listServerResources: Entering method for server ${serverName}`);
-    // The built-in `flujo` server publishes RUN-SCOPED resources in-process
-    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern. Other
-    // built-ins (filesystem/bash) publish no resources.
-    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
-      const { internalListResources } = await import('./internalResources');
-      return internalListResources();
-    }
-    // The built-in `filesystem` server publishes its MCP App UI (#97).
-    if (serverName === FILESYSTEM_SERVER_NAME) {
-      const { filesystemListResources } = await import('./internal/filesystemResources');
-      return filesystemListResources();
-    }
     return this.listWithReconnect(serverName, listResources, { resources: [] });
   }
 
   /**
    * List the resource templates a server publishes (#15).
    */
-  async listServerResourceTemplates(serverName: string): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
-    log.debug(`listServerResourceTemplates: Entering method for server ${serverName}`);
-    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
-      const { internalListResourceTemplates } = await import('./internalResources');
-      return internalListResourceTemplates();
-    }
-    return this.listWithReconnect(serverName, listResourceTemplates, { resourceTemplates: [] });
+  async listServerResourceTemplates(
+    serverName: string,
+  ): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
+    if (isProtectedExecutionServer(serverName)) return { resourceTemplates: [], error: 'execution_protocol_surface_forbidden' };
+    log.debug(
+      `listServerResourceTemplates: Entering method for server ${serverName}`,
+    );
+    return this.listWithReconnect(serverName, listResourceTemplates, {
+      resourceTemplates: [],
+    });
   }
 
   /**
    * Read a resource's contents from a server (#15).
    */
-  async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
-    log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
-    // Run-scoped resources are served in-process by the `flujo` server —
-    // this also makes `${resource:flujo__flujo://run/...}` pills work.
-    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
-      const { internalReadResource } = await import('./internalResources');
-      return internalReadResource(uri);
-    }
-    // The built-in `filesystem` server serves its MCP App UI HTML in-process (#97).
-    if (serverName === FILESYSTEM_SERVER_NAME) {
-      const { filesystemReadResource, isFilesystemAppUri } = await import('./internal/filesystemResources');
-      if (isFilesystemAppUri(uri)) return filesystemReadResource(uri);
-    }
+  async readResource(
+    serverName: string,
+    uri: string,
+  ): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
+    log.debug(
+      `readResource: Entering method for server ${serverName}, uri ${uri}`,
+    );
     const client = this.getClient(serverName);
     if (!client) {
       log.warn(`readResource: Client not found for ${serverName}`);
@@ -1334,10 +2416,273 @@ export class MCPService {
     return result;
   }
 
+  private async prepareMcpSkillsClient(
+    serverName: string,
+  ): Promise<MCPServiceResponse<{ client: Client; capability: McpSkillsExtensionCapability }>> {
+    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
+    const config = await this.getServerConfig(serverName);
+    if (!config) {
+      return { success: false, error: `MCP server '${serverName}' was not found.`, statusCode: 404 };
+    }
+    if (config.disabled) {
+      return {
+        success: false,
+        error: `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`,
+        statusCode: 409,
+        errorType: "disabled",
+      };
+    }
+    if (config.enableMcpSkills !== true) {
+      return {
+        success: false,
+        error: `MCP Skills are disabled for server '${serverName}'.`,
+        statusCode: 409,
+        errorType: "skills_disabled",
+      };
+    }
+
+    const connect = await this.connectServer(serverName);
+    if (!connect.success) {
+      return {
+        success: false,
+        error: connect.error || `Failed to connect to MCP server '${serverName}'.`,
+        statusCode: connect.statusCode || 502,
+      };
+    }
+
+    const client = this.getClient(serverName);
+    const capability = getMcpSkillsCapability(client, true);
+    if (!client || !capability) {
+      return {
+        success: false,
+        error: `Server '${serverName}' does not advertise ${MCP_SKILLS_EXTENSION_ID}.`,
+        statusCode: 404,
+        errorType: "skills_unsupported",
+      };
+    }
+    return { success: true, data: { client, capability } };
+  }
+
+  async getServerSkillsCapability(
+    serverName: string,
+  ): Promise<McpSkillsExtensionCapability | undefined> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    return prepared.success ? prepared.data?.capability : undefined;
+  }
+
+  async listServerSkills(
+    serverName: string,
+    cursor?: string,
+  ): Promise<McpServerSkillsResult> {
+    const config = await this.getServerConfig(serverName);
+    if (!config || config.disabled || config.enableMcpSkills !== true) {
+      return {
+        resultType: "complete",
+        skills: [],
+        serverName,
+        availability: "disabled",
+        ...(!config ? { error: `MCP server '${serverName}' was not found.` } : {}),
+      };
+    }
+
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) {
+      return {
+        resultType: "complete",
+        skills: [],
+        serverName,
+        availability:
+          prepared.errorType === "skills_unsupported" ? "unsupported" : "available",
+        ...(prepared.errorType === "skills_unsupported" ? {} : { error: prepared.error }),
+      };
+    }
+
+    const attempt = async (client: Client) => listMcpSkills(client, true, cursor);
+    try {
+      const result = await attempt(prepared.data.client);
+      return {
+        ...result,
+        serverName,
+        availability: "available",
+        capability: prepared.data.capability,
+      };
+    } catch (error) {
+      if (error instanceof McpSkillsUnsupportedError) {
+        return {
+          resultType: "complete",
+          skills: [],
+          serverName,
+          availability: "unsupported",
+        };
+      }
+
+      const reconnect = await this.forceReconnect(serverName);
+      if (reconnect.success) {
+        const retryClient = this.getClient(serverName);
+        try {
+          const result = await attempt(retryClient as Client);
+          const capability = getMcpSkillsCapability(retryClient, true);
+          return {
+            ...result,
+            serverName,
+            availability: "available",
+            ...(capability ? { capability } : {}),
+          };
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+
+      return {
+        resultType: "complete",
+        skills: [],
+        serverName,
+        availability: "available",
+        error: error instanceof Error ? error.message : "Failed to list MCP Skills.",
+      };
+    }
+  }
+
+  async getServerSkill(
+    serverName: string,
+    uri: string,
+  ): Promise<MCPServiceResponse<McpGetSkillResult>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+
+    try {
+      return { success: true, data: await getMcpSkill(prepared.data.client, true, uri) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to get MCP Skill.",
+        statusCode: error instanceof McpSkillsUnsupportedError ? 404 : 502,
+      };
+    }
+  }
+
+  async readServerSkillDirectory(
+    serverName: string,
+    uri: string,
+    cursor?: string,
+  ): Promise<MCPServiceResponse<McpReadSkillDirectoryResult>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+
+    try {
+      return {
+        success: true,
+        data: await readMcpSkillDirectory(prepared.data.client, true, uri, cursor),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to read MCP Skill directory.",
+        statusCode: error instanceof McpSkillsUnsupportedError ? 404 : 502,
+      };
+    }
+  }
+
+  async readVerifiedSkillResource(
+    serverName: string,
+    skillUri: string,
+    resourceUri: string,
+  ): Promise<MCPServiceResponse<McpVerifiedSkillResource>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+    const skill = await this.getServerSkill(serverName, skillUri);
+    if (!skill.success || !skill.data) return mcpFailure(skill);
+
+    try {
+      return {
+        success: true,
+        data: await readVerifiedMcpSkillResource(
+          prepared.data.client,
+          true,
+          skill.data.skill,
+          resourceUri,
+        ),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to verify MCP Skill resource.",
+        statusCode: 422,
+      };
+    }
+  }
+
+  async loadVerifiedSkill(
+    serverName: string,
+    skillUri: string,
+    conversationId: string,
+  ): Promise<MCPServiceResponse<McpLoadedSkill>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+    const skill = await this.getServerSkill(serverName, skillUri);
+    if (!skill.success || !skill.data) return mcpFailure(skill);
+
+    if (skill.data.skill.resources === "dynamic") {
+      return {
+        success: false,
+        error: "Dynamic MCP Skills cannot be integrity-verified.",
+        statusCode: 422,
+      };
+    }
+
+    const normalizedSkillUri = parseMcpSkillUri(skill.data.skill.uri).normalizedUri;
+    const manifest = skill.data.skill.resources.find(
+      (resource) => resource.uri === normalizedSkillUri,
+    );
+    if (!manifest) {
+      return {
+        success: false,
+        error: "MCP Skill manifest metadata is missing.",
+        statusCode: 422,
+      };
+    }
+
+    const approval = getApprovedMcpSkill({
+      conversationId,
+      serverName,
+      skillUri: normalizedSkillUri,
+      manifestDigest: manifest.digest,
+    });
+    if (!approval) {
+      return {
+        success: false,
+        error: "This MCP Skill is not approved for the current conversation and manifest digest.",
+        statusCode: 403,
+        errorType: "skills_approval_required",
+      };
+    }
+
+    try {
+      return {
+        success: true,
+        data: await loadVerifiedMcpSkill(
+          prepared.data.client,
+          true,
+          serverName,
+          skill.data.skill,
+        ),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to load MCP Skill.",
+        statusCode: 422,
+      };
+    }
+  }
+
   /**
    * List the prompt templates a server publishes (#15).
    */
-  async listServerPrompts(serverName: string): Promise<{ prompts: MCPPrompt[]; error?: string }> {
+  async listServerPrompts(
+    serverName: string,
+  ): Promise<{ prompts: MCPPrompt[]; error?: string }> {
+    if (isProtectedExecutionServer(serverName)) return { prompts: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(`listServerPrompts: Entering method for server ${serverName}`);
     return this.listWithReconnect(serverName, listPrompts, { prompts: [] });
   }
@@ -1345,8 +2690,15 @@ export class MCPService {
   /**
    * Fetch a prompt template, expanded with arguments, from a server (#15).
    */
-  async getPrompt(serverName: string, promptName: string, args?: Record<string, string>): Promise<MCPServiceResponse<MCPGetPromptResult>> {
-    log.debug(`getPrompt: Entering method for server ${serverName}, prompt ${promptName}`);
+  async getPrompt(
+    serverName: string,
+    promptName: string,
+    args?: Record<string, string>,
+  ): Promise<MCPServiceResponse<MCPGetPromptResult>> {
+    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
+    log.debug(
+      `getPrompt: Entering method for server ${serverName}, prompt ${promptName}`,
+    );
     const client = this.getClient(serverName);
     if (!client) {
       log.warn(`getPrompt: Client not found for ${serverName}`);
@@ -1362,16 +2714,64 @@ export class MCPService {
    * API-key handling so the two behave identically:
    *   - MASKED_API_KEY        -> keep the existing stored secret (the UI never saw the real one)
    *   - "${global:VAR}"       -> a global-variable binding; store the reference verbatim
-   *   - "encrypted[_failed]:"  -> already encrypted; store as-is (idempotent, no double-encrypt)
+   *   - "encrypted:"         -> already encrypted; store as-is (idempotent, no double-encrypt)
    *   - "" (empty)            -> cleared/unbound; store empty
    *   - anything else         -> a freshly typed plaintext secret; encrypt it at rest
    */
-  private async resolveOAuthSecretForSave(incoming: string, existing: string | undefined): Promise<string> {
-    if (incoming === MASKED_API_KEY) return existing ?? '';
-    if (!incoming) return '';
-    if (incoming.startsWith('${global:')) return incoming;
-    if (incoming.startsWith('encrypted:') || incoming.startsWith('encrypted_failed:')) return incoming;
-    return await encryptApiKey(incoming);
+  private async resolveOAuthSecretForSave(
+    incoming: string,
+    existing: string | undefined,
+  ): Promise<string> {
+    if (isMaskedHeaderValue(incoming)) incoming = existing ?? "";
+    if (!incoming) return "";
+    if (incoming.startsWith("${global:")) return incoming;
+    return this.encryptSecretForSave(incoming);
+  }
+
+  /** Never persist the legacy encryption-failure marker, which contains plaintext. */
+  private async encryptSecretForSave(value: string): Promise<string> {
+    if (value.startsWith("encrypted_failed:")) {
+      throw new Error("MCP credential encryption failed");
+    }
+    if (value.startsWith("encrypted:") && value.length > "encrypted:".length) {
+      return value;
+    }
+    const encrypted = await encryptApiKey(value);
+    if (!encrypted.startsWith("encrypted:") || encrypted.length <= "encrypted:".length) {
+      throw new Error("MCP credential encryption failed");
+    }
+    return encrypted;
+  }
+
+  /** Env maps replace the prior map; explicit masks retain secrets, omitted keys delete them. */
+  private async resolveEnvForSave(
+    incoming: Record<string, EnvVarValue>,
+    existing: Record<string, EnvVarValue> | undefined,
+  ): Promise<Record<string, EnvVarValue>> {
+    const result: Record<string, EnvVarValue> = {};
+    for (const [key, raw] of Object.entries(mcpValueRecord(incoming))) {
+      let value = typeof raw === "string" ? raw : raw.value;
+      const previous = existing?.[key];
+      const wasSecret = typeof previous === "object" && previous.metadata.isSecret;
+      const isSecret = typeof raw === "string"
+        ? wasSecret || isSecretEnvVar(key)
+        : raw.metadata.isSecret;
+      if (!isSecret) {
+        result[key] = raw;
+        continue;
+      }
+      if (isMaskedHeaderValue(value)) {
+        if (previous === undefined) continue;
+        value = typeof previous === "string" ? previous : previous.value;
+        // A placeholder without a stored credential must never become a runtime password.
+        if (isMaskedHeaderValue(value)) continue;
+      }
+      result[key] = {
+        value: !value || isGlobalBinding(value) ? value : await this.encryptSecretForSave(value),
+        metadata: { isSecret: true },
+      };
+    }
+    return result;
   }
 
   /**
@@ -1381,7 +2781,7 @@ export class MCPService {
    * they behave identically:
    *   - MASKED_API_KEY / MASKED_STRING -> keep the existing stored value (UI never saw the real one)
    *   - "${global:VAR}"                -> a global-variable binding; store the reference verbatim
-   *   - "encrypted[_failed]:"           -> already encrypted; store as-is (no double-encrypt)
+   *   - "encrypted:"                  -> already encrypted; store as-is (no double-encrypt)
    *   - "" (empty)                     -> cleared; drop the header
    *   - anything else                  -> a freshly typed plaintext secret; encrypt it at rest
    */
@@ -1392,12 +2792,13 @@ export class MCPService {
     const result: Record<string, MCPHeaderValue> = {};
     for (const [key, raw] of Object.entries(incoming || {})) {
       if (!key) continue;
-      const { value, isSecret } = normalizeHeaderValue(raw, key);
+      let { value } = normalizeHeaderValue(raw, key);
+      const { isSecret } = normalizeHeaderValue(raw, key);
 
       if (!isSecret) {
         // Non-secret header: store verbatim (drop empties). Keep the object shape so the
         // per-header secret flag round-trips.
-        if (value !== '') {
+        if (value !== "") {
           result[key] = { value, metadata: { isSecret: false } };
         }
         continue;
@@ -1406,15 +2807,19 @@ export class MCPService {
       // Secret header handling, mirroring resolveOAuthSecretForSave.
       if (isMaskedHeaderValue(value)) {
         const prev = existing?.[key];
-        if (prev !== undefined) result[key] = prev; // keep the stored (encrypted/bound) value
-        continue;
+        if (prev === undefined) continue;
+        value = normalizeHeaderValue(prev, key).value;
+        if (isMaskedHeaderValue(value)) continue;
       }
       if (!value) continue; // cleared
-      if (isGlobalBinding(value) || value.startsWith('encrypted:') || value.startsWith('encrypted_failed:')) {
+      if (isGlobalBinding(value)) {
         result[key] = { value, metadata: { isSecret: true } };
         continue;
       }
-      result[key] = { value: await encryptApiKey(value), metadata: { isSecret: true } };
+      result[key] = {
+        value: await this.encryptSecretForSave(value),
+        metadata: { isSecret: true },
+      };
     }
     return result;
   }
@@ -1423,80 +2828,72 @@ export class MCPService {
    * Update an MCP server configuration
    */
   /**
-   * Eagerly create the root dir of a remote (streamable/SSE/websocket) server (issue 52).
-   * Remote servers default to mcp-servers/<name> like stdio servers, but nothing else
-   * ever creates that folder for them (no clone/install step). Only safe, scoped paths
-   * are created: filesystem roots are skipped, and relative paths resolve against the
-   * data dir (where mcp-servers/ lives). Best-effort — failures are logged, never thrown.
+   * Eagerly create managed roots that have no clone/install step: remote servers
+   * (issue 52) and Registry stdio packages executed by npx/uvx/etc. Registry package
+   * processes launch from a separate private runtime cwd, but roots/list and file
+   * pickers still need their mcp-servers/<name> directory to exist.
+   * Best-effort — failures are logged, never thrown.
    */
-  private async ensureRemoteServerRootDir(config: MCPServerConfig): Promise<void> {
+  private async ensureManagedServerRootDir(
+    config: MCPServerConfig,
+  ): Promise<void> {
     try {
-      if (!['streamable', 'sse', 'websocket'].includes(config.transport)) return;
-      const rootPath = (config.rootPath || '').trim();
+      const rootPath = (config.rootPath || "").trim();
       if (!rootPath) return;
-      const resolved = path.resolve(getDataDir(), rootPath);
+      const isRemote = ["streamable", "sse", "websocket"].includes(config.transport);
+      const isRegistryPackage =
+        config.transport === "stdio"
+        && (config.source?.type === "registry" || config.source?.type === "marketplace");
+      if (!isRemote && !isRegistryPackage) return;
+
+      const resolved = path.resolve(getWorkspaceDataDir(), rootPath);
       // Never create (or touch) a filesystem root — a root is its own parent.
       if (path.dirname(resolved) === resolved) return;
+      const shipped = config.transport === 'stdio' ? shippedDescriptorForConfig(config) : undefined;
+      if (shipped && resolved === path.resolve(getWorkspaceDataDir(), 'mcp-servers', shipped.packageDirectory)) {
+        // Shipped marketplace records have a clone step at transport start.
+        // Creating an empty destination here would make that step treat it as
+        // an existing package and reject its missing manifest. Leave both new
+        // and existing reserved directories to the strict package copier.
+        return;
+      }
+      if (isRegistryPackage) {
+        // Registry stdio roots are FLUJO-managed. Refuse an unexpected absolute or
+        // traversing value even if a malformed config reaches this boundary.
+        const managedRoot = path.join(getWorkspaceDataDir(), "mcp-servers");
+        const relative = path.relative(managedRoot, resolved);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return;
+      }
       await fs.mkdir(resolved, { recursive: true });
-      log.debug(`ensureRemoteServerRootDir: ensured ${resolved} for ${config.name}`);
+      log.debug(
+        `ensureManagedServerRootDir: ensured ${resolved} for ${config.name}`,
+      );
     } catch (error) {
-      log.warn(`ensureRemoteServerRootDir: could not create root dir for ${config.name}:`, error);
+      log.warn(
+        `ensureManagedServerRootDir: could not create root dir for ${config.name}:`,
+        error,
+      );
     }
   }
 
-  async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
+  async updateServerConfig(
+    serverName: string,
+    updates: Partial<MCPServerConfig>,
+  ): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
-
-    // The built-in internal servers are synthesized, not stored — their command/
-    // env/name cannot be edited, and this also blocks CREATING a server under a
-    // reserved name (the POST route funnels through here). Renaming another server
-    // onto a reserved name is caught by the duplicate check below, since
-    // loadServerConfigs() always contains the synthetic entries. The ONE mutation
-    // that IS allowed is toggling `disabled` on/off (issue #170): it is persisted
-    // as a tiny override, never as the synthetic config itself.
-    if (await this.isInternalServer(serverName)) {
-      const keys = Object.keys(updates).filter(k => k !== 'name');
-      const nameOk = updates.name === undefined || updates.name === serverName;
-      const onlyDisabledChange =
-        keys.length > 0 && keys.every(k => k === 'disabled') && typeof updates.disabled === 'boolean' && nameOk;
-      // The `filesystem` and `bash` built-ins additionally allow configuring their
-      // confinement roots (issues #170 + #175): persisted as a tiny override, never
-      // as the synthetic config.
-      const onlyRootsChange =
-        (serverName === FILESYSTEM_SERVER_NAME || serverName === BASH_SERVER_NAME) &&
-        keys.length > 0 &&
-        keys.every(k => k === 'roots') &&
-        Array.isArray(updates.roots) &&
-        nameOk;
-      if (onlyDisabledChange) {
-        await setInternalServerDisabled(serverName, updates.disabled as boolean);
-        log.info(`updateServerConfig: Toggled built-in server ${serverName} disabled=${updates.disabled}`);
-        const refreshed = await this.loadServerConfigs();
-        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
-        return cfg ?? { success: true };
-      }
-      if (onlyRootsChange) {
-        await setInternalServerRoots(serverName, updates.roots as string[]);
-        log.info(`updateServerConfig: Set built-in ${serverName} roots (${(updates.roots as string[]).length})`);
-        const refreshed = await this.loadServerConfigs();
-        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
-        return cfg ?? { success: true };
-      }
-      return {
-        success: false,
-        error: `"${serverName}" is a FLUJO built-in server: only enabling/disabling it is allowed, not editing.`,
-      };
-    }
 
     // Load all configs from storage
     const configsResult = await this.loadServerConfigs();
     if (!Array.isArray(configsResult)) {
-      log.warn(`updateServerConfig: Failed to load configs:`, configsResult.error);
+      log.warn(
+        `updateServerConfig: Failed to load configs:`,
+        configsResult.error,
+      );
       return configsResult;
     }
-    
+
     const configs = configsResult;
-    let config = configs.find(c => c.name === serverName);
+    let config = configs.find((c) => c.name === serverName);
 
     // A rename arrives as a PUT whose path is the CURRENT (old) name and whose body
     // carries a different `name`. Detect it up front: the storage swap below already
@@ -1504,29 +2901,37 @@ export class MCPService {
     // the old name and must be migrated explicitly (see the connection handling at the
     // end of this method).
     const isRename =
-      !!config && typeof updates.name === 'string' && updates.name !== serverName;
+      !!config &&
+      typeof updates.name === "string" &&
+      updates.name !== serverName;
 
     // Refuse to rename onto a name another server already uses: the configs are keyed by
     // name, so saving would silently drop one of the two. Surface it as an error instead.
-    if (isRename && configs.some(c => c.name === updates.name)) {
-      log.warn(`updateServerConfig: Refusing to rename ${serverName} -> ${updates.name}: name already in use`);
-      return { success: false, error: `A server named "${updates.name}" already exists` };
+    if (isRename && configs.some((c) => c.name === updates.name)) {
+      log.warn(
+        `updateServerConfig: Refusing to rename ${serverName} -> ${updates.name}: name already in use`,
+      );
+      return {
+        success: false,
+        error: `A server named "${updates.name}" already exists`,
+      };
     }
 
     if (!config && updates.name) {
       // New server being added - default to stdio transport
-      log.info(`updateServerConfig: Creating new server config for ${updates.name}`);
+      log.info(
+        `updateServerConfig: Creating new server config for ${updates.name}`,
+      );
       config = {
         name: updates.name,
-        transport: 'stdio',
-        command: '',
+        transport: "stdio",
+        command: "",
         args: [],
         env: {},
         disabled: false,
-        autoApprove: [],
-        _buildCommand: '',
-        _installCommand: '',
-        rootPath: '',
+        _buildCommand: "",
+        _installCommand: "",
+        rootPath: "",
       };
       configs.push(config);
     } else if (!config) {
@@ -1534,49 +2939,32 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
-    // If env variables are being updated, resolve any global variable references
-    if (updates.env) {
-      log.debug(`updateServerConfig: Resolving global variables in env for ${serverName}`);
-      try {
-        // Log the original env variables for debugging
-        log.debug(`Original env variables for ${serverName}:`, JSON.stringify(updates.env, null, 2));
-        
-        // Resolve global variables in the environment variables and update directly
-        updates.env = await resolveGlobalVars(updates.env) as Record<string, string>;
-        
-        // Log the resolved env variables for debugging
-        log.debug(`Resolved env variables for ${serverName}:`, JSON.stringify(updates.env, null, 2));
-        
-        log.debug(`updateServerConfig: Successfully resolved global variables for ${serverName}`);
-      } catch (error) {
-        log.warn(`updateServerConfig: Error resolving global variables for ${serverName}:`, error);
-        // Continue with the update even if global variable resolution fails
+    // Encrypt all credential updates before saving or changing a live connection.
+    // Bindings remain references and are resolved/decrypted at connect time.
+    updates = { ...updates };
+    try {
+      if (updates.env !== undefined) {
+        updates.env = await this.resolveEnvForSave(updates.env, config.env);
       }
+      const incomingSecret = (updates as Partial<MCPStreamableConfig>).oauthClientSecret;
+      if (incomingSecret !== undefined) {
+        const existingSecret = (config as MCPStreamableConfig).oauthClientSecret;
+        (updates as Partial<MCPStreamableConfig>).oauthClientSecret =
+          await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
+      }
+
+      const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
+      if (incomingHeaders !== undefined) {
+        const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
+        (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
+          await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
+      }
+    } catch {
+      // Do not log the original error: encryption failures may contain credential input.
+      return { success: false, error: "Failed to encrypt MCP credentials; configuration was not saved" };
     }
 
-    // OAuth client secret handling, mirroring model API-key semantics. The browser only ever
-    // sends MASKED_API_KEY (meaning "keep the stored secret"), a "${global:VAR}" binding, or a
-    // freshly typed plaintext secret — never the real stored value. Encrypt plaintext at rest;
-    // keep bindings and already-encrypted values as-is; an empty value clears it.
-    const incomingSecret = (updates as Partial<MCPStreamableConfig>).oauthClientSecret;
-    if (incomingSecret !== undefined) {
-      const existingSecret = (config as MCPStreamableConfig).oauthClientSecret;
-      (updates as Partial<MCPStreamableConfig>).oauthClientSecret =
-        await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
-    }
-
-    // Custom-header secret handling (#84), mirroring the OAuth secret contract above. Unlike
-    // env vars (resolved/baked in at save above), header ${global:} bindings are stored
-    // verbatim and resolved fresh at connect time (resolveConfigHeaders) so rotating the bound
-    // global takes effect without re-saving the server.
-    const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
-    if (incomingHeaders !== undefined) {
-      const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
-      (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
-        await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
-    }
-
-    // Update the config with the new values (including resolved env variables)
+    // Update the config with the protected values.
     let updatedConfig: MCPServerConfig = { ...config };
     updatedConfig = {
       ...config,
@@ -1590,29 +2978,65 @@ export class MCPService {
     const effectiveRootsChanged =
       JSON.stringify((config as { roots?: string[] }).roots ?? []) !==
         JSON.stringify((updatedConfig as { roots?: string[] }).roots ?? []) ||
-      (config.rootPath ?? '') !== (updatedConfig.rootPath ?? '');
+      (config.rootPath ?? "") !== (updatedConfig.rootPath ?? "");
 
     // Find and update the config in the array
-    const index = configs.findIndex(c => c.name === serverName);
+    const index = configs.findIndex((c) => c.name === serverName);
     if (index !== -1) {
       configs[index] = updatedConfig;
     } else if (updatedConfig.name) {
       // This is a new config
       configs.push(updatedConfig);
     }
-    
+
     // Save all configs to storage
-    const saveResult = await saveConfig(new Map(configs.map(c => [c.name, c])));
+    const saveResult = await saveConfig(
+      new Map(configs.map((c) => [c.name, c])),
+    );
     if (!saveResult.success) {
-      log.warn(`updateServerConfig: Failed to save config for ${serverName}:`, saveResult.error);
+      log.warn(
+        `updateServerConfig: Failed to save config for ${serverName}:`,
+        saveResult.error,
+      );
       return saveResult;
     }
 
-    // Remote servers spawn no process, but their root dir (default mcp-servers/<name>,
-    // issue 52) is where folder pickers, per-node roots and future file work point.
-    // Eagerly create it so the server always has a folder to work in. Best-effort:
-    // a failure here must never block the config update.
-    await this.ensureRemoteServerRootDir(updatedConfig);
+    // Remote and Registry package servers have no clone step, so create their
+    // managed root explicitly. A failure here must never block the config update.
+    await this.ensureManagedServerRootDir(updatedConfig);
+
+    if (isRename) {
+      // Flow nodes persist MCP bindings by server name (`properties.boundServer`).
+      // Once the config has been safely re-keyed, cascade the rename through every
+      // saved flow so those references do not become dangling. Keep this import lazy:
+      // the execution/flow layer already depends on MCPService, and a static import
+      // here would introduce a module-initialization cycle.
+      try {
+        const { flowService } = await import("@/backend/services/flow");
+        const migration = await flowService.migrateMcpServerReferences(
+          serverName,
+          updatedConfig.name,
+        );
+        if (!migration.success) {
+          log.warn(
+            `updateServerConfig: Server rename succeeded, but some flow references could not be migrated`,
+            migration,
+          );
+        } else if (migration.migratedReferences > 0) {
+          log.info(
+            `updateServerConfig: Migrated ${migration.migratedReferences} MCP reference(s) across ${migration.migratedFlows} flow(s)`,
+          );
+        }
+      } catch (error) {
+        // The config rename is already durable at this point. Do not report the
+        // entire rename as failed (which would make a retry address the vanished old
+        // name), but retain a high-signal log if flow persistence was unavailable.
+        log.warn(
+          `updateServerConfig: Server rename succeeded, but flow-reference migration failed`,
+          error,
+        );
+      }
+    }
 
     // Handle connection state based on config changes.
     if (isRename) {
@@ -1639,26 +3063,33 @@ export class MCPService {
       this.notifyRootsChanged(updatedConfig.name);
     }
 
-    log.info(`updateServerConfig: Successfully updated config for ${serverName}${isRename ? ` (renamed to ${updatedConfig.name})` : ''}`);
+    log.info(
+      `updateServerConfig: Successfully updated config for ${serverName}${isRename ? ` (renamed to ${updatedConfig.name})` : ""}`,
+    );
     return updatedConfig;
   }
 
   /**
    * Handle connection state changes when a server config is updated
-   * 
+   *
    * This function is called after a server config is updated in storage.
    * It manages the connection state based on the updated config:
    * - If the server is enabled (disabled=false), it attempts to connect it
    * - If the server is disabled (disabled=true), it disconnects it if currently connected
-   * 
+   *
    * Note: This function does not affect whether the config update itself was successful.
    * The config update can succeed even if the server fails to connect with the new config.
    * This separation allows users to fix configuration issues without being blocked by
    * connection failures.
    */
-  private async handleConnectionStateChange(serverName: string, config: MCPServerConfig): Promise<void> {
-    log.debug(`handleConnectionStateChange: Entering method for server ${serverName}`);
-    
+  private async handleConnectionStateChange(
+    serverName: string,
+    config: MCPServerConfig,
+  ): Promise<void> {
+    log.debug(
+      `handleConnectionStateChange: Entering method for server ${serverName}`,
+    );
+
     // Global-aware: the live client may exist only in the shared recovery map
     // (owned by another module instance). A local this.clients.has() check would
     // miss it and skip the "re-apply config to connected server" path that a PAT/
@@ -1668,15 +3099,22 @@ export class MCPService {
 
     if (isCurrentlyConnected && !shouldBeConnected) {
       // If server should be disabled, disconnect it
-      log.info(`handleConnectionStateChange: Disconnecting disabled server ${serverName}`);
+      log.info(
+        `handleConnectionStateChange: Disconnecting disabled server ${serverName}`,
+      );
       try {
         await this.disconnectServer(serverName);
       } catch (error) {
-        log.warn(`handleConnectionStateChange: Failed to disconnect server ${serverName} during update:`, error);
+        log.warn(
+          `handleConnectionStateChange: Failed to disconnect server ${serverName} during update:`,
+          error,
+        );
       }
     } else if (!isCurrentlyConnected && shouldBeConnected) {
       // If the server should be enabled but isn't connected, connect it
-      log.info(`handleConnectionStateChange: Connecting previously disabled server ${serverName}`);
+      log.info(
+        `handleConnectionStateChange: Connecting previously disabled server ${serverName}`,
+      );
       await this.connectServer(config);
     } else if (isCurrentlyConnected && shouldBeConnected) {
       // Server stays enabled, but its config may have changed (command, args, env,
@@ -1684,11 +3122,15 @@ export class MCPService {
       // connection only when something meaningful actually changed (otherwise it's a
       // cheap no-op). Roots changes alone never rebuild (issue 46) — they are announced
       // via notifications/roots/list_changed by updateServerConfig instead.
-      log.info(`handleConnectionStateChange: Re-applying config to connected server ${serverName}`);
+      log.info(
+        `handleConnectionStateChange: Re-applying config to connected server ${serverName}`,
+      );
       await this.connectServer(config);
     } else if (!shouldBeConnected) {
       // If server should be disabled, also clear any pending retry timers
-      log.info(`handleConnectionStateChange: Clearing retry timers for disabled server ${serverName}`);
+      log.info(
+        `handleConnectionStateChange: Clearing retry timers for disabled server ${serverName}`,
+      );
       this.clearRetryTimer(serverName);
       this.connectionRetryAttempts.delete(serverName);
     }
@@ -1698,30 +3140,39 @@ export class MCPService {
    * Clear all retry timers for disabled servers
    */
   private async clearRetryTimersForDisabledServers(): Promise<void> {
-    log.debug('clearRetryTimersForDisabledServers: Checking for disabled servers with active retry timers');
-    
+    log.debug(
+      "clearRetryTimersForDisabledServers: Checking for disabled servers with active retry timers",
+    );
+
     try {
       // Load current configs from storage
       const configs = await this.loadServerConfigs();
-      
+
       if (!Array.isArray(configs)) {
-        log.warn('clearRetryTimersForDisabledServers: Failed to load server configs');
+        log.warn(
+          "clearRetryTimersForDisabledServers: Failed to load server configs",
+        );
         return;
       }
-      
+
       // Find all disabled servers
-      const disabledServers = configs.filter(config => config.disabled);
-      
+      const disabledServers = configs.filter((config) => config.disabled);
+
       // Clear retry timers for disabled servers
       for (const config of disabledServers) {
         if (this.connectionRetryTimers.has(config.name)) {
-          log.info(`clearRetryTimersForDisabledServers: Clearing retry timer for disabled server ${config.name}`);
+          log.info(
+            `clearRetryTimersForDisabledServers: Clearing retry timer for disabled server ${config.name}`,
+          );
           this.clearRetryTimer(config.name);
           this.connectionRetryAttempts.delete(config.name);
         }
       }
     } catch (error) {
-      log.error('clearRetryTimersForDisabledServers: Error clearing retry timers:', error);
+      log.error(
+        "clearRetryTimersForDisabledServers: Error clearing retry timers:",
+        error,
+      );
     }
   }
 
@@ -1731,112 +3182,130 @@ export class MCPService {
   async deleteServerConfig(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`deleteServerConfig: Entering method for server ${serverName}`);
 
-    // The built-in internal server is synthesized, not stored — it cannot be deleted.
-    if (await this.isInternalServer(serverName)) {
-      return {
-        success: false,
-        error: `"${INTERNAL_SERVER_NAME}" is FLUJO's built-in server and cannot be deleted.`,
-      };
-    }
-
     // First disconnect if connected
     if (this.clients.has(serverName)) {
-      log.info(`deleteServerConfig: Disconnecting server ${serverName} before deletion`);
+      log.info(
+        `deleteServerConfig: Disconnecting server ${serverName} before deletion`,
+      );
       await this.disconnectServer(serverName);
     }
 
     // Load all configs from storage
     const configsResult = await this.loadServerConfigs();
     if (!Array.isArray(configsResult)) {
-      log.warn(`deleteServerConfig: Failed to load configs:`, configsResult.error);
+      log.warn(
+        `deleteServerConfig: Failed to load configs:`,
+        configsResult.error,
+      );
       return configsResult;
     }
-    
+
     const configs = configsResult;
-    
+
     // Find the config to delete
-    const index = configs.findIndex(c => c.name === serverName);
+    const index = configs.findIndex((c) => c.name === serverName);
     if (index === -1) {
       log.warn(`deleteServerConfig: Server ${serverName} not found in configs`);
       return { success: false, error: `Server ${serverName} not found` };
     }
-    
+
     // Remove the config from the array
     configs.splice(index, 1);
-    
+
     // Save updated configs
-    log.debug(`deleteServerConfig: Saving updated configs after deleting ${serverName}`);
-    const saveResult = await saveConfig(new Map(configs.map(c => [c.name, c])));
-    
+    log.debug(
+      `deleteServerConfig: Saving updated configs after deleting ${serverName}`,
+    );
+    const saveResult = await saveConfig(
+      new Map(configs.map((c) => [c.name, c])),
+    );
+
     if (saveResult.success) {
       log.info(`deleteServerConfig: Successfully deleted server ${serverName}`);
     } else {
-      log.warn(`deleteServerConfig: Error saving configs after deleting ${serverName}:`, saveResult.error);
+      log.warn(
+        `deleteServerConfig: Error saving configs after deleting ${serverName}:`,
+        saveResult.error,
+      );
     }
-    
+
     return saveResult;
   }
 
   /**
    * Get the connection status of an MCP server
    */
-  async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
-    // The built-in internal server runs in-process: it is connected by definition,
-    // unless it has been toggled off (issue #170).
-    if (await this.isInternalServer(serverName)) {
-      if (await this.isServerDisabled(serverName)) {
-        return { status: 'disconnected' };
-      }
-      return { status: 'connected' };
-    }
-
+  async getServerStatus(serverName: string): Promise<{
+    status: string;
+    message?: string;
+    stderrOutput?: string;
+    stdioOAuth?: MCPStdioOAuthStatus;
+  }> {
     // Get the config directly from storage
     const config = await this.getServerConfig(serverName);
     if (!config) {
       log.warn(`getServerStatus: Server ${serverName} not found`);
-      return { 
-        status: 'error', 
-        message: `Server ${serverName} configuration not found. The server may have been deleted or not properly configured.` 
+      return {
+        status: "error",
+        message: `Server ${serverName} configuration not found. The server may have been deleted or not properly configured.`,
       };
     }
 
     if (config.disabled) {
       log.debug(`getServerStatus: Server ${serverName} is disabled`);
-      return { status: 'disconnected' };
+      return { status: "disconnected" };
     }
 
-    // Check if this is a streamable server that requires OAuth but has no tokens
-    if (config.transport === 'streamable') {
+    // A live client is authoritative: a server may be connected with a static
+    // Authorization header even when an earlier OAuth-capability probe persisted
+    // oauthScopes. In that mixed state, missing FLUJO-managed OAuth tokens must not
+    // override the proven working connection with a stale auth-required badge.
+    const hasLiveClient = !!this.getClient(serverName);
+
+    // Check if this is a disconnected streamable server that requires OAuth but has no tokens
+    if (config.transport === "streamable") {
       const streamableConfig = config as MCPStreamableConfig;
-      if (streamableConfig.oauthScopes && streamableConfig.oauthScopes.length > 0) {
+      if (
+        !hasLiveClient &&
+        streamableConfig.oauthScopes &&
+        streamableConfig.oauthScopes.length > 0
+      ) {
         // This server requires OAuth authentication
-        if (!streamableConfig.oauthTokens || !streamableConfig.oauthTokens.access_token) {
-          log.info(`getServerStatus: Server ${serverName} requires OAuth authentication but has no valid tokens`);
+        if (
+          !streamableConfig.oauthTokens ||
+          !streamableConfig.oauthTokens.access_token
+        ) {
+          log.info(
+            `getServerStatus: Server ${serverName} requires OAuth authentication but has no valid tokens`,
+          );
           return {
-            status: 'requires_authentication',
-            message: 'OAuth authentication required. Click the authenticate button to complete the OAuth flow.'
+            status: "requires_authentication",
+            message:
+              "OAuth authentication required. Click the authenticate button to complete the OAuth flow.",
           };
         }
-        
+
         // An expired access token only means "re-authenticate" when there is no refresh
         // token to renew it with. With a refresh_token stored, the next connection attempt
         // refreshes silently (see MCPOAuthClientProvider.tokens), so fall through to the
         // real connection state instead of flashing the auth badge after every restart.
+        const issuedAt = (streamableConfig.oauthTokens as typeof streamableConfig.oauthTokens & { issued_at?: number }).issued_at;
         if (
           !streamableConfig.oauthTokens.refresh_token &&
           streamableConfig.oauthTokens.expires_in &&
-          (streamableConfig.oauthTokens as any).issued_at
+          issuedAt
         ) {
-          const issuedAt = (streamableConfig.oauthTokens as any).issued_at;
           const expiresIn = streamableConfig.oauthTokens.expires_in;
           const currentTime = Math.floor(Date.now() / 1000);
           const expirationTime = issuedAt + expiresIn;
 
           if (currentTime >= expirationTime) {
-            log.info(`getServerStatus: OAuth tokens for ${serverName} have expired and no refresh token is available`);
+            log.info(
+              `getServerStatus: OAuth tokens for ${serverName} have expired and no refresh token is available`,
+            );
             return {
-              status: 'requires_authentication',
-              message: 'OAuth tokens have expired. Please re-authenticate.'
+              status: "requires_authentication",
+              message: "OAuth tokens have expired. Please re-authenticate.",
             };
           }
         }
@@ -1845,21 +3314,53 @@ export class MCPService {
 
     // Get any stderr logs for this server
     const stderrLogs = this.stderrLogs.get(serverName) || [];
-    const stderrOutput = stderrLogs.join('\n').trim();
+    const stderrOutput = stderrLogs.join("\n").trim();
     // The last persisted connection failure (survives the per-attempt stderr buffer reset).
     const persistedError = this.lastConnectionError.get(serverName);
+    let stdioOAuth: MCPStdioOAuthStatus | undefined;
+
+    if (hasLiveClient) {
+      const client = this.getClient(serverName);
+      if (serverSupportsExternalAuthorization(client)) {
+        try {
+          stdioOAuth = await getExternalAuthorizationStatus(client, serverName);
+          if (stdioOAuth.blockingAuthorization) {
+            const requiredAuthorization = stdioOAuth.blockingAuthorization;
+            return {
+              status: "requires_authentication",
+              message:
+                requiredAuthorization.message ||
+                `${requiredAuthorization.label} authorization is required before this server can be used by unattended flows.`,
+              stderrOutput: stderrOutput || undefined,
+              stdioOAuth,
+            };
+          }
+        } catch (authorizationError) {
+          const detail =
+            authorizationError instanceof Error
+              ? authorizationError.message
+              : String(authorizationError);
+          return {
+            status: "error",
+            message: `Connected, but the mcp-stdio-oauth readiness check failed: ${detail}`,
+            stderrOutput: stderrOutput || undefined,
+          };
+        }
+      }
+    }
 
     // Check if the client exists — via getClient so a closed/aborted connection reads
     // as "not connected" instead of lying "connected" until something trips over it.
     // The map itself is shared across module instances, so a client connected by the
     // startup instance is visible here without any adoption step.
-    const clientExists = !!this.getClient(serverName);
+    const clientExists = hasLiveClient || !!this.getClient(serverName);
 
     if (clientExists) {
       log.info(`getServerStatus: Server ${serverName} is connected`);
       return {
-        status: 'connected',
-        stderrOutput: stderrOutput || undefined
+        status: "connected",
+        stderrOutput: stderrOutput || undefined,
+        ...(stdioOAuth ? { stdioOAuth } : {}),
       };
     } else {
       // The backend may still be bringing this server up - either an attempt is
@@ -1869,35 +3370,45 @@ export class MCPService {
       // "configured but not connected" error the user would otherwise see for the
       // first few seconds after launch. A server that has already recorded a real
       // connection failure falls through to that error even during startup.
-      const startupPending = this.isStartingUp() && !this.lastConnectionError.has(serverName);
+      const startupPending =
+        this.isStartingUp() && !this.lastConnectionError.has(serverName);
       if (this.connectingServers.has(serverName) || startupPending) {
         log.info(`getServerStatus: Server ${serverName} is still connecting`);
         return {
-          status: 'connecting',
-          message: 'Server is starting up. This may take a few moments.'
+          status: "connecting",
+          message: "Server is starting up. This may take a few moments.",
         };
       }
 
       // Check if stderr contains OAuth authentication errors
-      if (stderrOutput && (stderrOutput.includes('OAuth authentication required') || stderrOutput.includes('invalid_token'))) {
-        log.info(`getServerStatus: OAuth authentication error detected for ${serverName}`);
+      if (
+        stderrOutput &&
+        (stderrOutput.includes("OAuth authentication required") ||
+          stderrOutput.includes("invalid_token"))
+      ) {
+        log.info(
+          `getServerStatus: OAuth authentication error detected for ${serverName}`,
+        );
         return {
-          status: 'requires_authentication',
-          message: 'OAuth authentication required. Please complete the OAuth flow.',
-          stderrOutput: stderrOutput
+          status: "requires_authentication",
+          message:
+            "OAuth authentication required. Please complete the OAuth flow.",
+          stderrOutput: stderrOutput,
         };
       }
-      
+
       // Use the live stderr output if present, otherwise the last persisted connection
       // error. HTTP transports fail inside connect() and produce no live stderr, so the
       // persisted error is what makes the real reason visible here.
       const effectiveError = stderrOutput || persistedError;
       if (effectiveError) {
-        log.info(`getServerStatus: Using ${stderrOutput ? 'stderr output' : 'persisted connection error'} as error message for ${serverName}`);
+        log.info(
+          `getServerStatus: Using ${stderrOutput ? "stderr output" : "persisted connection error"} as error message for ${serverName}`,
+        );
         return {
-          status: 'error',
+          status: "error",
           message: effectiveError,
-          stderrOutput: stderrOutput || undefined
+          stderrOutput: stderrOutput || undefined,
         };
       }
 
@@ -1907,20 +3418,32 @@ export class MCPService {
       // servers x up to 5s). The connection itself (and its real error) is established by
       // connectServer / the on-demand reconnect in listServerTools & callTool, which is
       // where errors get persisted. Just report the generic state instantly.
-      log.info(`getServerStatus: No specific error details available for ${serverName}`);
+      log.info(
+        `getServerStatus: No specific error details available for ${serverName}`,
+      );
       return {
-        status: 'error',
+        status: "error",
         message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
-        stderrOutput: undefined
+        stderrOutput: undefined,
       };
     }
   }
 
   /**
-   * Start all enabled servers
+   * Start all enabled servers.
+   *
+   * Issue #413: with `FLUJO_MCP_LAZY_START` the sweep only DISCOVERS
+   * configuration (so the MCP page and every tool/resource manifest consumer
+   * still sees every enabled server) and warms nothing. Servers are then
+   * connected on first use through `acquireServerLease`, which is the point of
+   * the lazy pool: a dozen configured-but-unused servers cost nothing.
+   *
+   * The flag defaults OFF because eager startup may only be retired once every
+   * consumer acquires a lease before use — the migration gate in the plan. Servers
+   * marked always-on are warmed and pinned in either mode.
    */
   async startEnabledServers(): Promise<void> {
-    log.info('Starting all enabled servers');
+    log.info("Starting all enabled servers");
     this.setStartingUp(true);
 
     try {
@@ -1932,19 +3455,40 @@ export class MCPService {
 
       // Skip if there was an error loading configs
       if (!Array.isArray(configs)) {
-        log.warn('Failed to load server configs, cannot start servers');
+        log.warn("Failed to load server configs, cannot start servers");
         return;
       }
 
       // Find all enabled servers
-      const enabledServers = configs.filter(config => !config.disabled);
-      log.info(`Found ${enabledServers.length} enabled servers to start`);
-      log.debug(`${enabledServers}`);
+      const allEnabledServers = configs.filter((config) => !config.disabled);
+      const lazyStart = /^(1|true|yes)$/i.test(
+        process.env.FLUJO_MCP_LAZY_START ?? "",
+      );
+      // An always-on server is pinned: it is exempt from idle/LRU closure and is
+      // warmed even in lazy mode (long-lived subscriptions/triggers need it live).
+      const alwaysOn = allEnabledServers.filter(
+        (config) => (config as { alwaysOn?: boolean }).alwaysOn === true,
+      );
+      for (const config of alwaysOn) {
+        pinServer(config.name, "always-on");
+      }
+      const enabledServers = lazyStart ? alwaysOn : allEnabledServers;
+      if (lazyStart) {
+        log.info(
+          `Lazy MCP start: ${allEnabledServers.length} enabled server(s) discovered, ` +
+            `warming only ${alwaysOn.length} always-on server(s)`,
+        );
+      } else {
+        log.info(`Found ${enabledServers.length} enabled servers to start`);
+        log.debug(`${enabledServers}`);
+      }
 
       // Mark every enabled server as "connecting" up front so the MCP page shows a
       // spinner for all of them while the sweep runs. connectServer() clears each
       // entry as its attempt settles.
-      enabledServers.forEach(config => this.connectingServers.add(config.name));
+      enabledServers.forEach((config) =>
+        this.connectingServers.add(config.name),
+      );
 
       // Connect enabled servers with BOUNDED concurrency. Connecting sequentially made
       // startup scale with the SUM of every server's connect time (one slow/hanging
@@ -1955,15 +3499,24 @@ export class MCPService {
       // startup off the sequential worst case while capping the simultaneous fork load.
       // Tunable via FLUJO_MCP_BOOT_CONCURRENCY (default 2). Each connectServer() already
       // catches its own failures and never rejects.
-      const bootConcurrency = Math.max(1, Number(process.env.FLUJO_MCP_BOOT_CONCURRENCY) || 2);
-      log.info(`Connecting ${enabledServers.length} enabled servers with boot concurrency ${bootConcurrency}`);
-      await runWithConcurrency(enabledServers, bootConcurrency, async (config) => {
-        log.info(`Starting server: ${config.name}`);
-        await this.connectServer(config).catch(error => {
-          log.error(`Failed to start server ${config.name}:`, error);
-          // Swallow so one failure doesn't abort the others.
-        });
-      });
+      const bootConcurrency = Math.max(
+        1,
+        Number(process.env.FLUJO_MCP_BOOT_CONCURRENCY) || 2,
+      );
+      log.info(
+        `Connecting ${enabledServers.length} enabled servers with boot concurrency ${bootConcurrency}`,
+      );
+      await runWithConcurrency(
+        enabledServers,
+        bootConcurrency,
+        async (config) => {
+          log.info(`Starting server: ${config.name}`);
+          await this.connectServer(config).catch((error) => {
+            log.error(`Failed to start server ${config.name}:`, error);
+            // Swallow so one failure doesn't abort the others.
+          });
+        },
+      );
     } finally {
       // Always reset the flag when done, even if there were errors
       this.setStartingUp(false);
@@ -1977,12 +3530,15 @@ export class MCPService {
     try {
       // Get all server configs directly from storage
       const configs = await this.loadServerConfigs();
-      
-      if (!configs || 'error' in configs) {
-        log.warn('getAvailableClients: Failed to load server configs:', configs?.error);
+
+      if (!configs || "error" in configs) {
+        log.warn(
+          "getAvailableClients: Failed to load server configs:",
+          configs?.error,
+        );
         return [];
       }
-      
+
       // Get the status of each server
       const serverStatuses = await Promise.all(
         (configs as MCPServerConfig[]).map(async (config: MCPServerConfig) => {
@@ -1990,22 +3546,28 @@ export class MCPService {
             const status = await this.getServerStatus(config.name);
             return {
               name: config.name,
-              status: typeof status === 'string' ? status : status.status,
-              connected: typeof status === 'string' ? 
-                status === 'connected' : 
-                status.status === 'connected'
+              status: typeof status === "string" ? status : status.status,
+              connected:
+                typeof status === "string"
+                  ? status === "connected"
+                  : status.status === "connected",
             };
           } catch (error) {
-            log.warn(`getAvailableClients: Error getting status for ${config.name}:`, error);
-            return { name: config.name, status: 'error', connected: false };
+            log.warn(
+              `getAvailableClients: Error getting status for ${config.name}:`,
+              error,
+            );
+            return { name: config.name, status: "error", connected: false };
           }
-        })
+        }),
       );
-      
+
       // Return a formatted list of clients with their status
-      return serverStatuses.map((s: { name: string, status: string }) => `${s.name} (${s.status})`);
+      return serverStatuses.map(
+        (s: { name: string; status: string }) => `${s.name} (${s.status})`,
+      );
     } catch (error) {
-      log.error('getAvailableClients: Error getting available clients:', error);
+      log.error("getAvailableClients: Error getting available clients:", error);
       return [];
     }
   }

@@ -71,6 +71,24 @@ files: existing per-flow files are never overwritten (crash-resume safe), and th
 legacy file is renamed to `db/flows.json.migrated-<timestamp>.bak` only after
 every flow has been written. Re-running with no legacy file is a no-op.
 
+### Behavior-rule field compatibility
+
+`Flow.behaviorRules` is the canonical backend-only Persona Behavior policy. The
+legacy serialized key `permissionRules` is accepted at read/import boundaries,
+but conflicting dual-key payloads fail closed and all new writes emit only
+`behaviorRules`. Equivalent legacy and canonical payloads are normalized before
+snapshot hashing. This policy does not participate in ChatInput `requireApproval`
+and is never exposed in the Flow editor.
+
+Operators may explicitly call `FlowService.migrateBehaviorRulesField()` after a
+workspace backup. It scans only `db/flows/<id>.json`, stores each original legacy
+record once in `db/flow-behavior-rules-backups/<id>.json`, rewrites through the
+atomic collection helper, and returns migrated/already-canonical/failed counts.
+Malformed or conflicting records are reported by id and left untouched. Repeated
+runs are no-ops once every record is canonical. Rollback consists of restoring a
+backed-up `flow` payload to its matching `db/flows/<id>.json` while the service is
+stopped, then restarting to rebuild caches.
+
 ### Node and Edge Management
 
 - `createNode(type, position)`: Create a new node of the specified type at the given position

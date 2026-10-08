@@ -31,6 +31,9 @@ import {
 } from '@mui/icons-material';
 import { isSecretEnvVar } from '@/utils/shared';
 import { MASKED_STRING } from '@/shared/types/constants';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+
+const GLOBAL_BINDING_RE = /^\$\{global:([A-Za-z0-9_.-]+)\}$/;
 
 interface EnvVariable {
   key: string;
@@ -58,6 +61,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
   onDelete,
   onServerRestart,
 }) => {
+  const { t } = useI18n();
   const { globalEnvVars } = useStorage();
   const [variables, setVariables] = useState<EnvVariable[]>([]);
   const [isEditing, setIsEditing] = useState(false);
@@ -79,7 +83,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
         : { isSecret: isSecretEnvVar(key) };
       
       // Check if the value is a global variable binding
-      const bindingMatch = value.match(/\$\{global:([^}]+)\}/);
+      const bindingMatch = value.match(GLOBAL_BINDING_RE);
       
       if (bindingMatch) {
         const boundTo = bindingMatch[1];
@@ -188,6 +192,10 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
       }
       
       if (field === 'value') {
+        const bindingMatch = strValue.match(GLOBAL_BINDING_RE);
+        updatedVariable.isBound = !!bindingMatch;
+        updatedVariable.boundTo = bindingMatch?.[1];
+
         if (newVariables[index].isEncrypted) {
           // User is changing an encrypted value, so it's no longer encrypted
           updatedVariable.isEncrypted = false;          
@@ -254,7 +262,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
       // Create env object with resolved values
       const envObject = variables.reduce(
         (acc, variable) => {
-          const { key, value, isBound, boundTo, isSecret, isEncrypted } = variable;
+          const { key, value, isBound, boundTo, isSecret } = variable;
           
           if (!key) return acc; // Skip empty keys
 
@@ -265,13 +273,12 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
               metadata: { isSecret }
             };
           } else {
-            // For all other values, store with metadata, unless it is secret and the value is masked.
-            if (!(isSecret && value === MASKED_STRING)) {
-              acc[key] = {
-                value,
-                metadata: { isSecret }
-              };
-            }
+            // MCP env is a replacement map. Send the mask so the backend can retain
+            // an unchanged encrypted value; only deleted rows should disappear.
+            acc[key] = {
+              value,
+              metadata: { isSecret }
+            };
           }
           return acc;
         },
@@ -305,7 +312,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
     >
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h6" sx={{ fontWeight: 'semibold' }}>
-          Environment Variables - {serverName}
+          {t('mcp.env.title', { server: serverName })}
         </Typography>
         <Button
           variant="contained"
@@ -314,7 +321,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
           startIcon={<AddIcon />}
           onClick={handleAddVariable}
         >
-          Add Variable
+          {t('mcp.env.add')}
         </Button>
       </Box>
 
@@ -324,11 +331,11 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
             <Grid item xs={12} sm={5}>
               <TextField
                 fullWidth
-                placeholder="Variable name"
+                placeholder={t('mcp.env.name')}
                 value={variable.key}
                 onChange={(e) => handleVariableChange(index, 'key', e.target.value)}
                 error={variable.isValidKey === false}
-                helperText={variable.isValidKey === false ? "Only alphanumeric characters and underscores allowed" : ""}
+                helperText={variable.isValidKey === false ? t('mcp.env.invalidName') : ''}
                 size="small"
               />
             </Grid>
@@ -336,21 +343,21 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
               <TextField
                 fullWidth
                 type={variable.isSecret ? 'password' : 'text'}
-                placeholder={variable.showWarning ? "Re-enter value" : "Value"}
+                placeholder={variable.showWarning ? t('mcp.env.reenter') : t('mcp.env.value')}
                 value={variable.value}
                 onChange={(e) => handleVariableChange(index, 'value', e.target.value)}
                 InputProps={{
                   readOnly: variable.isBound,
                   startAdornment: variable.isEncrypted ? (
                     <InputAdornment position="start">
-                      <LockIcon fontSize="small" titleAccess="This value is stored encrypted" />
+                      <LockIcon fontSize="small" titleAccess={t('mcp.env.encrypted')} />
                     </InputAdornment>
                   ) : null,
                   endAdornment: variable.isBound ? (
                     <InputAdornment position="end">
                       <Chip
                         size="small"
-                        label={`Bound to global: ${variable.boundTo}`}
+                        label={t('mcp.env.bound', { name: variable.boundTo ?? '' })}
                         color="primary"
                         variant="outlined"
                         onDelete={() => handleUnbindVariable(index)}
@@ -360,7 +367,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                   ) : null
                 }}
                 error={variable.showWarning}
-                helperText={variable.showWarning ? "You must re-enter the value after switching from secret to normal mode" : ""}
+                helperText={variable.showWarning ? t('mcp.env.reenterHelp') : ''}
                 size="small"
                 sx={{
                   bgcolor: (theme) => variable.isBound ? 
@@ -379,7 +386,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                       size="small"
                     />
                   }
-                  label="Secret"
+                  label={t('mcp.env.secret')}
                   sx={{ mr: 1 }}
                 />
                 {!variable.isBound && (
@@ -387,7 +394,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                     size="small"
                     color="primary"
                     onClick={() => handleBindVariable(index)}
-                    title="Bind to global variable"
+                    title={t('mcp.env.bind')}
                     sx={{ mr: 1 }}
                   >
                     <LinkIcon fontSize="small" />
@@ -397,7 +404,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                   size="small"
                   color="error"
                   onClick={() => handleRemoveVariable(index)}
-                  title="Remove variable"
+                  title={t('mcp.env.remove')}
                 >
                   <DeleteIcon fontSize="small" />
                 </IconButton>
@@ -428,12 +435,12 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
           borderRadius: 2
         }}>
           <Typography variant="h6" sx={{ mb: 2 }}>
-            Bind to Global Variable
+            {t('mcp.env.bindTitle')}
           </Typography>
           
           {Object.keys(globalEnvVars).length === 0 ? (
             <Typography color="text.secondary" sx={{ mb: 2 }}>
-              No global variables available. Add some in Settings first.
+              {t('mcp.env.noGlobals')}
             </Typography>
           ) : (
             <Box sx={{ maxHeight: 300, overflow: 'auto', mb: 2 }}>
@@ -472,7 +479,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                 setSelectedVarIndex(null);
               }}
             >
-              Cancel
+              {t('mcp.env.cancel')}
             </Button>
           </Box>
         </Box>
@@ -486,7 +493,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
             onClick={handleSave}
             disabled={isSaving || variables.some(v => v.key !== '' && v.isValidKey === false)}
           >
-            {isSaving ? 'Saving...' : 'Save Changes'}
+            {isSaving ? t('mcp.env.saving') : t('mcp.env.save')}
           </Button>
         </Box>
       )}

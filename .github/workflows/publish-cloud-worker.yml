@@ -1,0 +1,132 @@
+name: Publish Cloud Worker Image
+
+# Independent from npm/releases and :latest. Only a tested main revision can
+# advance the worker channel; manual runs are useful after a transient CI failure.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'mcp-servers/**'
+      - 'scripts/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.mjs'
+      - 'tsconfig.json'
+      - 'postcss.config.*'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/publish-cloud-worker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-cloud-worker
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && github.repository == 'mario-andreschak/FLUJO'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/mario-andreschak/flujo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Read application version
+        id: version
+        run: |
+          node -e 'const fs=require("fs"); const version=require("./package.json").version; if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version)) throw Error("Invalid image version"); fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);'
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Linux worker image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: flujo-cloud-worker-smoke:${{ github.sha }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=cloud-worker
+          cache-to: type=gha,scope=cloud-worker,mode=max
+
+      - name: Validate exact image and run offline production worker smoke
+        id: smoke
+        env:
+          APPLICATION_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect --format '{{.Id}}' "flujo-cloud-worker-smoke:${GITHUB_SHA}")"
+          docker image inspect "$image_id" > "$RUNNER_TEMP/cloud-worker-image.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const [image] = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/cloud-worker-image.json`, 'utf8'));
+          assert.equal(image.Os, 'linux');
+          assert.equal(image.Architecture, 'amd64');
+          assert.equal(image.Config.User, 'node');
+          for (const [key, value] of Object.entries({
+            'io.flujo.application.version': process.env.APPLICATION_VERSION,
+            'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+            'org.opencontainers.image.revision': process.env.GITHUB_SHA,
+            'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
+          })) assert.equal(image.Config.Labels[key], value, `Incorrect ${key}`);
+          NODE
+          # The test creates an encrypted synthetic snapshot and local mock model
+          # inside the container, rehydrates a bundled MCP process, executes a real
+          # flow, then restarts Next and checks durable results. No provider/GitHub
+          # credentials, host workspace mounts, or network access are supplied.
+          docker run --rm --network none --read-only --no-healthcheck \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+            "$image_id" node scripts/smoke-cloud-worker.mjs --production
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the tested image without rebuilding
+        env:
+          IMAGE_ID: ${{ steps.smoke.outputs.image_id }}
+          APPLICATION_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision_tag="${IMAGE}:cloud-worker-${GITHUB_SHA}"
+          # Revision tags are write-once. Preserve an earlier tested image if the
+          # same workflow revision is rerun after a partial channel push. Re-test
+          # that exact prior image before completing its channel promotion.
+          if docker manifest inspect "$revision_tag" >/dev/null 2>&1; then
+            docker pull "$revision_tag"
+            IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$revision_tag")"
+            test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_ID")" = "$GITHUB_SHA"
+            test "$(docker image inspect --format '{{index .Config.Labels "io.flujo.application.version"}}' "$IMAGE_ID")" = "$APPLICATION_VERSION"
+            docker run --rm --network none --read-only --no-healthcheck \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+              --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+              "$IMAGE_ID" node scripts/smoke-cloud-worker.mjs --production
+          else
+            docker tag "$IMAGE_ID" "$revision_tag"
+            docker push "$revision_tag"
+          fi
+          for tag in "${IMAGE}:cloud-worker-${APPLICATION_VERSION}" "${IMAGE}:cloud-worker"; do
+            docker tag "$IMAGE_ID" "$tag"
+            docker push "$tag"
+          done
+          echo "Published tested cloud worker revision ${GITHUB_SHA}." >> "$GITHUB_STEP_SUMMARY"

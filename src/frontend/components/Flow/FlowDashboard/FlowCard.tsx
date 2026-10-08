@@ -6,11 +6,13 @@ import {
   CardActionArea, 
   CardContent, 
   CardActions, 
+  Button,
   Typography, 
   Box, 
   IconButton, 
   Tooltip, 
   Chip,
+  Checkbox,
   alpha,
   Skeleton,
   styled,
@@ -25,11 +27,14 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ChatIcon from '@mui/icons-material/Chat';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { Flow } from '@/frontend/types/flow/flow';
+import { Flow, NodeType } from '@/frontend/types/flow/flow';
 import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { FlowValidationResult } from '@/utils/shared/flowValidation';
+import { getFlowCardMetrics } from '@/utils/shared/flowCardMetrics';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
 
@@ -57,43 +62,74 @@ interface FlowCardProps {
    * the dashboard share the exact same card body without drifting.
    */
   pickerMode?: boolean;
+  /** The surrounding CardPickerGrid owns selection semantics and keyboard input. */
+  selectionManaged?: boolean;
+  /** Disabled picker cards stay visible without accepting selection. */
+  disabled?: boolean;
+  /** Dashboard bulk-selection mode used by quick model replacement (#401). */
+  selectionMode?: boolean;
 }
 
 // Styled card with hover effects
 const StyledCard = styled(Card, {
   shouldForwardProp: (prop) => prop !== 'selected',
 })<{ selected: boolean }>(({ theme, selected }) => ({
-  display: 'flex',
-  flexDirection: 'column',
+  display: 'grid',
+  gridTemplateColumns: 'minmax(138px, 1.05fr) minmax(0, 0.95fr)',
+  gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
+  gridTemplateAreas: `
+    "title title"
+    "preview details"
+    "preview primary"
+    "preview footer"
+  `,
   height: '100%',
-  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  minHeight: 286,
   position: 'relative',
-  border: selected ? `2px solid ${theme.palette.primary.main}` : 'none',
-  boxShadow: selected ? theme.shadows[4] : theme.shadows[1],
+  overflow: 'hidden',
+  border: `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
+  boxShadow: selected
+    ? `0 0 0 3px ${alpha(theme.palette.primary.main, 0.14)}, 0 24px 70px ${alpha(theme.palette.primary.main, 0.18)}`
+    : `0 16px 45px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.18 : 0.07)}`,
+  transition: 'transform 220ms cubic-bezier(0.2, 0.75, 0.2, 1), border-color 220ms ease, box-shadow 220ms ease',
   '&:hover': {
-    boxShadow: theme.shadows[6],
+    borderColor: alpha(theme.palette.primary.main, 0.42),
+    boxShadow: `0 26px 70px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.16 : 0.12)}`,
     transform: 'translateY(-4px)',
   },
-  '&::before': selected ? {
+  '&::before': {
     content: '""',
     position: 'absolute',
+    zIndex: 2,
     top: 0,
     left: 0,
     width: '100%',
-    height: '4px',
-    backgroundColor: theme.palette.primary.main,
-  } : {},
+    height: selected ? '3px' : '1px',
+    opacity: selected ? 1 : 0.5,
+    background: `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main}, transparent)`,
+  },
 }));
 
 // Preview area to show a simplified graph visualization
 const PreviewArea = styled(Box)(({ theme }) => ({
-  height: '140px',
-  backgroundColor: alpha(theme.palette.background.default, 0.7),
-  borderRadius: theme.shape.borderRadius,
+  gridArea: 'preview',
+  flex: 1,
+  minWidth: 0,
+  height: 236,
+  backgroundColor: alpha(theme.palette.background.default, 0.82),
+  backgroundImage: `
+    linear-gradient(${alpha(theme.palette.divider, 0.55)} 1px, transparent 1px),
+    linear-gradient(90deg, ${alpha(theme.palette.divider, 0.55)} 1px, transparent 1px),
+    radial-gradient(circle at 25% 0%, ${alpha(theme.palette.primary.main, 0.12)}, transparent 52%)
+  `,
+  backgroundSize: '22px 22px, 22px 22px, auto',
+  border: `1px solid ${theme.palette.divider}`,
+  borderRadius: 14,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  margin: theme.spacing(1),
+  margin: theme.spacing(1.25),
+  marginRight: theme.spacing(0),
   overflow: 'hidden',
   position: 'relative',
 }));
@@ -110,37 +146,46 @@ const FlowCard = ({
   onToggleFavorite,
   folders = [],
   validation,
-  pickerMode = false
+  pickerMode = false,
+  selectionManaged = false,
+  disabled = false,
+  selectionMode = false,
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
   const theme = useTheme();
+  const { t, tp, formatNumber } = useI18n();
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
 
   // Surface flow problems at a glance: red when it won't run (errors), amber for
   // advisory warnings. The tooltip lists the first few issues.
   const errorCount = validation?.errorCount ?? 0;
   const warningCount = validation?.warningCount ?? 0;
+  const { stepCount, subagentCount, signalCount } = getFlowCardMetrics(flow);
   const badgeSeverity: 'error' | 'warning' | null =
     errorCount > 0 ? 'error' : warningCount > 0 ? 'warning' : null;
   const badgeTooltip = validation ? (
     <Box>
       <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
         {errorCount > 0
-          ? `${errorCount} problem${errorCount === 1 ? '' : 's'} — won't run`
-          : `${warningCount} warning${warningCount === 1 ? '' : 's'}`}
+          ? tp('flows.card.problem', errorCount)
+          : tp('flows.card.warning', warningCount)}
       </Typography>
       {validation.issues.slice(0, 5).map((issue, i) => (
         <Typography key={i} variant="caption" sx={{ display: 'block' }}>
-          • {issue.message}
+          • {localizeFlowIssue(issue, t)}
         </Typography>
       ))}
       {validation.issues.length > 5 && (
         <Typography variant="caption" sx={{ display: 'block', fontStyle: 'italic' }}>
-          …and {validation.issues.length - 5} more
+          {t('flows.card.more', { count: formatNumber(validation.issues.length - 5) })}
         </Typography>
       )}
     </Box>
   ) : null;
+
+  const handleSelect = () => {
+    if (!disabled) onSelect(flow.id);
+  };
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -155,6 +200,7 @@ const FlowCard = ({
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onEdit) onEdit(flow.id);
+    else handleSelect();
   };
 
   const handleOpenInChatClick = (e: React.MouseEvent) => {
@@ -182,7 +228,7 @@ const FlowCard = ({
       return (
         <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography color="textSecondary" align="center">
-            Empty Flow
+            {t('flows.card.nothing')}
           </Typography>
         </Box>
       );
@@ -240,7 +286,7 @@ const FlowCard = ({
           {flow.nodes.map((node) => {
             const x = node.position?.x ?? 0;
             const y = node.position?.y ?? 0;
-            const type = (node.data?.type ?? 'process') as 'start' | 'process' | 'finish' | 'mcp';
+            const type = (node.data?.type ?? 'process') as NodeType;
             const color = getNodeColor(type, theme);
             return (
               <g key={node.id}>
@@ -276,9 +322,31 @@ const FlowCard = ({
   };
 
   return (
-    <StyledCard selected={selected}>
-      {onToggleFavorite && (
-        <Tooltip title={flow.favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+    <StyledCard
+      selected={selected}
+      data-tutorial-flow-id={flow.id}
+      aria-disabled={disabled || undefined}
+      sx={{ opacity: disabled ? 0.58 : 1 }}
+    >
+      {selectionMode && (
+        <Checkbox
+          checked={selected}
+          onChange={handleSelect}
+          disabled={disabled}
+          onClick={(event) => event.stopPropagation()}
+          inputProps={{ 'aria-label': t('flows.card.select', { name: flow.name }) }}
+          sx={{
+            position: 'absolute',
+            top: 2,
+            left: 2,
+            zIndex: 3,
+            bgcolor: alpha(theme.palette.background.paper, 0.78),
+            borderRadius: 1.5,
+          }}
+        />
+      )}
+      {onToggleFavorite && !selectionMode && (
+        <Tooltip title={flow.favorite ? t('flows.card.favoriteRemove') : t('flows.card.favoriteAdd')} arrow placement="top">
           <IconButton
             size="small"
             onClick={handleFavoriteClick}
@@ -329,33 +397,64 @@ const FlowCard = ({
         </Tooltip>
       )}
       <CardActionArea
-        onClick={() => onSelect(flow.id)}
-        sx={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
+        component={selectionManaged ? 'div' : 'button'}
+        tabIndex={selectionManaged ? -1 : undefined}
+        onClick={handleSelect}
+        sx={{
+          gridArea: 'title',
+          display: 'block',
+          minWidth: 0,
+          px: 1.5,
+          py: 1.25,
+          pl: onToggleFavorite || selectionMode ? 5.5 : 1.5,
+          pr: badgeSeverity ? 7 : 1.5,
+          borderBottom: `1px solid ${theme.palette.divider}`,
+        }}
+      >
+        <Typography variant="h6" component="div" noWrap title={flow.name}>
+          {flow.name}
+        </Typography>
+      </CardActionArea>
+
+      <CardActionArea
+        component={selectionManaged ? 'div' : 'button'}
+        tabIndex={selectionManaged ? -1 : undefined}
+        onClick={handleSelect}
+        aria-label={t('flows.card.open', { name: flow.name })}
+        sx={{
+          gridArea: 'preview',
+          minWidth: 0,
+          height: 256,
+          display: 'flex',
           alignItems: 'stretch',
-          height: '100%',
-          position: 'relative',
         }}
       >
         <PreviewArea>
           {renderFlowPreview()}
         </PreviewArea>
-        
-        <CardContent sx={{ flexGrow: 1, pb: 0 }}>
-          <Typography variant="h6" component="div" noWrap>
-            {flow.name}
-          </Typography>
+      </CardActionArea>
 
-          {flow.description && (
+      <CardActionArea
+        component={selectionManaged ? 'div' : 'button'}
+        tabIndex={selectionManaged ? -1 : undefined}
+        onClick={handleSelect}
+        sx={{
+          gridArea: 'details',
+          gridRow: pickerMode || selectionMode ? '2 / 5' : undefined,
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'stretch',
+        }}
+      >
+        <CardContent sx={{ width: '100%', minWidth: 0, p: 1.5, '&:last-child': { pb: 1.25 } }}>
+          {flow.description ? (
             <Tooltip title={flow.description} placement="bottom-start">
               <Typography
                 variant="body2"
                 color="text.secondary"
                 sx={{
-                  mt: 0.5,
                   display: '-webkit-box',
-                  WebkitLineClamp: 2,
+                  WebkitLineClamp: 3,
                   WebkitBoxOrient: 'vertical',
                   overflow: 'hidden',
                 }}
@@ -363,20 +462,32 @@ const FlowCard = ({
                 {flow.description}
               </Typography>
             </Tooltip>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              {t('flows.card.noDescription')}
+            </Typography>
           )}
           
-          <Box sx={{ display: 'flex', gap: 0.5, mt: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 0.5, mt: 1.25, flexWrap: 'wrap' }}>
             <Chip 
               size="small" 
-              label={`${flow.nodes.length} nodes`} 
+              label={tp('flows.card.step', stepCount)}
               color="primary" 
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
             />
-            <Chip 
-              size="small" 
-              label={`${flow.edges.length} connections`} 
-              color="secondary" 
+            {subagentCount > 0 && (
+              <Chip
+                size="small"
+                label={tp('flows.card.subagent', subagentCount)}
+                color="secondary"
+                variant="outlined"
+                sx={{ fontSize: '0.7rem', height: 20 }}
+              />
+            )}
+            <Chip
+              size="small"
+              label={tp('flows.card.signal', signalCount)}
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
             />
@@ -384,59 +495,75 @@ const FlowCard = ({
         </CardContent>
       </CardActionArea>
       
-      {!pickerMode && (
-      <CardActions sx={{ 
-        justifyContent: 'flex-end', 
-        p: 1,
-        opacity: 0.7,
-        '&:hover': {
-          opacity: 1
-        }
-      }}>
-        {onOpenInChat && (
-          <Tooltip title="Start a conversation with this flow">
-            <IconButton size="small" onClick={handleOpenInChatClick} color="primary">
-              <ChatIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
+      {!pickerMode && !selectionMode && (
+        <>
+          <CardActions sx={{ gridArea: 'primary', gap: 0.75, px: 1.25, pb: 1, pt: 0 }}>
+            {onOpenInChat && (
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<ChatIcon fontSize="small" />}
+                onClick={handleOpenInChatClick}
+                sx={{ flex: 1, minWidth: 0 }}
+              >
+                {t('flows.card.use')}
+              </Button>
+            )}
 
-        {onEdit && (
-          <Tooltip title="Edit flow metadata">
-            <IconButton size="small" onClick={handleEditClick}>
-              <EditIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-        
-        {onCopy && (
-          <Tooltip title="Copy flow">
-            <IconButton size="small" onClick={handleCopyClick}>
-              <ContentCopyIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-
-        {onSetFolder && (
-          <Tooltip title={flow.folder ? `Folder: ${flow.folder}` : 'Move to folder'}>
-            <IconButton
+            <Button
+              data-tutorial-edit-flow-id={flow.id}
               size="small"
-              onClick={handleFolderClick}
-              color={flow.folder ? 'primary' : 'default'}
+              variant="outlined"
+              startIcon={<EditIcon fontSize="small" />}
+              onClick={handleEditClick}
+              sx={{ flex: 1, minWidth: 0 }}
             >
-              <DriveFileMoveOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-        
-        {onDelete && (
-          <Tooltip title="Delete flow">
-            <IconButton size="small" onClick={handleDeleteClick} color="error">
-              <DeleteIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-      </CardActions>
+              {t('flows.card.edit')}
+            </Button>
+          </CardActions>
+
+          <CardActions
+            sx={{
+              gridArea: 'footer',
+              justifyContent: 'flex-end',
+              gap: 0.25,
+              px: 1,
+              py: 0.625,
+              minHeight: 42,
+              borderTop: `1px solid ${theme.palette.divider}`,
+              backgroundColor: alpha(theme.palette.background.default, 0.55),
+            }}
+          >
+            {onCopy && (
+              <Tooltip title={t('flows.card.copy')}>
+                <IconButton size="small" onClick={handleCopyClick} aria-label={t('flows.card.copy')}>
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {onSetFolder && (
+              <Tooltip title={flow.folder ? t('flows.card.folder', { folder: flow.folder }) : t('flows.card.organize')}>
+                <IconButton
+                  size="small"
+                  onClick={handleFolderClick}
+                  color={flow.folder ? 'primary' : 'default'}
+                  aria-label={t('flows.card.move')}
+                >
+                  <DriveFileMoveOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {onDelete && (
+              <Tooltip title={t('flows.card.delete')}>
+                <IconButton size="small" onClick={handleDeleteClick} color="error" aria-label={t('flows.card.delete')}>
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </CardActions>
+        </>
       )}
 
       {!pickerMode && onSetFolder && (
@@ -455,18 +582,34 @@ const FlowCard = ({
 
 // Loading skeleton version of the card
 export const FlowCardSkeleton = () => (
-  <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-    <Box sx={{ p: 1 }}>
-      <Skeleton variant="rectangular" height={140} />
+  <Card
+    sx={{
+      height: '100%',
+      minHeight: 286,
+      display: 'grid',
+      gridTemplateColumns: 'minmax(138px, 1.05fr) minmax(0, 0.95fr)',
+      gridTemplateRows: 'auto 1fr auto auto',
+    }}
+  >
+    <Box sx={{ gridColumn: '1 / -1', px: 1.5, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+      <Skeleton variant="text" width="55%" height={30} />
     </Box>
-    <CardContent sx={{ flexGrow: 1 }}>
-      <Skeleton variant="text" width="80%" height={30} />
-      <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+    <Box sx={{ gridColumn: 1, gridRow: '2 / 5', p: 1.25, pr: 0 }}>
+      <Skeleton variant="rounded" height="100%" sx={{ minHeight: 220 }} />
+    </Box>
+    <CardContent sx={{ gridColumn: 2, gridRow: 2, p: 1.5 }}>
+      <Skeleton variant="text" />
+      <Skeleton variant="text" width="85%" />
+      <Box sx={{ display: 'flex', gap: 0.5, mt: 1 }}>
         <Skeleton variant="rectangular" width={60} height={20} />
-        <Skeleton variant="rectangular" width={90} height={20} />
+        <Skeleton variant="rectangular" width={55} height={20} />
       </Box>
     </CardContent>
-    <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
+    <CardActions sx={{ gridColumn: 2, gridRow: 3, px: 1.25, pb: 1 }}>
+      <Skeleton variant="rounded" width="48%" height={30} />
+      <Skeleton variant="rounded" width="48%" height={30} />
+    </CardActions>
+    <CardActions sx={{ gridColumn: 2, gridRow: 4, justifyContent: 'flex-end', p: 0.75, borderTop: 1, borderColor: 'divider' }}>
       <Skeleton variant="circular" width={28} height={28} />
       <Skeleton variant="circular" width={28} height={28} />
       <Skeleton variant="circular" width={28} height={28} />

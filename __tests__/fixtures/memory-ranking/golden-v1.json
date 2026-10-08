@@ -1,0 +1,531 @@
+{
+  "version": "golden-v1",
+  "description": "Synthetic, fixed-time memory ranking and deduplication cases for issue #466.",
+  "items": [
+    {
+      "id": "r-exact",
+      "content": "release",
+      "importance": 0.2,
+      "confidence": 0.2,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "r-phrase",
+      "content": "release branch stable",
+      "importance": 0.2,
+      "confidence": 0.2,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "coverage-one",
+      "content": "release notes",
+      "importance": 0.2,
+      "confidence": 0.2,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "priority-importance",
+      "content": "priority",
+      "importance": 1,
+      "confidence": 0,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "reflection",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "priority-confidence",
+      "content": "priority",
+      "importance": 0,
+      "confidence": 1,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "reflection",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "roadmap-fresh",
+      "content": "roadmap",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "verified_tool",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "roadmap-stale",
+      "content": "roadmap",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "verified_tool",
+      "updatedAt": 1974080000000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "trust-user",
+      "content": "trust",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "trust-tool",
+      "content": "trust",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "verified_tool",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "trust-model",
+      "content": "trust",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "trust-external",
+      "content": "trust",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "external_untrusted",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "length-short",
+      "content": "needle short",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "length-long",
+      "content": "needle xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "tie-a",
+      "content": "tie",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "tie-b",
+      "content": "tie",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "core-old",
+      "content": "architecture",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1974080000000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active",
+      "core": true
+    },
+    {
+      "id": "core-fresh",
+      "content": "architecture",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active",
+      "core": false
+    },
+    {
+      "id": "d-new",
+      "content": "Release branch is stable.",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "d-old",
+      "content": "Release branch is stable.",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999827200000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "d-unrelated",
+      "content": "The favorite color is purple.",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999956800000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "d-wrong-kind",
+      "content": "Release branch is stable.",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "reflection",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "d-wrong-scope",
+      "content": "Release branch is stable.",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "workspace",
+      "status": "active"
+    },
+    {
+      "id": "d-inactive",
+      "content": "Release branch is stable.",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "superseded"
+    },
+    {
+      "id": "d-empty",
+      "content": "!!!",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "d-short",
+      "content": "a",
+      "importance": 0.5,
+      "confidence": 0.5,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    }
+  ],
+  "queries": [
+    {
+      "id": "exact-match",
+      "query": "release",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "r-exact"
+      ],
+      "expectedOrder": [
+        "r-exact",
+        "r-phrase"
+      ],
+      "candidateIds": [
+        "r-exact",
+        "r-phrase"
+      ]
+    },
+    {
+      "id": "term-coverage",
+      "query": "release stable",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "r-phrase"
+      ],
+      "expectedOrder": [
+        "r-phrase",
+        "coverage-one"
+      ],
+      "candidateIds": [
+        "coverage-one",
+        "r-phrase"
+      ]
+    },
+    {
+      "id": "importance-confidence",
+      "query": "priority",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "priority-importance"
+      ],
+      "expectedOrder": [
+        "priority-importance",
+        "priority-confidence"
+      ],
+      "candidateIds": [
+        "priority-importance",
+        "priority-confidence"
+      ]
+    },
+    {
+      "id": "recency",
+      "query": "roadmap",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "roadmap-fresh"
+      ],
+      "expectedOrder": [
+        "roadmap-fresh",
+        "roadmap-stale"
+      ],
+      "candidateIds": [
+        "roadmap-fresh",
+        "roadmap-stale"
+      ]
+    },
+    {
+      "id": "trust-order",
+      "query": "trust",
+      "asOf": 2000000000000,
+      "topK": 4,
+      "relevantIds": [
+        "trust-user",
+        "trust-tool"
+      ],
+      "expectedOrder": [
+        "trust-user",
+        "trust-tool",
+        "trust-model",
+        "trust-external"
+      ],
+      "candidateIds": [
+        "trust-user",
+        "trust-tool",
+        "trust-model",
+        "trust-external"
+      ]
+    },
+    {
+      "id": "length-normalisation",
+      "query": "needle",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "length-short"
+      ],
+      "expectedOrder": [
+        "length-short",
+        "length-long"
+      ],
+      "candidateIds": [
+        "length-short",
+        "length-long"
+      ]
+    },
+    {
+      "id": "stable-tie",
+      "query": "tie",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "tie-a",
+        "tie-b"
+      ],
+      "expectedOrder": [
+        "tie-a",
+        "tie-b"
+      ],
+      "candidateIds": [
+        "tie-b",
+        "tie-a"
+      ]
+    },
+    {
+      "id": "core-decay",
+      "query": "architecture",
+      "asOf": 2000000000000,
+      "topK": 2,
+      "relevantIds": [
+        "core-old"
+      ],
+      "expectedOrder": [
+        "core-old",
+        "core-fresh"
+      ],
+      "candidateIds": [
+        "core-old",
+        "core-fresh"
+      ]
+    }
+  ],
+  "duplicates": [
+    {
+      "id": "duplicate-newest-tie",
+      "incoming": {
+        "content": "release branch is stable!",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": true,
+      "expectedSurvivorId": "d-new",
+      "candidateIds": [
+        "d-old",
+        "d-new"
+      ]
+    },
+    {
+      "id": "non-duplicate",
+      "incoming": {
+        "content": "Completely different material.",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": false,
+      "candidateIds": [
+        "d-new"
+      ]
+    },
+    {
+      "id": "kind-boundary",
+      "incoming": {
+        "content": "release branch is stable",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": false,
+      "candidateIds": [
+        "d-wrong-kind"
+      ]
+    },
+    {
+      "id": "scope-boundary",
+      "incoming": {
+        "content": "release branch is stable",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": false,
+      "candidateIds": [
+        "d-wrong-scope"
+      ]
+    },
+    {
+      "id": "status-boundary",
+      "incoming": {
+        "content": "release branch is stable",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": false,
+      "candidateIds": [
+        "d-inactive"
+      ]
+    },
+    {
+      "id": "comparison-window-source",
+      "incoming": {
+        "content": "release branch is stable",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": true,
+      "expectedSurvivorId": "d-old",
+      "candidateIds": [
+        "d-unrelated",
+        "d-old"
+      ]
+    },
+    {
+      "id": "empty-normalised",
+      "incoming": {
+        "content": "???",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": true,
+      "expectedSurvivorId": "d-empty",
+      "candidateIds": [
+        "d-empty"
+      ]
+    },
+    {
+      "id": "short-shingle",
+      "incoming": {
+        "content": "a",
+        "kind": "semantic",
+        "scope": "persona"
+      },
+      "expectedDuplicate": true,
+      "expectedSurvivorId": "d-short",
+      "candidateIds": [
+        "d-short"
+      ]
+    }
+  ]
+}

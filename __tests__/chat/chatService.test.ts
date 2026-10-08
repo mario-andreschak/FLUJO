@@ -29,6 +29,15 @@ beforeEach(() => {
 });
 
 describe('chatService REST methods', () => {
+  it('countConversations: uses the lightweight presence endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { count: 3 }));
+
+    const result = await chatService.countConversations();
+
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations?presence=1');
+    expect(result).toBe(3);
+  });
+
   it('listConversations: GET /v1/chat/conversations', async () => {
     const list = [{ id: 'a', title: 'A', flowId: 'f', createdAt: 1, updatedAt: 2 }];
     fetchMock.mockResolvedValueOnce(makeResponse(200, list));
@@ -39,14 +48,195 @@ describe('chatService REST methods', () => {
     expect(result).toEqual(list);
   });
 
+  it('getConversationChains: GET the read-only chain projection (#405)', async () => {
+    const chains = {
+      chains: [{ rootId: 'r', title: 'R', updatedAt: 2, activeNodeCount: 1, totalNodeCount: 1, truncated: false, nodes: [] }],
+      totalChains: 1,
+      truncated: false,
+      activeStatuses: ['running'],
+      generatedAt: 5,
+    };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, chains));
+
+    const result = await chatService.getConversationChains();
+
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversation-chains', undefined);
+    expect(result).toEqual(chains);
+  });
+
+  it('getConversationChains: encodes the root filter and forwards an abort signal', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { chains: [], totalChains: 0, truncated: false, activeStatuses: [], generatedAt: 1 }));
+    const controller = new AbortController();
+
+    await chatService.getConversationChains({ rootId: 'a b&c', limit: 3, signal: controller.signal });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversation-chains?root=a+b%26c&limit=3',
+      { signal: controller.signal },
+    );
+  });
+
+  it('getConversationChains: maps a non-2xx response to ChatApiError', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(400, { error: 'Invalid root conversation id' }));
+
+    await expect(chatService.getConversationChains({ rootId: 'nope' })).rejects.toMatchObject({
+      name: 'ChatApiError',
+      status: 400,
+    });
+  });
+
+  it('listConversationPage: sends the cursor paging contract', async () => {
+    const page = {
+      items: [{ id: 'a', title: 'A', flowId: null, createdAt: 1, updatedAt: 2 }],
+      total: 3,
+      hasMore: true,
+      nextCursor: 'next page',
+    };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, page));
+
+    const result = await chatService.listConversationPage({
+      limit: 25,
+      cursor: 'previous page',
+      search: 'needle',
+      dimension: 'content',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations?paged=1&limit=25&cursor=previous+page&search=needle&dimension=content',
+    );
+    expect(result).toEqual(page);
+  });
+
+  it('listConversationPage: forwards an abort signal without serializing it into the URL', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, {
+      items: [], total: 0, hasMore: false,
+    }));
+    const controller = new AbortController();
+
+    await chatService.listConversationPage({
+      limit: 50,
+      search: 'needle',
+      dimension: 'title',
+      signal: controller.signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations?paged=1&limit=50&search=needle&dimension=title',
+      { signal: controller.signal },
+    );
+  });
+
+  it('listConversationPage: sends origin and descendant filters to the backend', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, {
+      items: [], total: 0, hasMore: false,
+    }));
+
+    await chatService.listConversationPage({
+      limit: 50,
+      origin: 'subflow',
+      descendantsOf: 'parent-1',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations?paged=1&limit=50&origin=subflow&descendantsOf=parent-1',
+    );
+  });
+
+  it('listConversationPage: requests pinned families alongside the regular page', async () => {
+    const page = { items: [{ id: 'recent' }], pinnedItems: [{ id: 'parent' }, { id: 'child' }], total: 3, hasMore: true };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, page));
+    const result = await chatService.listConversationPage({ limit: 1, pinnedIds: ['parent', 'child'] });
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations?paged=1&limit=1&pinnedId=parent&pinnedId=child');
+    expect(result).toEqual(page);
+  });
+
+  it('listAllConversationPages: follows cursors until the collection is complete', async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeResponse(200, {
+        items: [{ id: 'a' }], total: 2, hasMore: true, nextCursor: 'cursor-2',
+      }))
+      .mockResolvedValueOnce(makeResponse(200, {
+        items: [{ id: 'b' }], total: 2, hasMore: false,
+      }));
+
+    const result = await chatService.listAllConversationPages();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/v1/chat/conversations?paged=1&limit=200',
+      '/v1/chat/conversations?paged=1&limit=200&cursor=cursor-2',
+    ]);
+    expect(result).toEqual([{ id: 'a' }, { id: 'b' }]);
+  });
+
+  it('listAllConversationPages: stops before requesting another page when aborted', async () => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => {
+        controller.abort();
+        return JSON.stringify({
+          items: [{ id: 'a' }], total: 2, hasMore: true, nextCursor: 'cursor-2',
+        });
+      },
+    } as Response);
+
+    await expect(chatService.listAllConversationPages({ signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscribeToSidebarEvents: uses the filtered global lifecycle stream', () => {
+    const source = {
+      onopen: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent) => void) | null,
+      onerror: null as ((event: Event) => void) | null,
+      close: jest.fn(),
+    };
+    const eventSourceMock = jest.fn(() => source);
+    (global as any).EventSource = eventSourceMock;
+    const onEvent = jest.fn();
+
+    const result = chatService.subscribeToSidebarEvents({ onEvent });
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'run:done',
+        conversationId: 'conversation-1',
+        status: 'completed',
+        seq: 1,
+        timestamp: 2,
+      }),
+    } as MessageEvent);
+
+    expect(eventSourceMock).toHaveBeenCalledWith(
+      '/v1/chat/events?scope=sidebar&workspace=default-workspace',
+    );
+    expect(result).toBe(source);
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'run:done',
+      conversationId: 'conversation-1',
+    }));
+  });
+
   it('getConversation: GET with encoded id', async () => {
     const conv = { id: 'x/y', title: 'T', messages: [], flowId: 'f', createdAt: 1, updatedAt: 2 };
     fetchMock.mockResolvedValueOnce(makeResponse(200, conv));
 
     const result = await chatService.getConversation('x/y');
 
-    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations/x%2Fy');
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations/x%2Fy?compactToolPayloads=1');
     expect(result).toEqual(conv);
+  });
+
+  it('getConversation: requests a bounded snapshot when messageLimit is set', async () => {
+    const conv = { id: 'bounded', title: 'T', messages: [], flowId: 'f', createdAt: 1, updatedAt: 2 };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, conv));
+
+    await chatService.getConversation('bounded', { messageLimit: 200 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations/bounded?compactToolPayloads=1&messageLimit=200',
+    );
   });
 
   it('getConversation: maps a 404 to ChatApiError with status', async () => {
@@ -93,6 +283,16 @@ describe('chatService REST methods', () => {
     }));
   });
 
+  it('deleteConversations: DELETE collection route with ids body', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { deleted: 2, errors: 0 }));
+    await chatService.deleteConversations(['a', 'b']);
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations', expect.objectContaining({
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['a', 'b'] }),
+    }));
+  });
+
   it('respondToToolCall: POST action + toolCallId, returns parsed data', async () => {
     fetchMock.mockResolvedValueOnce(makeResponse(200, { status: 'running' }));
 
@@ -113,6 +313,10 @@ describe('chatService REST methods', () => {
     fetchMock.mockResolvedValueOnce(makeResponse(200, { status: 'completed' }));
     await chatService.debugContinue('c');
     expect(fetchMock).toHaveBeenLastCalledWith('/v1/chat/conversations/c/debug/continue', { method: 'POST' });
+
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { success: true }));
+    await chatService.attachDebugger('c');
+    expect(fetchMock).toHaveBeenLastCalledWith('/v1/chat/conversations/c/debug/attach', { method: 'POST' });
   });
 
   it('setBreakpoints: PUT with breakpoints array', async () => {

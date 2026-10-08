@@ -4,6 +4,7 @@ import React from 'react';
 import { Box, Collapse, IconButton, Typography, Chip, useTheme } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface CollapsibleCardSectionProps {
   /** Header text (folder name, sort bucket label, …). */
@@ -16,6 +17,14 @@ export interface CollapsibleCardSectionProps {
   onToggle: () => void;
   /** Show a small folder glyph before the label (used for #71 folder view). */
   showFolderIcon?: boolean;
+  /** Stable identifier used by list scroll navigation. */
+  groupKey?: string;
+  /**
+   * Anchor id used by the scroll navigation cluster (#376). Defaults to
+   * `groupKey`; the header renders `data-scroll-group-key` + `id` so
+   * "previous / next folder" can find it without knowing the page.
+   */
+  anchorKey?: string;
   children: React.ReactNode;
 }
 
@@ -31,9 +40,13 @@ const CollapsibleCardSection = ({
   expanded,
   onToggle,
   showFolderIcon = false,
+  groupKey,
+  anchorKey,
   children,
 }: CollapsibleCardSectionProps) => {
+  const scrollAnchorKey = anchorKey ?? groupKey;
   const theme = useTheme();
+  const { t } = useI18n();
 
   return (
     <Box sx={{ mb: 1.5 }}>
@@ -41,6 +54,8 @@ const CollapsibleCardSection = ({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
+        id={scrollAnchorKey ? `scroll-group-${scrollAnchorKey}` : undefined}
+        data-scroll-group-key={scrollAnchorKey}
         onClick={onToggle}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -64,7 +79,7 @@ const CollapsibleCardSection = ({
       >
         <IconButton
           size="small"
-          aria-label={expanded ? 'Collapse section' : 'Expand section'}
+          aria-label={expanded ? t('common.collapseSection') : t('common.expandSection')}
           onClick={(e) => {
             e.stopPropagation();
             onToggle();

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { createLogger } from '@/utils/logger';
 import { getOllamaUrl, isLocalModelsEnabled } from '@/utils/paths';
 import { probeCapability } from '@/backend/services/ollama/capability';
@@ -17,7 +18,7 @@ export const runtime = 'nodejs';
  * model. Read-only and secret-free, so it is intentionally NOT behind the
  * encryption unlock gate — it can run on first launch before encryption is set up.
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   try {
     const [capability, reachable] = await Promise.all([probeCapability(), isReachable()]);
     // Only list installed models when the server is actually up.
@@ -42,4 +43,11 @@ export async function GET() {
       headers: { 'Content-Type': 'application/json' },
     });
   }
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
 }

@@ -11,6 +11,7 @@ import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/Car
 import ModelCard from '@/frontend/components/models/list/ModelCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ModelBindingProps {
   isLoadingModels: boolean;
@@ -31,6 +32,7 @@ const ModelBinding: React.FC<ModelBindingProps> = ({
   isModelBound,
   handleUnbindModel
 }) => {
+  const { t } = useI18n();
   // Route the picker through the shared view-model (#92) so it mirrors the
   // Models page's saved search/sort/folder settings.
   const modelPicker = useCardPicker<Model>('models', models);
@@ -51,20 +53,20 @@ const ModelBinding: React.FC<ModelBindingProps> = ({
   return (
     <Box sx={{ mt: 4 }}>
       <Typography variant="subtitle1" gutterBottom>
-        Bind to Model
+        {t('flows.process.bindModel')}
       </Typography>
 
       {/* The model picker reuses the Models-page card layout (#92) so binding a
           model here looks exactly like the Models page. Cards act as a radio
           group: one selection at a time. */}
-      <Box role="radiogroup" aria-label="Bind to model">
+      <Box role="radiogroup" aria-label={t('flows.process.bindModelAria')}>
         <CardPickerGrid
           isLoading={isLoadingModels}
           error={loadError}
-          loadingMessage="Loading models..."
-          emptyMessage="No models available. Add some in the Model Manager."
+          loadingMessage={t('flows.process.loadingModels')}
+          emptyMessage={t('flows.process.noModels')}
           searchable
-          searchPlaceholder="Search models…"
+          searchPlaceholder={t('flows.process.searchModels')}
           searchTerm={modelPicker.searchTerm}
           onSearchChange={modelPicker.setSearchTerm}
           columns={{ xs: 12, sm: 6 }}
@@ -79,8 +81,8 @@ const ModelBinding: React.FC<ModelBindingProps> = ({
         <>
           <FormHelperText>
             {selectedModelId
-              ? `This node will use the selected model for processing.`
-              : 'Select a model to bind this node to.'}
+              ? t('flows.process.modelSelected')
+              : t('flows.process.modelSelect')}
           </FormHelperText>
 
           {isModelBound && (
@@ -92,7 +94,7 @@ const ModelBinding: React.FC<ModelBindingProps> = ({
                 variant="outlined"
                 size="small"
               >
-                Unbind Model
+                {t('flows.process.unbindModel')}
               </Button>
             </Box>
           )}

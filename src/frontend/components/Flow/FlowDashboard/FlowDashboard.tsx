@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
+import { validateFlow, FlowValidationResult, type VFlow } from '@/utils/shared/flowValidation';
 import { 
   Box, 
   Grid, 
@@ -32,15 +32,33 @@ import AddIcon from '@mui/icons-material/Add';
 import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
+import QuickChangeModelsDialog, { type QuickModelChangeResult } from './QuickChangeModelsDialog';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import {
+  groupByFolder,
+  groupItems,
+  collectFolders,
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+} from '@/utils/shared/cardGrouping';
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { Flow } from '@/frontend/types/flow/flow';
+import type { Model } from '@/shared/types/model';
+import type { FlowModelReplacementMap } from '@/utils/shared/flowModelReplacement';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
+import {
+  BIG_TUTORIAL_EVENT,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowDashboard');
 
@@ -58,6 +76,11 @@ interface FlowDashboardProps {
   onSetFolder?: (flowId: string, folder: string | undefined) => void;
   /** Toggle a flow's favorite flag (#120). */
   onToggleFavorite?: (flowId: string) => void;
+  /** Persist model-id substitutions across several selected flows (#401). */
+  onReplaceModels?: (
+    flowIds: string[],
+    replacements: FlowModelReplacementMap,
+  ) => Promise<QuickModelChangeResult>;
   isLoading?: boolean;
 }
 
@@ -75,39 +98,57 @@ const FlowDashboard = ({
   onCreateFlow,
   onSetFolder,
   onToggleFavorite,
+  onReplaceModels,
   isLoading = false,
 }: FlowDashboardProps) => {
+  const { t, tp, formatNumber } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'filter-agent-search') return;
+      setSearchTerm(event.detail.query);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
+  // #372: place the caret in the search field automatically. The toolbar Paper
+  // already sits outside the inner scroll container below, so it stays visible
+  // without a sticky wrapper — only auto-focus is needed here.
+  const searchInputRef = useAutoFocusSearch();
   // Persisted view preferences (#93): survive navigating away and back. Search
   // is intentionally NOT persisted (session-scoped), and the transient menu
   // anchors stay ephemeral.
-  const [sortOption, setSortOption] = useUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
-  const [viewMode, setViewMode] = useUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
+  const [viewMode, setViewMode] = useWorkspaceUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', 'none');
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
+  const [modelSelectionMode, setModelSelectionMode] = useState(false);
+  const [selectedForModelChange, setSelectedForModelChange] = useState<Set<string>>(new Set());
+  const [quickChangeOpen, setQuickChangeOpen] = useState(false);
   // Keys of the sections the user has collapsed; everything defaults to expanded.
   // Persisted as a string[] and re-derived into a Set for O(1) lookups.
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:flows:collapsed', []);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:flows:collapsed', []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   // Context for the per-card consistency badge. Loaded once; flows are revalidated
   // whenever the list or the context changes. A failed load leaves a family undefined
   // so the validator skips those checks rather than mislabelling every card.
   const [validationContext, setValidationContext] = useState<{
-    models?: Array<{ id: string; name?: string; displayName?: string }>;
+    models?: Model[];
     servers?: Array<{ name: string; status?: string }>;
   }>({});
+  const [modelsLoading, setModelsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const ctx: { models?: any[]; servers?: Array<{ name: string; status?: string }> } = {};
+      const ctx: { models?: Model[]; servers?: Array<{ name: string; status?: string }> } = {};
       try {
         const res = await fetch('/api/model');
         if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) ctx.models = data;
+          const data: unknown = await res.json();
+          if (Array.isArray(data)) ctx.models = data as Model[];
         }
       } catch (error) {
         log.warn('Could not load models for flow badges', error);
@@ -115,26 +156,45 @@ const FlowDashboard = ({
       try {
         const res = await fetch('/api/mcp/servers');
         if (res.ok) {
-          const data = await res.json();
+          const data: unknown = await res.json();
           if (Array.isArray(data)) {
-            ctx.servers = data.map((s: any) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
+            ctx.servers = data.flatMap((server): Array<{ name: string; status?: string }> => {
+              if (!server || typeof server !== 'object') return [];
+              const candidate = server as Record<string, unknown>;
+              if (typeof candidate.name !== 'string') return [];
+              return [{
+                name: candidate.name,
+                status: candidate.disabled === true ? 'disabled' : undefined,
+              }];
+            });
           }
         }
       } catch (error) {
         log.warn('Could not load servers for flow badges', error);
       }
-      if (!cancelled) setValidationContext(ctx);
+      if (!cancelled) {
+        setValidationContext(ctx);
+        setModelsLoading(false);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
+  useEffect(() => {
+    const availableIds = new Set(flows.map((flow) => flow.id));
+    setSelectedForModelChange((current) => {
+      const next = new Set(Array.from(current).filter((id) => availableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [flows]);
+
   const validationByFlow = useMemo(() => {
     const map: Record<string, FlowValidationResult> = {};
     for (const flow of flows) {
       try {
-        map[flow.id] = validateFlow(flow as any, validationContext);
+        map[flow.id] = validateFlow(flow as VFlow, validationContext);
       } catch (error) {
         log.warn('Failed to validate flow for badge', { flowId: flow.id, error });
       }
@@ -183,6 +243,21 @@ const FlowDashboard = ({
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
     );
   };
+
+  const toggleModelSelection = (flowId: string) => {
+    setSelectedForModelChange((current) => {
+      const next = new Set(current);
+      if (next.has(flowId)) next.delete(flowId);
+      else next.add(flowId);
+      return next;
+    });
+  };
+
+  const leaveModelSelectionMode = () => {
+    setModelSelectionMode(false);
+    setSelectedForModelChange(new Set());
+    setQuickChangeOpen(false);
+  };
   
   // Filter and sort flows
   const filteredFlows = useMemo(() => {
@@ -204,9 +279,9 @@ const FlowDashboard = ({
   }, [flows, searchTerm, sortOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the cards load.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:flows',
-    { deps: [isLoading, filteredFlows.length] },
+    { deps: [isLoading, filteredFlows.length], groupsEnabled: groupMode !== 'none' },
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker.
@@ -215,13 +290,37 @@ const FlowDashboard = ({
   // Grouped view of the filtered/sorted flows, driven by the active group mode.
   const groups = useMemo<CardGroup<Flow>[]>(() => {
     if (groupMode === 'folder') {
-      return groupByFolder(filteredFlows, (f) => f.folder);
+      return groupByFolder(filteredFlows, (f) => f.folder, t('flows.group.ungrouped'));
     }
     if (groupMode === 'sort') {
-      return groupItems(filteredFlows, (f) => deriveFlowSortGroup(f, sortOption));
+      return groupItems(filteredFlows, (f) => {
+        const group = deriveFlowSortGroup(f, sortOption);
+        const labels: Record<string, string> = {
+          'recency:unknown': t('flows.group.noDate'),
+          'recency:today': t('flows.group.today'),
+          'recency:week': t('flows.group.week'),
+          'recency:month': t('flows.group.month'),
+          'recency:older': t('flows.group.older'),
+          'nodes:0': t('flows.group.nodes0'),
+          'nodes:1-2': t('flows.group.nodes12'),
+          'nodes:3-5': t('flows.group.nodes35'),
+          'nodes:6-10': t('flows.group.nodes610'),
+          'nodes:11+': t('flows.group.nodes11'),
+          all: t('flows.group.all'),
+        };
+        return { ...group, label: labels[group.key] ?? group.label };
+      });
     }
     return [];
-  }, [groupMode, filteredFlows, sortOption]);
+  }, [groupMode, filteredFlows, sortOption, t]);
+
+  const sortLabel =
+    sortOption === 'name-asc' ? t('flows.sort.nameAsc') :
+    sortOption === 'name-desc' ? t('flows.sort.nameDesc') :
+    sortOption === 'newest' ? t('flows.sort.newest') :
+    sortOption === 'oldest' ? t('flows.sort.oldest') :
+    sortOption === 'most-nodes' ? t('flows.sort.mostSteps') :
+    t('flows.sort.fewestSteps');
   
   // Generate loading skeletons
   const renderSkeletons = () => {
@@ -234,7 +333,7 @@ const FlowDashboard = ({
 
   // Render a grid of flow cards for a given subset (whole list or one group).
   const renderFlowGrid = (items: Flow[]) => (
-    <Grid container spacing={2}>
+    <Grid container spacing={2.5}>
       {items.map(flow => (
         <Grid 
           item 
@@ -245,8 +344,8 @@ const FlowDashboard = ({
         >
           <FlowCard
             flow={flow}
-            selected={selectedFlow === flow.id}
-            onSelect={onSelectFlow}
+            selected={modelSelectionMode ? selectedForModelChange.has(flow.id) : selectedFlow === flow.id}
+            onSelect={modelSelectionMode ? toggleModelSelection : onSelectFlow}
             onDelete={onDeleteFlow}
             onCopy={onCopyFlow}
             onEdit={onEditFlow}
@@ -255,6 +354,7 @@ const FlowDashboard = ({
             onToggleFavorite={onToggleFavorite}
             folders={folders}
             validation={validationByFlow[flow.id]}
+            selectionMode={modelSelectionMode}
           />
         </Grid>
       ))}
@@ -279,12 +379,14 @@ const FlowDashboard = ({
         }}>
           {/* Search field */}
           <TextField
-            placeholder="Search flows..."
+            data-tour="agents-search"
+            placeholder={t('flows.dashboard.search')}
             variant="outlined"
             size="small"
             fullWidth
             value={searchTerm}
             onChange={handleSearchChange}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -295,7 +397,54 @@ const FlowDashboard = ({
             sx={{ maxWidth: { sm: 300 } }}
           />
           
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+            {onReplaceModels && (
+              modelSelectionMode ? (
+                <>
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedForModelChange(new Set(filteredFlows.map((flow) => flow.id)))}
+                  >
+                    {t('flows.quickModels.selectVisible')}
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedForModelChange(new Set())}
+                    disabled={selectedForModelChange.size === 0}
+                  >
+                    {t('flows.quickModels.clear')}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<SwapHorizRoundedIcon />}
+                    disabled={selectedForModelChange.size === 0}
+                    onClick={() => setQuickChangeOpen(true)}
+                  >
+                    {t('flows.quickModels.changeSelected', {
+                      count: formatNumber(selectedForModelChange.size),
+                    })}
+                  </Button>
+                  <IconButton
+                    size="small"
+                    aria-label={t('flows.quickModels.cancelSelection')}
+                    onClick={leaveModelSelectionMode}
+                  >
+                    <CloseRoundedIcon fontSize="small" />
+                  </IconButton>
+                </>
+              ) : (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<SwapHorizRoundedIcon />}
+                  disabled={flows.length === 0 || isLoading}
+                  onClick={() => setModelSelectionMode(true)}
+                >
+                  {t('flows.quickModels.start')}
+                </Button>
+              )
+            )}
             {/* View mode toggle */}
             <Box sx={{ 
               display: 'flex', 
@@ -305,6 +454,7 @@ const FlowDashboard = ({
               overflow: 'hidden'
             }}>
               <IconButton 
+                aria-label={t('flows.dashboard.cards')}
                 size="small" 
                 onClick={() => setViewMode('grid')}
                 color={viewMode === 'grid' ? 'primary' : 'default'}
@@ -317,6 +467,7 @@ const FlowDashboard = ({
                 <ViewModuleIcon fontSize="small" />
               </IconButton>
               <IconButton 
+                aria-label={t('flows.dashboard.compact')}
                 size="small" 
                 onClick={() => setViewMode('compact')}
                 color={viewMode === 'compact' ? 'primary' : 'default'}
@@ -339,13 +490,15 @@ const FlowDashboard = ({
                 border: `1px solid ${theme.palette.divider}`,
                 backgroundColor: theme.palette.background.default
               }}
-              title="Group cards"
+              title={t('flows.dashboard.groupCards')}
+              aria-label={t('flows.dashboard.groupAgents')}
             >
               <LayersIcon fontSize="small" />
             </IconButton>
             
             {/* Sort button */}
             <IconButton
+              aria-label={t('flows.dashboard.sortAgents')}
               size="small"
               onClick={handleSortMenuOpen}
               sx={{
@@ -369,19 +522,15 @@ const FlowDashboard = ({
         px: 1
       }}>
         <Typography variant="body2" color="textSecondary">
-          {filteredFlows.length} of {flows.length} flows
-          {searchTerm && ` matching "${searchTerm}"`}
+          {tp('flows.dashboard.count', flows.length, {
+            shown: formatNumber(filteredFlows.length),
+            total: formatNumber(flows.length),
+          })}
+          {searchTerm && t('flows.dashboard.matching', { search: searchTerm })}
         </Typography>
         
         <Typography variant="body2" color="textSecondary">
-          Sorted by: {
-            sortOption === 'name-asc' ? 'Name (A-Z)' :
-            sortOption === 'name-desc' ? 'Name (Z-A)' :
-            sortOption === 'newest' ? 'Newest first' :
-            sortOption === 'oldest' ? 'Oldest first' :
-            sortOption === 'most-nodes' ? 'Most nodes' :
-            'Least nodes'
-          }
+          {t('flows.dashboard.showing', { sort: sortLabel })}
         </Typography>
       </Box>
       
@@ -393,7 +542,7 @@ const FlowDashboard = ({
         pb: 2
       }}>
         {isLoading ? (
-          <Grid container spacing={2}>
+          <Grid container spacing={2.5}>
             {renderSkeletons()}
           </Grid>
         ) : filteredFlows.length > 0 ? (
@@ -403,6 +552,7 @@ const FlowDashboard = ({
             groups.map((group) => (
               <CollapsibleCardSection
                 key={group.key}
+                groupKey={group.key}
                 label={group.label}
                 count={group.items.length}
                 expanded={!collapsedKeys.has(group.key)}
@@ -427,18 +577,21 @@ const FlowDashboard = ({
             minHeight: 200
           }}>
             <Typography variant="h6" gutterBottom color="textSecondary">
-              No flows found
+              {searchTerm ? t('flows.dashboard.noMatches') : t('flows.dashboard.empty')}
             </Typography>
             {searchTerm ? (
               <Typography variant="body2" color="textSecondary" align="center">
-                No flows match your search criteria.
+                {t('flows.dashboard.noMatchHelp')}
                 <Box component="span" display="block" mt={1}>
-                  Try a different search term or <Button size="small" onClick={() => setSearchTerm('')}>clear the search</Button>
+                  <Trans
+                    message="flows.dashboard.trySearch"
+                    values={{ clearAction: <Button size="small" onClick={() => setSearchTerm('')}>{t('flows.dashboard.clearSearch')}</Button> }}
+                  />
                 </Box>
               </Typography>
             ) : (
               <Typography variant="body2" color="textSecondary" align="center">
-                Get started by creating your first flow.
+                {t('flows.dashboard.emptyHelp')}
                 {onCreateFlow && (
                   <Box component="span" display="block" mt={2}>
                     <Button 
@@ -447,7 +600,7 @@ const FlowDashboard = ({
                       startIcon={<AddIcon />}
                       onClick={onCreateFlow}
                     >
-                      Create New Flow
+                      {t('flows.dashboard.createFirst')}
                     </Button>
                   </Box>
                 )}
@@ -469,19 +622,19 @@ const FlowDashboard = ({
           <ListItemIcon>
             <LayersClearIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="No grouping" />
+          <ListItemText primary={t('flows.group.none')} />
         </MenuItem>
         <MenuItem selected={groupMode === 'folder'} onClick={() => handleGroupChange('folder')}>
           <ListItemIcon>
             <FolderOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="By folder" />
+          <ListItemText primary={t('flows.group.folder')} />
         </MenuItem>
         <MenuItem selected={groupMode === 'sort'} onClick={() => handleGroupChange('sort')}>
           <ListItemIcon>
             <LayersIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="By sort setting" />
+          <ListItemText primary={t('flows.group.sort')} />
         </MenuItem>
       </Menu>
       
@@ -503,43 +656,61 @@ const FlowDashboard = ({
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Name (A-Z)" />
+          <ListItemText primary={t('flows.sort.nameAsc')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('name-desc')}>
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Name (Z-A)" />
+          <ListItemText primary={t('flows.sort.nameDesc')} />
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => handleSortChange('newest')}>
           <ListItemIcon>
             <UpdateIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Newest first" />
+          <ListItemText primary={t('flows.sort.newest')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('oldest')}>
           <ListItemIcon>
             <UpdateIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Oldest first" />
+          <ListItemText primary={t('flows.sort.oldest')} />
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => handleSortChange('most-nodes')}>
           <ListItemIcon>
             <FilterListIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Most nodes" />
+          <ListItemText primary={t('flows.sort.mostSteps')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('least-nodes')}>
           <ListItemIcon>
             <FilterListIcon fontSize="small" sx={{ transform: 'scaleY(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Least nodes" />
+          <ListItemText primary={t('flows.sort.fewestSteps')} />
         </MenuItem>
       </Menu>
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollNavCluster {...scrollNavProps} />
+
+      {onReplaceModels && (
+        <QuickChangeModelsDialog
+          open={quickChangeOpen}
+          flows={flows.filter((flow) => selectedForModelChange.has(flow.id))}
+          models={validationContext.models ?? []}
+          modelsLoading={modelsLoading}
+          onClose={() => setQuickChangeOpen(false)}
+          onApply={async (replacements) => {
+            const result = await onReplaceModels(Array.from(selectedForModelChange), replacements);
+            if (result.updatedFlowCount > 0 || result.failedFlowCount === 0) {
+              setModelSelectionMode(false);
+              setSelectedForModelChange(new Set());
+            }
+            return result;
+          }}
+        />
+      )}
     </Box>
   );
 };

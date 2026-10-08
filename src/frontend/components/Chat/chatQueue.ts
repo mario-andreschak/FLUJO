@@ -7,6 +7,7 @@
 // unblocked. Keeping this logic pure (no React) makes it trivially unit-testable
 // and keeps the Chat component wiring thin.
 
+import type { McpSkillSelection } from '@/shared/types/mcp';
 import type { Attachment } from './index';
 
 // A message the user submitted while a run was already in progress. `nodeOverride`
@@ -17,6 +18,8 @@ export interface QueuedMessage {
   content: string;
   attachments: Attachment[];
   nodeOverride: string | null;
+  /** Approved Skill identities captured with this queued turn. */
+  mcpSkillSelections?: McpSkillSelection[];
   timestamp: number;
 }
 
@@ -65,6 +68,21 @@ export function dequeue(
   return { queues: next, head };
 }
 
+/**
+ * Re-insert a message at the FRONT of a conversation's queue (immutably).
+ * Used by the drain error path to restore a message that failed to send so it
+ * is retried before any later items (preserving FIFO order for the rest).
+ * If a message with the same id is already in the queue it is removed first
+ * so the call is idempotent.
+ */
+export function requeueFront(queues: QueueMap, conversationId: string, message: QueuedMessage): QueueMap {
+  const current = getQueue(queues, conversationId).filter(m => m.id !== message.id);
+  return {
+    ...queues,
+    [conversationId]: [message, ...current],
+  };
+}
+
 /** Drop a conversation's entire queue (e.g. on delete). Immutable. */
 export function clearQueue(queues: QueueMap, conversationId: string): QueueMap {
   if (!(conversationId in queues)) return queues;
@@ -109,4 +127,22 @@ export interface DrainGate {
  */
 export function canDrain(gate: DrainGate): boolean {
   return !gate.running && !gate.pendingApproval && !gate.debugPaused && !gate.hasError && !gate.stopped;
+}
+
+/**
+ * Why the queue is HELD rather than merely waiting for the current run, or null
+ * when nothing is holding it back. `running` is not a hold — it is the normal
+ * case and resolves on its own.
+ *
+ * A held queue used to be invisible: the pending bubbles kept showing a
+ * "Queued" spinner that would never resolve, so a message parked behind an
+ * errored or stopped run looked like it was still on its way. These strings let
+ * the UI say what is actually happening and what will release it.
+ */
+export function drainHoldReason(gate: DrainGate): string | null {
+  if (gate.stopped) return 'Held — you stopped this run. Send again to continue.';
+  if (gate.hasError) return 'Held — the last run failed. Retry or send again to continue.';
+  if (gate.pendingApproval) return 'Held — waiting for tool approval.';
+  if (gate.debugPaused) return 'Held — paused in the debugger.';
+  return null;
 }

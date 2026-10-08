@@ -25,6 +25,7 @@ import {
   RegistryServerResult,
   RegistryServer,
   InstallOption,
+  isAutoInstallable,
   ResolvedInstallPlan,
   getInstallOptions,
   buildConfigFromOption,
@@ -41,6 +42,7 @@ import { GITHUB_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/git
 import { NPM_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/npmDownloads';
 import { REGISTRY_STATUS_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/registryStatus';
 import { loadQualitySettings } from '@/backend/services/mcp/quality/settings';
+import type { EnvVarValue, MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/registryInstall');
 
@@ -106,6 +108,26 @@ export async function searchRegistry(
   return ranked.map((sc) => toSearchHit(sc.candidate.server, sc));
 }
 
+/**
+ * Read-only capability discovery for callers that want ranked recommendations
+ * without coupling research to installation. Unlike searchRegistry, this fans a
+ * natural-language request into Registry-friendly name terms before ranking.
+ */
+export async function findBestRegistryServers(
+  query: string,
+  limit = DEFAULT_SEARCH_LIMIT,
+): Promise<RegistrySearchHit[]> {
+  if (!query || typeof query !== 'string') return [];
+  const pages = await Promise.all(capabilitySearchTerms(query).map((term) => fetchRegistryResults(term, 10)));
+  const byName = new Map<string, RegistryServerResult>();
+  for (const result of pages.flat()) {
+    if (!byName.has(result.server.name)) byName.set(result.server.name, result);
+  }
+  const ranked = await enrichAndRank(query, [...byName.values()].map(toCandidate));
+  return ranked.slice(0, Math.min(Math.max(limit, 1), 30))
+    .map((candidate) => toSearchHit(candidate.candidate.server, candidate));
+}
+
 /** Raw registry list fetch (no ranking), shared by search + resolve paths. */
 async function fetchRegistryResults(query: string, limit: number): Promise<RegistryServerResult[]> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
@@ -118,7 +140,9 @@ async function fetchRegistryResults(query: string, limit: number): Promise<Regis
 }
 
 function toSearchHit(server: RegistryServer, scored?: ScoredCandidate): RegistrySearchHit {
-  const options = getInstallOptions(server);
+  // Launch-and-connect entries (#392) are describable but not headlessly
+  // installable, so they must not make a hit look installable.
+  const options = getInstallOptions(server).filter(isAutoInstallable);
   const best = options[0];
   return {
     name: server.name,
@@ -202,41 +226,142 @@ export interface InstallOptions {
    * pass false to force it off for a specific install.
    */
   worksGate?: boolean;
+  /**
+   * Package-provided replacements for existing stdio argument positions. Each
+   * value must contain a portable `${global:NAME}` reference; raw commands and
+   * unrelated arguments are never accepted through this channel.
+   */
+  argTemplates?: Array<{ index: number; value: string }>;
+  /**
+   * Transport recorded by a package export. Registry entries can expose both a
+   * local package and a hosted endpoint; restore the same kind that was
+   * exported instead of blindly taking the registry's first option.
+   */
+  preferredTransport?: 'stdio' | 'sse' | 'streamable' | 'websocket';
+  /** Optional reviewed FLUJO config name (used by the assisted-install UI). */
+  serverName?: string;
+  /**
+   * The hosted endpoint was probed and advertised OAuth dynamic client
+   * registration. In this mode the OAuth provider owns Authorization, so a
+   * Registry-declared static Authorization header must not be requested/saved.
+   */
+  oauthDynamicClientRegistration?: boolean;
+  /**
+   * Exact plan that was reviewed/audited immediately before this call. The
+   * install is rejected before saving or spawning if a fresh Registry resolve
+   * changes any security-relevant field.
+   */
+  expectedPlan?: ResolvedInstallPlan;
+  /** Resolved package header declarations (including secret metadata). */
+  headerOverrides?: Record<string, MCPHeaderValue>;
+  /** Explicit approval to execute locally when the exported remote kind is unavailable. */
+  allowLocalFallback?: boolean;
+}
+
+function optionTransport(option: InstallOption): 'stdio' | 'sse' | 'streamable' {
+  if (option.kind === 'package') return 'stdio';
+  if (option.kind === 'manual-launch') return option.transport;
+  return option.remote.type === 'sse' ? 'sse' : 'streamable';
+}
+
+function chooseInstallOption(
+  options: InstallOption[],
+  preferred?: InstallOptions['preferredTransport'],
+): InstallOption | undefined {
+  if (!preferred) return options[0];
+  const exact = options.find((option) => optionTransport(option) === preferred);
+  if (exact) return exact;
+  // A websocket package cannot be represented by the public registry today.
+  // For all other remote transports, prefer another hosted option before ever
+  // falling back to code execution on the local machine.
+  if (preferred !== 'stdio') {
+    return options.find((option) => option.kind === 'remote') ?? options[0];
+  }
+  return options.find((option) => option.kind === 'package') ?? options[0];
+}
+
+function headerLiteral(value: MCPHeaderValue): string {
+  return typeof value === 'string' ? value : value.value;
+}
+
+function plansMatch(left: ResolvedInstallPlan, right: ResolvedInstallPlan): boolean {
+  const comparable = (value: ResolvedInstallPlan) => ({
+    registryName: value.registryName,
+    resolvedName: value.resolvedName,
+    serverName: value.serverName,
+    transport: value.transport,
+    command: value.command,
+    args: value.args,
+    serverUrl: value.serverUrl,
+    steps: value.steps,
+    requiredEnvNames: value.requiredEnvNames,
+    verificationStatus: value.verificationStatus,
+  });
+  return JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
+}
+
+function applyArgTemplates(
+  config: ReturnType<typeof buildConfigFromOption>,
+  templates: InstallOptions['argTemplates'],
+): ReturnType<typeof buildConfigFromOption> | { error: string } {
+  if (!templates?.length) return config;
+  if (config.transport !== 'stdio' || !Array.isArray(config.args)) {
+    return { error: 'Package argument templates require a stdio registry server' };
+  }
+  const args = [...config.args];
+  for (const template of templates) {
+    if (
+      !Number.isInteger(template.index) ||
+      template.index < 0 ||
+      template.index > args.length ||
+      (template.index < args.length &&
+        !/\$\{global:[A-Za-z0-9_.-]+\}/.test(args[template.index])) ||
+      !/\$\{global:[A-Za-z0-9_.-]+\}/.test(template.value)
+    ) {
+      return {
+        error:
+          `Invalid package argument template at index ${String(template.index)}; ` +
+          'templates may append arguments or replace an existing global-backed argument',
+      };
+    }
+    args[template.index] = template.value;
+  }
+  return { ...config, args };
 }
 
 /**
- * Resolve a registry entry by its exact name (falls back to best search hit).
+ * Resolve a registry entry by its exact name. Never substitute a fuzzy hit:
+ * callers use this result to approve and execute a specific install plan.
  * Returns the full result (not just `.server`) so the caller can read the
  * `_meta … status` verification field.
  */
-async function resolveEntry(registryName: string): Promise<RegistryServerResult | null> {
+export async function resolveRegistryEntry(registryName: string): Promise<RegistryServerResult | null> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
   url.searchParams.set('version', 'latest');
   url.searchParams.set('limit', '10');
   url.searchParams.set('search', registryName);
   const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS)) as RegistryListResponse;
   const results: RegistryServerResult[] = Array.isArray(data?.servers) ? data.servers : [];
-  const exact = results.find((r) => r.server?.name === registryName);
-  return exact ?? results[0] ?? null;
+  return results.find((r) => r.server?.name === registryName) ?? null;
 }
 
 /**
- * Install a registry server end-to-end: resolve → build config → save (which
- * connects) → list tools. Idempotent-ish: an existing server of the same name is
- * left untouched and reported with its tools.
+ * Resolve and prepare a Registry configuration without saving, connecting, or
+ * adopting an existing server. Both package installation and workspace restore
+ * use this preparation step before applying their different persistence rules.
  */
-export async function installRegistryServer(
+export async function prepareRegistryServerRuntime(
   registryName: string,
-  envOverrides?: Record<string, string>,
+  envOverrides?: Record<string, EnvVarValue>,
   options?: InstallOptions
-): Promise<InstallResult> {
+): Promise<InstallResult & { config?: Partial<MCPServerConfig> }> {
   if (!registryName || typeof registryName !== 'string') {
     return { installed: false, error: 'A registry server name is required' };
   }
 
   let result: RegistryServerResult | null;
   try {
-    result = await resolveEntry(registryName);
+    result = await resolveRegistryEntry(registryName);
   } catch (err) {
     return { installed: false, error: `Registry lookup failed: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -245,22 +370,66 @@ export async function installRegistryServer(
     return { installed: false, error: `No registry entry found for "${registryName}"` };
   }
 
-  const installOptions = getInstallOptions(server);
-  const option: InstallOption | undefined = installOptions[0]; // packages first, same as the UI
+  const allOptions = getInstallOptions(server);
+  // #392: a launch-and-connect package is a process the USER starts; FLUJO does
+  // not own that lifecycle yet, so the headless installer never picks one.
+  const installOptions = allOptions.filter(isAutoInstallable);
+  const option = chooseInstallOption(installOptions, options?.preferredTransport);
   if (!option) {
-    return { installed: false, error: `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)` };
+    const manualOnly = installOptions.length === 0 && allOptions.length > 0;
+    return {
+      installed: false,
+      error: manualOnly
+        ? `"${server.name}" must be started manually (it runs locally but speaks HTTP); add it from the MCP server dialog instead`
+        : `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)`,
+    };
   }
 
   // Resolve-only / consent preview: exact command + args + required env NAMES,
   // never touching updateServerConfig. Available before any missing-env or
   // already-exists check so a caller can always show/log what would run.
+  const requestedServerName = options?.serverName;
+  if (
+    requestedServerName !== undefined
+    && (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(requestedServerName))
+  ) {
+    return {
+      installed: false,
+      error: 'The server name must be 1-64 characters and use only letters, numbers, hyphens, or underscores.',
+    };
+  }
+  const omitOAuthAuthorization = option.kind === 'remote' && options?.oauthDynamicClientRegistration === true;
+  const isAuthorization = (name: string) => name.trim().toLocaleLowerCase() === 'authorization';
   const verificationStatus = verificationStatusOf(result);
-  const plan = resolvedPlanFrom(registryName, server, option, verificationStatus);
+  const basePlan = resolvedPlanFrom(registryName, server, option, verificationStatus);
+  const plan: ResolvedInstallPlan = {
+    ...basePlan,
+    ...(requestedServerName ? { serverName: requestedServerName } : {}),
+    ...(omitOAuthAuthorization
+      ? { requiredEnvNames: basePlan.requiredEnvNames.filter(name => !isAuthorization(name)) }
+      : {}),
+  };
+  if (options?.expectedPlan && !plansMatch(plan, options.expectedPlan)) {
+    return {
+      installed: false,
+      serverName: plan.serverName,
+      plan,
+      error: 'The Registry install plan changed after it was reviewed and audited. Resolve and approve the new exact plan before installing.',
+    };
+  }
   if (options?.resolveOnly) {
     return { installed: false, serverName: plan.serverName, plan };
   }
 
-  const missing = missingRequiredInputs(option, envOverrides);
+  const effectiveHeaderOverrides = Object.fromEntries(
+    Object.entries(options?.headerOverrides ?? {})
+      .filter(([name]) => !omitOAuthAuthorization || !isAuthorization(name)),
+  );
+  const providedHeaders = Object.fromEntries(
+    Object.entries(effectiveHeaderOverrides).map(([name, value]) => [name, headerLiteral(value)]),
+  );
+  const missing = missingRequiredInputs(option, { ...envOverrides, ...providedHeaders })
+    .filter(name => !omitOAuthAuthorization || !isAuthorization(name));
   if (missing.length > 0) {
     return {
       installed: false,
@@ -270,8 +439,75 @@ export async function installRegistryServer(
     };
   }
 
-  const config = applySpotlightEnvDefaults(buildConfigFromOption(server, option), envOverrides);
+  const builtConfig = buildConfigFromOption(server, option);
+  // #392 guard: a `launch` spec means "a local process must be running behind
+  // this URL". Headless install cannot start it (Phase 2), so fail loudly here
+  // instead of persisting a config that would never connect.
+  if ('launch' in builtConfig && builtConfig.launch) {
+    return {
+      installed: false,
+      plan,
+      error: `"${server.name}" needs a locally launched process behind its HTTP endpoint, which FLUJO does not start yet. Add it from the MCP server dialog and start the process yourself.`,
+    };
+  }
+  const builtHeaders = 'headers' in builtConfig
+    ? (builtConfig.headers as Record<string, MCPHeaderValue> | undefined)
+    : undefined;
+  const policyHeaders = omitOAuthAuthorization
+    ? Object.fromEntries(Object.entries(builtHeaders ?? {}).filter(([name]) => !isAuthorization(name)))
+    : builtHeaders;
+  const registryConfig = {
+    ...builtConfig,
+    ...(requestedServerName ? { name: requestedServerName } : {}),
+    ...(requestedServerName
+      ? { rootPath: `mcp-servers/${requestedServerName}` }
+      : {}),
+    ...(option.kind === 'remote' ? { headers: policyHeaders ?? {} } : {}),
+  } as Partial<MCPServerConfig>;
+  const currentHeaders =
+    'headers' in registryConfig
+      ? (registryConfig.headers as Record<string, MCPHeaderValue> | undefined)
+      : undefined;
+  const baseConfig = applySpotlightEnvDefaults(
+    option.kind === 'remote' && Object.keys(effectiveHeaderOverrides).length > 0
+      ? { ...registryConfig, headers: { ...(currentHeaders ?? {}), ...effectiveHeaderOverrides } }
+      : registryConfig,
+    envOverrides,
+  );
+  const templatedConfig = applyArgTemplates(baseConfig, options?.argTemplates);
+  if ('error' in templatedConfig) {
+    return { installed: false, plan, error: templatedConfig.error };
+  }
+  if (
+    options?.preferredTransport &&
+    options.preferredTransport !== 'stdio' &&
+    option.kind === 'package' &&
+    !options.allowLocalFallback
+  ) {
+    return {
+      installed: false,
+      error:
+        `"${server.name}" was exported as ${options.preferredTransport}, but the registry now only offers ` +
+        'a local executable install. Confirm local execution before using that fallback.',
+    };
+  }
+  const config = templatedConfig;
   const serverName = config.name as string;
+
+  return { installed: false, serverName, plan, config };
+}
+
+/** Prepare once, then apply normal adopt-existing and installation semantics. */
+export async function installRegistryServer(
+  registryName: string,
+  envOverrides?: Record<string, EnvVarValue>,
+  options?: InstallOptions,
+): Promise<InstallResult> {
+  const prepared = await prepareRegistryServerRuntime(registryName, envOverrides, options);
+  const { config, ...result } = prepared;
+  if (!config) return result;
+  const serverName = config.name as string;
+  const plan = prepared.plan!;
 
   // Never clobber an existing server: report it as available instead.
   const existing = await mcpService.loadServerConfigs();
@@ -288,7 +524,7 @@ export async function installRegistryServer(
     };
   }
 
-  log.info(`installRegistryServer: installing "${server.name}" as "${serverName}" (${option.kind})`);
+  log.info(`installRegistryServer: installing "${registryName}" as "${serverName}" (${config.transport})`);
   const saved = await mcpService.updateServerConfig(serverName, config);
   if (!Array.isArray(saved) && saved && 'success' in saved && saved.success === false) {
     return { installed: false, error: `Saving the server failed: ${saved.error ?? 'unknown error'}` };
@@ -319,8 +555,8 @@ export async function installRegistryServer(
       serverName,
       plan,
       error: error
-        ? `"${server.name}" failed to start: ${error}`
-        : `"${server.name}" connected but exposed no tools — rejected by the works-gate. Try a different server.`,
+        ? `"${registryName}" failed to start: ${error}`
+        : `"${registryName}" connected but exposed no tools — rejected by the works-gate. Try a different server.`,
     };
   }
 
@@ -354,10 +590,34 @@ export interface BestInstallOptions {
   /** Minimum composite score to attempt. Defaults to the mcpQuality `minScore`. */
   minScore?: number;
   /**
+   * Called with the exact resolve-only plan before any package can be spawned.
+   * Return false to stop the ranked walk without executing that candidate.
+   */
+  beforeAttempt?: (plan: ResolvedInstallPlan) => Promise<boolean | void> | boolean | void;
+  /**
    * Audit hook invoked after each attempt with its plan + result, so a caller
    * (e.g. the authoring tool) can record every spawn to the SEP-1024 audit log.
    */
   onAttempt?: (plan: ResolvedInstallPlan | undefined, res: InstallResult) => Promise<void> | void;
+}
+
+/**
+ * Registry search is name-only, so a natural-language capability sentence is a
+ * particularly poor query. Fan it into a few concrete aliases before quality
+ * enrichment. The interactive AI path supplies better semantic aliases; this
+ * lexical fallback also fixes the internal install_best_mcp_server tool.
+ */
+export function capabilitySearchTerms(query: string): string[] {
+  const ignored = new Set(['connect', 'with', 'from', 'into', 'using', 'want', 'need', 'server', 'mcp', 'that', 'this', 'the', 'and', 'for']);
+  const words = query.toLocaleLowerCase()
+    .replace(/[^a-z0-9@._/-]+/g, ' ')
+    .split(/\s+/)
+    .map((word) => word.replace(/^[-/@.]+|[-/@.]+$/g, ''))
+    .filter((word) => word.length >= 2 && !ignored.has(word));
+  const terms = [words.slice(0, 3).join(' '), ...words]
+    .map((term) => term.trim().slice(0, 80))
+    .filter(Boolean);
+  return Array.from(new Set(terms)).slice(0, 6);
 }
 
 /**
@@ -379,7 +639,12 @@ export async function installBestForCapability(
 
   let results: RegistryServerResult[];
   try {
-    results = await fetchRegistryResults(query, 10);
+    const pages = await Promise.all(capabilitySearchTerms(query).map((term) => fetchRegistryResults(term, 10)));
+    const byName = new Map<string, RegistryServerResult>();
+    for (const result of pages.flat()) {
+      if (!byName.has(result.server.name)) byName.set(result.server.name, result);
+    }
+    results = [...byName.values()];
   } catch (err) {
     return { installed: false, error: `Registry lookup failed: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -399,14 +664,36 @@ export async function installBestForCapability(
       break;
     }
     // Don't spend an attempt on entries FLUJO can't run at all.
-    if (getInstallOptions(sc.candidate.server).length === 0) {
+    if (getInstallOptions(sc.candidate.server).filter(isAutoInstallable).length === 0) {
       attempts.push({ name, score: sc.score, reason: 'no supported install method' });
       continue;
     }
     if (tried >= maxAttempts) break;
     tried += 1;
 
-    const res = await installRegistryServer(name, envOverrides, { worksGate: true });
+    const preview = await installRegistryServer(name, undefined, { resolveOnly: true });
+    if (!preview.plan) {
+      attempts.push({ name, score: sc.score, reason: preview.error ?? 'could not resolve exact install plan' });
+      continue;
+    }
+    if (options?.beforeAttempt) {
+      try {
+        const proceed = await options.beforeAttempt(preview.plan);
+        if (proceed === false) {
+          attempts.push({ name, score: sc.score, reason: 'blocked before execution' });
+          break;
+        }
+      } catch (auditErr) {
+        log.error('installBestForCapability: beforeAttempt hook failed', auditErr);
+        attempts.push({ name, score: sc.score, reason: 'pre-install audit failed' });
+        break;
+      }
+    }
+
+    const res = await installRegistryServer(name, envOverrides, {
+      worksGate: true,
+      expectedPlan: preview.plan,
+    });
     if (options?.onAttempt) {
       try {
         await options.onAttempt(res.plan, res);

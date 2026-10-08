@@ -19,30 +19,60 @@ import type { NextRequest } from 'next/server';
 import type { ExecutionEvent, RawExecutionEvent } from '@/shared/types/execution/events';
 
 const assertUnlockedMock = jest.fn(async () => undefined);
+const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
+const loadConversationStateMock = jest.fn();
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...a: unknown[]) => assertUnlockedMock(...(a as [])),
+}));
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: (...args: [unknown, unknown?]) => assertLocalRequestMock(...args),
+}));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: (...args: unknown[]) => loadConversationStateMock(...args),
 }));
 
 import { GET } from '@/app/v1/chat/conversations/[conversationId]/events/route';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import {
+  _setConversationLogDirForTests,
+  flushConversationLog,
+} from '@/backend/execution/flow/conversationLog';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 
 const makeRequest = (
   conversationId: string,
   fromSeq: number | undefined,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options: { activityOnly?: boolean; lastEventId?: number } = {},
 ): NextRequest =>
   ({
     nextUrl: new URL(
       `http://localhost/v1/chat/conversations/${conversationId}/events` +
-        (fromSeq !== undefined ? `?fromSeq=${fromSeq}` : '')
+        (fromSeq !== undefined || options.activityOnly
+          ? `?${new URLSearchParams({
+              ...(fromSeq !== undefined ? { fromSeq: String(fromSeq) } : {}),
+              ...(options.activityOnly ? { replay: 'activity' } : {}),
+            }).toString()}`
+          : '')
     ),
-    headers: new Headers(),
+    headers: new Headers(
+      options.lastEventId !== undefined
+        ? { 'last-event-id': String(options.lastEventId) }
+        : undefined,
+    ),
     signal,
   }) as unknown as NextRequest;
 
-const openStream = async (conversationId: string, fromSeq?: number) => {
+const openStream = async (
+  conversationId: string,
+  fromSeq?: number,
+  options?: { activityOnly?: boolean; lastEventId?: number },
+) => {
   const abort = new AbortController();
-  const res = await GET(makeRequest(conversationId, fromSeq, abort.signal), {
+  const res = await GET(makeRequest(conversationId, fromSeq, abort.signal, options), {
     params: Promise.resolve({ conversationId }),
   });
   const reader = (res.body as ReadableStream<Uint8Array>).getReader();
@@ -121,7 +151,33 @@ const readUntilClosed = async (
 const emit = (conversationId: string, raw: Record<string, unknown>): ExecutionEvent =>
   executionEventBus.emit(conversationId, raw as unknown as RawExecutionEvent);
 
+beforeEach(() => {
+  assertLocalRequestMock.mockReset().mockReturnValue(null);
+  loadConversationStateMock.mockReset().mockResolvedValue({ conversationId: 'legacy' });
+});
+
 describe('events route SSE replay across runs', () => {
+  it('rejects a Persona event stream before replay or subscription', async () => {
+    loadConversationStateMock.mockResolvedValueOnce({
+      conversationId: 'persona-events',
+      personaAttribution: {
+        personaId: 'persona_1',
+        activityId: 'activity_1',
+        behaviorRevisionId: 'revision_1',
+      },
+    });
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+    const abort = new AbortController();
+    const request = makeRequest('persona-events', 0, abort.signal);
+
+    const response = await GET(request, {
+      params: Promise.resolve({ conversationId: 'persona-events' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(request);
+  });
+
   it('clamps a fromSeq=0 replay to the latest run and stays open for the live run', async () => {
     const conv = 'conv-events-replay-clamp';
     // Run 1: started, produced a message, and FINISHED (errored/stopped).
@@ -185,6 +241,189 @@ describe('events route SSE replay across runs', () => {
       const replay = await readEvents(reader, 2);
       expect(replay.events.map((e) => e.seq)).toEqual([2, 3]);
       expect(replay.closed).toBe(false);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('rebuilds live activity without replaying transcript payloads', async () => {
+    const conv = 'conv-events-activity-replay';
+    emit(conv, { type: 'run:start', flowId: 'f1' }); // seq 0
+    emit(conv, { type: 'model:delta', messageId: 'draft-1', delta: 'large chunk' }); // seq 1
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'durable' } }); // seq 2
+    emit(conv, { type: 'node:enter', node: { nodeId: 'n1' } }); // seq 3
+
+    const { reader, abort } = await openStream(conv, 0, { activityOnly: true });
+    try {
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map((event) => event.seq)).toEqual([0, 3]);
+
+      // Filtering is initial-replay-only: new transcript events remain live.
+      emit(conv, { type: 'message', message: { id: 'm2', role: 'assistant', content: 'live' } }); // seq 4
+      const live = await readEvents(reader, 1);
+      expect(live.events.map((event) => event.seq)).toEqual([4]);
+      expect(live.events[0].type).toBe('message');
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('prefers Last-Event-ID over the original fromSeq cursor on reconnect', async () => {
+    const conv = 'conv-events-last-id';
+    emit(conv, { type: 'run:start', flowId: 'f1' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'a' } }); // seq 1
+    emit(conv, { type: 'message', message: { id: 'm2', role: 'assistant', content: 'b' } }); // seq 2
+    emit(conv, { type: 'node:enter', node: { nodeId: 'n1' } }); // seq 3
+
+    const { reader, abort } = await openStream(conv, 0, {
+      activityOnly: true,
+      lastEventId: 2,
+    });
+    try {
+      const replay = await readEvents(reader, 1);
+      expect(replay.events.map((event) => event.seq)).toEqual([3]);
+    } finally {
+      abort.abort();
+    }
+  });
+});
+
+/**
+ * Durable JSONL fallback (issue #261): once the in-memory ring buffer is
+ * evicted (channel GC 5 min after run:done, or a process restart), a reconnect
+ * with a ?fromSeq cursor must still replay the persisted events from the
+ * conversation log — seq is now authoritative and monotonic, so the cursor is
+ * meaningful across runs/restarts and each event is delivered exactly once.
+ */
+describe('events route SSE replay from durable JSONL after buffer eviction', () => {
+  let tmpDir: string;
+  let prevDir: string;
+
+  const registerPersistable = (conversationId: string) => {
+    FlowExecutor.conversationStates.set(conversationId, {
+      conversationId,
+      messages: [],
+      trackingInfo: { executionId: 'x', startTime: 1, nodeExecutionTracker: [] },
+      flowId: 'f',
+      title: 't',
+      createdAt: 1,
+      updatedAt: 1,
+    } as never);
+  };
+
+  // Drop the in-memory channel + ring buffer for a conversation (simulates the
+  // post-run:done channel GC / a process restart).
+  const evictBuffer = (conversationId: string) => {
+    const channels = (executionEventBus as unknown as { channels: Map<string, unknown> }).channels;
+    for (const key of channels.keys()) {
+      if (key === conversationId || key.endsWith(`\u0000${conversationId}`)) channels.delete(key);
+    }
+  };
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-events-replay-'));
+    prevDir = _setConversationLogDirForTests(tmpDir);
+  });
+
+  afterAll(async () => {
+    _setConversationLogDirForTests(prevDir);
+    FlowExecutor.conversationStates.clear();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('replays a finished run from JSONL and closes on the terminal run:done', async () => {
+    const conv = 'conv-events-jsonl-fallback';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'hi' } }); // seq 1
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+    await flushConversationLog(conv);
+
+    evictBuffer(conv);
+
+    const { reader, abort } = await openStream(conv, 0);
+    try {
+      const replay = await readEvents(reader, 3);
+      expect(replay.events.map((e) => e.seq)).toEqual([0, 1, 2]);
+      expect(replay.events.map((e) => e.type)).toEqual(['run:start', 'message', 'run:done']);
+      // run:done is the latest persisted event → the stream terminates.
+      expect(await readUntilClosed(reader)).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('resumes from a mid-run cursor via JSONL, skipping already-seen events', async () => {
+    const conv = 'conv-events-jsonl-midcursor';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'a' } }); // seq 1
+    emit(conv, { type: 'message', message: { id: 'm2', role: 'assistant', content: 'b' } }); // seq 2
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 3
+    await flushConversationLog(conv);
+
+    evictBuffer(conv);
+
+    // Client already applied seq 0-1; resume at 2.
+    const { reader, abort } = await openStream(conv, 2);
+    try {
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map((e) => e.seq)).toEqual([2, 3]);
+      expect(await readUntilClosed(reader)).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('activity reattach skips durable transcript replay after buffer eviction', async () => {
+    const conv = 'conv-events-jsonl-activity-skip';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'old', role: 'assistant', content: 'old' } }); // seq 1
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+    await flushConversationLog(conv);
+    evictBuffer(conv);
+
+    const { reader, abort } = await openStream(conv, 0, { activityOnly: true });
+    try {
+      // Reattachment is now a live-control subscription, not transcript
+      // hydration. The first delivered item is therefore genuinely new.
+      emit(conv, { type: 'run:start', flowId: 'f' }); // seq 3
+      const live = await readEvents(reader, 1);
+      expect(live.events.map((event) => event.seq)).toEqual([3]);
+      expect(live.events[0].type).toBe('run:start');
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('serves a live run from JSONL replay + live tail with no duplicates', async () => {
+    const conv = 'conv-events-jsonl-continue';
+    registerPersistable(conv);
+    // Run 1 finished and persisted.
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'old' } }); // seq 1
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+    await flushConversationLog(conv);
+
+    // Buffer evicted, THEN the conversation is continued with a live run 2.
+    evictBuffer(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 3 (persisted + buffered live)
+    emit(conv, { type: 'node:enter', node: { nodeId: 'n1' } }); // seq 4
+    await flushConversationLog(conv);
+
+    const { reader, abort } = await openStream(conv, 0);
+    try {
+      // JSONL fills [0,3), the live buffer covers [3,..]; clamped to the latest
+      // run:start (seq 3) so the finished run 1 is not replayed.
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map((e) => e.seq)).toEqual([3, 4]);
+      expect(replay.closed).toBe(false);
+
+      // A live event on the current run arrives exactly once.
+      emit(conv, { type: 'usage', totalTokens: 7 }); // seq 5
+      const live = await readEvents(reader, 1);
+      expect(live.events.map((e) => e.seq)).toEqual([5]);
     } finally {
       abort.abort();
     }

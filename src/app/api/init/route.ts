@@ -1,6 +1,6 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { ensureBackendInitialized } from '@/backend/init';
 
@@ -15,7 +15,7 @@ const log = createLogger('app/api/init/route');
  * fallback / explicit re-trigger: ensureBackendInitialized() is memoized, so
  * calling it here simply joins the in-progress (or completed) startup run.
  */
-export async function GET(req: NextRequest) {
+async function GET_handler(req: NextRequest) {
   const requestId = uuidv4();
   log.info(`Handling initialization request [RequestID: ${requestId}]`);
 
@@ -34,3 +34,5 @@ export async function GET(req: NextRequest) {
     }, { status: 500 });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

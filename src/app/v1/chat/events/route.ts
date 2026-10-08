@@ -1,9 +1,23 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { executionEventBus, GlobalEvent } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/v1/chat/events/route');
+
+// The chat sidebar only needs events that can add a conversation or change its
+// list-level status. Filtering at the server keeps high-volume model deltas,
+// tool progress, and debugger activity off this lightweight subscription.
+const SIDEBAR_EVENT_TYPES = new Set([
+  'run:start',
+  'run:paused',
+  'run:awaiting_approval',
+  'run:done',
+  'recovery:transition',
+  'recovery:retry',
+]);
 
 // SSE must never be statically optimized or cached.
 export const dynamic = 'force-dynamic';
@@ -26,9 +40,16 @@ export const dynamic = 'force-dynamic';
  * spans every conversation, so a single run finishing must not tear it down.
  * It ends only when the client disconnects.
  */
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
+  // Global events do not carry a durable ownership discriminator, so they
+  // follow the app-wide exposure policy rather than attempting Persona-level
+  // filtering here.
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+
+  const sidebarOnly = request.nextUrl.searchParams.get('scope') === 'sidebar';
 
   // Replay position: explicit ?fromSeq= wins; otherwise honor the browser's
   // Last-Event-ID on auto-reconnect (resume just after the last seen event).
@@ -71,6 +92,7 @@ export async function GET(request: NextRequest) {
       };
 
       const send = ({ globalSeq, event }: GlobalEvent) => {
+        if (sidebarOnly && !SIDEBAR_EVENT_TYPES.has(event.type)) return;
         // Guard ordering/duplication: only forward strictly-newer entries.
         if (globalSeq <= maxSentSeq) return;
         maxSentSeq = globalSeq;
@@ -127,3 +149,5 @@ export async function GET(request: NextRequest) {
     },
   });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

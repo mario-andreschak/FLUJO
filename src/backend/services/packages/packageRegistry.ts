@@ -1,27 +1,34 @@
 /**
- * Package-registry HTTP client (issue #198).
+ * Package-registry lookup helpers (issue #198).
  *
- * Fetches a raw package manifest by id (and optional version) from the online
- * package registry. The registry API itself is #196 — until that ships, the
- * origin is configurable via `FLUJO_PACKAGE_REGISTRY_ORIGIN` and defaults to the
- * MCP registry origin. Kept in its own module (separate from the orchestrator)
- * so tests can mock the network boundary independently.
+ * Talks to the HOSTED FLUJO PACKAGE REGISTRY (registry.flujo.com.co, issue #196),
+ * via `packageRegistryClient` (the same client #197's account/publish flows use).
+ * This is NOT the MCP server registry (registry.modelcontextprotocol.io) — that's
+ * a separate, unrelated service for installing individual MCP servers.
  *
- * Node-only: reuses the registry HTTP client (HTTP/2 with an HTTP/1.1 fallback).
- * Returns the raw parsed JSON — validation is the orchestrator's job (via
- * parsePackageManifest), so a malformed manifest is reported as data, not thrown.
+ * Browsing/installing packages is anonymous (no auth token required); only
+ * publishing needs a confirmed registry account.
  */
 import { createLogger } from '@/utils/logger';
-import { REGISTRY_ORIGIN, registryGetJson } from '@/backend/utils/registryClient';
+import { searchPackages, getPackageManifest, type RegistryPackageSearchResult } from '@/backend/utils/packageRegistryClient';
 
 const log = createLogger('backend/services/packages/packageRegistry');
 
-const PACKAGE_FETCH_TIMEOUT_MS = 15_000;
-const PACKAGES_PATH = '/v0.1/packages';
+export type { RegistryPackageSearchResult, RegistryPackageSummary } from '@/backend/utils/packageRegistryClient';
 
-/** Origin of the package registry (opt-in override for hosted / #196 wiring). */
-function packageRegistryOrigin(): string {
-  return process.env.FLUJO_PACKAGE_REGISTRY_ORIGIN?.trim() || REGISTRY_ORIGIN;
+/** Search/browse published packages. Returns an empty result set on transport failure. */
+export async function searchPackageRegistry(params: {
+  q?: string;
+  tag?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<RegistryPackageSearchResult> {
+  const { status, body } = await searchPackages(params);
+  if (status < 200 || status >= 300) {
+    log.warn(`searchPackageRegistry: registry responded with status ${status}`);
+    return { items: [], page: params.page ?? 1, pageSize: params.pageSize ?? 20, total: 0, error: body?.error ?? `Registry responded with status ${status}` };
+  }
+  return body;
 }
 
 /**
@@ -35,8 +42,13 @@ export async function fetchPackageManifest(
   if (!packageId || typeof packageId !== 'string') {
     throw new Error('A package id is required');
   }
-  const url = new URL(`${packageRegistryOrigin()}${PACKAGES_PATH}/${encodeURIComponent(packageId)}`);
-  url.searchParams.set('version', version && version.trim() ? version.trim() : 'latest');
-  log.info(`fetchPackageManifest: GET ${url.pathname}${url.search}`);
-  return registryGetJson(url, PACKAGE_FETCH_TIMEOUT_MS);
+  const { status, body } = await getPackageManifest(packageId, version && version.trim() ? version.trim() : 'latest');
+  if (status < 200 || status >= 300) {
+    const message = (body as { error?: string; message?: string } | null)?.error
+      ?? (body as { error?: string; message?: string } | null)?.message
+      ?? `Registry responded with status ${status}`;
+    // installPackage() wraps this in its own "Failed to fetch package ..." prefix — keep this bare.
+    throw new Error(message);
+  }
+  return body;
 }

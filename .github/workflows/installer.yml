@@ -1,0 +1,192 @@
+# Validates the side-effect-free Windows installer decisions and builds the
+# graphical bootstrapper on pull requests, main, version tags, and manual runs.
+name: Validate Windows installer
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/installer.yml'
+      - 'README.md'
+      - 'installer/**'
+      - 'scripts/install.ps1'
+      - 'scripts/install.sh'
+      - 'scripts/installer-functions.ps1'
+      - 'scripts/uninstall.ps1'
+      - 'scripts/update.ps1'
+      - 'tests/installer.Tests.ps1'
+      - 'tests/installer-unix.test.sh'
+      - 'tests/installer-repository.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'bin/flujo.mjs'
+      - 'scripts/launch-next.mjs'
+      - 'scripts/smoke-mcp-artifacts.mjs'
+      - 'scripts/validate-mcp-release.mjs'
+      - '__tests__/mcp/**'
+      - 'mcp-servers/**'
+      - 'src/app/mcp-proxy/**'
+      - 'src/backend/services/mcp/**'
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-smoke:
+    name: MCP artifact validation (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build production artifacts
+        run: |
+          npm ci --include=dev
+          npm run build
+
+      - name: Exercise MCP process boundaries
+        run: |
+          node --test mcp-servers/browser/scripts/install-browser.test.mjs
+          npm run test:mcp-process-boundary
+          npm run validate:mcp-release
+
+      # A clean consumer install is intentionally expensive on hosted Windows.
+      # Keep it as a release/manual gate instead of paying that cost on every
+      # pull request and push to main.
+      - name: Exercise packed consumer artifacts
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          npm run smoke:mcp-artifacts
+
+  powershell-tests:
+    name: Installer decisions (Pester)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Pester
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run installer tests
+        shell: powershell
+        run: |
+          Import-Module Pester -RequiredVersion 5.7.1
+          Invoke-Pester -Path tests\installer.Tests.ps1 -CI
+
+  installer-build:
+    name: Compile flujo-setup.exe
+    needs: [powershell-tests, artifact-smoke, unix-installer-tests]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pinned Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --version=6.7.1 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey could not install Inno Setup 6.7.1 (exit $LASTEXITCODE)."
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw "Pinned Inno Setup compiler was not found: $iscc"
+          }
+
+      - name: Compile and validate the installer
+        shell: powershell
+        run: |
+          $packageVersion = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $expectedTag = "v$packageVersion"
+            if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+              throw "Release tag '$env:GITHUB_REF_NAME' does not match package version '$expectedTag'."
+            }
+            $version = $packageVersion
+            $sourceRef = $expectedTag
+            $sourceRevision = $env:GITHUB_SHA
+          } else {
+            $version = '0.0.0'
+            $sourceRef = 'main'
+            $sourceRevision = ''
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$version" "/DMyBranch=$sourceRef" "/DMyRevision=$sourceRevision" installer\flujo-setup.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed (exit $LASTEXITCODE)."
+          }
+
+          $artifact = Join-Path $PWD 'installer\Output\flujo-setup.exe'
+          if (-not (Test-Path -LiteralPath $artifact)) {
+            throw "Expected installer was not produced: $artifact"
+          }
+          if ((Get-Item -LiteralPath $artifact).Length -le 0) {
+            throw "Installer artifact is empty: $artifact"
+          }
+
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flujo-setup
+          path: installer/Output/flujo-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Require exact-commit main verification before release publication
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-release-verification.mjs installer
+
+      - name: Attach installer to version release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/flujo-setup.exe
+          generate_release_notes: true
+
+  unix-installer-tests:
+    name: Unix installer validation (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run Unix installer Node.js version tests
+        run: |
+          chmod +x scripts/install.sh
+          bash tests/installer-unix.test.sh
+
+      - name: Verify package.json engine contract
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const engines = pkg.engines?.node;
+            if (!engines) throw new Error('engines.node not found in package.json');
+            const match = engines.match(/^>=(\d+)\.(\d+)\.(\d+)$/);
+            if (!match) throw new Error('engines.node must be simple >=X.Y.Z form, got: ' + engines);
+            const [, major, minor, patch] = match;
+            if (major !== '22' || minor !== '0' || patch !== '0') {
+              throw new Error('Expected engines.node >=22.0.0, got: ' + engines);
+            }
+            console.log('package.json engines.node contract verified:', engines);
+          "

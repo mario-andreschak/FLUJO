@@ -1,44 +1,109 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Box, Button, Alert, Paper, TextField, InputAdornment } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  ButtonGroup,
+  InputAdornment,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
+  Paper,
+  TextField,
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import SearchIcon from '@mui/icons-material/Search';
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { v4 as uuidv4 } from 'uuid';
 
 import ModelList from '@/frontend/components/models/list/ModelList';
 import ModelModal from '@/frontend/components/models/modal';
+import ModelConnectionWizard, {
+  GuidedCreationResult,
+} from '@/frontend/components/models/ModelConnectionWizard';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
 import { getModelService, ModelResult } from '@/frontend/services/model';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import QuickChatDialog, {
+  QuickChatStartSelection,
+} from '@/frontend/components/Chat/QuickChatDialog';
+import { flowService } from '@/frontend/services/flow';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { navigateWorkspaceRoute } from '@/frontend/utils/workspaceNavigation';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import FallbackPolicyDialog from '@/frontend/components/models/FallbackPolicyDialog';
 
 const log = createLogger('app/models/ModelClient');
 
-interface ModelClientProps {
-  initialModels: Model[];
+function errorMessage(error: unknown): string | undefined {
+  return error instanceof Error ? error.message : undefined;
 }
 
-export default function ModelClient({ initialModels }: ModelClientProps) {
+export default function ModelClient() {
+  const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [models, setModels] = useState(initialModels);
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // #372: caret placed automatically; this page scrolls the document, so the
+  // search toolbar also needs to stay pinned while scrolling (see wrapper below).
+  const searchInputRef = useAutoFocusSearch();
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
+  const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
+  const [conversionModel, setConversionModel] = useState<
+    Pick<Model, 'id' | 'name' | 'displayName'> | null
+  >(null);
+  const [conversionCreationId, setConversionCreationId] = useState<string | null>(null);
   // In-memory draft for a brand-new model (add mode). It is NOT persisted to disk until the
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+  const [policyDraft, setPolicyDraft] = useState<Model | null>(null);
+  // #374: whether THIS instance pushed the current `?edit=`/`?add=` history
+  // entry (vs. it being present on initial load from a deep link) — lets
+  // closing prefer `router.back()` (a clean history stack) over `router.push`
+  // while still falling back safely for a direct deep link.
+  const modalPushedByUsRef = useRef(false);
 
-  const isAddMode = searchParams.get('add') === '1';
+  useAskFlujoPage({
+    scopeId: 'models:dashboard',
+    pageType: 'models',
+    route: '/models',
+    title: 'AI Setup',
+    data: {
+      models: models.map(model => ({
+        ...model,
+        ApiKey: model.ApiKey ? '[REDACTED]' : '',
+      })),
+      searchTerm,
+    },
+    capabilities: {
+      notes: ['API keys are intentionally redacted before model configuration enters AI context.'],
+    },
+  });
+
+  const addMode = searchParams.get('add');
+  const isWizardOpen = addMode === '1';
+  const isManualAddMode = addMode === 'manual';
 
   // Create the draft once when entering add mode; clear it when leaving.
   useEffect(() => {
-    if (isAddMode) {
+    if (isManualAddMode) {
       setNewModelDraft(prev => prev ?? ({
         id: uuidv4(),
         name: '',
@@ -53,7 +118,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     } else {
       setNewModelDraft(null);
     }
-  }, [isAddMode]);
+  }, [isManualAddMode]);
 
   // Ensure service is ready before using it
   useEffect(() => {
@@ -80,8 +145,31 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     }
   }, []);
 
+  // Models must be loaded by the browser only after WorkspaceBootstrap has
+  // installed the selected workspace on fetch. Server components have no
+  // access to the browser's selection and would otherwise seed this page with
+  // default-workspace models.
+  useEffect(() => {
+    if (!serviceReady) return;
+    let cancelled = false;
+    void getModelService().loadModels()
+      .then(loaded => {
+        if (!cancelled) setModels(loaded);
+      })
+      .catch(loadError => {
+        log.error('Failed to load models', loadError);
+        if (!cancelled) setError(t('models.error.description'));
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceReady, t]);
+
   // Show loading spinner if service is not ready
-  if (!serviceReady) {
+  if (!serviceReady || !modelsLoaded) {
     log.debug('Waiting for model service to be ready...');
     return <Spinner />;
   }
@@ -89,35 +177,34 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   // Get modal state from URL
   const editId = searchParams.get('edit');
   // In add mode the model comes from the in-memory draft; in edit mode from the loaded list.
-  const currentModel: Model | null = isAddMode
+  const currentModel: Model | null = isManualAddMode
     ? newModelDraft
     : (editId ? models.find(m => m.id === editId) ?? null : null);
-  const isModalOpen = isAddMode ? Boolean(newModelDraft) : Boolean(editId);
+  const isModalOpen = isManualAddMode ? Boolean(newModelDraft) : Boolean(editId);
 
   const handleSave = async (model: Model): Promise<ModelResult> => {
-    log.info('Saving model', { modelId: model.id, modelName: model.name, mode: isAddMode ? 'add' : 'update' });
+    log.info('Saving model', { modelId: model.id, modelName: model.name, mode: isManualAddMode ? 'add' : 'update' });
     setIsLoading(true);
     try {
       const service = getModelService();
       // First-time save of a new model creates it; otherwise update the existing record.
-      const result = isAddMode ? await service.addModel(model) : await service.updateModel(model);
+      const result = isManualAddMode ? await service.addModel(model) : await service.updateModel(model);
       if (result.success) {
         // Refresh models list
         const updatedModels = await service.loadModels();
         setModels(updatedModels);
 
-        // Close modal by removing query param
-        setNewModelDraft(null);
-        router.push('/models');
+        // Save and cancel consume the same modal history entry.
+        await handleCloseModal();
         return { success: true, model: result.model };
       } else {
-        setError(result.error || 'Failed to save model.');
+        setError(result.error || t('models.saveFailed'));
         return { success: false, error: result.error };
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to save model', error);
-      setError(error?.message || 'Failed to save model. Please try again.');
-      return { success: false, error: error?.message || 'Failed to save model' };
+      setError(errorMessage(error) || t('models.saveFailedRetry'));
+      return { success: false, error: errorMessage(error) || t('models.saveFailed') };
     } finally {
       setIsLoading(false);
     }
@@ -125,15 +212,113 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   
   const handleEdit = async (model: Model): Promise<ModelResult> => {
     log.info('Editing model', { modelId: model.id, modelName: model.name });
-    // Open modal by adding query param
+    // Open modal by adding query param — a real history entry (#374) so Back
+    // closes the modal instead of leaving `/models`.
+    modalPushedByUsRef.current = true;
     router.push(`/models?edit=${model.id}`);
     return { success: true };
   };
 
   const handleAdd = async () => {
-    log.info('Opening add-model modal');
-    // Just open the modal in add mode - the draft lives in memory until the user saves.
+    log.info('Opening guided model connection wizard');
+    setAddMenuAnchor(null);
+    modalPushedByUsRef.current = true;
     router.push('/models?add=1');
+  };
+
+  const handleManualAdd = () => {
+    log.info('Opening manual add-model modal');
+    setAddMenuAnchor(null);
+    // The draft lives in memory until the user saves.
+    if (isWizardOpen) {
+      // Guided and manual setup are two views of one modal. Keep its original
+      // history ownership so closing cannot return to and reopen the wizard.
+      router.replace('/models?add=manual');
+      return;
+    }
+    modalPushedByUsRef.current = true;
+    router.push('/models?add=manual');
+  };
+
+  const handleGuidedCreate = async (candidates: Model[]): Promise<GuidedCreationResult> => {
+    log.info('Creating guided model bundle', { count: candidates.length });
+    setIsLoading(true);
+    setError(null);
+    const created: Model[] = [];
+    const existing: Model[] = [];
+
+    try {
+      const service = getModelService();
+      const current = await service.loadModels();
+      const known = [...current];
+
+      for (const candidate of candidates) {
+        // Re-running a completed (or partially completed) wizard path is
+        // idempotent: reuse the connection identity and custom settings, but
+        // apply credentials explicitly entered on this attempt (e.g. a typo
+        // correction or a rotated key).
+        const match = known.find((model) =>
+          model.provider === candidate.provider &&
+          (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
+          model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase() &&
+          (candidate.provider !== 'azure' || (
+            (model.baseUrl || '').replace(/\/+$/, '').toLowerCase() ===
+              (candidate.baseUrl || '').replace(/\/+$/, '').toLowerCase() &&
+            model.azureApiVersion === candidate.azureApiVersion
+          ))
+        );
+        if (match) {
+          if (candidate.ApiKey?.trim() && candidate.provider !== 'ollama') {
+            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey });
+            if (!result.success || !result.model) {
+              setModels(await service.loadModels());
+              return { success: false, created, existing, error: result.error || t('models.saveFailed') };
+            }
+            existing.push(result.model);
+            known[known.indexOf(match)] = result.model;
+          } else {
+            existing.push(match);
+          }
+          continue;
+        }
+
+        // Display names are globally unique in FLUJO. Preserve a user's
+        // unrelated connection and give the guided model a readable suffix.
+        const baseDisplayName = candidate.displayName || candidate.name;
+        let displayName = baseDisplayName;
+        let suffix = 2;
+        while (known.some((model) => model.displayName?.trim().toLowerCase() === displayName.trim().toLowerCase())) {
+          displayName = `${baseDisplayName} (${suffix})`;
+          suffix += 1;
+        }
+
+        const result = await service.addModel({ ...candidate, displayName });
+        if (!result.success || !result.model) {
+          const updated = await service.loadModels();
+          setModels(updated);
+          return {
+            success: false,
+            created,
+            existing,
+            error: result.error || t('models.createNamedFailed', { name: displayName }),
+          };
+        }
+        created.push(result.model);
+        known.push(result.model);
+      }
+
+      const updated = await service.loadModels();
+      setModels(updated);
+      router.refresh();
+      return { success: true, created, existing };
+    } catch (guidedError: unknown) {
+      log.error('Failed to create guided model bundle', guidedError);
+      const message = errorMessage(guidedError) || t('models.guidedBundleFailed');
+      setError(message);
+      return { success: false, created, existing, error: message };
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleDelete = async (modelId: string) => {
@@ -149,7 +334,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       
     } catch (error) {
       log.error('Failed to delete model', error);
-      setError('Failed to delete model. Please try again.');
+      setError(t('models.deleteFailed'));
     } finally {
       setIsLoading(false);
     }
@@ -167,19 +352,19 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       const service = getModelService();
       const model = await service.getModel(modelId);
       if (!model) {
-        setError('Model not found.');
+        setError(t('models.notFound'));
         return;
       }
       const result = await service.updateModel({ ...model, folder });
       if (!result.success) {
-        setError(result.error || 'Failed to move model to folder.');
+        setError(result.error || t('models.moveFailed'));
         return;
       }
       const updatedModels = await service.loadModels();
       setModels(updatedModels);
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to set model folder', error);
-      setError(error?.message || 'Failed to move model to folder. Please try again.');
+      setError(errorMessage(error) || t('models.moveFailedRetry'));
     } finally {
       setIsLoading(false);
     }
@@ -197,29 +382,81 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       const service = getModelService();
       const model = await service.getModel(modelId);
       if (!model) {
-        setError('Model not found.');
+        setError(t('models.notFound'));
         return;
       }
       const nextFavorite = !model.favorite;
       const result = await service.updateModel({ ...model, favorite: nextFavorite || undefined });
       if (!result.success) {
-        setError(result.error || 'Failed to update favorite.');
+        setError(result.error || t('models.favoriteFailed'));
         return;
       }
       const updatedModels = await service.loadModels();
       setModels(updatedModels);
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to toggle model favorite', error);
-      setError(error?.message || 'Failed to update favorite. Please try again.');
+      setError(errorMessage(error) || t('models.favoriteFailedRetry'));
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleOpenConversion = (modelId: string) => {
+    const model = models.find((candidate) => candidate.id === modelId);
+    if (!model) {
+      setError(t('models.notFound'));
+      return;
+    }
+    // Keep the conversion boundary credential-free: only public identity fields
+    // cross into dialog state, never the model's ApiKey or provider settings.
+    setConversionModel({
+      id: model.id,
+      name: model.name,
+      displayName: model.displayName,
+    });
+    setConversionCreationId(uuidv4());
+  };
+
+  const handleCloseConversion = () => {
+    setConversionModel(null);
+    setConversionCreationId(null);
+  };
+
+  const handleCreateAgent = async (selection: QuickChatStartSelection) => {
+    if (!conversionModel || !conversionCreationId || !selection.flowName) {
+      throw new Error(t('models.agent.invalidSelection'));
+    }
+    const created = await flowService.createModelAgent({
+      creationId: conversionCreationId,
+      modelId: conversionModel.id,
+      name: selection.flowName,
+      servers: selection.servers,
+      systemPrompt: selection.systemPrompt,
+    });
+    handleCloseConversion();
+    navigateWorkspaceRoute(
+      router,
+      withWorkspaceUrl(magicLinkPath({
+        kind: 'flow-editor',
+        id: created.flowId,
+        extra: { authoringMode: 'advanced' },
+      })),
+    );
+  };
+
   const handleCloseModal = async () => {
     // Nothing to clean up: an unsaved new model only ever lived in memory.
     setNewModelDraft(null);
-    router.push('/models');
+    if (modalPushedByUsRef.current) {
+      // Pop the entry this instance pushed when it opened, so Back afterwards
+      // leaves `/models` instead of re-opening the modal.
+      modalPushedByUsRef.current = false;
+      router.back();
+    } else {
+      // Opened from a deep link (e.g. a CopyLinkButton'd `/models?edit=<id>`
+      // URL) with nothing safe to pop back to.
+      router.replace('/models');
+    }
   };
 
   // Filter models by name/displayName for the search box (consistent with the
@@ -237,7 +474,12 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   return (
     <>
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
-      <Paper elevation={1} sx={{ mb: 2, p: 1 }}>
+      <StickySearchBar mode="page">
+      <Paper
+        elevation={0}
+        variant="outlined"
+        sx={{ mb: 2.5, p: 1.2, borderRadius: 3 }}
+      >
         <Box
           sx={{
             display: 'flex',
@@ -248,11 +490,12 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
           }}
         >
           <TextField
-            placeholder="Search models..."
+            placeholder={t('models.searchPlaceholder')}
             variant="outlined"
             size="small"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -262,17 +505,45 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             }}
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={<AddIcon />}
-            onClick={handleAdd}
-            data-tour="add-model"
-          >
-            Add Model
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button variant="outlined" startIcon={<AddIcon />} onClick={() => setPolicyDraft({
+              id: uuidv4(), name: 'policy/', ApiKey: '', fallbackPolicy: { modelIds: [] },
+            })}>{t('models.policy.create')}</Button>
+            <ButtonGroup variant="contained" color="primary" aria-label={t('models.connectionOptionsAria')}>
+              <Button startIcon={<AddIcon />} onClick={handleAdd} data-tour="add-model">
+                {t('models.connectAi')}
+              </Button>
+              <Button
+                size="small"
+                aria-label={t('models.moreOptionsAria')}
+                aria-controls={addMenuAnchor ? 'add-model-menu' : undefined}
+                aria-haspopup="menu"
+                aria-expanded={addMenuAnchor ? 'true' : undefined}
+                onClick={(event) => setAddMenuAnchor(event.currentTarget)}
+                sx={{ px: 0.8, minWidth: 40 }}
+              >
+                <ArrowDropDownIcon />
+              </Button>
+            </ButtonGroup>
+            <Menu
+              id="add-model-menu"
+              anchorEl={addMenuAnchor}
+              open={Boolean(addMenuAnchor)}
+              onClose={() => setAddMenuAnchor(null)}
+            >
+              <MenuItem onClick={handleAdd}>
+                <ListItemIcon><AutoAwesomeRoundedIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary={t('models.guidedConnection')} secondary={t('models.guidedConnectionDescription')} />
+              </MenuItem>
+              <MenuItem onClick={handleManualAdd}>
+                <ListItemIcon><TuneRoundedIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary={t('models.manualCreation')} secondary={t('models.manualCreationDescription')} />
+              </MenuItem>
+            </Menu>
+          </Box>
         </Box>
       </Paper>
+      </StickySearchBar>
 
       {error && (
         <Box sx={{ mb: 2 }}>
@@ -288,13 +559,53 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
         onAdd={handleAdd}
         onUpdate={handleEdit}
         onDelete={handleDelete}
+        onConvertToAgent={handleOpenConversion}
         folders={collectFolders(models, (m) => m.folder)}
         onSetFolder={handleSetFolder}
         onToggleFavorite={handleToggleFavorite}
       />
 
+      {conversionModel && (
+        <QuickChatDialog
+          open
+          onClose={handleCloseConversion}
+          onStart={handleCreateAgent}
+          initialModelId={conversionModel.id}
+          lockModelSelection
+          initialFlowName={`${conversionModel.displayName || conversionModel.name} Agent`}
+          flowNameLabel={t('models.agent.nameLabel')}
+          title={t('models.agent.title')}
+          helpText={t('models.agent.help')}
+          serversLabel={t('models.agent.connectedApps')}
+          noServersText={t('models.agent.noApps')}
+          submitLabel={t('models.agent.saveAndOpen')}
+          submittingLabel={t('models.agent.saving')}
+          connectedServersOnly
+        />
+      )}
+
+      <ModelConnectionWizard
+        open={isWizardOpen}
+        onClose={handleCloseModal}
+        onManualCreation={handleManualAdd}
+        onCreateModels={handleGuidedCreate}
+      />
+
       {/* Only render modal when we have a valid model ID */}
-      {isModalOpen && currentModel ? (
+      {(policyDraft || (isModalOpen && currentModel?.fallbackPolicy)) && (
+        <FallbackPolicyDialog key={(policyDraft || currentModel)!.id} model={(policyDraft || currentModel)!} models={models}
+          onClose={() => { if (policyDraft) setPolicyDraft(null); else void handleCloseModal(); }}
+          onSave={async policy => {
+            const service = getModelService();
+            const result = policyDraft ? await service.addModel(policy) : await service.updateModel(policy);
+            if (result.success) {
+              setModels(await service.loadModels());
+              if (policyDraft) setPolicyDraft(null); else await handleCloseModal();
+            }
+            return result;
+          }} />
+      )}
+      {isModalOpen && currentModel && !currentModel.fallbackPolicy ? (
           <ModelModal
             open={isModalOpen}
             model={currentModel}

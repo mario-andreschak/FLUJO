@@ -9,9 +9,11 @@ import {
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import EnvEditor from '../mcp/MCPEnvManager/EnvEditor';
 import { MASKED_STRING } from '@/shared/types/constants';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export default function GlobalEnvSettings() {
   const { globalEnvVars, setGlobalEnvVars, deleteGlobalEnvVar } = useStorage();
+  const { t } = useI18n();
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleSave = async (vars: Record<string, { value: string, metadata: { isSecret: boolean } } | string>) => {
@@ -26,7 +28,7 @@ export default function GlobalEnvSettings() {
       await setGlobalEnvVars(filteredVars);
       setMessage({
         type: 'success',
-        text: 'Global environment variables updated successfully',
+        text: t('settings.globalEnv.success'),
       });
 
       // Clear message after 3 seconds
@@ -36,7 +38,7 @@ export default function GlobalEnvSettings() {
     } catch (error) {
       setMessage({
         type: 'error',
-        text: 'Failed to update global environment variables',
+        text: t('settings.globalEnv.failed'),
       });
     }
   };
@@ -44,7 +46,7 @@ export default function GlobalEnvSettings() {
   return (
     <Box sx={{ width: '100%' }}>   
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Define global environment variables that can be bound to MCP servers. This allows you to manage API keys and other sensitive information in one place.
+        {t('settings.globalEnv.description')}
       </Typography>
 
       {message && (
@@ -54,7 +56,7 @@ export default function GlobalEnvSettings() {
       )}
 
       <EnvEditor 
-        serverName="Global" 
+        serverName={t('settings.globalEnv.serverName')}
         initialEnv={globalEnvVars} 
         onSave={handleSave}
         onDelete={deleteGlobalEnvVar}

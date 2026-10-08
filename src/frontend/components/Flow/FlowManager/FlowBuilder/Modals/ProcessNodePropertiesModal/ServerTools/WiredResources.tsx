@@ -11,6 +11,7 @@ import {
 import DescriptionIcon from '@mui/icons-material/Description';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
  * A resource NODE wired to this Process node (Tier 3, issue #161 item 3).
@@ -40,6 +41,7 @@ interface WiredResourcesProps {
  * back; produce nodes are written by the step's `write_resource` tool at run time.
  */
 const WiredResources: React.FC<WiredResourcesProps> = ({ wiredResources, promptBuilderRef }) => {
+  const { t } = useI18n();
   if (wiredResources.length === 0) return null;
 
   const insertResRef = (runName?: string) => {
@@ -51,12 +53,10 @@ const WiredResources: React.FC<WiredResourcesProps> = ({ wiredResources, promptB
   return (
     <Box sx={{ mb: 3 }}>
       <Typography variant="subtitle1" gutterBottom>
-        Wired resource nodes
+        {t('flows.wired.title')}
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-        Resource nodes connected to this step on the canvas. A <strong>produce</strong> node is
-        written by the step&apos;s <code>write_resource</code> tool; a <strong>consume</strong> node&apos;s
-        contents are injected into the prompt when the step runs.
+        {t('flows.wired.help')}
       </Typography>
 
       <List disablePadding>
@@ -71,13 +71,18 @@ const WiredResources: React.FC<WiredResourcesProps> = ({ wiredResources, promptB
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, wordBreak: 'break-all' }}>
                     {r.scope === 'run'
-                      ? `Temporary Data${r.runName ? ` "${r.runName}"` : ' (no name set)'}`
-                      : `MCP resource${r.uri ? ` ${r.uri}` : ''}${r.boundServer ? ` on ${r.boundServer}` : ''}`}
+                      ? (r.runName
+                        ? t('flows.wired.temporaryNamed', { name: r.runName })
+                        : t('flows.wired.temporaryUnnamed'))
+                      : t('flows.wired.mcp', {
+                        uri: r.uri ? ` ${r.uri}` : '',
+                        server: r.boundServer ? t('flows.wired.onServer', { server: r.boundServer }) : '',
+                      })}
                   </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, ml: 1, gap: 0.5 }}>
                   {r.scope === 'run' && r.runName && (
-                    <Tooltip title={`Insert \${res:${r.runName}} into the prompt`}>
+                    <Tooltip title={t('flows.wired.insert', { reference: `\${res:${r.runName}}` })}>
                       <Chip
                         size="small"
                         icon={<SaveAltIcon />}
@@ -91,7 +96,7 @@ const WiredResources: React.FC<WiredResourcesProps> = ({ wiredResources, promptB
                   <Chip
                     size="small"
                     color={r.role === 'produce' ? 'secondary' : 'default'}
-                    label={r.role}
+                    label={r.role === 'produce' ? t('flows.wired.produce') : t('flows.wired.consume')}
                   />
                 </Box>
               </Box>

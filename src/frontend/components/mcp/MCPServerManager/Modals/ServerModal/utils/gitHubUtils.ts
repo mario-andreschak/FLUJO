@@ -1,7 +1,11 @@
 import { RepoInfo, MessageState } from '../types';
+import { translate, type Translator } from '@/frontend/i18n';
+
+const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
 export const validateGitHubUrl = async (
-  inputUrl: string
+  inputUrl: string,
+  t: Translator = englishTranslator
 ): Promise<{
   repoInfo: RepoInfo | null;
   message: MessageState | null;
@@ -13,7 +17,7 @@ export const validateGitHubUrl = async (
     // Validate URL format
     const url = new URL(githubUrl);
     if (url.hostname !== 'github.com') {
-      throw new Error('Not a GitHub URL');
+      throw new Error(t('mcp.github.notGithub'));
     }
 
     // Extract owner and repo, handling file URLs
@@ -30,7 +34,7 @@ export const validateGitHubUrl = async (
         owner = pathParts[0];
         repo = pathParts[1];
       } else {
-        throw new Error('Invalid repository path');
+        throw new Error(t('mcp.github.invalidPath'));
       }
     }
     
@@ -38,7 +42,7 @@ export const validateGitHubUrl = async (
     const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
     
     if (!response.ok) {
-      throw new Error('Repository not found or not accessible');
+      throw new Error(t('mcp.github.notFound'));
     }
     
     const repoData = await response.json();
@@ -46,7 +50,7 @@ export const validateGitHubUrl = async (
     // Check if it's an MCP server by looking for package.json
     const contentsResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents`);
     if (!contentsResponse.ok) {
-      throw new Error('Could not fetch repository contents');
+      throw new Error(t('mcp.github.contentsFailed'));
     }
     
     const contents = await contentsResponse.json();
@@ -60,7 +64,7 @@ export const validateGitHubUrl = async (
       },
       message: {
         type: 'success',
-        text: `Valid repository: ${owner}/${repo}`
+        text: t('mcp.github.validRepository', { repository: `${owner}/${repo}` })
       },
       showCloneButton: true
     };
@@ -70,7 +74,7 @@ export const validateGitHubUrl = async (
       repoInfo: null,
       message: {
         type: 'error',
-        text: (error as Error).message || 'Invalid GitHub URL. Please enter a valid repository URL.'
+        text: (error as Error).message || t('mcp.github.invalidUrl')
       },
       showCloneButton: false
     };
@@ -81,7 +85,8 @@ export const cloneRepository = async (
   githubUrl: string,
   repoInfo: RepoInfo,
   savePath: string,
-  forceClone: boolean = false
+  forceClone: boolean = false,
+  t: Translator = englishTranslator
 ): Promise<{
   success: boolean;
   message: MessageState;
@@ -122,7 +127,7 @@ export const cloneRepository = async (
     
     const result = await response.json();
     if (!response.ok && !('exists' in result)) {
-      throw new Error(result.error || 'Failed to clone repository');
+      throw new Error(result.error || t('mcp.github.cloneFailed'));
     }
     
     // Normalize path by replacing backslashes with forward slashes
@@ -132,7 +137,7 @@ export const cloneRepository = async (
       success: true,
       message: {
         type: 'success',
-        text: 'Repository cloned successfully.'
+        text: t('mcp.github.cloned')
       },
       clonedRepoPath: normalizedRepoPath,
       envExample: result.envExample
@@ -151,7 +156,7 @@ export const cloneRepository = async (
         success: true,
         message: {
           type: 'warning',
-          text: errorMessage
+          text: t('mcp.github.exists', { path: extractedPath })
         },
         clonedRepoPath: extractedPath.replace(/\\/g, '/'),
         envExample: undefined
@@ -162,7 +167,7 @@ export const cloneRepository = async (
       success: false,
       message: {
         type: 'error',
-        text: errorMessage || 'Error cloning repository. Please try again or configure manually.'
+        text: t('mcp.github.cloneError', { error: errorMessage || t('mcp.server.unknownError') })
       },
       envExample: undefined
     };
@@ -171,7 +176,8 @@ export const cloneRepository = async (
 
 export const runRepository = async (
   repoPath: string,
-  runCommand: string
+  runCommand: string,
+  t: Translator = englishTranslator
 ): Promise<{
   success: boolean;
   message: MessageState;
@@ -196,14 +202,14 @@ export const runRepository = async (
     
     const result = await response.json();
     if (!response.ok) {
-      throw new Error(result.error || 'Failed to run command in repository');
+      throw new Error(result.error || t('mcp.github.runFailed'));
     }
     
     return {
       success: true,
       message: {
         type: 'success',
-        text: 'Command executed successfully.'
+        text: t('mcp.github.runSuccess')
       },
       commandOutput: result.commandOutput
     };
@@ -214,7 +220,7 @@ export const runRepository = async (
       success: false,
       message: {
         type: 'error',
-        text: (error as Error).message || 'Error executing command. Please try again.'
+        text: t('mcp.github.runError', { error: (error as Error).message || t('mcp.server.unknownError') })
       }
     };
   }

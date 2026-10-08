@@ -1,16 +1,18 @@
 import React from 'react';
 import { TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Switch, Typography, Box } from '@mui/material';
 import { PropertyDefinition } from './types';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface NodePropertiesProps {
   nodeData: {
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null;
-  handlePropertyChange: (key: string, value: any) => void;
+  handlePropertyChange: (key: string, value: unknown) => void;
   properties: PropertyDefinition[];
 }
 
 const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropertyChange, properties }) => {
+  const { t } = useI18n();
   const renderField = (property: PropertyDefinition) => {
     if (!nodeData) return null;
 
@@ -25,7 +27,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
             label={property.label}
             multiline={property.multiline}
             rows={property.multiline ? 4 : 1}
-            value={value}
+            value={typeof value === 'string' ? value : ''}
             onChange={(e) => handlePropertyChange(property.key, e.target.value)}
             margin="normal"
             helperText={property.helperText}
@@ -38,7 +40,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
             fullWidth
             type="number"
             label={property.label}
-            value={value}
+            value={typeof value === 'number' || typeof value === 'string' ? value : ''}
             inputProps={{
               min: property.min,
               max: property.max,
@@ -59,7 +61,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
           <FormControl key={property.key} fullWidth margin="normal">
             <InputLabel>{property.label}</InputLabel>
             <Select
-              value={value || ''}
+              value={typeof value === 'string' || typeof value === 'number' ? value : ''}
               label={property.label}
               onChange={(e) => handlePropertyChange(property.key, e.target.value)}
             >
@@ -77,7 +79,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
             key={property.key}
             control={
               <Switch
-                checked={value || false}
+                checked={typeof value === 'boolean' ? value : false}
                 onChange={(e) => handlePropertyChange(property.key, e.target.checked)}
               />
             }
@@ -95,7 +97,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
       {properties.length > 0 && (
         <Box sx={{ mt: 3 }}>
           <Typography variant="subtitle1" gutterBottom>
-            Node Properties
+            {t('flows.nodeProperties.title')}
           </Typography>
           {properties.map(property => renderField(property))}
         </Box>

@@ -5,6 +5,7 @@ import { MCPServerConfig, MCPServerState, MCPStreamableConfig } from '@/shared/t
 import { createLogger } from '@/utils/logger';
 import { Grid, Box, Typography, Paper } from '@mui/material';
 import { ServerUpdateInfo } from './utils/serverUpdates';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerList');
 
@@ -50,6 +51,7 @@ const ServerList: React.FC<ServerListProps> = ({
   onServerSetFolder,
   onServerToggleFavorite,
 }) => {
+  const { t } = useI18n();
   log.debug('Rendering ServerList', { 
     serverCount: servers.length, 
     isLoading, 
@@ -68,7 +70,7 @@ const ServerList: React.FC<ServerListProps> = ({
       }}>
         <Spinner size="large" color="primary" />
         <Typography sx={{ mt: 2, color: 'text.secondary' }}>
-          Loading servers...
+          {t('mcp.list.loading')}
         </Typography>
       </Box>
     );
@@ -87,14 +89,14 @@ const ServerList: React.FC<ServerListProps> = ({
     return (
       <Paper sx={{ p: 3, textAlign: 'center', borderRadius: 1 }}>
         <Typography color="text.secondary">
-          No servers configured. Click "Add Server" to get started.
+          {t('mcp.list.empty')}
         </Typography>
       </Paper>
     );
   }
 
   return (
-    <Grid container spacing={2}>
+    <Grid container spacing={2.5}>
       {servers.map((server) => {
         // Check if this is a streamable server with OAuth tokens
         const hasOAuthTokens = server.transport === 'streamable' && 
@@ -117,20 +119,21 @@ const ServerList: React.FC<ServerListProps> = ({
               stderrOutput={server.stderrOutput}
               exposeAsMcpServer={server.exposeAsMcpServer}
               enableMcpApps={server.enableMcpApps}
+              enableMcpSkills={server.enableMcpSkills}
               selectionMode={selectionMode}
               selected={selectedServers.has(server.name)}
-              onSelect={onServerSelectionChange && !server.builtIn ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
+              onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
               hasOAuthTokens={hasOAuthTokens}
+              stdioOAuth={server.stdioOAuth}
               updateInfo={server.rootPath ? updates?.[server.rootPath] : undefined}
               installCommand={server._installCommand}
               buildCommand={server._buildCommand}
               onUpdated={onServerUpdated ? () => onServerUpdated(server.name, server.rootPath) : undefined}
               folder={server.folder}
               folders={folders}
-              onSetFolder={onServerSetFolder && !server.builtIn ? (f) => onServerSetFolder(server.name, f) : undefined}
+              onSetFolder={onServerSetFolder ? (f) => onServerSetFolder(server.name, f) : undefined}
               favorite={server.favorite}
-              onToggleFavorite={onServerToggleFavorite && !server.builtIn ? () => onServerToggleFavorite(server.name, !server.favorite) : undefined}
-              builtIn={server.builtIn}
+              onToggleFavorite={onServerToggleFavorite ? () => onServerToggleFavorite(server.name, !server.favorite) : undefined}
               serverConfig={server}
             />
           </Grid>

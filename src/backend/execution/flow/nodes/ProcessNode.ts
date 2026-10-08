@@ -5,12 +5,28 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
-import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
+import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
+import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
+import { buildTodoTool, TODO_TOOL_NAME, formatTodoBlock } from '../handlers/todoTool';
+import {
+  appendMeetingParticipantProtocol,
+  buildMeetingTools,
+  isMeetingToolName,
+  isSilentMeetingControlRequest,
+} from '../handlers/meetingTools';
+import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
-import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
+import { prepareModelInputMaterialization, finalizeModelInputMaterialization } from '../materializeModelInput';
+import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
-import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
+import { buildSubflowTool } from '../handlers/subflowToolInvocation';
+import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
+import { buildPersonaTools } from '../handlers/personaTools';
+import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
+import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
+import { modelService } from '@/backend/services/model';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
 import {
@@ -20,6 +36,7 @@ import {
   ProcessNodeExecResult,
   ToolDefinition,
   HandoffToolInfo,
+  SubflowNodeProperties,
   STAY_ON_NODE_ACTION, // Keep for reference, but won't be returned directly by post
   TOOL_CALL_ACTION,    // Import new actions
   FINAL_RESPONSE_ACTION,
@@ -29,15 +46,63 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
+import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
+import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { executionExtensionSignal } from '@/backend/execution/extensions';
+import { upsertMessageById } from '../conversationMessages';
+import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
 
-export class ProcessNode extends BaseNode {
+/**
+ * Providers report unsupported tool use through several shapes: an OpenAI SDK
+ * APIError, an OpenRouter in-band error object, or FLUJO's normalized model
+ * error. Match only explicit tool-capability failures so authentication,
+ * routing, rate-limit, and generic 4xx errors are never retried with a
+ * materially different request.
+ */
+function isUnsupportedToolUseError(error: unknown): boolean {
+  const record = error && typeof error === 'object'
+    ? error as Record<string, unknown>
+    : undefined;
+  let details = '';
+  try {
+    details = JSON.stringify(record?.details ?? record ?? '');
+  } catch {
+    // The normalized message/code below are sufficient if provider details are
+    // circular or otherwise not serializable.
+  }
+  const haystack = [
+    error instanceof Error ? error.message : '',
+    typeof record?.message === 'string' ? record.message : '',
+    typeof record?.code === 'string' ? record.code : '',
+    typeof record?.type === 'string' ? record.type : '',
+    details,
+  ].join(' ').toLowerCase();
+
+  return (
+    haystack.includes('no endpoints found that support tool use') ||
+    haystack.includes('no endpoint found that supports tool use') ||
+    haystack.includes('tool use is not supported') ||
+    haystack.includes('tool use not supported') ||
+    haystack.includes('tools are not supported') ||
+    haystack.includes('tools not supported') ||
+    haystack.includes('does not support tool use') ||
+    haystack.includes('does not support tools') ||
+    haystack.includes('function calling is not supported') ||
+    haystack.includes('tools_not_supported') ||
+    haystack.includes('tool_use_not_supported') ||
+    haystack.includes('unsupported_tool_use')
+  );
+}
+
+export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, ProcessNodePrepResult, ProcessNodeExecResult> {
   /**
    * Generate handoff tools for each connected non-MCP node
    */
@@ -68,9 +133,7 @@ export class ProcessNode extends BaseNode {
     const targets: { id: string; label: string; type: string }[] = [];
     const seenIds = new Set<string>();
     for (const edgeId of actions) {
-      const targetNode = this.successors instanceof Map
-        ? this.successors.get(edgeId)
-        : (this.successors as any)[edgeId];
+      const targetNode = this.successors.get(edgeId);
       if (!targetNode) {
         log.warn(`Target node not found for edge ${edgeId}`);
         continue;
@@ -85,17 +148,13 @@ export class ProcessNode extends BaseNode {
       });
     }
 
-    // Human-readable, collision-free tool names (issue #38, Item A): the raw
-    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
-    // name -> node-id mapping so routing still works.
-    const nameMap = buildHandoffToolNameMap(targets);
-    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
-
     // Load the containing flow once so descriptions can read each target's
     // user-authored description and full properties (and recurse into subflows).
+    // Loaded BEFORE the handoff/tool name maps are built (issue #385) so a
+    // Subflow target's `invocationMode` can be read while partitioning targets.
     let flowNodesById: Map<string, FlowNode> | null = null;
     try {
-      const flow = await flowService.getFlow(sharedState.flowId);
+      const flow = sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId);
       if (flow) {
         flowNodesById = new Map(flow.nodes.map(n => [n.id, n]));
       }
@@ -103,76 +162,157 @@ export class ProcessNode extends BaseNode {
       log.warn('Could not load flow for handoff descriptions; using basic descriptions', { err });
     }
 
+    // Connecting a Subflow is sufficient: the model can call it inline, start
+    // it in the background, or follow the graph handoff. Legacy invocationMode
+    // and experimental flags no longer hide these capabilities.
+    const hasSubflowTargets = targets.some(t => t.type === 'subflow');
+    const nameMap = buildHandoffToolNameMap(targets);
+    const subflowNameMap = buildSubflowToolNameMap(targets.filter(t => t.type === 'subflow'));
+    // Every connected Subflow also has a non-blocking launch tool, so an
+    // orchestrator can remain available for questions and steering. Reuse the
+    // collision-safe naming used by callable subflows (including equal labels).
+    const detachedNameMap = new Map([...buildSubflowToolNameMap(targets.filter(t => t.type === 'subflow'))]
+      .map(([id, name]) => [id, name.replace(SUBFLOW_TOOL_PREFIX, SUBFLOW_DETACHED_TOOL_PREFIX)]));
+    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
+    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
+    sharedState.subflowToolNameMap = sharedState.subflowToolNameMap || {};
+    sharedState.subflowDetachedToolNameMap = sharedState.subflowDetachedToolNameMap || {};
+
     const handoffTools: ToolDefinition[] = [];
     for (const target of targets) {
+      const flowNodeForTarget = flowNodesById?.get(target.id);
+
+      if (target.type === 'subflow') {
+        const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
+        sharedState.subflowDetachedToolNameMap[toolName] = target.id;
+        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined) : `Start ${target.label} as a detached subflow`;
+        const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
+        handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
+      }
+
+      if (target.type === 'subflow') {
+        // Inline calls return structured results without changing graph nodes.
+        const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
+        sharedState.subflowToolNameMap[toolName] = target.id;
+        const description = flowNodeForTarget
+          ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
+          : `Run ${target.label} as a callable subflow tool`;
+        const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
+        const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
+        handoffTools.push(
+          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory),
+        );
+        log.debug('Created subflow tool-invocation tool', { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
+      }
+
       const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
       sharedState.handoffNameMap[toolName] = target.id;
+      sharedState.handoffTargetTypes[target.id] = target.type;
 
       const flowNode = flowNodesById?.get(target.id);
       const description = flowNode
-        ? await buildHandoffDescription(flowNode)
+        ? await buildHandoffDescription(flowNode, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
         : `Hand off execution to ${target.label} (${target.type})`;
 
-      // A subflow node in 'isolated' inputMode that opted into `allowCallerPrompt`
-      // (issue #96) lets the routing model pass an instruction to the child flow.
-      // Only those targets get a `prompt` parameter; every other handoff tool
-      // stays byte-identically parameter-less (preserving the provider
-      // prefix-cache stability from #89). The param is OPTIONAL: the model may
-      // still route with no prompt, in which case the authored promptTemplate is
-      // used as the default (see SubflowNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string } | undefined;
-      // Spawn-with-brief (issue #156, supersedes the #130 `parallelFlows` param):
-      // a subflow target that opted into `allowCallerFanout` is a SPAWNABLE
-      // sub-agent. Its handoff tool gains an optional `task` string, and the
-      // description tells the model it may call the tool several times in ONE
-      // turn — each call spawns one parallel, independently-briefed instance of
-      // the target. runFlow captures every matching call's brief single-shot;
-      // SubflowNode.prep turns them into parallel lanes. Every OTHER handoff
-      // tool keeps the byte-identical empty schema (preserving the #89 provider
-      // prefix-cache stability).
-      const acceptsCallerSpawn =
-        target.type === 'subflow' && targetProps?.allowCallerFanout === true;
+      // A subflow OR process node in 'isolated' inputMode that opted into
+      // `allowCallerPrompt` (issue #96) lets the routing model pass an
+      // instruction message THROUGH the handoff to the target — so an isolated
+      // process step can receive a message from the previous node, exactly like
+      // an isolated subflow. Only those targets get a `prompt` parameter; every
+      // other handoff tool stays byte-identically parameter-less (preserving the
+      // provider prefix-cache stability from #89). The param is OPTIONAL: the
+      // model may still route with no prompt, in which case the target's authored
+      // isolated message (promptTemplate for a subflow, isolatedPrompt for a
+      // process node) is used as the default (see SubflowNode.prep /
+      // ProcessNode.prep).
+      const targetProps = flowNode?.data?.properties as (SubflowNodeProperties & { isolatedPrompt?: string }) | undefined;
+      // Every Subflow is a queue-backed sub-agent. The routing model may call the
+      // same handoff tool any number of times in ONE turn; each call contributes
+      // one job for this node's single child flow. `concurrencyLimit` on the
+      // Subflow controls only how many jobs are active at once — it never limits
+      // how many calls are accepted. runFlow captures all matching calls and
+      // SubflowNode.prep turns them into an ordered job queue.
+      const acceptsCallerSpawn = target.type === 'subflow';
       const acceptsCallerPrompt =
-        target.type === 'subflow' &&
+        (target.type === 'subflow' || target.type === 'process') &&
         targetProps?.inputMode === 'isolated' &&
         targetProps?.allowCallerPrompt !== false;
-      // Issue #169: for a NON-spawn, isolated, allowCallerPrompt subflow that has
-      // NO authored message on the node itself (empty promptTemplate), the caller
-      // MUST supply a prompt — otherwise the subflow starts with an empty prompt
-      // and the chain dies silently (StartNode asks the user for input). In that
-      // exact configuration we mark `prompt` as JSON-Schema `required`, turning a
-      // silent runtime dead-end into a schema-enforced guarantee. Every other
-      // configuration keeps `prompt` optional exactly as before.
-      const promptIsMandatory =
-        acceptsCallerPrompt &&
-        targetProps?.allowCallerFanout !== true &&
-        !(targetProps?.promptTemplate?.trim());
+      // The target's OWN authored isolated message, used to decide whether a
+      // caller prompt is mandatory: a subflow authors it as `promptTemplate`, a
+      // process node as `isolatedPrompt`.
+      const authoredIsolatedMessage =
+        target.type === 'subflow' ? targetProps?.promptTemplate : targetProps?.isolatedPrompt;
+      // Issue #169: for a NON-spawn, isolated, allowCallerPrompt target that has
+      // NO authored message on the node itself, the caller MUST supply a prompt —
+      // otherwise the target starts with an empty prompt and the chain dies
+      // silently. In that exact configuration we mark `prompt` as JSON-Schema
+      // `required`, turning a silent runtime dead-end into a schema-enforced
+      // guarantee. Every other configuration keeps `prompt` optional as before.
+      const promptIsMandatory = acceptsCallerPrompt && !acceptsCallerSpawn && !(authoredIsolatedMessage?.trim());
+      const taskIsMandatory =
+        acceptsCallerSpawn &&
+        targetProps?.inputMode === 'isolated' &&
+        !(authoredIsolatedMessage?.trim());
+      const acceptsCallerSessionKey =
+        target.type === 'subflow' &&
+        targetProps?.sessionScope === 'per-key' &&
+        targetProps?.saveConversation !== false;
 
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
       const descExtras: string[] = [];
-      if (acceptsCallerSpawn) {
-        // `task` subsumes `prompt` for spawnable targets (a single spawn with a
-        // brief behaves like a caller prompt), so only one param is exposed.
+      if (target.type === 'signal') {
+        paramProps.body = {
+          type: "string",
+          minLength: 1,
+          description: "REQUIRED non-empty payload body to emit with the signal. You MUST supply the signal data for this handoff."
+        };
+        requiredParams.push('body');
+        descExtras.push('You MUST pass a non-empty "body" argument; it becomes the emitted signal payload.');
+      } else if (acceptsCallerSpawn) {
+        // `task` subsumes `prompt` for Subflow targets. One call is a normal
+        // handoff; repeated calls form a queue of independently briefed jobs.
         paramProps.task = {
           type: "string",
-          description: "The brief for this spawned instance of the sub-agent: what this one copy should work on. Optional; omit it (and call the tool once) for a plain handoff."
+          description: taskIsMandatory
+            ? "REQUIRED task for this child run. This isolated subflow has no default instruction."
+            : "Task for this child run. Optional; omit it (and call the tool once) to use the subflow's configured input."
         };
+        if (taskIsMandatory) requiredParams.push('task');
         descExtras.push(
-          'PARALLEL SPAWNING: You may call this tool MULTIPLE TIMES in the SAME response — each call spawns one parallel instance of this sub-agent, briefed with that call\'s "task". All instances run concurrently in the background; their results are merged in call order and the flow continues once every instance has finished. To split work, make one call per sub-task, each with a specific, self-contained "task".'
+          'QUEUED SUB-AGENT: You may call this tool MULTIPLE TIMES in the SAME response — each call queues one child run with its own "task". The Subflow runs up to its configured maximum simultaneously, keeps pulling queued jobs until all are finished, and merges results in call order. To split work, make one call per self-contained task.'
         );
       } else if (acceptsCallerPrompt) {
         paramProps.prompt = {
           type: "string",
           description: promptIsMandatory
-            ? "REQUIRED initial brief/instruction for the target subflow (isolated mode). The subflow has no authored message of its own, so you MUST supply what it should work on — omitting it makes the subflow start with an empty prompt and stall."
-            : "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
+            ? "REQUIRED initial brief/instruction for the target node (isolated mode). It has no authored message of its own, so you MUST supply what it should work on — omitting it makes the target start with an empty prompt and stall."
+            : "Instruction/prompt to run the target node with (isolated mode). Optional; omitted falls back to the target's default prompt."
         };
         if (promptIsMandatory) {
           requiredParams.push('prompt');
-          descExtras.push('You MUST pass a "prompt" argument instructing the target subflow — it has no authored message of its own.');
+          descExtras.push('You MUST pass a "prompt" argument instructing the target node — it has no authored message of its own.');
         } else {
-          descExtras.push('Optionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.');
+          descExtras.push('Optionally pass a "prompt" argument to instruct the target node; omit it to use its default prompt.');
+        }
+      }
+      if (acceptsCallerSessionKey) {
+        paramProps.sessionKey = {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          description: 'Stable child-conversation handle. It overrides the authored key template for this job. Equal keys reuse and serialise access to one child chat; different keys may run concurrently.'
+        };
+        const knownKeys = Object.values(sharedState.subflowSessions ?? {})
+          .filter((session) => session.nodeId === target.id && !!session.sessionKey)
+          .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+          .slice(0, 20)
+          .map((session) => session.sessionKey as string);
+        descExtras.push(
+          'PERSISTENT CHILD CHAT: optionally pass a stable "sessionKey". It overrides the authored key template for this job. Reusing a key appends "task" as a serialised follow-up to the same finished child conversation; different keys can run concurrently. If neither caller nor template resolves a key, the job uses a fresh one-off child.',
+        );
+        if (knownKeys.length > 0) {
+          descExtras.push(`Existing resumable session keys for this sub-agent: ${knownKeys.map((key) => JSON.stringify(key)).join(', ')}.`);
         }
       }
       const hasParams = Object.keys(paramProps).length > 0;
@@ -190,11 +330,23 @@ export class ProcessNode extends BaseNode {
       log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
     }
 
+    if (hasSubflowTargets || sharedState.launchedTaskIds?.length) {
+      handoffTools.push(
+        { name: 'subflow_task_get', description: 'Get the status and terminal result of a detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+        { name: 'subflow_task_cancel', description: 'Cancel a working detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+      );
+    }
+
     log.info('Generated handoff tools', {
       toolsCount: handoffTools.length
     });
 
-    return handoffTools;
+    return [
+      ...handoffTools,
+      ...((hasSubflowTargets || sharedState.parentRunId || sharedState.parentConversationId || sharedState.launchedTaskIds?.length || Object.keys(sharedState.subflowInvocations ?? {}).length)
+        ? buildSubflowCommunicationTools() : []),
+      ...buildBehaviorToolDefinitions(sharedState.behaviorToolRegistry),
+    ];
   }
 
   async prep(sharedState: SharedState, node_params?: ProcessNodeParams): Promise<ProcessNodePrepResult> {
@@ -207,12 +359,13 @@ export class ProcessNode extends BaseNode {
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
+    const currentAppId = node_params?.properties?.mcpNodes?.[0]?.properties?.boundServer;
 
     log.debug('Extracted properties', {
       nodeId,
       flowId,
       boundModel,
-      excludeModelPrompt,
+      excludeModelPrompt: sharedState.executionExtensionContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt
     });
@@ -227,6 +380,11 @@ export class ProcessNode extends BaseNode {
       throw new Error("Process node requires a bound model");
     }
 
+    // Immutable Persona behavior snapshots own the native-ability boundary.
+    if (sharedState.flowSnapshot) {
+      sharedState.behaviorRules = structuredClone(sharedState.flowSnapshot.behaviorRules ?? []);
+    }
+
     // Use the promptRenderer to build the complete prompt
     log.info('Using promptRenderer to build the complete prompt');
     const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
@@ -235,6 +393,9 @@ export class ProcessNode extends BaseNode {
       excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
+      // A Persona execution is pinned to this immutable snapshot. Never fall
+      // back to the mutable Flow record while one is present.
+      ...(sharedState.flowSnapshot ? { flowSnapshot: sharedState.flowSnapshot } : {}),
       // Tier 3: announce each resource pill the renderer resolves as a live
       // resource:read event, attributed to this node. The renderer itself
       // stays state-agnostic — it just calls back.
@@ -247,18 +408,37 @@ export class ProcessNode extends BaseNode {
     });
 
     // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
-    // scratchpad AFTER rendering. PromptRenderer is state-agnostic by design
-    // (it has no SharedState), so the substitution happens here where the vars
-    // are in scope. This is plaintext map lookup — NOT resolveGlobalVars (which
-    // decrypts `${global:VAR}` for tool args / API keys and never touches prompts).
-    // Tier 3: then inject `${res:NAME}` named run resources (after vars, no
-    // recursion — see resolveRunResourceRefs).
-    let completePrompt = await resolveRunResourceRefs(
-      resolveRunVars(renderedPrompt, sharedState.variables),
+    // scratchpad AFTER rendering. Tier 3 then injects `${res:NAME}` resources.
+    const personaContext = sharedState.personaInstructionContext;
+    const appliesPersonaContext = Boolean(
+      personaContext
+      && sharedState.personaAttribution
+      && personaContext.personaId === sharedState.personaAttribution.personaId
+      && personaContext.activityId === sharedState.personaAttribution.activityId
+      && personaContext.behaviorRevisionId === sharedState.personaAttribution.behaviorRevisionId
+      && personaContext.rootFlowId === flowId,
+    );
+    const trustedPrompt = appliesPersonaContext
+      ? personaContext!.instruction + '\n\n' + renderedPrompt
+      : renderedPrompt;
+
+    let completePrompt = sharedState.executionExtensionContext ? trustedPrompt : await resolveRunResourceRefs(
+      resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
       { nodeId }
     );
+
+    // Resolve configuration globals at execution time. The prompt-safe resolver
+    // deliberately leaves secret globals as `${global:NAME}` so their values are
+    // never sent to the model.
+    completePrompt = sharedState.executionExtensionContext ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
+      conversationId: sharedState.conversationId,
+      flowId,
+      nodeId,
+      modelId: boundModel,
+      appId: currentAppId,
+    }) as string;
 
     // Tier 4 (persistent kv): inject `${kv:NAME}` cross-run values AFTER vars
     // and resources. Scope needs the flow's folder, fetched once (lazily) and
@@ -269,7 +449,12 @@ export class ProcessNode extends BaseNode {
       if (kvCtx) return kvCtx;
       let folder: string | undefined;
       try { folder = (await flowService.getFlow(flowId))?.folder; } catch { /* best effort */ }
-      kvCtx = { flowId, folder };
+      kvCtx = {
+        flowId,
+        folder,
+        executionAuthority: sharedState.executionAuthority,
+        personaAttribution: sharedState.personaAttribution,
+      };
       return kvCtx;
     };
     if (completePrompt.includes('${kv:')) {
@@ -289,6 +474,15 @@ export class ProcessNode extends BaseNode {
       completePrompt += resourceBlock;
     }
 
+    // Meeting participants receive a fixed protocol before the prompt is frozen
+    // below. Live roster/round data stays in user inbox messages, so this system
+    // prefix remains byte-identical between turns and across meeting rounds.
+    // Child Subflows do not inherit meetingParticipant, keeping these coordinator
+    // controls confined to the root participant flow.
+    if (sharedState.meetingParticipant && sharedState.meetingTurn) {
+      completePrompt = appendMeetingParticipantProtocol(completePrompt);
+    }
+
     log.debug('Prompt rendered successfully', {
       completePromptLength: completePrompt.length,
       completePromptPreview: completePrompt.length > 100 ?
@@ -301,6 +495,16 @@ export class ProcessNode extends BaseNode {
     // Check if tools are already available in shared state
     let availableTools: ToolDefinition[] = [];
 
+    // Hoisted out of the else-branch below: the bound MCP nodes are needed for
+    // resource-tool dispatch and for the synthetic-tool arming decision
+    // regardless of whether the tool DEFINITIONS came from shared state or from a
+    // fresh processMCPNodes call. (Previously this only ran on the fresh path, so
+    // a step served from sharedState.mcpContext lost its server routing context.)
+    const mcpNodes = node_params?.properties?.mcpNodes || [];
+
+    // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
+    sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
+
     if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
       // Use tools already processed by MCPNode
       log.info('Using MCP tools from shared state', {
@@ -308,15 +512,11 @@ export class ProcessNode extends BaseNode {
       });
       availableTools = sharedState.mcpContext.availableTools;
     } else {
-      // Only process MCP nodes if tools are not available in shared state
-      const mcpNodes = node_params?.properties?.mcpNodes || [];
-
       if (mcpNodes.length > 0) {
         log.info('No MCP tools found in shared state, processing MCP nodes', {
           mcpNodesCount: mcpNodes.length
         });
 
-        // Process MCP nodes using the ToolHandler
         const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
 
         if (!mcpResult.success) {
@@ -328,11 +528,37 @@ export class ProcessNode extends BaseNode {
       }
     }
 
-    // Generate handoff tools for each connected non-MCP node
+    // Generate handoff tools for each connected non-MCP node (also emits
+    // `call_subflow_<slug>` tool-invocation tools for tool-mode Subflow
+    // targets — issue #385 — and populates sharedState.subflowToolNameMap).
     const handoffTools = await this.generateHandoffTools(sharedState);
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
+
+    // Persona-native abilities are authored into the immutable Process snapshot.
+    // Definitions stay in canonical order and are denied before advertisement;
+    // ModelHandler remains the fenced execution boundary.
+    const personaTools = sharedState.personaAttribution
+      && sharedState.executionAuthority?.commitPersonaMutation
+      ? buildPersonaTools(node_params?.properties?.personaTools, {
+          maintenanceMemoryProposal: Boolean(
+            sharedState.executionAuthority.proposePersonaMemoryMaintenance,
+          ),
+        }).filter(
+          (tool) => !(sharedState.behaviorRules ?? []).some((rule) => (
+            rule.effect === 'deny'
+            && (rule.action === '*' || rule.action === tool.name)
+            && (rule.resource === '*' || rule.resource === undefined)
+          )),
+        )
+      : [];
+    const existingToolNames = new Set(availableTools.map((tool) => tool.name));
+    const collision = personaTools.find((tool) => existingToolNames.has(tool.name));
+    if (collision) {
+      throw new Error(`Persona tool name collides with another advertised tool: ${collision.name}`);
+    }
+    availableTools = [...availableTools, ...personaTools];
 
     // Tier 3 (issue #161): when a PRODUCE-role run-artifact resource node is
     // wired to this step, offer an explicit `write_resource` tool so the model
@@ -346,13 +572,78 @@ export class ProcessNode extends BaseNode {
       availableTools = [...availableTools, ...runResourceTools];
     }
 
+    // Question tool (issue #258): offer the synthetic `question` tool only when
+    // this Process node explicitly opts in (`allowQuestion`). Unlike
+    // read_resource it is NOT sticky-armed via armedSyntheticTools — it is
+    // offered iff enabled, so flows that don't use it keep a byte-identical tool
+    // set (preserving the #89 prefix-cache) and unattended flows can leave it
+    // off entirely.
+    const questionDeniedBySnapshot = (sharedState.behaviorRules ?? []).some(
+      rule => rule.effect === 'deny'
+        && rule.action === 'question'
+        && (rule.resource === '*' || rule.resource === undefined),
+    );
+    if (node_params?.properties?.allowQuestion === true
+        && !questionDeniedBySnapshot
+        && !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
+      availableTools = [...availableTools, buildQuestionTool()];
+    }
+
+    // Todo tool (issue #259): offer the synthetic `todo` tool only when this
+    // Process node opts in (`enableTodoTool`). Like the question tool, it is
+    // offered iff enabled (not sticky-armed), so flows that don't use it keep a
+    // byte-identical tool set (preserving the #89 prefix-cache).
+    if (node_params?.properties?.enableTodoTool === true &&
+        !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
+      availableTools = [...availableTools, buildTodoTool()];
+    }
+
+    // Meeting tools are coordinator-owned capabilities. Replace any colliding
+    // advertised names with our fixed definitions, both to keep the block
+    // deterministic and to ensure a server tool can never impersonate a meeting
+    // control. Ordinary conversations retain their exact existing tool set.
+    if (sharedState.meetingParticipant && sharedState.meetingTurn) {
+      availableTools = [
+        ...availableTools.filter((tool) => !isMeetingToolName(tool.name)),
+        ...buildMeetingTools(),
+      ];
+    }
+
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
+    if (sharedState.executionExtensionContext) {
+      const { executionExtensionProtectedServer, authorizeExecutionExtensionHandoffs } = await import('@/backend/execution/extensions');
+      const server = executionExtensionProtectedServer(sharedState.executionExtensionContext);
+      availableTools = availableTools.filter(tool =>
+        tool.server === server || handoffTools.some(handoff => handoff.name === tool.name));
+      sharedState.toolNameMap = {};
+      authorizeExecutionExtensionHandoffs(sharedState.executionExtensionContext, handoffTools.map(tool => tool.name));
+    }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
-        sharedState.toolNameMap[tool.name] = { server: tool.server, tool: tool.originalName, timeout: tool.timeout };
+        tool.context = {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: tool.server,
+        };
+        // Issue #255: carry the advertise-time identity (client generation +
+        // schema hash) so a stale dispatch after a reconnect is rejected.
+        sharedState.toolNameMap[tool.name] = {
+          server: tool.server,
+          tool: tool.originalName,
+          timeout: tool.timeout,
+          nodeId: tool.nodeId,
+          clientGeneration: tool.clientGeneration,
+          schemaHash: tool.schemaHash,
+          annotations: tool.annotations,
+          uiResourceUri: tool.uiResourceUri,
+          presetArgs: tool.presetArgs,
+          context: tool.context,
+        };
       }
     }
 
@@ -367,58 +658,191 @@ export class ProcessNode extends BaseNode {
     // Forwarded so self-orchestrating adapters can surface mid-run tool-approval
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
+    runId: sharedState.logicalRunId,
+    archiveModelTurns: !sharedState.ephemeral,
+    codexSession: sharedState.codexSessions?.[nodeId],
+    onCodexSessionChange: (session) => {
+      if (session) {
+        sharedState.codexSessions = { ...(sharedState.codexSessions ?? {}), [nodeId]: session };
+      } else if (sharedState.codexSessions?.[nodeId]) {
+        const { [nodeId]: _removed, ...remaining } = sharedState.codexSessions;
+        sharedState.codexSessions = Object.keys(remaining).length > 0 ? remaining : undefined;
+      }
+    },
     requireToolApproval: sharedState.requireApproval ?? false,
+    onApprovalRequired: sharedState.onApprovalRequired,
+    // Issue #258: carry the resolved unattended flag so execCore can pass it to
+    // the model call (the synthetic `question` tool degrades in unattended runs).
+    unattended: sharedState.unattended,
+    behaviorRules: structuredClone(sharedState.behaviorRules ?? []),
+    executionAuthority: sharedState.executionAuthority,
+    executionExtensionContext: sharedState.executionExtensionContext,
+    personaAttribution: sharedState.personaAttribution,
+    ...(sharedState.temperatureOverrideOnce !== undefined
+      ? { temperatureOverride: sharedState.temperatureOverrideOnce }
+      : {}),
   };
 
-    // Create our own system message with the current prompt as FlujoChatMessage
+    // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
+    // per (conversation, node) on first render and re-send it byte-identically
+    // thereafter, so it forms a stable provider cache prefix (mirrors the #89
+    // tool-block freeze). Drift in `${resource:}` / `${kv:}` pills (or a future
+    // date injection) must NOT mutate the frozen prefix — that would invalidate
+    // the provider's prefix cache — so it is surfaced to the model as a synthetic
+    // `[System update]` tail message instead. Re-frozen only at a compaction
+    // boundary (where the prefix is rebuilt anyway).
+    const freeze = resolveFrozenSystemPrompt(
+      nodeId,
+      completePrompt,
+      sharedState.frozenSystemPrompts,
+      sharedState.messages
+    );
+    sharedState.frozenSystemPrompts = freeze.frozenSystemPrompts;
+    const systemPromptContent = freeze.content;
+    if (freeze.frozeNow) {
+      log.info('Froze system prompt for node (first render)', {
+        nodeId,
+        length: completePrompt.length,
+      });
+    }
+    if (freeze.driftUpdate !== undefined) {
+      // Surface the drift to the model as a synthetic `[System update]` tail
+      // message instead of mutating the frozen prefix (which would bust the
+      // provider prefix cache). Dedupe is handled inside resolveFrozenSystemPrompt.
+      sharedState.messages.push({
+        id: uuidv4(),
+        role: 'user',
+        content: freeze.driftUpdate,
+        timestamp: Date.now(),
+      });
+      log.info('System prompt drifted from frozen prefix; appended [System update]', {
+        nodeId,
+      });
+    }
+    // Keep prepResult.currentPrompt consistent with the (possibly frozen) content
+    // actually sent on the wire.
+    prepResult.currentPrompt = systemPromptContent;
+
+    // Create our own system message with the (frozen) prompt as FlujoChatMessage
     const systemMessage: FlujoChatMessage = {
       id: uuidv4(), // Generate unique ID
       role: 'system',
-      content: completePrompt,
+      content: systemPromptContent,
       timestamp: Date.now() // Add timestamp
     };
 
     log.info('Added system message from prompt template', {
-      contentLength: completePrompt.length,
-      contentPreview: completePrompt.length > 100 ?
-        completePrompt.substring(0, 100) + '...' : completePrompt
+      contentLength: systemPromptContent.length,
+      contentPreview: systemPromptContent.length > 100 ?
+        systemPromptContent.substring(0, 100) + '...' : systemPromptContent
     });
 
-    // Assemble the node's threaded history (lossless — this is written back to
-    // SharedState.messages). Stripping handoff plumbing for the MODEL happens at
-    // the provider boundary (ModelHandler.generateCompletion → stripHandoffPlumbing),
-    // so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
-    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
-
-    // Shape what the MODEL sees — both wire-only, prepResult.messages stays the
-    // full history so post() writes it back intact and the tool loop can
-    // re-enter without losing the prior conversation:
-    //  1. collapseNodeOutputs: drop the settled tool exchanges of every node
-    //     whose outputMode is 'latest-message' (their final responses survive).
-    //  2. scopeMessagesForInput: narrow to this node's inputMode
-    //     (latest-message / isolated).
-    // When neither applies, wireMessages stays unset and the model sees
-    // prepResult.messages verbatim.
+    // Begin the shared immutable materialization pipeline. Runtime-only reads,
+    // resource events, and tool setup remain outside it; the same pure fold /
+    // scope / finalization stages are also used by the read-only preview route.
     const inputMode = node_params?.properties?.inputMode ?? 'full-history';
-    let wireBase = prepResult.messages;
-    try {
-      const flow = await flowService.getFlow(flowId);
-      const collapsedNodeIds = new Set(
-        (flow?.nodes ?? [])
-          .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
-          .map((n) => n.id)
-      );
-      wireBase = collapseNodeOutputs(prepResult.messages, collapsedNodeIds);
-    } catch (err) {
-      // Collapsing is a context-token optimization — never block the run on it.
-      log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
+    // Caller handoff input (issue #96): the single-shot, node-id-scoped `prompt`
+    // an upstream routing model passed via the handoff tool — the same value
+    // SubflowNode.prep reads. It lets an ISOLATED process node receive a message
+    // handed to it by the previous node, exactly like an isolated subflow. Read
+    // WITHOUT clearing: a Process node's tool loop re-runs prep() on every
+    // iteration (runFlow re-enters the node), so clearing here would lose the
+    // caller prompt mid-loop. runFlow resets handoffInput at each handoff
+    // transition, so it stays scoped to this node's visit and never leaks to a
+    // later node or a subsequent turn.
+    const handoffForThisNode =
+      sharedState.handoffInput && sharedState.handoffInput.targetNodeId === node_params?.id
+        ? sharedState.handoffInput
+        : undefined;
+    // Claude's experimental session resume tracks a message-count watermark. An
+    // output-folded history from another node no longer aligns with it, so keep
+    // the full history for this eligible call. Explicit input scoping remains
+    // unsafe and continues through the normal wire-view path below.
+    let preserveFullHistoryForClaudeResume = false;
+    if (inputMode === 'full-history') {
+      try {
+        const model = await modelService.getModel(boundModel);
+        preserveFullHistoryForClaudeResume =
+          model?.adapter === 'claude-cli' &&
+          await ModelHandler.isClaudeSessionResumeEnabled();
+      } catch (err) {
+        // If the model cannot be resolved, retain the established folding behavior.
+        log.warn('Could not determine Claude session-resume compatibility', { err });
+      }
     }
+
+    let collapsedNodeIds = new Set<string>();
+    if (!preserveFullHistoryForClaudeResume) {
+      try {
+        const flow = sharedState.flowSnapshot ?? await flowService.getFlow(flowId);
+        collapsedNodeIds = new Set(
+          (flow?.nodes ?? [])
+            .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
+            .map((n) => n.id)
+        );
+      } catch (err) {
+        // Collapsing is a context-token optimization — never block the run on it.
+        log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
+      }
+    }
+    const materializationBase = prepareModelInputMaterialization({
+      canonicalMessages: sharedState.messages,
+      systemMessage,
+      collapsedNodeIds,
+    });
+    prepResult.messages = materializationBase.threaded;
+    let wireBase = materializationBase.folded;
+
+    // Chat references are a wire-only projection: preserve canonical serialized
+    // pills in SharedState.messages, but expand only resources authorized for
+    // this ProcessNode and non-secret globals before the model sees them.
+    if (!sharedState.executionExtensionContext && wireBase.some((message) =>
+      message.role === 'user'
+      && typeof message.content === 'string'
+      && (message.content.includes('${') || message.content.includes('@'))
+    )) {
+      wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
+        if (message.role !== 'user' || typeof message.content !== 'string') return message;
+        let content = await promptRenderer.resolveChatMessageReferences(
+          message.content,
+          mcpNodes,
+          (info) => sharedState.emit?.({
+            type: 'resource:read',
+            node: { nodeId },
+            source: 'pill',
+            ...info,
+          }),
+        );
+        content = await resolveRunResourceRefs(
+          content,
+          sharedState.ephemeral ? undefined : sharedState.conversationId,
+          sharedState.emit,
+          { nodeId },
+        );
+        content = await resolvePromptDynamicReferences(content, {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: currentAppId,
+        }) as string;
+        return content === message.content
+          ? message
+          : { ...message, content } as FlujoChatMessage;
+      }));
+    }
+
+    let resolvedIsolatedPrompt: string | undefined;
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
-      // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
-      // like the system prompt) so an isolated step can pull captured state.
-      // Tier 3: `${res:NAME}` likewise.
-      const isolatedPrompt = node_params?.properties?.isolatedPrompt;
-      let resolvedIsolatedPrompt = isolatedPrompt !== undefined
+      // Runtime reference reads stay outside the immutable materializer. Their
+      // resolved value is supplied as plain data to the shared scoping stage.
+      const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
+      const callerPrompt = allowCallerPrompt ? handoffForThisNode?.prompt?.trim() : undefined;
+      if (callerPrompt) {
+        log.info('Using caller-supplied prompt for isolated process node', { nodeId });
+      }
+      const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
+      resolvedIsolatedPrompt = sharedState.executionExtensionContext ? isolatedPrompt : isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -426,37 +850,150 @@ export class ProcessNode extends BaseNode {
             { nodeId }
           )
         : isolatedPrompt;
-      // Tier 4: `${kv:NAME}` in the isolated prompt too (wire-only text).
+      if (!sharedState.executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
+        resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: currentAppId,
+        }) as string;
+      }
       if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
         resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());
       }
-      prepResult.wireMessages = scopeMessagesForInput(
-        wireBase,
-        inputMode,
-        resolvedIsolatedPrompt,
-      );
     }
 
-    // Issue #168: auto-expose the `read_resource` tool when the wire history
-    // actually references a run resource (a `flujo://run/...` marker left by an
-    // oversized captured tool result/args), so the model can dereference it back
-    // to full content — even when the flujo MCP server isn't attached. Gated on
-    // the marker being present so resource-free flows keep a byte-identical tool
-    // set (preserving the #89 provider prefix-cache stability). Scanned over the
-    // SCOPED wire view the model actually receives; the node's own live loop has
-    // produced nothing yet at prep time, so only PRIOR history is inspected.
-    const wireForScan = prepResult.wireMessages ?? wireBase;
-    const historyHasRunResourceUri = wireForScan.some(
-      (m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME),
+    const approvedMcpSkills = await loadApprovedMcpSkillSelections(
+      sharedState.conversationId,
+      sharedState.mcpSkillSelections,
     );
-    if (
-      historyHasRunResourceUri &&
-      !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
-    ) {
-      // prepResult.availableTools is the same array reference, so this is picked
-      // up by execCore's toolNameMap build and the model call.
+
+    let materialized = finalizeModelInputMaterialization({
+      ...materializationBase,
+      folded: wireBase,
+      systemContent: completePrompt,
+      inputMode,
+      isolatedPrompt: resolvedIsolatedPrompt,
+      mcpAppContexts: sharedState.mcpAppContexts,
+      mcpSkills: approvedMcpSkills,
+    });
+    prepResult.wireMessages = materialized.wireChanged
+      ? materialized.scoped
+      : undefined;
+
+    // Issue #168 / #239: expose the synthetic `read_resource` tool so the model
+    // can dereference a `flujo://run/...` marker (left by an oversized captured
+    // tool result/args, or by compaction) back to full content — even when the
+    // flujo MCP server isn't attached — and can fetch native MCP resource URIs it
+    // discovers via list_mcp_resources.
+    //
+    // Arming is FRONT-LOADED and MONOTONE, for prefix-cache stability (#89).
+    // The original gate armed the tool the first turn a `flujo://run/` URI showed
+    // up on the wire. That is inherently a mid-conversation flip: turn N has no
+    // URI and turn N+1 does, so the tool block — which serializes AHEAD of the
+    // messages — changes shape exactly once per run, invalidating the ENTIRE
+    // provider prefix cache on that turn. Since compaction can mint a URI from
+    // any oversized tool result, "a URI might appear later" is true for
+    // essentially every tool-using step, so waiting for the marker bought no
+    // token saving and cost a guaranteed full cache miss.
+    //
+    // Instead: decide from conditions known AT PREP TIME, before any URI exists —
+    // does this step have MCP tools (whose results can be captured/compacted into
+    // a URI), a write_resource tool, wired resource nodes, or native resources?
+    // Resource-free, tool-free steps still get a byte-identical tool set to
+    // before, which is what the original gate was protecting.
+    const wireForScan = prepResult.wireMessages ?? wireBase;
+    // Retained for conversations RESUMED from before this change, whose history
+    // already carries a URI but whose step might not match the conditions below.
+    const historyHasRunResourceUri = wireForScan.some((message) => {
+      // A materialized media URI is transport metadata: the next model receives
+      // its localPath as an artifact descriptor and, when supported, the bytes
+      // are hydrated automatically. Only unresolved media still needs the
+      // read_resource escape hatch. Other URI markers in message/tool content
+      // remain model-visible and continue to arm the tool.
+      const { media, ...modelVisibleMessage } = message;
+      if (JSON.stringify(modelVisibleMessage).includes(RUN_RESOURCE_SCHEME)) return true;
+      return media?.some(
+        part => part.resourceUri?.startsWith(RUN_RESOURCE_SCHEME) && !part.localPath,
+      ) ?? false;
+    });
+    const hasMcpTools = availableTools.some((t) => !!t.server);
+    const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
+    const hasResourceNodes = (node_params?.properties?.resourceNodes?.length ?? 0) > 0;
+    const hasNativeResources = availableTools.some(
+      (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
+    );
+    const shouldArmReadResource =
+      !sharedState.executionExtensionContext && (
+        hasMcpTools ||
+        hasWriteResource ||
+        hasResourceNodes ||
+        hasNativeResources ||
+        historyHasRunResourceUri
+      );
+
+    // Sticky arming: a synthetic tool offered once on this conversation keeps
+    // being offered. Guards the reverse flip — e.g. a server's resource listing
+    // succeeding on turn 1 (arming list_mcp_resources) and throwing on turn 2,
+    // which would otherwise drop the tool and rewrite the block.
+    // A private execution's approved tool set cannot acquire local capabilities
+    // after the earlier filter, including sticky tools from a prior failed turn.
+    const armed = new Set(sharedState.executionExtensionContext ? [] : sharedState.armedSyntheticTools ?? []);
+    if (shouldArmReadResource) {
+      armed.add(READ_RESOURCE_TOOL_NAME);
+      // Any step that can mint a run resource must also be able to enumerate
+      // the concrete URI afterwards. This is front-loaded alongside
+      // read_resource so the provider tool block remains byte-stable.
+      armed.add(LIST_MCP_RESOURCES_TOOL_NAME);
+    }
+
+    // prepResult.availableTools is the same array reference, so these are picked
+    // up by execCore's toolNameMap build and the model call.
+    if (armed.has(READ_RESOURCE_TOOL_NAME) &&
+        !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)) {
       availableTools.push(buildReadResourceTool());
     }
+    if (armed.has(LIST_MCP_RESOURCES_TOOL_NAME) &&
+        !availableTools.some((t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME)) {
+      // Rebuilt from configuration only (no re-probe), so the bytes match the
+      // definition emitted on the turn that armed it.
+      log.info('Re-arming list_mcp_resources from sticky state (probe unavailable this turn)');
+      availableTools.push(buildListMCPResourcesTool(mcpNodes));
+    }
+
+    if (armed.size > 0) {
+      sharedState.armedSyntheticTools = Array.from(armed).sort();
+    }
+
+    // Todo state is plain data supplied to the shared immutable finalizer.
+    // The canonical transcript remains untouched.
+    const additionalWireMessages: FlujoChatMessage[] = [];
+    if (node_params?.properties?.enableTodoTool === true && (sharedState.todos?.length ?? 0) > 0) {
+      const todoBlock = formatTodoBlock(sharedState.todos);
+      if (todoBlock) {
+        additionalWireMessages.push({
+          id: uuidv4(),
+          role: 'user',
+          content: todoBlock,
+          timestamp: Date.now(),
+        } as FlujoChatMessage);
+      }
+    }
+    if (additionalWireMessages.length > 0) {
+      materialized = finalizeModelInputMaterialization({
+        ...materializationBase,
+        folded: wireBase,
+        systemContent: completePrompt,
+        inputMode,
+        isolatedPrompt: resolvedIsolatedPrompt,
+        mcpAppContexts: sharedState.mcpAppContexts,
+        mcpSkills: approvedMcpSkills,
+        additionalWireMessages,
+      });
+      prepResult.wireMessages = materialized.scoped;
+    }
+    prepResult.modelInputForArchive = materialized.snapshot;
 
     log.info('Assembled node context', {
       systemMessageCount: 1,
@@ -474,13 +1011,7 @@ export class ProcessNode extends BaseNode {
     // conversation content ONLY (never credentials).
     if (sharedState.debugMode || FEATURES.ENABLE_EXECUTION_TRACKER) {
       try {
-        prepResult.modelInput = deriveModelInputView({
-          threaded: prepResult.messages,
-          foldedView: wireBase,
-          scopedView: prepResult.wireMessages ?? wireBase,
-          systemContent: completePrompt,
-          inputMode,
-        });
+        prepResult.modelInput = materialized.snapshot;
         // Issue #167 (Phase 2 of #162): expose the per-model-call wire snapshots
         // this visit produced as an ordered array the debugger can page through,
         // keeping `modelInput` as the first/representative entry for backward
@@ -497,6 +1028,17 @@ export class ProcessNode extends BaseNode {
         // Observability must never break a run.
         log.warn('Could not derive model-input debug view', { err });
       }
+    }
+
+    // Graceful landing (issue #253): when runFlow has flagged this as the forced
+    // final summary turn (the agentic-turn budget was exhausted), strip EVERY
+    // tool so the model can only produce a text-only summary. The forced summary
+    // instruction + synthetic tool-results were already appended to the history
+    // by runFlow, so prepResult.messages already carries them.
+    if (sharedState.forceSummaryTurn) {
+      log.info(`[ProcessNode ${prepResult.nodeId}] Forced summary turn: stripping all tools for graceful landing (#253).`);
+      prepResult.availableTools = [];
+      prepResult.forceSummaryTurn = true;
     }
 
     log.info('prep() completed', {
@@ -522,7 +1064,7 @@ export class ProcessNode extends BaseNode {
 
     try {
       // Prepare tools if available
-      let tools: OpenAI.ChatCompletionTool[] | undefined = undefined; // Initialize tools
+      let tools: OpenAI.ChatCompletionFunctionTool[] | undefined = undefined; // Initialize tools
 
       if (prepResult.availableTools && prepResult.availableTools.length > 0) {
         const toolsResult = ToolHandler.prepareTools({
@@ -540,10 +1082,22 @@ export class ProcessNode extends BaseNode {
       // Rebuild the model-facing-name -> (server, tool) map from the bound tools
       // (mirrors prep()'s SharedState.toolNameMap) so adapters that run their own
       // agentic tool loop (Claude subscription) can dispatch calls to mcpService.
-      const toolNameMap: Record<string, { server: string; tool: string; timeout?: number }> = {};
+      const toolNameMap: Record<string, DecodedTool> = {};
       for (const t of prepResult.availableTools ?? []) {
         if (t.server && t.originalName) {
-          toolNameMap[t.name] = { server: t.server, tool: t.originalName, timeout: t.timeout };
+          // Issue #255: preserve the identity token for the adapter dispatch path too.
+          toolNameMap[t.name] = {
+            server: t.server,
+            tool: t.originalName,
+            timeout: t.timeout,
+            nodeId: t.nodeId,
+            clientGeneration: t.clientGeneration,
+            schemaHash: t.schemaHash,
+            annotations: t.annotations,
+            uiResourceUri: t.uiResourceUri,
+            presetArgs: t.presetArgs,
+            context: t.context,
+          };
         }
       }
 
@@ -562,33 +1116,130 @@ export class ProcessNode extends BaseNode {
       });
 
       let modelResult;
+      let usedToolFreeFallback = false;
       try {
-        // Call the model with tool support
-        modelResult = await ModelHandler.callModel({
-          modelId: prepResult.boundModel,
-          prompt: prepResult.currentPrompt,
-        messages: prepResult.messages,
-        // Scoped view for latest-message / isolated inputMode; when unset the
-        // model sees `messages` verbatim (full-history). Persistence always uses
-        // the full `messages`, never this.
-        wireMessages: prepResult.wireMessages,
-        tools,
-        iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
-        maxIterations: 1, // Vestigial: the agentic-turn cap is now resolved from maxTurns (see below)
-        // Per-node override of the agentic-turn cap. ModelHandler merges this with
-        // the bound model's maxTurns setting and the system default (50), replacing
-        // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
-        maxTurns: node_params?.properties?.maxTurns,
-        // Per-node override of the per-completion output-token cap (#189).
-        // ModelHandler resolves this against the bound model's maxTokens, then
-        // lets the adapter apply its own default when both are unset.
-        maxTokens: node_params?.properties?.maxTokens,
-          nodeName, // Pass the node name to be included in the response header
-          nodeId: prepResult.nodeId, // Pass the node ID
-          toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
-          conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
-          requireToolApproval: prepResult.requireToolApproval // Gate tool calls on user approval
-        });
+        const callModelWithTools = async (
+          attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        ) => {
+          await prepResult.executionAuthority?.assertCurrent();
+          const result = await ModelHandler.callModel({
+            modelId: prepResult.boundModel,
+            prompt: prepResult.currentPrompt,
+            messages: prepResult.messages,
+            // Scoped view for latest-message / isolated inputMode; when unset the
+            // model sees `messages` verbatim (full-history). Persistence always uses
+            // the full `messages`, never this.
+            wireMessages: prepResult.wireMessages,
+            tools: attemptTools,
+            iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
+            maxIterations: 1, // Vestigial: the agentic-turn cap is now resolved from maxTurns (see below)
+            // Per-node override of the agentic-turn cap. ModelHandler merges this with
+            // the bound model's maxTurns setting and the system default (255), replacing
+            // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
+            maxTurns: node_params?.properties?.maxTurns,
+            // Per-node override of the per-completion output-token cap (#189).
+            // ModelHandler resolves this against the bound model's maxTokens, then
+            // lets the adapter apply its own default when both are unset.
+            maxTokens: node_params?.properties?.maxTokens,
+            temperatureOverride: prepResult.temperatureOverride,
+            // Thread the existing Process-node summarizing-compaction settings;
+            // ModelHandler previously resolved them with `undefined` (#356).
+            compactionMode: node_params?.properties?.compactionMode,
+            compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
+            onFinalWire: prepResult.modelInput
+              ? (finalWire, visualCompaction, finalModelInput) => {
+                  if (finalModelInput) {
+                    prepResult.modelInput = finalModelInput;
+                    prepResult.modelInputForArchive = finalModelInput;
+                  }
+                  const captured = finalWire.map((message, index) => ({
+                    ...message,
+                    id: `final-wire-${prepResult.nodeId}-${index}`,
+                    timestamp: Date.now(),
+                    content: Array.isArray(message.content)
+                      ? message.content.map((part) => {
+                          if (part && typeof part === 'object' && 'image_url' in part) {
+                            const image = (part as { image_url?: { url?: string } }).image_url;
+                            return { type: 'text' as const, text: `[image omitted from debugger snapshot: ${image?.url?.slice(0, 32) ?? 'unknown'}…]` };
+                          }
+                          return part;
+                        })
+                      : message.content,
+                  })) as FlujoChatMessage[];
+                  prepResult.modelInput!.wireMessages = captured;
+                  if (visualCompaction) {
+                    visualCompaction.finalWireCaptured = true;
+                    prepResult.modelInput!.visualCompaction = visualCompaction;
+                  }
+                  prepResult.modelInputs = [prepResult.modelInput!];
+                }
+              : undefined,
+            archiveModelTurns: prepResult.archiveModelTurns,
+            modelInputForArchive: prepResult.modelInputForArchive,
+            nodeName, // Pass the node name to be included in the response header
+            nodeId: prepResult.nodeId, // Pass the node ID
+            toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
+            conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
+            runId: prepResult.runId,
+            codexSession: prepResult.codexSession,
+            onCodexSessionChange: prepResult.onCodexSessionChange,
+            requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
+            onApprovalRequired: prepResult.onApprovalRequired,
+            mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
+            unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
+            beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
+            beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
+            executionAuthority: prepResult.executionAuthority,
+            executionExtensionContext: prepResult.executionExtensionContext,
+            personaAttribution: prepResult.personaAttribution,
+            signal: prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : prepResult.executionAuthority?.signal,
+          });
+          // Provider abort is cooperative. A response can arrive after the
+          // Persona heartbeat/fence was lost, so reject it before any message,
+          // event, node, or conversation projection observes the stale result.
+          await assertFlowExecutionCurrent(prepResult);
+          return result;
+        };
+
+        // Provider catalogues can tell us before the request that a model lacks
+        // tool support. Strip only handoff-only plumbing when routing remains
+        // deterministic; executable/MCP tools are never silently removed.
+        let initialTools = tools;
+        if (
+          this.canRunWithoutTools(prepResult, node_params, tools) &&
+          await this.discoverBoundModelToolSupport(prepResult) === false
+        ) {
+          log.info(
+            `[ProcessNode ${prepResult.nodeId}] Provider metadata reports no tool support; calling without handoff-only tools`,
+          );
+          initialTools = undefined;
+          usedToolFreeFallback = true;
+        }
+
+        // Unknown capabilities retain the error-driven compatibility fallback
+        // below because many OpenAI-compatible providers expose only id/name.
+        modelResult = await callModelWithTools(initialTools);
+
+        // Retry exactly once without tools, but only when the removed block is
+        // entirely handoff plumbing and the engine can route the plain response
+        // deterministically. MCP and synthetic/executable tools are never
+        // silently removed.
+        if (
+          !modelResult.success &&
+          initialTools !== undefined &&
+          this.canRetryWithoutTools(prepResult, node_params, tools, modelResult.error)
+        ) {
+          log.warn(
+            `[ProcessNode ${prepResult.nodeId}] Provider rejected handoff-only tools; retrying once without tools`,
+            {
+              controlEdges: this.orderedControlEdges(node_params),
+              conditionedEdges: Object.keys(node_params?.edgeConditions ?? {}),
+            }
+          );
+          modelResult = await callModelWithTools(undefined);
+          usedToolFreeFallback = modelResult.success;
+        }
+
 
         // --- Log successful model call result (check success first) ---
         if (modelResult.success) {
@@ -621,11 +1272,9 @@ export class ProcessNode extends BaseNode {
         log.error('Model execution error after call attempt', { error: errorDetails });
 
         // CHANGE: Instead of returning an error result, throw a custom error
-      const modelError = new Error(`Model execution failed: ${modelResult.error.message}`);
-
-      // Add properties to the error object
-      (modelError as any).isModelError = true;
-      (modelError as any).details = {
+      const modelError = Object.assign(
+        new Error(`Model execution failed: ${modelResult.error.message}`),
+        { isModelError: true, details: {
         message: modelResult.error.message,
         type: modelResult.error.type,
         code: modelResult.error.code,
@@ -635,7 +1284,7 @@ export class ProcessNode extends BaseNode {
         status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
         // Include all other details from the original error
         ...modelResult.error.details
-      };
+      } });
 
       // Log that we're throwing a critical error
       log.error('Throwing critical model error to abort flow execution', {
@@ -656,7 +1305,13 @@ export class ProcessNode extends BaseNode {
         content: result.content || '',
         messages: result.messages, // Messages updated during tool calls
         fullResponse: result.fullResponse,
-        toolCalls: result.toolCalls
+        toolCalls: result.toolCalls,
+        // #253: carry the resolved turn cap out so post() can record it on
+        // SharedState.turnBudgets for runFlow's per-node turn counter.
+        effectiveMaxTurns: result.effectiveMaxTurns,
+        // Lets post() traverse a sole bare edge when this successful response
+        // came from the safe, handoff-free provider retry.
+        usedToolFreeFallback,
       };
 
       // Log tool calls if present
@@ -678,20 +1333,23 @@ export class ProcessNode extends BaseNode {
 
       return execResult;
     } catch (error) {
-    // For critical tool errors or model errors, we want to rethrow them
-    // to abort the flow execution
-    if (error && typeof error === 'object' &&
-        ('isCriticalToolError' in error || 'isModelError' in error)) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // If this error raced a higher-level lease loss, authority failure wins and
+      // escapes instead of being converted into a persistable Process-node error.
+      await prepResult.executionAuthority?.assertCurrent();
+      // For critical tool errors or model errors, we want to rethrow them
+      // to abort the flow execution
+      if (error && typeof error === 'object' &&
+          ('isCriticalToolError' in error || 'isModelError' in error)) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
 
-      log.error('Critical error detected - propagating to abort flow:', {
-        error: errorMessage,
-        isModelError: 'isModelError' in error,
-        isCriticalToolError: 'isCriticalToolError' in error
-      });
+        log.error('Critical error detected - propagating to abort flow:', {
+          error: errorMessage,
+          isModelError: 'isModelError' in error,
+          isCriticalToolError: 'isCriticalToolError' in error
+        });
 
-      // Rethrow the error to stop execution and propagate to the frontend
-      throw error;
+        // Rethrow the error to stop execution and propagate to the frontend
+        throw error;
       }
 
       // For other errors, create an error result
@@ -758,9 +1416,7 @@ export class ProcessNode extends BaseNode {
 
         // Find the edge ID that leads to this node
         for (const edgeId of actions) {
-          const targetNode = this.successors instanceof Map
-            ? this.successors.get(edgeId)
-            : (this.successors as any)[edgeId];
+          const targetNode = this.successors.get(edgeId);
 
           if (targetNode && targetNode.node_params?.id === targetNodeId) {
             // Set handoff request in shared state
@@ -805,6 +1461,86 @@ export class ProcessNode extends BaseNode {
     );
   }
 
+  /**
+   * A tool-free response can still advance when routing is engine-owned:
+   * conditioned edges are evaluated from the returned text, while a sole bare
+   * edge is unambiguous and can be traversed by post(). Multiple bare edges
+   * still require the model to choose a handoff and are therefore ineligible.
+   */
+  private hasAutomaticToolFreeRoute(node_params?: ProcessNodeParams): boolean {
+    const controlEdges = this.orderedControlEdges(node_params);
+    const conditions = node_params?.edgeConditions;
+    const hasConditionedEdge = controlEdges.some((edgeId) => !!conditions?.[edgeId]);
+    const hasSingleBareEdge =
+      controlEdges.length === 1 && !conditions?.[controlEdges[0]];
+    return hasConditionedEdge || hasSingleBareEdge;
+  }
+
+  private canRunWithoutTools(
+    prepResult: ProcessNodePrepResult,
+    node_params: ProcessNodeParams | undefined,
+    tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+  ): boolean {
+    if (!tools?.length) return false;
+    if ((node_params?.properties?.mcpNodes?.length ?? 0) > 0) return false;
+    if (!this.hasAutomaticToolFreeRoute(node_params)) return false;
+
+    const definitions = prepResult.availableTools ?? [];
+    return (
+      definitions.length > 0 &&
+      definitions.every((tool) => !tool.server && tool.name.startsWith('handoff_to_')) &&
+      tools.every(
+        (tool) => tool.type === 'function' && tool.function.name.startsWith('handoff_to_')
+      )
+    );
+  }
+
+  /**
+   * Prefer persisted capability metadata. For legacy OpenRouter models saved
+   * before discovery existed, consult the cached provider catalogue so the very
+   * first execution can avoid a known-invalid tool request too.
+   */
+  private async discoverBoundModelToolSupport(
+    prepResult: ProcessNodePrepResult,
+  ): Promise<boolean | undefined> {
+    try {
+      const model = await modelService.getModel(prepResult.boundModel);
+      if (!model) return undefined;
+      if (model.supportsTools !== undefined) return model.supportsTools;
+      if (model.provider !== 'openrouter' || !model.baseUrl) return undefined;
+
+      const discovered = await modelService.fetchProviderModels(
+        model.baseUrl,
+        model.id,
+        model.name,
+      );
+      return discovered.find(candidate => candidate.id === model.name)?.supportsTools;
+    } catch (error) {
+      log.warn('Could not discover bound-model tool capability; using provider fallback', {
+        modelId: prepResult.boundModel,
+        error,
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Stripping tools is safe only when every advertised capability is routing
+   * plumbing. A bound MCP node or any synthetic/executable tool keeps the
+   * original failure: silently removing those tools would change the task.
+   */
+  private canRetryWithoutTools(
+    prepResult: ProcessNodePrepResult,
+    node_params: ProcessNodeParams | undefined,
+    tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+    error: unknown
+  ): boolean {
+    return (
+      isUnsupportedToolUseError(error) &&
+      this.canRunWithoutTools(prepResult, node_params, tools)
+    );
+  }
+
   async post(
     prepResult: ProcessNodePrepResult,
     execResult: ProcessNodeExecResult,
@@ -813,6 +1549,12 @@ export class ProcessNode extends BaseNode {
   ): Promise<string> {
     // --- Log start of post method ---
     log.debug(`[ProcessNode ${node_params?.id}] post() method started.`);
+
+    // Consume only after execCore actually ran. Debug previews and before-model
+    // pauses may call prep(), but must not spend this one-turn override.
+    if (prepResult.temperatureOverride !== undefined) {
+      sharedState.temperatureOverrideOnce = undefined;
+    }
 
     log.info('post() started', {
       execResultSuccess: execResult.success,
@@ -838,6 +1580,14 @@ export class ProcessNode extends BaseNode {
     } else {
        // Use the content from execResult which might include prefixes
        sharedState.lastResponse = execResult.content || '';
+    }
+
+    // Graceful landing (issue #253): record the effective agentic-turn cap this
+    // node resolved so runFlow's request/response tool loop can enforce it and
+    // land with a forced text summary once the budget is spent.
+    if (execResult.success && typeof execResult.effectiveMaxTurns === 'number' && node_params?.id) {
+      sharedState.turnBudgets = sharedState.turnBudgets ?? {};
+      sharedState.turnBudgets[node_params.id] = execResult.effectiveMaxTurns;
     }
 
     // Tier 2c (named variables): capture this node's final output into the
@@ -868,13 +1618,19 @@ export class ProcessNode extends BaseNode {
       try {
         let folder: string | undefined;
         try { folder = (await flowService.getFlow(sharedState.flowId))?.folder; } catch { /* best effort */ }
-        const res = await captureKvValue(captureKv, execResult.content ?? '', { flowId: sharedState.flowId, folder });
+        const res = await captureKvValue(captureKv, execResult.content ?? '', {
+          flowId: sharedState.flowId,
+          folder,
+          executionAuthority: sharedState.executionAuthority,
+          personaAttribution: sharedState.personaAttribution,
+        });
         if ('skipped' in res) {
           log.warn('captureKv skipped', { captureKv, reason: res.skipped });
         } else {
           log.info('Captured node output into persistent kv', { captureKv, nodeId: node_params?.id });
         }
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error('captureKv failed; continuing run', error);
       }
     }
@@ -888,9 +1644,15 @@ export class ProcessNode extends BaseNode {
     // buildNodeContext drops any stale system messages), so nothing is lost by
     // excluding it here. (execution-core v2 Phase 3, plan §11.2.4)
     if (execResult.messages && execResult.messages.length > 0) {
-      sharedState.messages = execResult.messages.filter(m => m.role !== 'system');
+      // Absence from a model-facing/result projection is never deletion. Upsert
+      // returned canonical messages and preserve every existing canonical id.
+      const canonicalMessages = [...sharedState.messages];
+      for (const message of execResult.messages) {
+        if (message.role !== 'system') upsertMessageById(canonicalMessages, message);
+      }
+      sharedState.messages = canonicalMessages;
 
-      log.info('Updated messages in sharedState (system prompt excluded)', {
+      log.info('Updated canonical messages in sharedState (system prompt excluded)', {
         messagesCount: sharedState.messages.length
       });
     }
@@ -913,27 +1675,48 @@ export class ProcessNode extends BaseNode {
       });
     }
 
-    // Process tool calls to check for handoff requests FIRST
-    const handoffRequested = this.processHandoffToolCalls(execResult.toolCalls, sharedState); // Uses the modified processHandoffToolCalls
-    if (handoffRequested && sharedState.handoffRequested) {
-      const edgeId = sharedState.handoffRequested.edgeId;
-      log.info(`Handoff requested via tool call, returning edge ID: ${edgeId}`);
-      // The service layer will clear sharedState.handoffRequested after transition
-      return edgeId; // Return the edgeId as the action for handoff
+    // Silence is terminal for this participant's current meeting round. If the
+    // model emitted it in the same provider response as a handoff, route the
+    // batch through the normal local-tool dispatcher first; runFlow will accept
+    // the silence and end the turn without entering the handoff target.
+    const silentMeetingControlRequested = Boolean(
+      sharedState.meetingParticipant
+      && sharedState.meetingTurn
+      && execResult.toolCalls?.some((call) =>
+        isSilentMeetingControlRequest(call.name, call.args)),
+    );
+
+    // Process tool calls to check for handoff requests FIRST, except when the
+    // same response explicitly ended this meeting turn silently.
+    const handoffRequested = silentMeetingControlRequested
+      ? false
+      : this.processHandoffToolCalls(execResult.toolCalls, sharedState); // Uses the modified processHandoffToolCalls
+    const nonHandoffToolCalls = execResult.toolCalls?.filter(
+      tc => tc.name !== 'handoff' && !tc.name.startsWith('handoff_to_'),
+    );
+    // A mixed response is a staged operation: execute every ordinary call,
+    // then commit the already-selected handoff. Keeping handoffRequested in
+    // SharedState makes approvals, debugger pauses, and process restarts able
+    // to resume without asking the model to choose the route again.
+    if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
+      log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION', {
+        stagedHandoff: handoffRequested && !!sharedState.handoffRequested,
+      });
+      return TOOL_CALL_ACTION;
     }
 
-    // If no handoff, check for other tool calls (excluding handoff tools already processed)
-    const nonHandoffToolCalls = execResult.toolCalls?.filter(tc => !tc.name.startsWith('handoff_to_'));
-    if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
-      log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION');
-      return TOOL_CALL_ACTION; // Return tool call action
+    if (handoffRequested && sharedState.handoffRequested) {
+      const edgeId = sharedState.handoffRequested.edgeId;
+      log.info(`Handoff-only turn detected, returning edge ID: ${edgeId}`);
+      // The service layer will clear sharedState.handoffRequested after transition.
+      return edgeId;
     }
 
     // --- Tier 2b: deterministic conditioned routing -------------------------
     // GATED: only runs when this node has at least one conditioned outgoing edge.
     // A node whose edges are all bare is byte-for-byte unchanged (model-decided
-    // handoff above; terminate on plain text below). Precedence: a model handoff
-    // tool call (handled above at :673) always wins; conditions decide otherwise.
+    // handoff above; terminate on plain text below). Precedence: a handoff-only
+    // model turn wins; mixed turns finish their ordinary tools first.
     const edgeConditions = node_params?.edgeConditions;
     if (edgeConditions && Object.keys(edgeConditions).length > 0) {
       const ordered = this.orderedControlEdges(node_params);
@@ -960,6 +1743,21 @@ export class ProcessNode extends BaseNode {
       // Conditioned node, nothing matched, no fallback → fall through and
       // terminate (FINAL_RESPONSE_ACTION), same as an unmatched plain response.
       log.info('Conditioned node: no predicate matched and no bare fallback; terminating');
+    }
+
+    // A provider that cannot accept tools may have been retried without the
+    // handoff-only tool block. In that exceptional path, one bare outgoing edge
+    // is an unambiguous continuation and does not need a model-authored handoff.
+    // This is deliberately marker-gated so ordinary all-bare nodes retain their
+    // existing model-decided routing semantics.
+    if (execResult.usedToolFreeFallback) {
+      const ordered = this.orderedControlEdges(node_params);
+      if (ordered.length === 1 && !edgeConditions?.[ordered[0]]) {
+        log.info('Tool-free provider fallback: routing through sole bare edge', {
+          edgeId: ordered[0],
+        });
+        return ordered[0];
+      }
     }
 
     // If no error, no handoff, and no other tool calls, it's a final response for this step

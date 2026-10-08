@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { suggestModel } from '@/backend/services/ollama/capability';
@@ -40,7 +41,7 @@ function memoryParam(params: URLSearchParams, bytesKey: string, gbKey: string): 
  * host), this takes the hardware as input, so another app can get a suggestion
  * for its own machine. Read-only and secret-free, so not behind the unlock gate.
  */
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const params = new URL(request.url).searchParams;
 
   let totalRamBytes: number | null;
@@ -76,3 +77,5 @@ export async function GET(request: NextRequest) {
     });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

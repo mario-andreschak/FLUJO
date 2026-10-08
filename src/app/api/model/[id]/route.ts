@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -12,7 +13,7 @@ type RouteContext = { params: Promise<{ id: string }> };
  * GET /api/model/{id}
  * Get a single model by ID.
  */
-export async function GET(request: NextRequest, { params }: RouteContext) {
+async function GET_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
  * PUT /api/model/{id}
  * Update an existing model. The path ID is authoritative and overrides any ID in the body.
  */
-export async function PUT(request: NextRequest, { params }: RouteContext) {
+async function PUT_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -88,7 +89,7 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
  * DELETE /api/model/{id}
  * Delete a model by ID.
  */
-export async function DELETE(request: NextRequest, { params }: RouteContext) {
+async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -113,3 +114,7 @@ export async function DELETE(request: NextRequest, { params }: RouteContext) {
     });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const PUT = withWorkspaceRoute(PUT_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

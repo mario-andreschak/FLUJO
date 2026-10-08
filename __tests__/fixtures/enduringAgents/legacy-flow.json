@@ -1,0 +1,116 @@
+{
+  "id": "legacy-tool-flow",
+  "name": "Legacy tool flow",
+  "description": "A pre-Persona flow fixture with an authored MCP tool binding.",
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000,
+  "permissionRules": [
+    {
+      "action": "read_file",
+      "resource": "*",
+      "effect": "allow"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Start",
+        "type": "start",
+        "properties": {
+          "promptTemplate": "Inspect the requested legacy file."
+        }
+      }
+    },
+    {
+      "id": "process",
+      "type": "process",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "data": {
+        "label": "Legacy worker",
+        "type": "process",
+        "properties": {
+          "boundModel": "legacy-model",
+          "promptTemplate": "Use the attached filesystem tools and report the result."
+        }
+      }
+    },
+    {
+      "id": "filesystem-tools",
+      "type": "mcp",
+      "position": {
+        "x": 240,
+        "y": 180
+      },
+      "data": {
+        "label": "Filesystem",
+        "type": "mcp",
+        "properties": {
+          "nameIsCustom": true,
+          "boundServer": "filesystem",
+          "enabledTools": [
+            "read_file",
+            "list_directory"
+          ],
+          "env": {
+            "LEGACY_FIXTURE_FLAG": "enabled"
+          },
+          "toolTimeout": 45,
+          "roots": [
+            "C:\\legacy-workspace"
+          ],
+          "enabledResources": [
+            "file:///legacy/spec.md"
+          ]
+        }
+      }
+    },
+    {
+      "id": "finish",
+      "type": "finish",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "data": {
+        "label": "Finish",
+        "type": "finish",
+        "properties": {}
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-process",
+      "source": "start",
+      "target": "process",
+      "data": {
+        "edgeType": "standard"
+      }
+    },
+    {
+      "id": "process-finish",
+      "source": "process",
+      "target": "finish",
+      "data": {
+        "edgeType": "standard"
+      }
+    },
+    {
+      "id": "process-filesystem-tools",
+      "source": "process",
+      "target": "filesystem-tools",
+      "data": {
+        "edgeType": "mcp"
+      }
+    }
+  ]
+}

@@ -1,0 +1,348 @@
+import { createHmac, randomBytes, randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import path from 'path';
+import {
+  sanitizeStatisticsEvent,
+  STATISTICS_SCHEMA_VERSION,
+  type StatisticsErrorClass,
+  type StatisticsEvent,
+  type StatisticsSkipReason,
+} from '@/shared/types/statistics';
+import { createLogger } from '@/utils/logger';
+import { writeFileAtomic } from '@/utils/storage/backend';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+
+const log = createLogger('backend/services/statistics');
+const SAFE_UTC_DAY = /^\d{4}-\d{2}-\d{2}$/;
+export const STATISTICS_RETENTION_DAYS = 90;
+
+type StatisticsEventInput = StatisticsEvent extends infer Event
+  ? Event extends StatisticsEvent
+    ? Omit<Event, 'schemaVersion' | 'eventId' | 'timestamp'> & { timestamp?: string }
+    : never
+  : never;
+
+// Per-call resolution: statistics live in the selected workspace's db/ (#406).
+let statisticsDirOverride: string | undefined;
+const statisticsDir = () =>
+  statisticsDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'statistics');
+// All three are keyed by the resolved statistics directory: a day partition,
+// installation HMAC key, and "already pruned today" marker all belong to one
+// concrete workspace tree, even if the ambient data root later changes.
+const appendChains = new Map<string, Promise<unknown>>();
+const keyPromises = new Map<string, Promise<Buffer>>();
+const lastPrunedDay = new Map<string, string>();
+
+export function _setStatisticsDirForTests(dir: string | undefined): string {
+  const previous = statisticsDir();
+  statisticsDirOverride = dir;
+  appendChains.clear();
+  keyPromises.clear();
+  lastPrunedDay.clear();
+  return previous;
+}
+
+export function createStatisticsEvent(input: StatisticsEventInput): StatisticsEvent {
+  const event = sanitizeStatisticsEvent({
+    ...input,
+    schemaVersion: STATISTICS_SCHEMA_VERSION,
+    eventId: randomUUID(),
+    timestamp: input.timestamp ?? new Date().toISOString(),
+  });
+  if (!event) throw new TypeError('Invalid statistics event');
+  return event;
+}
+
+function utcDay(timestamp: string): string {
+  const day = timestamp.slice(0, 10);
+  if (!SAFE_UTC_DAY.test(day) || !Number.isFinite(Date.parse(`${day}T00:00:00.000Z`))) {
+    throw new TypeError('Statistics event timestamp does not contain a valid UTC day');
+  }
+  return day;
+}
+
+function eventFile(directory: string, day: string): string {
+  if (!SAFE_UTC_DAY.test(day)) throw new TypeError('Invalid statistics day');
+  return path.join(directory, `${day}.jsonl`);
+}
+
+function statisticsStorageKey(directory: string, ...parts: string[]): string {
+  return [path.resolve(directory), ...parts].join('\u0000');
+}
+
+async function pruneOldPartitions(directory: string, today: string): Promise<void> {
+  const pruneKey = statisticsStorageKey(directory, 'statistics-prune');
+  if (lastPrunedDay.get(pruneKey) === today) return;
+  lastPrunedDay.set(pruneKey, today);
+  const cutoff = Date.parse(`${today}T00:00:00.000Z`) - STATISTICS_RETENTION_DAYS * 86_400_000;
+  try {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    await Promise.all(entries.map(async entry => {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) return;
+      const day = entry.name.slice(0, -'.jsonl'.length);
+      if (!SAFE_UTC_DAY.test(day)) return;
+      if (Date.parse(`${day}T00:00:00.000Z`) < cutoff) {
+        await fs.unlink(path.join(directory, entry.name));
+      }
+    }));
+  } catch {
+    // Retention is best-effort, like event writes themselves.
+  }
+}
+
+export function appendStatisticsEvent(event: StatisticsEvent): Promise<void> {
+  const sanitized = sanitizeStatisticsEvent(event);
+  if (!sanitized) {
+    return Promise.reject(new TypeError('Invalid or unsupported statistics event'));
+  }
+  const day = utcDay(sanitized.timestamp);
+  // Resolve the destination before yielding. FLUJO_DATA_DIR is process-global
+  // and test/runtime teardown can restore it while this append is waiting on a
+  // previous write. A queued event must never migrate to that later root.
+  const directory = statisticsDir();
+  // Same UTC day in two workspace trees = two different files, so the append
+  // chain is per (resolved directory, day) rather than per day (#406).
+  return runInStatisticsPartitionChain(directory, day, async () => {
+    await fs.mkdir(directory, { recursive: true });
+    await fs.appendFile(eventFile(directory, day), `${JSON.stringify(sanitized)}\n`, 'utf8');
+    await pruneOldPartitions(directory, day);
+  });
+}
+
+function runInStatisticsPartitionChain<T>(
+  directory: string,
+  day: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const chain = statisticsStorageKey(directory, 'statistics', day);
+  const previous = appendChains.get(chain) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  appendChains.set(chain, next);
+  void next.finally(() => {
+    if (appendChains.get(chain) === next) appendChains.delete(chain);
+  }).catch(() => undefined);
+  return next;
+}
+
+const SAFE_PERSONA_ATTRIBUTION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function malformedLineTargetsPersona(line: string, personaId: string): boolean {
+  // Statistics JSONL is one object per line and Persona ids need no JSON
+  // escaping. If a crash truncated an attributed line, that line is already
+  // ignored by replay; discard only that unusable target record rather than
+  // retaining an identity fragment indefinitely.
+  const pattern = new RegExp(
+    `"personaAttribution"\\s*:\\s*\\{[^}\\r\\n]*"personaId"\\s*:\\s*"${personaId}"`,
+  );
+  return pattern.test(line);
+}
+
+async function anonymizeStatisticsPartition(
+  directory: string,
+  day: string,
+  personaId: string,
+): Promise<number> {
+  let body: string;
+  try {
+    body = await fs.readFile(eventFile(directory, day), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+
+  let changed = 0;
+  const rewritten = body.split('\n').map((line) => {
+    if (!line.trim()) return line;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      if (malformedLineTargetsPersona(line, personaId)) {
+        changed += 1;
+        return '';
+      }
+      return line;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return line;
+    const record = parsed as Record<string, unknown>;
+    const attribution = record.personaAttribution;
+    if (
+      !attribution
+      || typeof attribution !== 'object'
+      || Array.isArray(attribution)
+      || (attribution as Record<string, unknown>).personaId !== personaId
+    ) return line;
+
+    delete record.personaAttribution;
+    changed += 1;
+    // Valid records remain canonical. An invalid/manual record stays invalid
+    // and otherwise byte-equivalent in meaning, but no longer contains the
+    // deleted Persona identity.
+    return JSON.stringify(sanitizeStatisticsEvent(record) ?? record);
+  }).join('\n');
+
+  if (changed > 0) await writeFileAtomic(eventFile(directory, day), rewritten);
+  return changed;
+}
+
+/**
+ * Privacy-policy exception to the append-only statistics log. It removes only
+ * the matching top-level Persona attribution triple, retaining every event and
+ * all unrelated metadata. Rewrites are atomic and serialized with same-day
+ * appends; exact retries are no-ops.
+ */
+export async function anonymizeStatisticsPersonaAttribution(personaId: string): Promise<number> {
+  if (!SAFE_PERSONA_ATTRIBUTION_ID.test(personaId)) {
+    throw new TypeError('Invalid Persona id for statistics anonymization');
+  }
+  const directory = statisticsDir();
+  // Include every event already enqueued by the quiesced Persona runtime before
+  // taking the partition inventory.
+  await flushStatisticsEvents();
+  let entries: import('fs').Dirent[];
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  const days = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => entry.name.slice(0, -'.jsonl'.length))
+    .filter((day) => SAFE_UTC_DAY.test(day));
+  const counts = await Promise.all(days.map((day) =>
+    runInStatisticsPartitionChain(
+      directory,
+      day,
+      () => anonymizeStatisticsPartition(directory, day, personaId),
+    )));
+  return counts.reduce((total, count) => total + count, 0);
+}
+
+/** Enqueue an event without allowing storage failure to alter execution. */
+export function recordStatisticsEvent(event: StatisticsEvent): void {
+  void appendStatisticsEvent(event).catch(() => {
+    log.warn('Statistics event append failed', { type: event.type });
+  });
+}
+
+export async function flushStatisticsEvents(): Promise<void> {
+  // A producer can enqueue another event while an earlier snapshot is being
+  // awaited. Keep draining until every chain (including those later arrivals)
+  // has settled and removed itself from the registry.
+  while (appendChains.size > 0) {
+    await Promise.allSettled([...appendChains.values()]);
+  }
+}
+
+export interface StatisticsPartitionMetadata {
+  day: string;
+  exists: boolean;
+  mtimeMs?: number;
+  size?: number;
+}
+
+/** Reads freshness for one selected partition without enumerating history. */
+export async function getStatisticsPartitionMetadata(day: string): Promise<StatisticsPartitionMetadata> {
+  const directory = statisticsDir();
+  try {
+    const stat = await fs.stat(eventFile(directory, day));
+    return { day, exists: true, mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { day, exists: false };
+    throw error;
+  }
+}
+
+export async function readStatisticsEvents(day: string): Promise<StatisticsEvent[]> {
+  const directory = statisticsDir();
+  let body: string;
+  try {
+    body = await fs.readFile(eventFile(directory, day), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const events: StatisticsEvent[] = [];
+  let invalidRecords = 0;
+  for (const line of body.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = sanitizeStatisticsEvent(JSON.parse(line) as unknown);
+      if (parsed) events.push(parsed);
+      else invalidRecords += 1;
+    } catch {
+      invalidRecords += 1;
+      // Corrupt middle records and truncated tails are ignored independently.
+    }
+  }
+  if (invalidRecords > 0) {
+    log.warn('Ignored invalid statistics records', { day, count: invalidRecords });
+  }
+  return events;
+}
+
+async function loadInstallationKey(directory: string): Promise<Buffer> {
+  const keyFile = path.join(directory, '.installation-key');
+  await fs.mkdir(directory, { recursive: true });
+  try {
+    return await fs.readFile(keyFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const generated = randomBytes(32);
+  try {
+    await fs.writeFile(keyFile, generated, { flag: 'wx', mode: 0o600 });
+    return generated;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return fs.readFile(keyFile);
+    throw error;
+  }
+}
+
+/** Stable installation-local grouping. Neither the credential nor HMAC key is serialized. */
+export async function credentialFingerprint(credential: string | undefined | null): Promise<string | undefined> {
+  if (!credential) return undefined;
+  const directory = statisticsDir();
+  const installationKeyId = statisticsStorageKey(directory, 'statistics-installation-key');
+  let keyPromise = keyPromises.get(installationKeyId);
+  if (!keyPromise) {
+    keyPromise = loadInstallationKey(directory);
+    keyPromises.set(installationKeyId, keyPromise);
+  }
+  const key = await keyPromise;
+  return `cred_${createHmac('sha256', key).update(credential).digest('base64url').slice(0, 22)}`;
+}
+
+export function classifyStatisticsError(value: unknown): StatisticsErrorClass {
+  const code = typeof value === 'object' && value !== null
+    ? String((value as { code?: unknown; type?: unknown }).code ?? (value as { type?: unknown }).type ?? '')
+    : '';
+  const name = value instanceof Error ? value.name : '';
+  const text = `${code} ${name}`.toLowerCase();
+  if (/cancel|abort/.test(text)) return 'cancelled';
+  if (/401|authenticat|api_key/.test(text)) return 'authentication';
+  if (/403|permission|authoriz/.test(text)) return 'authorization';
+  if (/429|rate.?limit/.test(text)) return 'rate_limit';
+  if (/context|token.?limit/.test(text)) return 'context_limit';
+  if (/timeout/.test(text)) return 'timeout';
+  if (/network|fetch|socket|econn/.test(text)) return 'network';
+  if (/config|model_not_found/.test(text)) return 'configuration';
+  if (/valid|parse|schema/.test(text)) return 'validation';
+  if (/provider|api_error/.test(text)) return 'provider';
+  return 'unknown';
+}
+
+export function classifySchedulerSkip(reason: string): StatisticsSkipReason {
+  const value = reason.toLowerCase();
+  if (value.includes('disabled')) return 'disabled';
+  if (value.includes('deleted')) return 'deleted';
+  if (value.includes('encryption locked')) return 'encryption_locked';
+  if (value.includes('queue full') || value.includes('queue cap')) return 'queue_full';
+  if (value.includes('exclusive')) return 'exclusive_lock';
+  if (value.includes('overlap') || value.includes('previous run')) return 'overlap';
+  if (value.includes('pause')) return 'paused';
+  if (value.includes('duplicate')) return 'duplicate';
+  if (value.includes('ineligible') || value.includes('no longer')) return 'ineligible';
+  return 'unknown';
+}

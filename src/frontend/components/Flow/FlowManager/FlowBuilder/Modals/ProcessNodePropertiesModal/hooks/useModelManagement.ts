@@ -3,11 +3,21 @@ import { modelService } from '@/frontend/services/model';
 import { Model } from '@/shared/types/model';
 import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { ProcessNodeData } from '../types';
+import type { Dispatch, SetStateAction } from 'react';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useModelManagement.ts');
 
-const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: any) => void, setPromptTemplate: (template: string) => void, setIsModelBound: (isBound: boolean) => void) => {
+const useModelManagement = (
+  open: boolean,
+  nodeData: ProcessNodeData | null,
+  setNodeData: Dispatch<SetStateAction<ProcessNodeData | null>>,
+  setPromptTemplate: (template: string) => void,
+  setIsModelBound: (isBound: boolean) => void,
+) => {
+  const { t } = useI18n();
   log.debug('useModelManagement: Entering hook');
   const [models, setModels] = useState<Model[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -34,7 +44,7 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
     if (!current || !current.name) return;
     if (nodeData?.properties?.modelName === current.name) return;
 
-    setNodeData((prev: any) => {
+    setNodeData((prev) => {
       if (!prev || prev.properties?.modelName === current.name) return prev;
       return {
         ...prev,
@@ -53,7 +63,7 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
       setModels(modelsList);
     } catch (error) {
       log.warn('loadModels: Failed to load models:', error);
-      setLoadError('Failed to load models');
+      setLoadError(t('flows.process.loadModelsFailed'));
     }
     setIsLoadingModels(false);
   };
@@ -65,7 +75,7 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
 
     if (selectedModel) {
       // Update node data with the selected model
-      setNodeData((prev: any) => {
+      setNodeData((prev) => {
         if (!prev) return null;
 
         // Auto-name the node after the bound model unless the user renamed it by
@@ -99,7 +109,7 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
 
   const handleUnbindModel = useCallback(() => {
     log.debug('handleUnbindModel: Entering method');
-    setNodeData((prev: any) => {
+    setNodeData((prev) => {
       if (!prev) return null;
 
       // Remove model binding properties but preserve promptTemplate

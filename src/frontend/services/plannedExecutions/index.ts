@@ -27,6 +27,19 @@ export type PlannedExecutionInput = Omit<
 };
 
 /**
+ * Updates accept null for the two Persona routing fields so a JSON client can
+ * deliberately switch an existing Persona Automation back to a Flow. The API
+ * translates null to the scheduler's existing undefined-as-clear semantics.
+ */
+export type PlannedExecutionPatch = Omit<
+  Partial<PlannedExecutionInput>,
+  'personaId' | 'behaviorSlotKey'
+> & {
+  personaId?: string | null;
+  behaviorSlotKey?: string | null;
+};
+
+/**
  * Frontend service for the Planned Executions REST API.
  * Follows the flowService singleton pattern: list reads swallow errors and
  * return empty data; mutations return { success, error }.
@@ -66,7 +79,7 @@ class PlannedExecutionsService {
 
   async update(
     id: string,
-    patch: Partial<PlannedExecutionInput>
+    patch: PlannedExecutionPatch
   ): Promise<{ success: boolean; execution?: PlannedExecution; error?: string }> {
     try {
       const response = await fetch(`/api/planned-executions/${id}`, {

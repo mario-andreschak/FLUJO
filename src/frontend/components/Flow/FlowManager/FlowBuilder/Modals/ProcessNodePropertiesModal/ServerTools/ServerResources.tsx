@@ -20,6 +20,7 @@ import { createLogger } from '@/utils/logger';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPResource, MCPResourceTemplate } from '@/shared/types/mcp';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerResources');
 
@@ -48,6 +49,7 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
   handleInsertResourceBinding,
   promptBuilderRef,
 }) => {
+  const { t } = useI18n();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [resources, setResources] = useState<MCPResource[]>([]);
   const [templates, setTemplates] = useState<MCPResourceTemplate[]>([]);
@@ -75,11 +77,11 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
       setError(result.error);
     } catch (e) {
       log.warn(`Failed to load resources for ${serverName}`, e);
-      setError(e instanceof Error ? e.message : 'Failed to load resources');
+      setError(e instanceof Error ? e.message : t('flows.serverResources.loadFailed'));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (selectedServer) {
@@ -107,19 +109,19 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
   return (
     <Box sx={{ mt: 4, display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Typography variant="subtitle1" gutterBottom>
-        Give this step access to…
+        {t('flows.serverResources.title')}
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
-        Pick a resource to insert. Its contents are read and placed into the prompt each time the step runs.
+        {t('flows.serverResources.help')}
       </Typography>
 
       {connectedMcpNodes.length === 0 ? (
         <Box sx={{ p: 2, border: '1px dashed rgba(0, 0, 0, 0.12)', borderRadius: 1 }}>
           <Typography color="text.secondary" align="center">
-            No MCP nodes connected to this Process node.
+            {t('flows.serverTools.noneConnected')}
           </Typography>
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
-            Connect MCP nodes using the side handles to access their resources.
+            {t('flows.serverResources.connectHelp')}
           </Typography>
         </Box>
       ) : (
@@ -156,7 +158,7 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
           </Tabs>
 
           <TextField
-            placeholder="Search resources…"
+            placeholder={t('flows.serverResources.search')}
             variant="outlined"
             size="small"
             fullWidth
@@ -178,7 +180,7 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
             {selectedNode && selectedNode.status !== 'connected' ? (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography color="text.secondary">
-                  Server &apos;{selectedServer}&apos; is not connected. Connect to view resources.
+                  {t('flows.serverResources.notConnected', { server: selectedServer || '' })}
                 </Typography>
               </Box>
             ) : isLoading ? (
@@ -189,8 +191,8 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography color="text.secondary">
                   {searchQuery.trim()
-                    ? `No resources match "${searchQuery}".`
-                    : 'This server does not publish any resources.'}
+                    ? t('flows.serverResources.noMatch', { search: searchQuery })
+                    : t('flows.serverResources.none')}
                 </Typography>
               </Box>
             ) : (
@@ -201,18 +203,18 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
                     primary={r.name || r.uri}
                     secondary={r.description || r.uri}
                     chip={r.mimeType}
-                    tooltip={`Add ${r.name || r.uri} to prompt`}
+                    tooltip={t('flows.serverResources.add', { resource: r.name || r.uri })}
                     onClick={() => insert(r.uri)}
                   />
                 ))}
-                {filteredTemplates.map((t) => (
+                {filteredTemplates.map((template) => (
                   <ResourceCard
-                    key={t.uriTemplate}
-                    primary={t.name || t.uriTemplate}
-                    secondary={t.description || t.uriTemplate}
+                    key={template.uriTemplate}
+                    primary={template.name || template.uriTemplate}
+                    secondary={template.description || template.uriTemplate}
                     chip="template"
-                    tooltip={`Add template ${t.uriTemplate} to prompt (fill in variables, e.g. with \${global:VAR})`}
-                    onClick={() => insert(t.uriTemplate)}
+                    tooltip={t('flows.serverResources.addTemplate', { template: template.uriTemplate })}
+                    onClick={() => insert(template.uriTemplate)}
                   />
                 ))}
               </List>
@@ -230,10 +232,11 @@ const ResourceCard: React.FC<{
   chip?: string;
   tooltip: string;
   onClick: () => void;
-}> = ({ primary, secondary, chip, onClick }) => (
+}> = ({ primary, secondary, chip, tooltip, onClick }) => (
   <Card
     variant="outlined"
     onClick={onClick}
+    title={tooltip}
     sx={{
       mb: 1,
       mx: 1,

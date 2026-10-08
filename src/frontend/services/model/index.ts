@@ -1,5 +1,5 @@
 import { Model } from '@/shared/types';
-import { ModelTestResult } from '@/shared/types/model/response';
+import { ModelTestResult, NormalizedModel } from '@/shared/types/model/response';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/model');
@@ -17,7 +17,7 @@ interface ModelsResult {
 }
 
 class ModelService {
-  private async fetchWithErrorHandling(url: string, options?: RequestInit): Promise<any> {
+  private async fetchWithErrorHandling<T>(url: string, options?: RequestInit): Promise<T> {
     try {
       // Log request attempt
       log.debug('Making API request', { 
@@ -85,7 +85,7 @@ class ModelService {
         status: response.status
       });
 
-      return data;
+      return data as T;
     } catch (error) {
       // If it's a network error, provide a more user-friendly message
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
@@ -120,7 +120,7 @@ class ModelService {
    */
   async tryLoadModels(): Promise<Model[] | null> {
     try {
-      const models = await this.fetchWithErrorHandling('/api/model');
+      const models = await this.fetchWithErrorHandling<Model[]>('/api/model');
       return Array.isArray(models) ? models : null;
     } catch (error) {
       log.error('Failed to load models', error);
@@ -134,7 +134,7 @@ class ModelService {
 
   async getModel(id: string): Promise<Model | null> {
     try {
-      const model = await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(id)}`);
+      const model = await this.fetchWithErrorHandling<Model>(`/api/model/${encodeURIComponent(id)}`);
       return model;
     } catch (error) {
       log.error('Failed to get model', { id, error });
@@ -145,7 +145,7 @@ class ModelService {
   async addModel(model: Model): Promise<ModelResult> {
     try {
       // Validate required fields
-      if (!model.provider) {
+      if (!model.provider && !model.fallbackPolicy) {
         return {
           success: false,
           error: 'Provider is required'
@@ -158,7 +158,7 @@ class ModelService {
         provider: model.provider 
       });
 
-      const newModel = await this.fetchWithErrorHandling('/api/model', {
+      const newModel = await this.fetchWithErrorHandling<Model>('/api/model', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -225,7 +225,7 @@ class ModelService {
         displayName: model.displayName 
       });
 
-      const updatedModel = await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(model.id)}`, {
+      const updatedModel = await this.fetchWithErrorHandling<Model>(`/api/model/${encodeURIComponent(model.id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -391,17 +391,19 @@ class ModelService {
     baseUrl: string,
     modelId: string,
     searchTerm?: string,
-    apiKey?: string
-  ): Promise<Array<{id: string, name: string, description?: string}>> {
+    apiKey?: string,
+    profileId?: string,
+  ): Promise<NormalizedModel[]> {
     try {
       log.debug('Fetching provider models', {
         baseUrl,
         modelId,
         searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+        profileId,
         apiKey: apiKey ? 'provided' : 'not provided'
       });
 
-      const response = await this.fetchWithErrorHandling('/api/model/provider', {
+      const response = await this.fetchWithErrorHandling<{ models?: NormalizedModel[] }>('/api/model/provider', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -410,6 +412,7 @@ class ModelService {
           baseUrl,
           modelId,
           searchTerm,
+          profileId,
           // The key the user just typed (or a "${global:VAR}" binding). Lets us fetch the
           // provider's model list for a brand-new model WITHOUT first persisting it to disk.
           apiKey,

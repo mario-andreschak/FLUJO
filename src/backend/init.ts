@@ -1,9 +1,42 @@
+import { Cron } from 'croner';
+import { FEATURES } from '@/config/features';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
+import { sweepOldRunResources } from '@/backend/services/runResources';
+import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
+import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services/subflowTasks';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
+import { ensureDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
+import {
+  backfillStoredMemoryDuplicates,
+  inspectAndReconcilePersonaRuntime,
+  listPersonas,
+  pruneWorkspacePersonaLeaseHistories,
+  reconcilePersonaRoleBehaviors,
+  runPersonaRuntimeRetentionSweep,
+  startPersonaFlowDispatcher,
+  startPersonaGoalRuntime,
+  stopPersonaGoalRuntime,
+  sweepMemoryCandidates,
+  sweepPersonaRuntimeEventSegments,
+} from '@/backend/services/enduringAgents';
+import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
+import { migrateEnduringAgentDirectoryShards } from '@/backend/services/enduringAgents/directoryShardingMigration';
+import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
+import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
+import { migrateWorkspaceLayout } from '@/backend/services/workspace/migration';
+import { isWorkerMode, setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import {
+  DEFAULT_WORKSPACE,
+  ensureWorkspaceDirs,
+  getCurrentWorkspace,
+  listWorkspaces,
+  runWithWorkspace,
+} from '@/utils/workspace';
 
 const log = createLogger('backend/init');
 
@@ -11,7 +44,6 @@ declare global {
   // The in-flight (or settled) initialization promise. Global-backed so the
   // startup hook (instrumentation) and the /api/init route share the SAME run
   // instead of each kicking off their own server-startup sweep and racing.
-  // eslint-disable-next-line no-var
   var __flujo_init_promise: Promise<void> | undefined;
   // The in-flight (or settled) secret-dependent startup promise (MCP sweep +
   // scheduler arm). Global-backed and memoized so that both the boot path
@@ -19,8 +51,295 @@ declare global {
   // once per process — neither double-starts servers nor double-arms triggers.
   // Deliberately NOT captured by __flujo_init_promise: while USER encryption is
   // locked this work is skipped at boot and only runs later, at unlock.
-  // eslint-disable-next-line no-var
   var __flujo_secret_services_promise: Promise<void> | undefined;
+  // The hourly run-resource retention sweep cron (issue #251). Global-guarded so
+  // Next.js hot-reload / duplicate module instantiation can't arm it twice
+  // (mirrors __flujo_run_resources / the scheduler singletons).
+  var __flujo_retention_cron: Cron | undefined;
+  var __flujo_subflow_task_retention_cron: Cron | undefined;
+  // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
+  var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
+  // Hourly snapshot storage cleanup cron (issue #414). Global-guarded so
+  // Next.js hot-reload / duplicate module instantiation can't arm it twice.
+  // The cleanup respects the retention policy and automatically compacts git history.
+  var __flujo_snapshot_cleanup_cron: Cron | undefined;
+  // Hourly memory candidate lifecycle sweep (issue #452): expiry, auto-promotion, and conflict repair.
+  var __flujo_memory_lifecycle_cron: Cron | undefined;
+  // Default-off, irreversible Persona lease-history pruning sweep (issue #478).
+  var __flujo_persona_lease_history_pruning_cron: Cron | undefined;
+  // Staged Persona soft-retention sweep (issue #481); the runner fails closed.
+  var __flujo_persona_runtime_retention_cron: Cron | undefined;
+  // Closed Persona runtime-event segment retention (issue #482).
+  var __flujo_persona_runtime_event_retention_cron: Cron | undefined;
+  // Hourly stored-memory duplicate backfill (issue #465).
+  var __flujo_memory_backfill_cron: Cron | undefined;
+  var __flujo_memory_backfill_in_flight: Promise<void> | undefined;
+  // Workspaces (#406): per-workspace copies of the two memos above, for every
+  // workspace OTHER than the default. The default workspace keeps using the
+  // original globals, so existing callers and tests are untouched.
+  var __flujo_workspace_init_promises: Map<string, Promise<void>> | undefined;
+  var __flujo_workspace_secret_promises: Map<string, Promise<void>> | undefined;
+  // Issue #413: process shutdown hooks are armed once per process, and the
+  // teardown itself is memoized so several signals arriving together (SIGINT then
+  // SIGTERM from a supervisor) share ONE teardown instead of racing two.
+  var __flujo_shutdown_hooks_registered: boolean | undefined;
+  var __flujo_shutdown_promise: Promise<void> | undefined;
+}
+
+/** Hard cap on how long MCP teardown may delay process exit. */
+const SHUTDOWN_TIMEOUT_MS = 20_000;
+
+/**
+ * Tear down process-owned background services (issue #413).
+ *
+ * Before this existed FLUJO had no MCP shutdown at all: on SIGTERM/SIGINT every
+ * stdio server child - and everything those had spawned - was simply abandoned to
+ * the OS, which reparents rather than kills. Repeated start/stop cycles therefore
+ * accumulated orphaned server trees until the machine was rebooted.
+ *
+ * Every workspace is torn down, because MCP runtimes are workspace-scoped (#406).
+ * Memoized and never rejects: shutdown must be safe to call from several signal
+ * handlers at once and must not be derailed by one uncooperative server.
+ */
+export function shutdownBackendServices(reason: string): Promise<void> {
+  if (global.__flujo_shutdown_promise) return global.__flujo_shutdown_promise;
+  const promise = (async () => {
+    log.info(`Shutting down backend services (${reason})`);
+    let workspaces: string[];
+    try {
+      workspaces = (await listWorkspaces()).map(w => w.name);
+    } catch {
+      workspaces = [DEFAULT_WORKSPACE];
+    }
+    for (const workspace of workspaces) {
+      try {
+        runWithWorkspace(workspace, () => stopPersonaGoalRuntime());
+        await runWithWorkspace(workspace, () => mcpService.disconnectAll(reason));
+      } catch (error) {
+        log.warn(`MCP teardown failed for workspace ${workspace}:`, error);
+      }
+    }
+  })().catch(error => {
+    log.warn('Backend shutdown encountered an error:', error);
+  });
+  global.__flujo_shutdown_promise = promise;
+  return promise;
+}
+
+/**
+ * Arm SIGINT/SIGTERM/SIGHUP handlers that tear down MCP servers before exit.
+ *
+ * The handlers exit the process themselves: installing a signal listener
+ * suppresses Node's default terminate behaviour, so failing to exit would turn
+ * Ctrl+C into "nothing happens". The timeout race guarantees a wedged server can
+ * delay exit but never prevent it - shutdown that hangs forever is worse than
+ * shutdown that force-exits with one orphan.
+ */
+function registerProcessShutdownHooks(): void {
+  if (global.__flujo_shutdown_hooks_registered) return;
+  global.__flujo_shutdown_hooks_registered = true;
+
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+  // SIGHUP is not deliverable on every platform; arming it is best-effort.
+  if (process.platform !== 'win32') signals.push('SIGHUP');
+
+  for (const signal of signals) {
+    try {
+      process.once(signal, () => {
+        log.info(`Received ${signal}; tearing down MCP servers before exit`);
+        const timeout = new Promise<void>(resolve => {
+          const timer = setTimeout(() => {
+            log.warn(`Shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms; exiting anyway`);
+            resolve();
+          }, SHUTDOWN_TIMEOUT_MS);
+          timer.unref?.();
+        });
+        void Promise.race([shutdownBackendServices(signal), timeout]).finally(() => {
+          process.exit(0);
+        });
+      });
+    } catch (error) {
+      log.debug(`Could not arm ${signal} shutdown hook:`, error);
+    }
+  }
+  log.info(`Armed process shutdown hooks (${signals.join(', ')})`);
+}
+
+// --- Per-workspace startup memos --------------------------------------------
+// Startup is per workspace: each one has its own MCP servers to connect and its
+// own planned executions to arm. Reading/writing the memo through these helpers
+// keeps the default workspace on the original global (so
+// `global.__flujo_init_promise = undefined` still resets it) while giving any
+// other workspace an independent, equally memoized startup.
+
+function getMemo(kind: 'init' | 'secret'): Promise<void> | undefined {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    return kind === 'init'
+      ? global.__flujo_init_promise
+      : global.__flujo_secret_services_promise;
+  }
+  const map =
+    kind === 'init'
+      ? global.__flujo_workspace_init_promises
+      : global.__flujo_workspace_secret_promises;
+  return map?.get(workspace);
+}
+
+function setMemo(kind: 'init' | 'secret', promise: Promise<void> | undefined): void {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    if (kind === 'init') global.__flujo_init_promise = promise;
+    else global.__flujo_secret_services_promise = promise;
+    return;
+  }
+  const map =
+    kind === 'init'
+      ? (global.__flujo_workspace_init_promises ??= new Map())
+      : (global.__flujo_workspace_secret_promises ??= new Map());
+  if (promise) map.set(workspace, promise);
+  else map.delete(workspace);
+}
+
+/**
+ * Arm the run-resource retention sweep (issue #251) once per process: an hourly
+ * croner job that deletes spilled run resources older than the configured
+ * retention age. `unref: true` keeps it from holding the Node process alive; the
+ * global guard survives hot-reload. The sweep itself is a no-op when
+ * retentionAgeDays <= 0, so this is safe to arm unconditionally.
+ */
+function armRetentionSweep(): void {
+  if (!global.__flujo_retention_cron) {
+    global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('run-resource', () => sweepOldRunResources());
+    });
+    log.info('Armed run-resource retention sweep (hourly)');
+  }
+  if (!global.__flujo_subflow_task_retention_cron) {
+    global.__flujo_subflow_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('detached subflow task', () => sweepOldSubflowTasks());
+    });
+  }
+  // Remote MCP task records (#404) are workspace-owned too: the sweep both
+  // fails expired non-terminal records closed and prunes old terminal ones.
+  if (!global.__flujo_mcp_remote_task_retention_cron) {
+    global.__flujo_mcp_remote_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('remote MCP task', () => sweepOldMcpRemoteTasks());
+    });
+  }
+  // Snapshot storage cleanup (issue #414): an hourly cron that respects the
+  // retention policy, expires old captures, and compacts git history for idle
+  // workspaces that have stopped capturing but still retain snapshots.
+  if (!global.__flujo_snapshot_cleanup_cron) {
+    global.__flujo_snapshot_cleanup_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('snapshot storage', () => snapshotStore.cleanup());
+    });
+    log.info('Armed snapshot storage cleanup sweep (hourly)');
+  }
+  // Memory candidate lifecycle sweep (issue #452): hourly expiry, auto-promotion, and conflict repair.
+  if (!global.__flujo_memory_lifecycle_cron) {
+    global.__flujo_memory_lifecycle_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('memory candidate lifecycle', () => sweepMemoryCandidates());
+    });
+    log.info('Armed memory candidate lifecycle sweep (hourly)');
+  }
+  // Lease-history pruning (issue #478) is deliberately armed only when its
+  // independent irreversible-deletion flag is enabled. The callback rechecks
+  // the flag inside the pruning service before every Persona deletion sweep.
+  if (
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING
+    && !global.__flujo_persona_lease_history_pruning_cron
+  ) {
+    global.__flujo_persona_lease_history_pruning_cron = new Cron(
+      '31 * * * *',
+      { unref: true },
+      () => {
+        void sweepEveryWorkspace(
+          'Persona lease-history pruning',
+          () => pruneWorkspacePersonaLeaseHistories(),
+        );
+      },
+    );
+    log.info('Armed Persona lease-history pruning sweep (hourly)');
+  }
+  // Persona runtime soft retention (issue #481) is armed unconditionally so a
+  // deployment can move between disabled, shadow, and active without restarting.
+  // The runner checks the emergency flag/config before any Persona storage read,
+  // prevents overlap per workspace, and re-authorizes every active write.
+  if (!global.__flujo_persona_runtime_retention_cron) {
+    global.__flujo_persona_runtime_retention_cron = new Cron(
+      '47 * * * *',
+      { unref: true },
+      () => {
+        void sweepEveryWorkspace(
+          'Persona runtime retention',
+          () => runPersonaRuntimeRetentionSweep(),
+        );
+      },
+    );
+    log.info('Armed Persona runtime retention sweep (hourly)');
+  }
+  // Runtime-event segment retention (#482) is armed unconditionally. The
+  // validated retentionDays <= 0 default makes the sweep a read-free no-op.
+  if (!global.__flujo_persona_runtime_event_retention_cron) {
+    global.__flujo_persona_runtime_event_retention_cron = new Cron(
+      '53 * * * *',
+      { unref: true },
+      () => {
+        void sweepEveryWorkspace(
+          'Persona runtime event segment',
+          () => sweepPersonaRuntimeEventSegments(),
+        );
+      },
+    );
+    log.info('Armed Persona runtime event segment retention sweep (hourly)');
+  }
+  // Historical memory deduplication (issue #465). The process-local promise
+  // prevents hot-reload callbacks from overlapping, while the workspace lock
+  // serializes separate local processes sharing the same workspace storage.
+  if (!global.__flujo_memory_backfill_cron) {
+    global.__flujo_memory_backfill_cron = new Cron('17 * * * *', { unref: true }, () => {
+      if (global.__flujo_memory_backfill_in_flight) return;
+      const sweep = sweepEveryWorkspace(
+        'stored memory duplicate backfill',
+        () => withWorkspaceRuntimeLock(
+          'memory-backfill-v1',
+          () => backfillStoredMemoryDuplicates(),
+        ),
+      ).finally(() => {
+        if (global.__flujo_memory_backfill_in_flight === sweep) {
+          global.__flujo_memory_backfill_in_flight = undefined;
+        }
+      });
+      global.__flujo_memory_backfill_in_flight = sweep;
+      void sweep;
+    });
+    log.info('Armed stored memory duplicate backfill (hourly)');
+  }
+}
+
+/**
+ * Run a retention sweep once per workspace (#406).
+ *
+ * The crons are process-wide (armed once), but the data they prune is
+ * workspace-owned, so the sweep is executed inside each workspace's context in
+ * turn. One workspace's failure must not stop the others from being swept.
+ */
+async function sweepEveryWorkspace(label: string, sweep: () => Promise<unknown>): Promise<void> {
+  let workspaces: string[];
+  try {
+    workspaces = (await listWorkspaces()).map(w => w.name);
+  } catch (error) {
+    log.warn(`Could not enumerate workspaces for the ${label} retention sweep:`, error);
+    workspaces = [DEFAULT_WORKSPACE];
+  }
+  for (const workspace of workspaces) {
+    try {
+      await runWithWorkspace(workspace, sweep);
+    } catch (error) {
+      log.warn(`${label} retention sweep failed for workspace ${workspace}:`, error);
+    }
+  }
 }
 
 /**
@@ -34,27 +353,99 @@ declare global {
  * can retry.
  */
 export function ensureBackendInitialized(): Promise<void> {
-  if (!global.__flujo_init_promise) {
-    global.__flujo_init_promise = runInitialization().catch(error => {
-      // Allow a subsequent call (e.g. the /api/init route) to retry after a
-      // failed startup instead of being stuck with a permanently rejected memo.
-      global.__flujo_init_promise = undefined;
-      throw error;
-    });
+  const existing = getMemo('init');
+  if (existing) return existing;
+  const promise = runInitialization().catch(error => {
+    // Allow a subsequent call (e.g. the /api/init route) to retry after a
+    // failed startup instead of being stuck with a permanently rejected memo.
+    setMemo('init', undefined);
+    setWorkerBootstrapStatus({ state: 'error', error: error instanceof Error ? error.message : 'Worker initialization failed.' });
+    throw error;
+  });
+  setMemo('init', promise);
+  return promise;
+}
+
+/**
+ * Initialize a specific workspace (#406). The default workspace is initialized
+ * at process startup; any other workspace is initialized lazily the first time a
+ * request selects it, so its MCP servers connect and its triggers arm without
+ * requiring a restart — and without a workspace nobody uses costing anything.
+ */
+export function ensureWorkspaceInitialized(workspace: string): Promise<void> {
+  return runWithWorkspace(workspace, async () => {
+    await ensureWorkspaceDirs(workspace);
+    await ensureBackendInitialized();
+  });
+}
+
+/**
+ * Initialize every workspace discovered at process start.
+ *
+ * Automations are workspace-owned background work, so waiting until a user
+ * opens a tab would leave schedules and webhooks in inactive workspaces
+ * unarmed. Workspaces are initialized sequentially to avoid a startup stampede;
+ * a broken workspace is logged and isolated from the others. Failure of the
+ * installation-wide layout barrier or workspace enumeration still rejects.
+ */
+export async function ensureAllWorkspacesInitialized(): Promise<void> {
+  await migrateWorkspaceLayout();
+  if (isWorkerMode()) {
+    const { restoreConfiguredWorkerSnapshot } = await import('@/backend/services/workspace/snapshotRestore');
+    const snapshot = await restoreConfiguredWorkerSnapshot();
+    if (!snapshot) throw new Error('Worker snapshot was not restored.');
+    await ensureWorkspaceInitialized(snapshot.workspace);
+    return;
   }
-  return global.__flujo_init_promise;
+  const workspaces = await listWorkspaces();
+  for (const workspace of workspaces) {
+    try {
+      await ensureWorkspaceInitialized(workspace.name);
+    } catch (error) {
+      log.error(`Initialization failed for workspace ${workspace.name}`, error);
+    }
+  }
 }
 
 async function runInitialization(): Promise<void> {
+  // Workspaces (#406): move/create <data root>/workspaces/default-workspace/*
+  // BEFORE anything opens a path. Every storage, MCP and scheduler path is now
+  // resolved inside a workspace, so running this first is what guarantees no
+  // component ever reads or writes the legacy root layout mid-migration. It
+  // rejects on an unresolvable source/destination conflict, which correctly
+  // aborts startup rather than risking two divergent copies of the user's data.
+  await migrateWorkspaceLayout();
+  if (isWorkerMode()) {
+    const { restoreConfiguredWorkerSnapshot, unlockWorkerSnapshot } = await import('@/backend/services/workspace/snapshotRestore');
+    const snapshot = await restoreConfiguredWorkerSnapshot();
+    if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) {
+      throw new Error('Worker initialization is restricted to the restored workspace.');
+    }
+    await unlockWorkerSnapshot(snapshot);
+  }
+
+  // Arm shutdown BEFORE anything spawns a child process, so an early Ctrl+C
+  // during a slow startup sweep still tears down whatever already connected.
+  registerProcessShutdownHooks();
+
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
+  if (!isWorkerMode()) await ensureDefaultFlujoAgent();
+  // Local detached launches can be reconciled in Worker mode too. Ownership and
+  // exact child interruption checks protect copied snapshot records; this never
+  // resumes tasks or replays scheduler effects. Task reads catch later recovery.
+  reconcileOrphanedTasks().catch(error =>
+    log.warn('Detached subflow task reconciliation failed at startup:', error)
+  );
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay
   // startup — the Spotlight tab just shows the previous cache until this lands.
-  refreshSpotlightServers().catch(error =>
-    log.warn('Spotlight refresh failed at startup:', error)
-  );
+  if (!isWorkerMode()) {
+    refreshSpotlightServers().catch(error =>
+      log.warn('Spotlight refresh failed at startup:', error)
+    );
+  }
 
   // MCP servers read secret env values and the scheduler fires flows that
   // resolve ${global:...} bindings and decrypt model API keys. In locked USER
@@ -62,6 +453,7 @@ async function runInitialization(): Promise<void> {
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
   // mode — or once already unlocked — it runs immediately, exactly as before.
   if (await isEncryptionLocked()) {
+    setWorkerBootstrapStatus({ state: 'locked', error: 'Worker workspace encryption is locked. Unlock this workspace before running jobs.' });
     log.info(
       'Encryption locked — deferring MCP/scheduler startup until unlock'
     );
@@ -73,20 +465,49 @@ async function runInitialization(): Promise<void> {
 
 /**
  * Start the secret-dependent background services exactly once per process, in
- * order: the MCP server sweep, then arming the scheduler. The scheduler is
- * armed AFTER the MCP sweep so a catch-up or early scheduled run doesn't race
- * servers that are still connecting.
+ * order: provision shipped MCP configs, run the MCP server sweep, then arm the
+ * scheduler. The scheduler is armed AFTER the MCP sweep so a catch-up or early
+ * scheduled run doesn't race servers that are still connecting.
  *
  * Idempotent and concurrency-safe via a memoized global promise: safe to call
  * from both boot (runInitialization) and the unlock transition (onUnlocked)
- * without double-starting. The inner steps each catch their own failures, so
- * the memo always settles (a transient failure isn't retried automatically —
- * a FLUJO restart re-runs boot).
+ * without double-starting. A migration failure rejects and clears both startup
+ * memos so a later initialization call can retry; downstream service failures
+ * remain isolated to their existing logging paths.
  */
 function startSecretDependentServices(): Promise<void> {
-  if (!global.__flujo_secret_services_promise) {
-    global.__flujo_secret_services_promise = (async () => {
+  const existing = getMemo('secret');
+  if (!existing) {
+    const promise = (async () => {
+      try {
+        // Persona storage must be fully relocated after unlock and before any
+        // reconciliation, dispatcher, or other runtime writer can start.
+        if (!isWorkerMode()) await migrateEnduringAgentDirectoryShards();
+      } catch (error) {
+        log.error('Failed to migrate Persona record directory shards:', error);
+        setMemo('secret', undefined);
+        throw error;
+      }
+
+      if (isWorkerMode()) {
+        // The snapshot plan is authoritative. Adding newly shipped configs here
+        // would change that plan and could launch tools the source had disabled.
+        await startWorkerRuntime();
+        return;
+      }
+
       log.info('Initializing MCP servers');
+      try {
+        // Issue #346: provisioning must finish before the enabled-server sweep.
+        await migrateShippedMcpServers();
+      } catch (error) {
+        log.error('Failed to provision shipped MCP server configurations:', error);
+        // Keep the startup retryable in-process; starting without the durable
+        // records would silently omit the shipped servers.
+        setMemo('secret', undefined);
+        throw error;
+      }
+
       // startEnabledServers() never rejects in practice (it catches per-server
       // failures) and always clears the startup flag in its own finally, so we
       // don't need to manage that flag here - just guard against the unexpected.
@@ -94,15 +515,88 @@ function startSecretDependentServices(): Promise<void> {
         log.error('Failed to start enabled servers:', error);
       });
 
+      // Resume durable REMOTE MCP tasks (#404) AFTER the MCP sweep: resuming
+      // needs live clients so each record's server/config identity can be
+      // verified before a single tasks/get is sent. Deliberately not awaited —
+      // a slow remote server must never delay the scheduler.
+      resumeRemoteMcpTasks().catch(error =>
+        log.warn('Remote MCP task resume failed at startup:', error)
+      );
+
+      // Repair durable Persona runtime projections and resume queued dispatches
+      // only after unlock + MCP startup, so recovered Behavior runs cannot race
+      // unavailable secrets or tool clients. Per-Persona failures stay visible
+      // through the runtime observation returned by GET /v1/personas/:id.
+      try {
+        await reconcilePersonaRoleBehaviors();
+        const personas = await listPersonas();
+        await Promise.all(personas.map((persona) =>
+          inspectAndReconcilePersonaRuntime(persona.id).catch(error => {
+            log.warn(`Persona runtime reconciliation failed for ${persona.id}:`, error);
+            return null;
+          })
+        ));
+        await startPersonaFlowDispatcher();
+        await startPersonaGoalRuntime();
+      } catch (error) {
+        log.error('Failed to start Persona Flow dispatcher:', error);
+      }
+
       // Arm planned-execution triggers AFTER the MCP sweep so a catch-up or
       // early scheduled run doesn't race servers that are still connecting.
       // start() is idempotent and catches per-execution arming failures.
       await getSchedulerService()
         .start()
         .catch(error => log.error('Failed to start scheduler:', error));
-    })();
+
+      // Arm the run-resource retention sweep (#251). Independent of secrets, but
+      // armed here so it shares the once-per-process startup path.
+      try {
+        armRetentionSweep();
+      } catch (error) {
+        log.error('Failed to arm run-resource retention sweep:', error);
+      }
+    })().catch(error => {
+      setMemo('secret', undefined);
+      setWorkerBootstrapStatus({ state: 'error', error: error instanceof Error ? error.message : 'Worker runtime initialization failed.' });
+      throw error;
+    });
+    setMemo('secret', promise);
+    return promise;
   }
-  return global.__flujo_secret_services_promise;
+  return existing;
+}
+
+async function startWorkerRuntime(): Promise<void> {
+  const { restoreConfiguredWorkerSnapshot, verifyWorkerCodexAuth } = await import('@/backend/services/workspace/snapshotRestore');
+  const { reinstallWorkspaceMcpServers } = await import('@/backend/services/packages/workspaceMcpTransfer');
+  const snapshot = await restoreConfiguredWorkerSnapshot();
+  if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) throw new Error('Worker runtime workspace mismatch.');
+  setWorkerBootstrapStatus({ state: 'installing', error: undefined });
+  await verifyWorkerCodexAuth(snapshot);
+  const installation = await reinstallWorkspaceMcpServers(snapshot.mcpTransfer);
+  const reports = installation.servers.map(server => ({
+    name: server.name, status: server.status,
+    ...(server.status === 'failed' ? { error: 'MCP dependency could not be prepared.' } : {}),
+  }));
+  setWorkerBootstrapStatus({ servers: reports });
+  if (!installation.ok) throw new Error('Worker MCP dependency preparation failed. Check the worker server status.');
+  await mcpService.startEnabledServers();
+  const configs = await mcpService.loadServerConfigs();
+  if (!Array.isArray(configs)) throw new Error('Worker MCP configurations could not be loaded.');
+  const servers = await Promise.all(configs.map(async config => {
+    if (config.disabled) return { name: config.name, status: 'disabled' };
+    const status = await mcpService.getServerStatus(config.name);
+    return {
+      name: config.name, status: status.status === 'connected' ? 'ready' : 'failed',
+      ...(status.status !== 'connected' ? { error: 'MCP server did not connect.' } : {}),
+    };
+  }));
+  setWorkerBootstrapStatus({ servers });
+  if (servers.some(server => server.status === 'failed')) {
+    throw new Error('Worker MCP startup failed. Every enabled server must connect before jobs are accepted.');
+  }
+  setWorkerBootstrapStatus({ state: 'ready', error: undefined });
 }
 
 /**
@@ -121,6 +615,25 @@ export async function onUnlocked(): Promise<void> {
     // DEFAULT mode: secret-dependent services started at boot already.
     return;
   }
-  log.info('Encryption unlocked — starting deferred MCP/scheduler startup');
+  // Only the ambient workspace was unlocked. Sibling workspaces may use a
+  // different DEK and must remain deferred until their own unlock transition.
+  log.info(
+    `Encryption unlocked — starting deferred MCP/scheduler startup for ${getCurrentWorkspace()}`,
+  );
+  const servicesAlreadyStarted = Boolean(getMemo('secret'));
   await startSecretDependentServices();
+  // The once-only startup memo may already be settled when a workspace is
+  // locked again and new Persona deliveries are admitted with startPump:false.
+  // Every unlock therefore performs an idempotent durable kick/reconciliation
+  // so those envelopes and scheduler projections cannot remain stranded.
+  if (!servicesAlreadyStarted || isWorkerMode()) return;
+  await startPersonaFlowDispatcher().catch(error => {
+    log.error('Failed to resume Persona Flow dispatcher after unlock:', error);
+  });
+  await startPersonaGoalRuntime().catch(error => {
+    log.error('Failed to resume ongoing Persona goals after unlock:', error);
+  });
+  await getSchedulerService().reconcilePersonaSchedulerProjections(false).catch(error => {
+    log.error('Failed to reconcile Persona scheduler projections after unlock:', error);
+  });
 }

@@ -9,11 +9,18 @@
 import {
   validateFlow,
   mcpServersConnectedToProcess,
+  PROCESS_FILEPATH_MCP_ROOTS_MISSING,
+  PROCESS_FILEPATH_MCP_UNAVAILABLE,
+  type FileAccessMcpSnapshot,
   type VFlow,
   type VNode,
   type VEdge,
 } from '@/utils/shared/flowValidation';
 import { encodeBindingPill } from '@/utils/shared/mcpBinding';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 const startNode = (id = 'start', over: Partial<VNode> = {}): VNode => ({
   id,
@@ -162,11 +169,11 @@ describe('validateFlow — subflow single outgoing path', () => {
     expect(r.isRunnable).toBe(false);
   });
 
-  it('warns on a concurrencyLimit below 1 in parallel mode', () => {
+  it('warns on a concurrencyLimit below 1 for an ordinary one-child Subflow', () => {
     const gate: VNode = {
       id: 'gate',
       type: 'subflow',
-      data: { label: 'gate', type: 'subflow', properties: { parallelSubflowIds: ['a'], concurrencyLimit: 0 } },
+      data: { label: 'gate', type: 'subflow', properties: { subflowId: 'a', concurrencyLimit: 0 } },
     };
     const flow: VFlow = {
       nodes: [...base, gate],
@@ -425,6 +432,165 @@ describe('validateFlow — connectivity', () => {
   });
 });
 
+describe('validateFlow — Process prompt filepath lint (issue #321)', () => {
+  const unavailable: FileAccessMcpSnapshot = {
+    filesystem: { configured: false, disabled: false, usability: 'unavailable' },
+    bash: { configured: false, disabled: false, usability: 'unavailable' },
+  };
+
+  const usable = (
+    name: 'filesystem' | 'bash',
+    config: Partial<FileAccessMcpSnapshot['filesystem']> = {}
+  ): FileAccessMcpSnapshot => ({
+    filesystem: {
+      configured: name === 'filesystem',
+      disabled: false,
+      usability: name === 'filesystem' ? 'usable' : 'unavailable',
+      ...config,
+    },
+    bash: {
+      configured: name === 'bash',
+      disabled: false,
+      usability: name === 'bash' ? 'usable' : 'unavailable',
+      ...config,
+    },
+  });
+
+  const promptFlow = (properties: Record<string, any>, extraNodes: VNode[] = [], extraEdges: VEdge[] = []): VFlow => ({
+    nodes: [startNode(), processNode('p', { boundModel: 'm1', ...properties }, 'File step'), finishNode(), ...extraNodes],
+    edges: [edge('start', 'p'), edge('p', 'finish'), ...extraEdges],
+  });
+
+  it.each([
+    ['promptTemplate', { promptTemplate: 'Read /tmp/input.txt' }],
+    ['isolatedPrompt', { inputMode: 'isolated', isolatedPrompt: 'Open C:\\work\\input.txt' }],
+  ])('keeps a %s filepath warning advisory', (_field, properties) => {
+    const r = validateFlow(promptFlow(properties), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(codes(r)).toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(r.issues.find((issue) => issue.code === PROCESS_FILEPATH_MCP_UNAVAILABLE)).toMatchObject({
+      severity: 'warning',
+      nodeId: 'p',
+      nodeLabel: 'File step',
+    });
+    expect(r.errorCount).toBe(0);
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('warns once when neither built-in file-access server is available', () => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Compare /tmp/a.txt and file:///tmp/b.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(r.issues.filter((issue) => issue.code === PROCESS_FILEPATH_MCP_UNAVAILABLE)).toHaveLength(1);
+  });
+
+  it('warns when the usable built-in has no effective roots', () => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: usable('filesystem'),
+    });
+    expect(codes(r)).toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it.each([
+    ['server roots', { roots: ['/workspace'] }],
+    ['rootPath fallback', { rootPath: 'relative-workspace' }],
+    ['file URI root', { roots: ['file:///workspace'] }],
+    ['runtime global root', { roots: ['${global:WORKSPACE_ROOT}'] }],
+  ])('accepts a meaningful %s', (_label, config) => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: usable('filesystem', config),
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it('accepts additive roots from an MCP node in the current flow', () => {
+    const filesystemNode: VNode = {
+      id: 'fs',
+      type: 'mcp',
+      data: { label: 'Filesystem', type: 'mcp', properties: { boundServer: 'filesystem', roots: ['workspace'] } },
+    };
+    const r = validateFlow(
+      promptFlow(
+        { promptTemplate: 'Read /tmp/input.txt' },
+        [filesystemNode],
+        [edge('p', 'fs', true)]
+      ),
+      { models: [{ id: 'm1' }], fileAccessMcp: usable('filesystem') }
+    );
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it.each([
+    ['filesystem disabled, bash usable', {
+      filesystem: { configured: true, disabled: true, usability: 'unavailable' as const },
+      bash: { configured: true, disabled: false, usability: 'usable' as const, roots: ['/workspace'] },
+    }],
+    ['bash disabled, filesystem usable', {
+      filesystem: { configured: true, disabled: false, usability: 'usable' as const, roots: ['/workspace'] },
+      bash: { configured: true, disabled: true, usability: 'unavailable' as const },
+    }],
+  ])('uses the remaining built-in when %s', (_label, fileAccessMcp) => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it('ignores blank and malformed root entries', () => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: usable('filesystem', {
+        roots: ['', '   ', null, '${var:ROOT}', 'file://'],
+        rootPath: ' ',
+      }),
+    });
+    expect(codes(r)).toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it.each([
+    'Use ${var:FILE_PATH}',
+    'Read /tmp/${kv:FILE_NAME}',
+    'Open C:\\work\\${global:FILE_NAME}',
+    'Discuss version 2.0 and example.com/docs in ordinary prose',
+  ])('does not match dynamic tokens or ordinary prose: %s', (promptTemplate) => {
+    const r = validateFlow(promptFlow({ promptTemplate }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it('ignores a stored isolatedPrompt unless the node is in isolated mode', () => {
+    const r = validateFlow(promptFlow({ inputMode: 'latest-message', isolatedPrompt: '/tmp/stale.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+  });
+
+  it('suppresses both warnings when enabled built-in availability is unknown', () => {
+    const fileAccessMcp: FileAccessMcpSnapshot = {
+      filesystem: { configured: true, disabled: false, usability: 'unknown' },
+      bash: { configured: false, disabled: false, usability: 'unavailable' },
+    };
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+});
+
 describe('validateFlow — dangling tool pills', () => {
   it('errors when a prompt references a server the node is not connected to', () => {
     // The pill references "files", but the process node has no mcp edge to a "files" server.
@@ -530,6 +696,144 @@ describe('validateFlow — obsolete handoff pills (issue #180)', () => {
     };
     const r = validateFlow(flow, { models: [{ id: 'm1' }] });
     expect(codes(r)).not.toContain('handoff-pill-obsolete');
+  });
+});
+
+describe('validateFlow — unreferenced handoff targets (issue #219)', () => {
+  const messagesFor = (r: { issues: { code: string; message: string }[] }, code: string) =>
+    r.issues.filter((i) => i.code === code).map((i) => i.message);
+
+  it('warns when an outgoing handoff target is never referenced in the prompt', () => {
+    // p can hand off to q and finish, but the prompt only mentions handoff_to_q,
+    // so handoff_to_finish is a reachable successor the model is never told about.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_q')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-target-unreferenced');
+    expect(messagesFor(r, 'handoff-target-unreferenced').join(' ')).toContain('handoff_to_finish');
+    expect(r.isRunnable).toBe(true); // warning only — never blocks a run
+  });
+
+  it('does not warn when every outgoing handoff target is referenced', () => {
+    const prompt =
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_q')} ` +
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_finish')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-target-unreferenced');
+  });
+
+  it('guard: a node with no handoff pills is never flagged for unreferenced targets', () => {
+    // No handoff pill in the prompt → not a handoff-routing node → the reverse
+    // check is skipped entirely (otherwise every successor would be noise).
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: 'just do the work' }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-target-unreferenced');
+  });
+
+  it('counts a bidirectional back-edge target as referenced (no warning)', () => {
+    const prompt =
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_b')} ` +
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_finish')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('b', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), biEdge('b', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-target-unreferenced');
+  });
+
+  it('warns for an unreferenced bidirectional back-edge target', () => {
+    // p reaches b via the bidirectional edge but the prompt only mentions finish.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_finish')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('b', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), biEdge('b', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-target-unreferenced');
+    expect(messagesFor(r, 'handoff-target-unreferenced').join(' ')).toContain('handoff_to_b');
+  });
+
+  it('reports both a stale pill and an unreferenced target together (both warning-only)', () => {
+    // Prompt references a stale handoff (no matching edge) and omits the real
+    // successors q and finish → forward + reverse checks both fire; still runnable.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_xyz')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-pill-obsolete');
+    expect(codes(r)).toContain('handoff-target-unreferenced');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('names the collision-suffixed variant when two successors slug to the same base', () => {
+    // Two successors both labelled 'Claude Opus' slug to handoff_to_claude_opus and
+    // handoff_to_claude_opus_2 (input/edge order). Prompt references only the first,
+    // so the _2 variant must be the one reported as unreferenced.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_claude_opus')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('a', { boundModel: 'm1' }, 'Claude Opus'),
+        processNode('b', { boundModel: 'm1' }, 'Claude Opus'),
+        finishNode(),
+      ],
+      edges: [
+        edge('start', 'p'),
+        edge('p', 'a'),
+        edge('p', 'b'),
+        edge('a', 'finish'),
+        edge('b', 'finish'),
+      ],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    const msgs = messagesFor(r, 'handoff-target-unreferenced');
+    expect(msgs.join(' ')).toContain('handoff_to_claude_opus_2');
+    // the referenced base name must NOT be reported as unreferenced
+    expect(msgs.some((m) => /handoff_to_claude_opus[^_0-9]/.test(m) && !m.includes('handoff_to_claude_opus_2'))).toBe(false);
   });
 });
 
@@ -709,3 +1013,155 @@ describe('mcpServersConnectedToProcess', () => {
 // survive edge/node deletion at design time so re-connecting restores them,
 // and the 'tool-pill-disconnected' error above still blocks running a flow
 // with genuinely orphaned pills.
+
+describe('validateFlow — static node re-entry & placeholders (#381)', () => {
+  const staticNode = (id: string, properties: Record<string, any>, label = id): VNode => ({
+    id,
+    type: 'static',
+    data: { label, type: 'static', properties },
+  });
+  const messageEntry = { kind: 'message', role: 'user', content: 'hi' };
+
+  it('does not error on tool-call arguments containing ${var:…} placeholders', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', toolName: 'count', argumentsJson: '{"n": ${var:COUNT}}', result: 'ok' }],
+        }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-toolcall-invalid-json');
+    expect(codes(r)).toContain('static-toolcall-unverifiable-json');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('still errors on genuinely malformed JSON arguments', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', { entries: [{ kind: 'toolCall', toolName: 'count', argumentsJson: '{oops', result: '' }] }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-toolcall-invalid-json');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('requires a server for real tool calls', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', executionMode: 'real', toolName: 'count', argumentsJson: '{}', result: '' }],
+        }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-real-toolcall-missing-server');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('requires a matching connected MCP server with the real tool enabled', () => {
+    const server = mcpNode('mcp', 'math');
+    server.data!.properties!.enabledTools = ['sum'];
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'math', toolName: 'count', argumentsJson: '{}', result: '' }],
+        }),
+        server,
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish'), edge('st', 'mcp', true)],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-real-toolcall-not-wired');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('accepts a real tool call wired to the matching enabled MCP tool', () => {
+    const server = mcpNode('mcp', 'math');
+    server.data!.properties!.enabledTools = ['count', 'sum'];
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'math', toolName: 'count', argumentsJson: '{}', result: '' }],
+        }),
+        server,
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish'), edge('st', 'mcp', true)],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-real-toolcall-missing-server');
+    expect(codes(r)).not.toContain('static-real-toolcall-not-wired');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('accepts the reserved in-process Persona memory gateway without an MCP edge', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{
+            kind: 'toolCall',
+            executionMode: 'real',
+            serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+            toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+            argumentsJson: '{"candidate_variable":"persona_memory_candidates"}',
+            result: '',
+          }],
+        }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-real-toolcall-not-wired');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('flags injectOnce on a node that can never be re-entered', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), staticNode('st', { entries: [messageEntry], injectOnce: true }), finishNode()],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-injectonce-without-loop');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('does not flag injectOnce when the node sits on a loop', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', { entries: [messageEntry], injectOnce: true }),
+        staticNode('back', { entries: [messageEntry] }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'back'), edge('back', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-injectonce-without-loop');
+  });
+
+  it('does not flag a static node that only appends (no injectOnce)', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), staticNode('st', { entries: [messageEntry] }), finishNode()],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-injectonce-without-loop');
+  });
+});

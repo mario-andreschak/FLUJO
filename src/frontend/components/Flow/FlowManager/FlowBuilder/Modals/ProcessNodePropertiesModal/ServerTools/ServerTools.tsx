@@ -26,6 +26,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { createLogger } from '@/utils/logger';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
@@ -33,6 +35,8 @@ import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools');
 
@@ -45,6 +49,52 @@ interface ConnectedMcpNode {
   // Add other relevant properties if needed
 }
 
+interface AvailableServer {
+  name: string;
+  status?: string;
+  transport?: string;
+  rootPath?: string;
+  disabled?: boolean;
+}
+
+type ServerCardStatus = React.ComponentProps<typeof ServerCard>['status'];
+type ServerCardTransport = React.ComponentProps<typeof ServerCard>['transport'];
+
+const SERVER_CARD_STATUSES = new Set<ServerCardStatus>([
+  'connected',
+  'disconnected',
+  'error',
+  'connecting',
+  'initialization',
+  'requires_authentication',
+]);
+
+const SERVER_CARD_TRANSPORTS = new Set<ServerCardTransport>([
+  'stdio',
+  'websocket',
+  'sse',
+  'streamable',
+]);
+
+const toServerCardStatus = (status?: string): ServerCardStatus => {
+  if (status === 'starting') return 'connecting';
+  return SERVER_CARD_STATUSES.has(status as ServerCardStatus)
+    ? status as ServerCardStatus
+    : 'disconnected';
+};
+
+const toServerCardTransport = (transport?: string): ServerCardTransport => (
+  SERVER_CARD_TRANSPORTS.has(transport as ServerCardTransport)
+    ? transport as ServerCardTransport
+    : 'stdio'
+);
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : undefined
+);
+
 interface ServerToolsProps {
   isLoadingServers: boolean; // Keep for overall loading state if needed, or remove if handled per node
   connectedMcpNodes: ConnectedMcpNode[]; // Use this instead of connectedServers
@@ -53,16 +103,10 @@ interface ServerToolsProps {
    * runtime value is a full server config, so extra fields are accepted (and
    * used to render the picker's ServerCards).
    */
-  availableServers?: Array<{
-    name: string;
-    status?: string;
-    transport?: string;
-    rootPath?: string;
-    disabled?: boolean;
-  }>;
+  availableServers?: AvailableServer[];
   /** Adds an MCP node for the given server and wires it to this Process node. */
   onConnectMcpServer?: (serverName: string) => void;
-  serverToolsMap: Record<string, any[]>; // Map tools by serverName (might need adjustment if tools are fetched per nodeId)
+  serverToolsMap: Record<string, Tool[]>; // Map tools by serverName (might need adjustment if tools are fetched per nodeId)
   serverStatuses: Record<string, string>; // Map status by serverName (might need adjustment)
   isLoadingTools: Record<string, boolean>; // Map loading by serverName (might need adjustment)
   handleSelectToolServer: (nodeId: string) => void; // Pass nodeId instead of serverName
@@ -95,6 +139,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   handleRestartServer,
   // flowNodes // Removed if not needed
 }) => {
+  const { t, tp } = useI18n();
   // The selected server node is derived — the parent owns the selection, and
   // the first connected node is the default (no mirrored local state to
   // drift).
@@ -121,19 +166,19 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   // the MCP page's saved search/sort/folder settings so choosing a server here
   // looks exactly like the MCP Servers page. Fed the already-filtered
   // connectable subset so already-connected servers stay hidden.
-  const serverPicker = useCardPicker<any>('mcp', connectableServers);
-  const renderServerCard = (server: any) => (
+  const serverPicker = useCardPicker<AvailableServer>('mcp', connectableServers);
+  const renderServerCard = (server: AvailableServer) => (
     <ServerCard
       name={server.name}
-      status={(server.status as any) || 'disconnected'}
+      status={toServerCardStatus(server.status)}
       path={server.rootPath || ''}
       enabled={!server.disabled}
-      transport={(server.transport as any) || 'stdio'}
+      transport={toServerCardTransport(server.transport)}
       pickerMode
       onClick={() => handleConnectServer(server.name)}
     />
   );
-  const toServerCell = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const toServerCell = (server: AvailableServer): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
   const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
   const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
     ? serverPicker.groups.map((g) => ({ ...g, items: g.items.map(toServerCell) }))
@@ -142,11 +187,11 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     <CardPickerDialog
       open={connectPickerOpen}
       onClose={() => setConnectPickerOpen(false)}
-      title="Connect an MCP server"
-      description="Pick a server to add to this flow and wire to this Process node."
-      emptyMessage="No more servers to connect."
+      title={t('flows.serverTools.connectTitle')}
+      description={t('flows.serverTools.connectDescription')}
+      emptyMessage={t('flows.serverTools.noneToConnect')}
       searchable
-      searchPlaceholder="Search servers…"
+      searchPlaceholder={t('flows.serverTools.searchServers')}
       searchTerm={serverPicker.searchTerm}
       onSearchChange={serverPicker.setSearchTerm}
       columns={{ xs: 12, sm: 6 }}
@@ -156,8 +201,52 @@ const ServerTools: React.FC<ServerToolsProps> = ({
       onToggleGroup={serverPicker.toggleGroup}
     />
   );
-  // State to track search query
+  // State to track search query and per-server/per-tool detail disclosure.
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [expandedToolKeys, setExpandedToolKeys] = useState<Record<string, boolean>>({});
+
+  const getToolKey = (nodeId: string, toolName: string) => `${nodeId}::${toolName}`;
+
+  const toggleToolDetails = (toolKey: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setExpandedToolKeys((current) => ({
+      ...current,
+      [toolKey]: !current[toolKey],
+    }));
+  };
+
+  const insertToolForSelectedNode = (nodeId: string, serverName: string, toolName: string) => {
+    if (nodeId !== selectedServerNodeId) {
+      log.debug('Node tab not selected, selecting node first', {
+        selectedNodeId: nodeId,
+        serverName,
+        toolName,
+      });
+      handleServerSelect(nodeId);
+      return;
+    }
+    if (serverName && toolName) {
+      log.debug('Inserting tool binding', { serverName, toolName });
+      handleInsertToolBinding(serverName, toolName);
+    } else {
+      log.warn('Cannot insert tool binding, server or tool name is undefined', {
+        serverName,
+        toolName,
+      });
+    }
+  };
+
+  const getParameterSummary = (inputSchema: unknown): string => {
+    const schema = asRecord(inputSchema);
+    const properties = asRecord(schema?.properties) ?? {};
+    const parameterCount = Object.keys(properties).length;
+    if (parameterCount === 0) return t('flows.serverTools.parameter.none');
+    const requiredCount = Array.isArray(schema?.required) ? schema.required.length : 0;
+    const required = requiredCount > 0
+      ? tp('flows.serverTools.required', requiredCount)
+      : '';
+    return tp('flows.serverTools.parameter', parameterCount, { required });
+  };
 
   // Get enabled tools for a specific MCP node instance
   const getEnabledToolsForNode = (nodeId: string): string[] => {
@@ -177,7 +266,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   };
 
   // Filter tools based on enabled status for a specific node and search query
-  const getFilteredTools = (nodeId: string, serverName: string, allToolsForServer: any[]): any[] => {
+  const getFilteredTools = (nodeId: string, serverName: string, allToolsForServer: Tool[]): Tool[] => {
     try {
       // Ensure allToolsForServer is defined and is an array
       if (!allToolsForServer || !Array.isArray(allToolsForServer)) {
@@ -265,31 +354,40 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   };
 
   // Format parameter schema for display
-  const formatParameterSchema = (inputSchema: any) => {
-    if (!inputSchema || !inputSchema.properties) {
+  const formatParameterSchema = (inputSchema: unknown) => {
+    const schema = asRecord(inputSchema);
+    const properties = asRecord(schema?.properties);
+    if (!properties) {
       return null;
     }
+
+    const required = Array.isArray(schema?.required)
+      ? schema.required.filter((name): name is string => typeof name === 'string')
+      : [];
 
     return (
       <Box sx={{ mt: 1 }}>
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 'medium' }}>
-          Parameters:
+          {t('flows.agentTools.parameters')}
         </Typography>
         <Box sx={{ pl: 1, mt: 0.5 }}>
-          {Object.entries(inputSchema.properties).map(([paramName, paramDetails]: [string, any]) => (
-            <Box key={paramName} sx={{ mb: 0.5 }}>
+          {Object.entries(properties).map(([paramName, paramDetails]) => {
+            const details = asRecord(paramDetails);
+            const description = typeof details?.description === 'string' ? details.description : undefined;
+            const type = typeof details?.type === 'string' ? details.type : undefined;
+            return <Box key={paramName} sx={{ mb: 0.5 }}>
               <Typography variant="caption" component="span" sx={{ fontWeight: 'medium' }}>
                 {paramName}
-                {inputSchema.required?.includes(paramName) && 
+                {required.includes(paramName) &&
                   <Typography variant="caption" component="span" color="error.main"> *</Typography>
                 }
                 {': '}
               </Typography>
               <Typography variant="caption" component="span" color="text.secondary">
-                {paramDetails.description || paramDetails.type || 'No description'}
+                {description || type || t('flows.agentTools.noDescription')}
               </Typography>
-            </Box>
-          ))}
+            </Box>;
+          })}
         </Box>
       </Box>
     );
@@ -311,23 +409,23 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   return (
     <Box sx={{ mt: 4, display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Typography variant="subtitle1" gutterBottom>
-        Connected MCP Servers and Tools
+        {t('flows.serverTools.title')}
       </Typography>
 
       {isLoadingServers ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
-          <Typography color="text.secondary">Loading connected MCP nodes...</Typography>
+          <Typography color="text.secondary">{t('flows.serverTools.loadingNodes')}</Typography>
         </Box>
       ) : connectedMcpNodes.length === 0 ? (
         <Box sx={{ p: 2, border: '1px dashed rgba(0, 0, 0, 0.12)', borderRadius: 1 }}>
           <Typography color="text.secondary" align="center">
-            No MCP nodes connected to this Process node.
+            {t('flows.serverTools.noneConnected')}
           </Typography>
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
             {canConnectServer
-              ? 'Pick a server below — the MCP node is added to the flow and wired up for you.'
-              : 'Connect MCP nodes to this Process node using the side handles to access their tools.'}
+              ? t('flows.serverTools.pickHelp')
+              : t('flows.serverTools.connectHelp')}
           </Typography>
           {canConnectServer && (
             <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
@@ -337,7 +435,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                 startIcon={<AddIcon />}
                 onClick={() => setConnectPickerOpen(true)}
               >
-                Connect MCP Server
+                {t('flows.serverTools.connect')}
               </Button>
             </Box>
           )}
@@ -405,7 +503,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
             })}
           </Tabs>
           {canConnectServer && (
-            <Tooltip title="Connect another MCP server">
+            <Tooltip title={t('flows.serverTools.connectAnother')}>
               <IconButton size="small" onClick={() => setConnectPickerOpen(true)} sx={{ ml: 1 }}>
                 <AddIcon fontSize="small" />
               </IconButton>
@@ -417,7 +515,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
           {/* Server actions for the selected node */}
           {currentSelectedMcpNode && currentSelectedServerName && (
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-              <Tooltip title={`Retry connection for ${currentSelectedServerName}`}>
+              <Tooltip title={t('flows.serverTools.retry', { server: currentSelectedServerName })}>
                 <span>
                   <IconButton
                     size="small"
@@ -434,7 +532,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
               </Tooltip>
 
               {currentSelectedMcpNode.status === 'connected' && handleRestartServer && (
-                <Tooltip title={`Restart server ${currentSelectedServerName}`}>
+                <Tooltip title={t('flows.serverTools.restart', { server: currentSelectedServerName })}>
                   <span>
                     <IconButton
                       size="small"
@@ -452,7 +550,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
 
           {/* Search input */}
           <TextField
-            placeholder="Search enabled tools..."
+            placeholder={t('flows.serverTools.searchTools')}
             variant="outlined"
             size="small"
             fullWidth
@@ -488,7 +586,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                 return (
                   <Box key={nodeId} sx={{ p: 2, textAlign: 'center' }}>
                     <Typography color="text.secondary">
-                      Server '{serverName}' is not connected. Connect to view tools.
+                      {t('flows.serverTools.notConnectedTools', { server: serverName })}
                     </Typography>
                   </Box>
                 );
@@ -511,10 +609,10 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                   <Box key={nodeId} sx={{ p: 2, textAlign: 'center' }}>
                     <Typography color="text.secondary">
                       {searchQuery.trim()
-                        ? `No enabled tools match "${searchQuery}" for this node.`
+                        ? t('flows.serverTools.noMatch', { search: searchQuery })
                         : enabledToolsCount === 0
-                        ? `No tools are enabled for this node instance. Enable tools in the MCP Node properties.`
-                        : "No tools available or enabled for this node instance."}
+                        ? t('flows.serverTools.noneEnabled')
+                        : t('flows.serverTools.noneAvailable')}
                     </Typography>
                   </Box>
                 );
@@ -522,69 +620,101 @@ const ServerTools: React.FC<ServerToolsProps> = ({
 
               return (
                 <List key={nodeId} disablePadding>
-                  {tools.map((tool) => (
-                    <Card
-                      key={tool.name}
-                      variant="outlined"
-                      onClick={() => {
-                        // Ensure the correct node tab is selected before inserting
-                        if (nodeId !== selectedServerNodeId) {
-                          log.debug('Node tab not selected, selecting node first', {
-                            selectedNodeId: nodeId,
-                            serverName: serverName,
-                            toolName: tool.name
-                          });
-                          handleServerSelect(nodeId); // Select the correct tab first
-                          // Don't insert on the first click
-                        } else {
-                          // Node tab is selected, insert the binding
-                          if (serverName && tool.name) {
-                            log.debug('Inserting tool binding', {
-                              serverName: serverName, // Use the actual server name for the binding string
-                              toolName: tool.name
-                            });
-                            handleInsertToolBinding(serverName, tool.name);
-                          } else {
-                            log.warn('Cannot insert tool binding, server or tool name is undefined', {
-                              serverName: serverName,
-                              toolName: tool.name
-                            });
+                  {tools.map((tool) => {
+                    const toolKey = getToolKey(nodeId, tool.name);
+                    const isExpanded = !!expandedToolKeys[toolKey];
+                    const description = tool.description || t('flows.agentTools.noDescription');
+                    const parameterSummary = getParameterSummary(tool.inputSchema);
+                    return (
+                      <Card
+                        key={tool.name}
+                        variant="outlined"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={t('flows.serverTools.addTool', { tool: tool.name, server: serverName })}
+                        onClick={() => insertToolForSelectedNode(nodeId, serverName, tool.name)}
+                        onKeyDown={(event) => {
+                          if (event.target !== event.currentTarget) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            insertToolForSelectedNode(nodeId, serverName, tool.name);
                           }
-                        }
-                      }}
-                      sx={{
-                        mb: 1,
-                        mx: 1,
-                        mt: 1,
-                        cursor: 'pointer',
-                        position: 'relative',
-                        '&:hover': {
-                          boxShadow: 1,
-                          bgcolor: 'action.hover'
-                        }
-                      }}
-                    >
-                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <Box sx={{ width: '100%' }}>
-                            <Typography variant="subtitle2" component="div" sx={{ display: 'flex', alignItems: 'center' }}>
-                              <CodeIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} />
-                              {tool.name}
-                            </Typography>
+                        }}
+                        sx={{
+                          mb: 1,
+                          mx: 1,
+                          mt: 1,
+                          cursor: 'pointer',
+                          '&:hover': {
+                            boxShadow: 1,
+                            bgcolor: 'action.hover'
+                          },
+                          '&:focus-visible': {
+                            outline: '2px solid',
+                            outlineColor: 'primary.main',
+                            outlineOffset: 1,
+                          },
+                        }}
+                      >
+                        <CardContent sx={{ p: 1.25, '&:last-child': { pb: 1.25 } }}>
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                              <Typography variant="subtitle2" component="div" sx={{ display: 'flex', alignItems: 'center' }}>
+                                <CodeIcon fontSize="small" sx={{ mr: 1, color: 'primary.main', flexShrink: 0 }} />
+                                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {tool.name}
+                                </Box>
+                              </Typography>
 
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                              {tool.description || "No description available"}
-                            </Typography>
-
-                            {tool.inputSchema && formatParameterSchema(tool.inputSchema)}
+                              <Tooltip title={description} describeChild placement="top-start">
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                  tabIndex={0}
+                                  sx={{
+                                    mt: 0.5,
+                                    display: '-webkit-box',
+                                    WebkitBoxOrient: 'vertical',
+                                    WebkitLineClamp: 2,
+                                    overflow: 'hidden',
+                                  }}
+                                >
+                                  {description}
+                                </Typography>
+                              </Tooltip>
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                {parameterSummary}
+                              </Typography>
+                            </Box>
+                            <Tooltip title={t(isExpanded ? 'flows.serverTools.collapse' : 'flows.serverTools.expand', { tool: tool.name })}>
+                              <IconButton
+                                size="small"
+                                aria-label={t(isExpanded ? 'flows.serverTools.collapse' : 'flows.serverTools.expand', { tool: tool.name })}
+                                aria-expanded={isExpanded}
+                                aria-controls={`${toolKey}-details`}
+                                onClick={(event) => toggleToolDetails(toolKey, event)}
+                              >
+                                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                              </IconButton>
+                            </Tooltip>
                           </Box>
-                        </Box>
-                      </CardContent>
-                      <Tooltip title={`Add ${tool.name} from ${serverName} to prompt`}>
-                        <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
-                      </Tooltip>
-                    </Card>
-                  ))}
+
+                          {isExpanded && (
+                            <Box
+                              id={`${toolKey}-details`}
+                              sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+                                {description}
+                              </Typography>
+                              {tool.inputSchema && formatParameterSchema(tool.inputSchema)}
+                            </Box>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </List>
               );
             })()}

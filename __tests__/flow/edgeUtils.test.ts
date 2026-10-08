@@ -6,9 +6,11 @@
  * pair regardless of side or handle, one flow-control edge per direction, and
  * handle-aware edge ids so parallel edges never collide.
  */
-import { Connection, Edge } from '@xyflow/react';
+import { Connection, Edge, MarkerType } from '@xyflow/react';
 import {
   validateConnection,
+  isConnectionAllowed,
+  connectionErrorReason,
   createEdgeFromConnection,
   getReplacedEdgeIds,
   canConvertToBidirectional,
@@ -182,14 +184,15 @@ describe('canConvertToBidirectional', () => {
 
 describe('validTargetTypesFor', () => {
   it('agrees with validateConnection for every source/handle combination', () => {
-    expect(validTargetTypesFor('mcp', 'mcp-bottom')).toEqual(['process']);
+    expect(validTargetTypesFor('mcp', 'mcp-bottom')).toEqual(['process', 'static']);
     expect(validTargetTypesFor('process', 'process-left-mcp')).toEqual(['mcp']);
+    expect(validTargetTypesFor('static', 'static-right-mcp')).toEqual(['mcp']);
     // `signal` is a real intermediate flow-control target reachable from any
     // plain control-flow source; it is appended last by the `all` filter order
     // (process, finish, mcp, subflow, resource, signal).
-    expect(validTargetTypesFor('process', 'process-bottom')).toEqual(['process', 'finish', 'subflow', 'signal']);
-    expect(validTargetTypesFor('start', 'start-bottom')).toEqual(['process', 'finish', 'subflow', 'signal']);
-    expect(validTargetTypesFor('subflow', 'subflow-bottom')).toEqual(['process', 'finish', 'subflow', 'signal']);
+    expect(validTargetTypesFor('process', 'process-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static']);
+    expect(validTargetTypesFor('start', 'start-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static']);
+    expect(validTargetTypesFor('subflow', 'subflow-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static']);
     expect(validTargetTypesFor('finish', 'finish-top')).toEqual([]);
   });
 });
@@ -208,6 +211,11 @@ describe('createEdgeFromConnection — resource edges', () => {
     expect((produce.data as any).edgeType).toBe('resource');
     // Resource edges are static config wiring, never animated flow control.
     expect(produce.animated).toBe(false);
+    // Teal stroke + directional closed-arrow marker distinguish it from the
+    // gray/animated control edge and the blue MCP edge (issue #223).
+    expect((produce.style as any).stroke).toBe('#009688');
+    expect((produce.markerEnd as any).type).toBe(MarkerType.ArrowClosed);
+    expect((produce.markerEnd as any).color).toBe('#009688');
   });
 
   it('types a resource → process (consume) connection as a resourceEdge', () => {
@@ -218,6 +226,8 @@ describe('createEdgeFromConnection — resource edges', () => {
     expect(consume.type).toBe('resourceEdge');
     expect((consume.data as any).edgeType).toBe('resource');
     expect(consume.animated).toBe(false);
+    expect((consume.style as any).stroke).toBe('#009688');
+    expect((consume.markerEnd as any).type).toBe(MarkerType.ArrowClosed);
   });
 });
 
@@ -239,5 +249,56 @@ describe('getReplacedEdgeIds — resource edges', () => {
     const control = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), resourceNodes);
     const resource = createEdgeFromConnection(connect('p1', 'process-right-resource', 'r1', 'resource-in'), resourceNodes);
     expect(getReplacedEdgeIds(resource, [control])).toEqual([]);
+  });
+});
+
+describe('isConnectionAllowed / connectionErrorReason — the Loose-mode live gate (issue #210)', () => {
+  // ReactFlow runs in ConnectionMode.Loose, so its built-in source→target
+  // handle-type check no longer blocks draws. isConnectionAllowed is the sole
+  // legality gate during a drag; it must mirror the shared connection rules.
+  const gateNodes = [...resourceNodes, node('start', 'start'), node('f1', 'finish')];
+
+  it('allows a producer edge from a Process node LEFT resource handle to a Resource node (the #210 case)', () => {
+    // process-left-resource is now a `source` handle, so a drag starting there
+    // and ending on the resource yields Process → Resource = produce.
+    const params = connect('p1', 'process-left-resource', 'r1', 'resource-out');
+    expect(isConnectionAllowed(params, resourceNodes, [])).toBe(true);
+    expect(connectionErrorReason(params, resourceNodes, [])).toBeNull();
+  });
+
+  it('still allows producing from the Process RIGHT resource handle', () => {
+    const params = connect('p1', 'process-right-resource', 'r1', 'resource-in');
+    expect(isConnectionAllowed(params, resourceNodes, [])).toBe(true);
+  });
+
+  it('still allows consuming (resource → process) from either side', () => {
+    expect(isConnectionAllowed(connect('r1', 'resource-out', 'p1', 'process-left-resource'), resourceNodes, [])).toBe(true);
+    expect(isConnectionAllowed(connect('r1', 'resource-out', 'p1', 'process-right-resource'), resourceNodes, [])).toBe(true);
+  });
+
+  it('rejects a resource handle wired to a non-Process, non-Resource node', () => {
+    const params = connect('p1', 'process-left-resource', 'f1', 'finish-top');
+    expect(isConnectionAllowed(params, gateNodes, [])).toBe(false);
+    expect(connectionErrorReason(params, gateNodes, [])).not.toBeNull();
+  });
+
+  it('still rejects connections into a Start node and out of a Finish node', () => {
+    expect(isConnectionAllowed(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, [])).toBe(false);
+    expect(isConnectionAllowed(connect('f1', 'finish-top', 'p1', 'process-top'), gateNodes, [])).toBe(false);
+  });
+
+  it('is silent: connectionErrorReason and isConnectionAllowed never log', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    isConnectionAllowed(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, []);
+    connectionErrorReason(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, []);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('validateConnection stays the logging commit-path wrapper', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect(validateConnection(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, [])).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

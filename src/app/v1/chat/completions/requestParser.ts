@@ -2,8 +2,80 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import OpenAI from 'openai';
 import { ChatCompletionMetadata } from '@/shared/types'; // Import the new shared type
+import type { McpAppModelContextMap } from '@/shared/types/chat';
+import type { McpSkillSelection } from '@/shared/types/mcp';
+import {
+  BehaviorSlotKeySchema,
+  EnduringAgentIdSchema,
+} from '@/shared/types/enduringAgent';
+import { parseMcpAppModelContexts } from '@/backend/mcpApps/modelContext';
+import { parseMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
+import { requireFunctionToolCalls, requireFunctionTools } from '@/shared/types/openai';
 
 const log = createLogger('app/v1/chat/completions/requestParser');
+
+export class InvalidPersonaChatMetadataError extends Error {
+  readonly code = 'invalid_persona_metadata';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidPersonaChatMetadataError';
+  }
+}
+
+export interface PersonaChatCompletionTarget {
+  personaId: string;
+  behaviorSlotKey?: string;
+  idempotencyKey?: string;
+}
+
+function optionalPersonaMetadataString(
+  value: unknown,
+  field: string,
+  validate: (candidate: string) => boolean,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new InvalidPersonaChatMetadataError(`metadata.${field} must be a string.`);
+  }
+  const candidate = value.trim();
+  if (!validate(candidate)) {
+    throw new InvalidPersonaChatMetadataError(`metadata.${field} is invalid.`);
+  }
+  return candidate;
+}
+
+function parsePersonaTarget(
+  metadata: ChatCompletionMetadata | undefined,
+): PersonaChatCompletionTarget | undefined {
+  const personaId = optionalPersonaMetadataString(
+    metadata?.personaId,
+    'personaId',
+    (candidate) => EnduringAgentIdSchema.safeParse(candidate).success,
+  );
+  const behaviorSlotKey = optionalPersonaMetadataString(
+    metadata?.behaviorSlotKey,
+    'behaviorSlotKey',
+    (candidate) => BehaviorSlotKeySchema.safeParse(candidate).success,
+  );
+  const idempotencyKey = optionalPersonaMetadataString(
+    metadata?.idempotencyKey,
+    'idempotencyKey',
+    (candidate) => candidate.length > 0 && candidate.length <= 512,
+  );
+  if (!personaId && (behaviorSlotKey || idempotencyKey)) {
+    throw new InvalidPersonaChatMetadataError(
+      'metadata.personaId is required when Persona routing metadata is supplied.',
+    );
+  }
+  return personaId
+    ? {
+        personaId,
+        ...(behaviorSlotKey ? { behaviorSlotKey } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      }
+    : undefined;
+}
 
 // Types for better TypeScript support using OpenAI SDK types directly
 export interface ChatCompletionRequest {
@@ -20,13 +92,21 @@ export interface ChatCompletionRequest {
   // `model-` completions, where they are passed through to the provider and
   // any tool_calls are returned to the CLIENT for execution. The flow path
   // manages its own MCP tools and ignores this field.
-  tools?: Array<OpenAI.ChatCompletionTool>;
+  tools?: Array<OpenAI.ChatCompletionFunctionTool>;
   // Custom extension for conversation state management (DEPRECATED - use metadata)
   conversation_id?: string;
   // Use the strict metadata type
   metadata?: ChatCompletionMetadata;
   // Node ID to start processing from (for message edits)
   processNodeId?: string;
+  /** Validated, future-turn-only context supplied by mounted MCP Apps. */
+  mcpAppContexts?: McpAppModelContextMap;
+  /** Exact approved MCP Skill identities selected for this conversation turn. */
+  mcpSkillSelections?: McpSkillSelection[];
+  /** Parsed internal response-shaping flag; public callers should use metadata. */
+  compactToolPayloads?: boolean;
+  /** Parsed stateful-chat flag: append request messages to saved history. */
+  appendMessages?: boolean;
 }
 
 // Define a new interface for the parsed result including the extracted flags
@@ -36,6 +116,10 @@ export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest,
   requireApproval: boolean;
   flujodebug: boolean; // Add flujodebug here
   processNodeId?: string; // Add processNodeId for message edits
+  compactToolPayloads: boolean;
+  appendMessages: boolean;
+  /** Validated trusted-control-plane Persona target, never forwarded as model input. */
+  personaTarget?: PersonaChatCompletionTarget;
 }
 
 // Parse request parameters from either query string or body
@@ -86,7 +170,9 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       // Add flags for GET requests (always false as metadata isn't supported)
       flujo: false,
       requireApproval: false, // Always false for GET
-      flujodebug: false // Always false for GET
+      flujodebug: false, // Always false for GET
+      compactToolPayloads: false,
+      appendMessages: false,
     };
 
     const duration = Date.now() - startTime;
@@ -107,12 +193,48 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       
       const data: ChatCompletionRequest = await request.json(); // Add type annotation
 
+      // `personaTarget` is an internal parsed field, not a public wire field.
+      // Rejecting it here prevents an unvalidated top-level JSON property from
+      // surviving the later object spread when validated metadata is absent.
+      if ('personaTarget' in (data as ChatCompletionRequest & { personaTarget?: unknown })) {
+        throw new InvalidPersonaChatMetadataError(
+          'Persona routing must be supplied through request metadata.',
+        );
+      }
+
+      // SDK 7 models tools and tool calls as function/custom unions. FLUJO's
+      // execution protocol is function-only, so reject unsupported wire shapes
+      // before they can create an unanswerable assistant/tool transcript.
+      requireFunctionTools(data.tools);
+      for (const message of data.messages ?? []) {
+        if (message.role === 'assistant') {
+          requireFunctionToolCalls(message.tool_calls);
+        }
+      }
+
       // Extract flags from the strictly typed metadata
       const flujo = data.metadata?.flujo === "true";
       // Prefer conversationId (camelCase) from metadata, fallback to deprecated body field
       const conversationId = data.metadata?.conversationId || data.conversation_id;
       const requireApproval = data.metadata?.requireApproval === "true";
       const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
+      const compactToolPayloads = data.metadata?.compactToolPayloads === "true";
+      const appendMessages = data.metadata?.appendMessages === "true";
+      const personaTarget = parsePersonaTarget(data.metadata);
+      const parsedAppContexts = parseMcpAppModelContexts(data.metadata?.mcpAppContexts);
+      const parsedSkillSelections = parseMcpSkillSelections(data.metadata?.mcpSkills);
+      if (parsedAppContexts.error) {
+        log.warn('Ignoring invalid MCP App model context metadata', {
+          requestId,
+          error: parsedAppContexts.error,
+        });
+      }
+      if (parsedSkillSelections.error) {
+        log.warn('Ignoring invalid MCP Skill selection metadata', {
+          requestId,
+          error: parsedSkillSelections.error,
+        });
+      }
 
       const duration = Date.now() - startTime;
       log.info('POST request body parsed successfully', {
@@ -126,7 +248,8 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         flujo,
         conversationId,
         requireApproval,
-        flujodebug // Log the new flag
+        flujodebug,
+        personaTargeted: Boolean(personaTarget),
       });
 
       // Remove metadata and deprecated conversation_id before returning
@@ -139,7 +262,12 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         conversation_id: conversationId, 
         requireApproval, 
         flujodebug,
-        processNodeId: data.processNodeId // Pass through processNodeId if provided
+        compactToolPayloads,
+        appendMessages,
+        ...(personaTarget ? { personaTarget } : {}),
+        mcpAppContexts: parsedAppContexts.contexts,
+        mcpSkillSelections: parsedSkillSelections.selections,
+        processNodeId: data.processNodeId ?? data.metadata?.processNodeId,
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -147,7 +275,9 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         requestId,
         error,
         duration: `${duration}ms`,
-        headers: Object.fromEntries(request.headers)
+        // Worker control tokens and other credentials arrive in headers.
+        // Header names are sufficient for request-shape diagnostics.
+        headerNames: Array.from(request.headers.keys())
       });
       throw error;
     }
@@ -161,7 +291,7 @@ export async function _logRequestDetails(request: NextRequest) {
   log.debug('Request details', { 
     url: request.url,
     method: request.method,
-    headers: Object.fromEntries(request.headers)
+    headerNames: Array.from(request.headers.keys())
   });
   
   if (request.nextUrl.search) {

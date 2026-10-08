@@ -1,12 +1,14 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { encryptWithPassword, decryptWithPassword } from '@/utils/encryption/secure';
+import {
+  encryptWithPassword, decryptWithPassword, isEncryptionInitialized, initializeDefaultEncryption,
+} from '@/utils/encryption/secure';
 import { isSecretEnvVar } from '@/utils/shared';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 } from 'uuid';
 const uuidv4 = v4;
 
@@ -22,23 +24,36 @@ interface EnvVarWithMetadata {
   metadata: EnvVarMetadata;
 }
 
+/** Abort the whole update before storage is changed if any secret cannot be encrypted. */
+async function encryptSecretForStorage(value: string): Promise<string> {
+  try {
+    if (!await isEncryptionInitialized() && !await initializeDefaultEncryption()) {
+      throw new Error('Encryption initialization failed');
+    }
+    const encrypted = await encryptWithPassword(value);
+    if (!encrypted) throw new Error('Encryption failed');
+    return `encrypted:${encrypted}`;
+  } catch {
+    // Crypto errors may include their input. Keep both responses and logs free of it.
+    throw new Error('Environment variable encryption failed. Unlock this workspace and retry; no variables were saved.');
+  }
+}
+
 // Helper function to check if the stored data is in the new format
-function isNewFormat(data: any): data is Record<string, EnvVarWithMetadata> {
+function isNewFormat(data: unknown): data is Record<string, EnvVarWithMetadata> {
   if (!data || typeof data !== 'object') return false;
-  const keys = Object.keys(data);
-  if (keys.length === 0) return true; // Empty object is valid
-  
-  // Check if the first entry has the expected structure
-  const firstKey = keys[0];
-  const firstValue = data[firstKey];
-  return (
-    firstValue &&
-    typeof firstValue === 'object' &&
-    'value' in firstValue &&
-    'metadata' in firstValue &&
-    typeof firstValue.metadata === 'object' &&
-    'isSecret' in firstValue.metadata
-  );
+  const record = data as Record<string, unknown>;
+  return Object.values(record).every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const value = entry as Record<string, unknown>;
+    const metadata = value.metadata;
+    return (
+      typeof value.value === 'string' &&
+      metadata !== null &&
+      typeof metadata === 'object' &&
+      typeof (metadata as Record<string, unknown>).isSecret === 'boolean'
+    );
+  });
 }
 
 // Helper function to migrate old format to new format
@@ -68,7 +83,7 @@ function migrateToNewFormat(oldData: Record<string, string>): Record<string, Env
  */
 
 // GET handler for retrieving environment variables
-export async function GET(req: NextRequest) {
+async function GET_handler(req: NextRequest) {
   // Local-only: `?includeSecrets=true` decrypts and returns plaintext API keys,
   // so a cross-origin browser must never reach the decrypt path (#141). Reject
   // before any crypto/lock work.
@@ -204,7 +219,7 @@ export async function GET(req: NextRequest) {
 }
 
 // POST handler for setting environment variables
-export async function POST(req: NextRequest) {
+async function POST_handler(req: NextRequest) {
   // Local-only: this route persists (and encrypts) env vars, so reject
   // cross-origin / DNS-rebinding callers first (#141).
   const notLocal = assertLocalRequest(req);
@@ -250,44 +265,10 @@ export async function POST(req: NextRequest) {
       // If it's a secret and not already a binding reference, encrypt it
       if (isSecret && stringValue && !stringValue.startsWith('${global:')) {
         log.debug(`Encrypting secret env var: ${key} [${requestId}]`);
-        try {
-          // First check if encryption is initialized
-          const isEncryptionInitialized = await import('@/utils/encryption/secure').then(
-            module => module.isEncryptionInitialized()
-          );
-          
-          if (!isEncryptionInitialized) {
-            log.debug(`Initializing default encryption [${requestId}]`);
-            // Initialize default encryption if not already initialized
-            await import('@/utils/encryption/secure').then(
-              module => module.initializeDefaultEncryption()
-            );
-          }
-          
-          const encryptedValue = await encryptWithPassword(stringValue);
-          if (encryptedValue) {
-            // Store with a prefix to identify encrypted values
-            envVars[key] = {
-              value: `encrypted:${encryptedValue}`,
-              metadata: { isSecret }
-            };
-          } else {
-            // If encryption fails, mark it as a failed encryption
-            // This will be handled by the UI to show asterisks
-            envVars[key] = {
-              value: `encrypted_failed:${stringValue}`,
-              metadata: { isSecret }
-            };
-            log.error(`Failed to encrypt environment variable: ${key}`);
-          }
-        } catch (error) {
-          log.error(`Error encrypting environment variable: ${key}`, error);
-          // Mark as failed encryption
-          envVars[key] = {
-            value: `encrypted_failed:${stringValue}`,
-            metadata: { isSecret }
-          };
-        }
+        envVars[key] = {
+          value: await encryptSecretForStorage(stringValue),
+          metadata: { isSecret }
+        };
       } else {
         // Store non-secret values as-is
         envVars[key] = {
@@ -311,17 +292,25 @@ export async function POST(req: NextRequest) {
       const varsToStore: Record<string, EnvVarWithMetadata> = { ...envVars };
       
       for (const [varKey, varData] of Object.entries(variables)) {
+        const varRecord = varData && typeof varData === 'object'
+          ? varData as Record<string, unknown>
+          : undefined;
         // Extract value and metadata from the variable data
-        const varValue = typeof varData === 'object' && varData !== null && 'value' in varData
-          ? (varData as any).value
+        const varValue = varRecord && 'value' in varRecord
+          ? varRecord.value
           : varData;
           
-        const varMetadata = typeof varData === 'object' && varData !== null && 'metadata' in varData
-          ? (varData as any).metadata
+        const rawMetadata = varRecord && 'metadata' in varRecord
+          ? varRecord.metadata
           : { isSecret: isSecretEnvVar(varKey) };
+        const varMetadata = rawMetadata && typeof rawMetadata === 'object'
+          ? rawMetadata as { isSecret?: unknown }
+          : undefined;
         
         // Get the isSecret flag from metadata
-        const isSecret = varMetadata?.isSecret ?? isSecretEnvVar(varKey);
+        const isSecret = typeof varMetadata?.isSecret === 'boolean'
+          ? varMetadata.isSecret
+          : isSecretEnvVar(varKey);
         const stringValue = String(varValue || '');
         
         // Silently ignore the placeholder value
@@ -333,44 +322,10 @@ export async function POST(req: NextRequest) {
         // If it's a secret and not already a binding reference, encrypt it
         if (isSecret && stringValue && !stringValue.startsWith('${global:')) {
           log.debug(`Encrypting secret env var: ${varKey} [${requestId}]`);
-          try {
-            // First check if encryption is initialized
-            const isEncryptionInitialized = await import('@/utils/encryption/secure').then(
-              module => module.isEncryptionInitialized()
-            );
-            
-            if (!isEncryptionInitialized) {
-              log.debug(`Initializing default encryption [${requestId}]`);
-              // Initialize default encryption if not already initialized
-              await import('@/utils/encryption/secure').then(
-                module => module.initializeDefaultEncryption()
-              );
-            }
-            
-            const encryptedValue = await encryptWithPassword(stringValue);
-            if (encryptedValue) {
-              // Store with a prefix to identify encrypted values
-              varsToStore[varKey] = {
-                value: `encrypted:${encryptedValue}`,
-                metadata: { isSecret }
-              };
-            } else {
-              // If encryption fails, mark it as a failed encryption
-              // This will be handled by the UI to show asterisks
-              varsToStore[varKey] = {
-                value: `encrypted_failed:${stringValue}`,
-                metadata: { isSecret }
-              };
-              log.error(`Failed to encrypt environment variable: ${varKey}`);
-            }
-          } catch (error) {
-            log.error(`Error encrypting environment variable: ${varKey}`, error);
-            // Mark as failed encryption
-            varsToStore[varKey] = {
-              value: `encrypted_failed:${stringValue}`,
-              metadata: { isSecret }
-            };
-          }
+          varsToStore[varKey] = {
+            value: await encryptSecretForStorage(stringValue),
+            metadata: { isSecret }
+          };
         } else {
           // Store non-secret values as-is
           varsToStore[varKey] = {
@@ -410,3 +365,5 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);

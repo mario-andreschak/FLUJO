@@ -38,7 +38,6 @@ jest.mock('@/backend/services/mcp/config', () => ({
 // createTransport returns a fresh (mocked) StdioClientTransport instance; the fake
 // client emits a stderr chunk on that transport during connect().
 jest.mock('@/backend/services/mcp/connection', () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   return {
     createNewClient: jest.fn(),

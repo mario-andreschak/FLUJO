@@ -34,6 +34,28 @@ const README_WITH_CONFIG = `
 
 const README_PLAIN = '# Some Python server\n\nSee the docs.\n';
 
+const README_WITH_NODE_CONFIG = `
+# Gmail MCP server
+
+## Install
+
+\`\`\`sh
+npm ci
+npm run build
+\`\`\`
+
+\`\`\`json
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "node",
+      "args": ["dist/cli.js"]
+    }
+  }
+}
+\`\`\`
+`;
+
 const PYPROJECT = `
 [project]
 name = "duckduckgo-mcp-server"
@@ -78,6 +100,32 @@ describe('parseRepositoryConfig: README explicit config wins over language heuri
     expect((result.config as Partial<MCPStdioConfig>)?.command).toBe('uvx');
     // The README documents a package-runner setup; no install step must be forced
     expect(result.installCommand ?? '').not.toContain('--system');
+  });
+
+  it('supplements an explicit README config with production-safe npm build metadata', async () => {
+    mockRepoFiles({
+      'README.md': README_WITH_NODE_CONFIG,
+      'package.json': JSON.stringify({
+        scripts: {
+          build: 'tsc -p tsconfig.build.json',
+          start: 'node dist/cli.js'
+        }
+      }),
+      'tsconfig.json': '{}'
+    });
+
+    const result = await parseRepositoryConfig({
+      repoPath: 'repo',
+      repoName: 'mcp-gmail-oauth'
+    });
+
+    expect(result.detected).toBe(true);
+    expect(result.foundExplicitConfig).toBe(true);
+    expect(result.runCommand).toBe('node');
+    expect(result.installCommand).toBe('npm install --include=dev');
+    expect(result.buildCommand).toBe('npm run build');
+    expect(result.config?._installCommand).toBe('npm install --include=dev');
+    expect(result.config?._buildCommand).toBe('npm run build');
   });
 
   it('falls back to the Python parser when the README has no explicit config', async () => {

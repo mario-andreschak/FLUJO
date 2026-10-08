@@ -9,21 +9,39 @@ import { Result } from '../errors';
 import { createToolError, createMCPError } from '../errorFactory';
 import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
-import { encodeToolName } from './toolNamespace';
+import { encodeToolName, hashSchema } from './toolNamespace';
+import { buildMCPResourceTools } from './mcpResourceTools';
+import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import OpenAI from 'openai';
+import { hidePresetParameters, mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
+import type { MCPServerConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
+
+export interface SanitizedToolSchema extends OpenAI.FunctionParameters {
+  type?: string;
+  format?: string;
+  description?: string;
+  properties?: Record<string, SanitizedToolSchema>;
+  required?: string[];
+  items?: SanitizedToolSchema;
+  oneOf?: SanitizedToolSchema[];
+  anyOf?: SanitizedToolSchema[];
+  allOf?: SanitizedToolSchema[];
+}
 
 export class ToolHandler {
   /**
    * Sanitizes a JSON Schema to ensure compatibility with all LLM providers
    * Specifically removes unsupported 'format' fields from string properties
+   * and removes invalid entries from 'required' arrays without changing their
+   * JSON Schema scope.
    */
-  static sanitizeSchema(schema: any): any {
-    if (!schema || typeof schema !== 'object') return schema;
+  static sanitizeSchema(schema: unknown): SanitizedToolSchema {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return {};
     
     // Make a deep copy to avoid modifying the original
-    const result = JSON.parse(JSON.stringify(schema));
+    const result = JSON.parse(JSON.stringify(schema)) as SanitizedToolSchema;
     
     // Handle string type with format
     if (result.type === 'string' && result.format) {
@@ -40,9 +58,23 @@ export class ToolHandler {
     
     // Process properties recursively
     if (result.properties) {
-      Object.keys(result.properties).forEach(key => {
-        result.properties[key] = ToolHandler.sanitizeSchema(result.properties[key]);
+      const properties = result.properties;
+      Object.keys(properties).forEach(key => {
+        properties[key] = ToolHandler.sanitizeSchema(properties[key]);
       });
+    }
+
+    // A `required` entry does not need a matching property declaration in the
+    // same schema node. Composition branches commonly declare only `required`
+    // while their properties live on an enclosing schema, so preserve all valid
+    // names independently of local `properties`.
+    if (Array.isArray(result.required)) {
+      result.required = (result.required as unknown[]).filter(
+        (k): k is string => typeof k === 'string' && k.length > 0
+      );
+      if (result.required.length === 0) {
+        delete result.required;
+      }
     }
     
     // Process array items
@@ -51,11 +83,9 @@ export class ToolHandler {
     }
     
     // Process oneOf, anyOf, allOf
-    ['oneOf', 'anyOf', 'allOf'].forEach(key => {
-      if (Array.isArray(result[key])) {
-        result[key] = result[key].map((item: any) => ToolHandler.sanitizeSchema(item));
-      }
-    });
+    if (Array.isArray(result.oneOf)) result.oneOf = result.oneOf.map((item) => ToolHandler.sanitizeSchema(item));
+    if (Array.isArray(result.anyOf)) result.anyOf = result.anyOf.map((item) => ToolHandler.sanitizeSchema(item));
+    if (Array.isArray(result.allOf)) result.allOf = result.allOf.map((item) => ToolHandler.sanitizeSchema(item));
     
     return result;
   }
@@ -125,7 +155,7 @@ export class ToolHandler {
       );
 
       // Map tools to OpenAI format with sanitized schemas
-      const tools: OpenAI.ChatCompletionTool[] = orderedTools.map(tool => ({
+      const tools: OpenAI.ChatCompletionFunctionTool[] = orderedTools.map(tool => ({
         type: "function",
         function: {
           name: tool.name,
@@ -189,6 +219,15 @@ export class ToolHandler {
     
     try {
       const allTools: ToolDefinition[] = [];
+      let serverConfigs: MCPServerConfig[] = [];
+      try {
+        const loadedConfigs = await mcpService.loadServerConfigs?.();
+        serverConfigs = Array.isArray(loadedConfigs) ? loadedConfigs : [];
+      } catch (error) {
+        // Listing/using tools remains available if config storage has a
+        // transient read failure; only server-wide presets are unavailable.
+        log.warn('Could not load server-wide tool parameter presets', error);
+      }
       
       // Process each MCP node
       for (const mcpNode of mcpNodes) {
@@ -198,6 +237,7 @@ export class ToolHandler {
           const boundServer = properties.boundServer;
           const enabledTools = properties.enabledTools || [];
           const toolTimeout = properties.toolTimeout;
+          const serverConfig = serverConfigs.find((config) => config.name === boundServer);
 
           // Node-level roots (issue 46): register this node's workspace-folder overlay
           // BEFORE connecting, so roots/list answers with the union of server-level and
@@ -250,14 +290,33 @@ export class ToolHandler {
           // Filter and format tools
           const serverTools = (toolsResult.tools || [])
             .filter(tool => enabledTools.includes(tool.name))
-            .map(tool => ({
-              originalName: tool.name,
-              server: boundServer,
-              name: encodeToolName(boundServer, tool.name),
-              timeout: toolTimeout,
-              description: tool.description,
-              inputSchema: tool.inputSchema
-            }));
+            .map(tool => {
+              const presetArgs = mergeToolParameterPresets(
+                serverConfig?.toolParameterPresets,
+                properties.toolParameterPresets,
+                tool.name,
+              );
+              // Issue #255: capture the tool's identity at advertise time so a
+              // later dispatch can detect that the server reconnected or the
+              // schema changed. Record the current schema hash as the advertised
+              // one so the dispatch-time comparison has a baseline.
+              const schemaHash = hashSchema(tool.inputSchema);
+              mcpService.setToolSchemaHash(boundServer, tool.name, schemaHash);
+              return {
+                originalName: tool.name,
+                server: boundServer,
+                nodeId: mcpNode.id,
+                name: encodeToolName(boundServer, tool.name),
+                timeout: toolTimeout,
+                description: tool.description,
+                inputSchema: hidePresetParameters(tool.inputSchema as Record<string, unknown>, presetArgs),
+                ...(Object.keys(presetArgs).length > 0 ? { presetArgs } : {}),
+                annotations: tool.annotations,
+                clientGeneration: mcpService.getClientGeneration(boundServer),
+                schemaHash,
+                uiResourceUri: extractUiResourceUri(tool._meta),
+              };
+            });
 
           // Add unique tools
           for (const tool of serverTools) {
@@ -268,6 +327,20 @@ export class ToolHandler {
         }
       }
       
+      // Build the list_mcp_resources synthetic tool (issue #239).
+      // This is additive (read-only); a listing failure logs a warning but does
+      // NOT abort the step — tool availability must not be blocked by resources.
+      try {
+        const resourceTools = await buildMCPResourceTools(mcpNodes);
+        for (const rt of resourceTools) {
+          if (!allTools.some((t) => t.name === rt.name)) {
+            allTools.push(rt);
+          }
+        }
+      } catch (resourceErr) {
+        log.warn('processMCPNodes: buildMCPResourceTools failed, skipping resource tool', { resourceErr });
+      }
+
       const result: Result<MCPNodeProcessingResult> = {
         success: true,
         value: { availableTools: allTools }

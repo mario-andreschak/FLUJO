@@ -1,0 +1,143 @@
+import { getExposureMode, inferLegacyExposureMode } from '@/utils/http/exposureMode';
+import {
+  assertLocalRequest,
+  isLocalRequest,
+  isLoopbackRequest,
+  isRequestHostAllowed,
+} from '@/utils/http/localRequest';
+
+const KEYS = [
+  'FLUJO_EXPOSURE_MODE',
+  'FLUJO_EXPOSURE_MODE_SOURCE',
+  'FLUJO_RUNTIME_LOCAL_HOSTS',
+  'FLUJO_EXTRA_LOCAL_HOSTS',
+  'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL',
+  'FLUJO_MCP_APP_HOST_ORIGINS',
+] as const;
+const original = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
+
+beforeEach(() => {
+  for (const key of KEYS) delete process.env[key];
+});
+
+afterAll(() => {
+  for (const key of KEYS) {
+    const value = original[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+
+describe('single network exposure mode', () => {
+  it('defaults to localhost and fails closed for other hosts', () => {
+    expect(getExposureMode()).toBe('localhost');
+    expect(isLocalRequest('localhost:4200', null)).toBe(true);
+    expect(isLocalRequest('[::1]:4200', 'http://[::1]:4200')).toBe(true);
+    expect(isLocalRequest('192.168.1.20:4200', null)).toBe(false);
+    expect(isRequestHostAllowed('example.com')).toBe(false);
+  });
+
+  it('accepts private addresses and startup-discovered names in network mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    process.env.FLUJO_RUNTIME_LOCAL_HOSTS = 'workstation,10.0.0.8';
+
+    expect(isLocalRequest('192.168.1.20:4200', null)).toBe(true);
+    expect(isLocalRequest('workstation:4200', 'http://workstation:4200')).toBe(true);
+    expect(isLocalRequest('192.168.1.20:4200', 'http://192.168.1.21:4200')).toBe(false);
+    expect(isLocalRequest('printer.local:4200', null)).toBe(true);
+    expect(isLocalRequest('example.com:4200', null)).toBe(false);
+  });
+
+  it('allows public native/same-host requests but rejects cross-site browser origins', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+
+    expect(isLocalRequest('flujo.example.com', null)).toBe(true);
+    expect(isLocalRequest('flujo.example.com', 'https://flujo.example.com')).toBe(true);
+    expect(isLocalRequest('flujo.example.com', 'https://attacker.example')).toBe(false);
+  });
+
+  it.each(['fc.attacker.example', 'fd.attacker.example', 'fe80.attacker.example', 'feb0.example'])
+  ('rejects public DNS lookalike %s in network mode', (hostname) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    expect(isRequestHostAllowed(`${hostname}:4200`)).toBe(false);
+    expect(isLocalRequest(`${hostname}:4200`, `http://${hostname}:4200`)).toBe(false);
+    expect(isLocalRequest('192.168.1.20:4200', `http://${hostname}:4200`)).toBe(false);
+  });
+
+  it.each(['fc00::1', 'fdff:abcd::1', 'fe80::1', 'febf::1'])
+  ('accepts valid private IPv6 literal %s in network mode', (address) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    expect(isRequestHostAllowed(`[${address}]:4200`)).toBe(true);
+    expect(isLocalRequest(`[${address}]:4200`, `http://[${address}]:4200`)).toBe(true);
+  });
+
+  it.each(['fc::1', 'fd::1', 'fe7f::1', 'fec0::1', 'fc00:::1', 'fd00:invalid::1'])
+  ('rejects non-private or malformed IPv6 literal %s in network mode', (address) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    expect(isRequestHostAllowed(`[${address}]:4200`)).toBe(false);
+    expect(isLocalRequest(`[${address}]:4200`, null)).toBe(false);
+  });
+
+  it('keeps strict control-plane requests loopback-only in public mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+
+    expect(isLoopbackRequest('localhost:4200', null)).toBe(true);
+    expect(isLoopbackRequest('[::1]:4200', 'http://localhost:4200')).toBe(true);
+    expect(isLoopbackRequest('flujo.example.com', null)).toBe(false);
+    expect(isLoopbackRequest('flujo.example.com', 'https://flujo.example.com')).toBe(false);
+    expect(assertLocalRequest(
+      new Request('https://flujo.example.com/v1/personas', {
+        headers: { host: 'flujo.example.com' },
+      }),
+      { strictLoopback: true },
+    )?.status).toBe(403);
+    expect(assertLocalRequest(
+      new Request('http://localhost:4200/v1/personas', {
+        headers: { host: 'localhost:4200' },
+      }),
+      { strictLoopback: true },
+    )?.status).toBe(403);
+
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(assertLocalRequest(
+      new Request('http://localhost:4200/v1/personas', {
+        headers: { host: 'localhost:4200' },
+      }),
+      { strictLoopback: true },
+    )).toBeNull();
+    expect(assertLocalRequest(
+      new Request('http://[::1]:4200/v1/personas', {
+        headers: { host: '[::1]:4200', origin: 'http://[::1]:4200' },
+      }),
+      { strictLoopback: true },
+    )).toBeNull();
+    expect(assertLocalRequest(
+      new Request('http://localhost:4200/v1/personas', {
+        headers: { host: 'localhost:4200', 'x-forwarded-for': '203.0.113.7' },
+      }),
+      { strictLoopback: true },
+    )?.status).toBe(403);
+    for (const malformedHost of ['[::1]evil', 'localhost:4200@evil', 'localhost:99999']) {
+      expect(assertLocalRequest(
+        new Request('http://localhost:4200/v1/personas', {
+          headers: { host: malformedHost },
+        }),
+        { strictLoopback: true },
+      )?.status).toBe(403);
+    }
+  });
+
+  it('uses legacy host/sandbox variables only as migration inputs', () => {
+    expect(inferLegacyExposureMode({ FLUJO_EXTRA_LOCAL_HOSTS: '.tenants.internal' })).toBe('network');
+    expect(inferLegacyExposureMode({ FLUJO_EXTRA_LOCAL_HOSTS: ' , ' })).toBeUndefined();
+    expect(inferLegacyExposureMode({ FLUJO_MCP_APP_SANDBOX_PUBLIC_URL: 'https://apps.example' })).toBe('public');
+  });
+
+  it('lets an explicit Settings choice supersede leftover legacy variables', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    process.env.FLUJO_EXPOSURE_MODE_SOURCE = 'settings';
+    process.env.FLUJO_EXTRA_LOCAL_HOSTS = '.tenants.internal';
+
+    expect(isLocalRequest('box.tenants.internal:4200', null)).toBe(false);
+  });
+});

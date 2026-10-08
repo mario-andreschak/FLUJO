@@ -2,69 +2,57 @@
 
 import { MessageState } from '../types';
 import { createLogger } from '@/utils/logger';
+import { translate, type Translator } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/Modals/ServerModal/utils/errorHandling');
+const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
 /**
  * Create a user-friendly error message for configuration detection failures
  */
-export function createConfigDetectionErrorMessage(error: unknown): MessageState {
+export function createConfigDetectionErrorMessage(error: unknown, t: Translator = englishTranslator): MessageState {
   log.error('Configuration detection error:', error);
   
-  let errorMessage = 'Failed to detect repository configuration.';
-  
-  if (error instanceof Error) {
-    errorMessage = `${errorMessage} ${error.message}`;
-  } else if (typeof error === 'string') {
-    errorMessage = `${errorMessage} ${error}`;
-  }
+  const details = error instanceof Error ? error.message : typeof error === 'string' ? error : t('mcp.server.unknownError');
   
   return {
     type: 'error',
-    text: errorMessage
+    text: t('mcp.github.detectionError', { error: details })
   };
 }
 
 /**
  * Create a user-friendly error message for repository cloning failures
  */
-export function createCloneErrorMessage(error: unknown): MessageState {
+export function createCloneErrorMessage(error: unknown, t: Translator = englishTranslator): MessageState {
   log.error('Repository cloning error:', error);
   
-  let errorMessage = 'Failed to clone repository.';
-  
-  if (error instanceof Error) {
-    errorMessage = `${errorMessage} ${error.message}`;
-  } else if (typeof error === 'string') {
-    errorMessage = `${errorMessage} ${error}`;
-  }
+  const details = error instanceof Error ? error.message : typeof error === 'string' ? error : t('mcp.server.unknownError');
   
   return {
     type: 'error',
-    text: errorMessage
+    text: t('mcp.github.cloneError', { error: details })
   };
 }
 
 /**
  * Create a user-friendly warning message for empty configuration
  */
-export function createEmptyConfigWarningMessage(language?: string): MessageState {
-  const languageText = language ? ` for ${language}` : '';
-  
+export function createEmptyConfigWarningMessage(language?: string, t: Translator = englishTranslator): MessageState {
   return {
     type: 'warning',
-    text: `No configuration detected${languageText}. Please configure manually.`
+    text: language
+      ? t('mcp.github.noConfigLanguage', { language })
+      : t('mcp.github.noConfig')
   };
 }
 
 /**
  * Create a user-friendly success message for configuration detection
  */
-export function createConfigDetectionSuccessMessage(language?: string): MessageState {
-  const languageText = language ? ` for ${language}` : '';
-  
+export function createConfigDetectionSuccessMessage(language?: string, t: Translator = englishTranslator): MessageState {
   return {
     type: 'success',
-    text: `Configuration detected successfully${languageText}.`
+    text: t('mcp.github.detectionSuccess')
   };
 }

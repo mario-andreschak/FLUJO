@@ -7,6 +7,16 @@
  * process restarted. flowService.saveFlow/deleteFlow must invalidate it.
  */
 import type { Flow } from '@/shared/types/flow';
+// This suite models collections in memory; disk ownership/concurrency is covered
+// by personaOwnedFlows.test.ts against the real authoring boundary.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
 
 // Capture engine cache-clear calls without loading the real execution layer.
 const clearFlowCache = jest.fn();
@@ -41,7 +51,6 @@ jest.mock('@/utils/paths', () => {
   return {
     ...actual,
     getDataDir: () =>
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       require('path').join(require('os').tmpdir(), 'flujo-cacheinvalidation-test'),
   };
 });
@@ -69,6 +78,19 @@ describe('flowService cache invalidation', () => {
     const svc = new FlowService();
     await svc.saveFlow(flowFixture('flow-abc', 'Original'));
     expect(clearFlowCache).toHaveBeenCalledWith('flow-abc');
+  });
+
+  it('strips a legacy unattended override before persisting', async () => {
+    const svc = new FlowService();
+    const legacyFlow = {
+      ...flowFixture('flow-legacy', 'Legacy'),
+      unattended: true,
+    } as Flow & { unattended?: boolean };
+
+    await svc.saveFlow(legacyFlow);
+
+    expect(legacyFlow.unattended).toBeUndefined();
+    expect((collections.flows['flow-legacy'] as { unattended?: boolean }).unattended).toBeUndefined();
   });
 
   it('invalidates the engine flow cache when a flow is updated (rename)', async () => {

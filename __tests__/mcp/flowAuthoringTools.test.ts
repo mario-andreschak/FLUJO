@@ -1,6 +1,6 @@
 /**
  * Tests for the flow-authoring tools on the built-in FLUJO MCP server (#14 follow-up):
- * list_flow_building_blocks / validate_flow_spec / create_flow. External agents author
+ * list_flow_building_blocks / guide / validate / draft / create. External agents author
  * the semantic FlowSpec; these tools compile, validate, and (create_flow only, gated on
  * zero errors) save — no raw ReactFlow JSON in the contract.
  */
@@ -32,13 +32,24 @@ jest.mock('@/backend/services/flow', () => ({
   },
 }));
 
+const suggestToolsMock = jest.fn();
+const applyToolsMock = jest.fn();
+const checkPlausibilityMock = jest.fn();
+jest.mock('@/backend/services/flow/assistedAuthoring', () => ({
+  suggestToolsForFlowStep: (...args: unknown[]) => suggestToolsMock(...args),
+  applyToolsToFlowStep: (...args: unknown[]) => applyToolsMock(...args),
+  checkFlowPlausibility: (...args: unknown[]) => checkPlausibilityMock(...args),
+}));
+
 import {
   AUTHORING_TOOL_NAMES,
   isAuthoringTool,
   authoringToolDefinitions,
   authoringCallTool,
+  MAX_AUTHORING_TOOL_DESCRIPTION_CHARS,
 } from '@/backend/services/mcp/flowAuthoringTools';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
+import { SIMPLE_FLOW_SPEC_SCHEMA } from '@/utils/shared/simpleFlowSpec';
 
 const goodSpec = {
   name: 'agent_made_flow',
@@ -51,6 +62,13 @@ const goodSpec = {
     { from: 's', to: 'p' },
     { from: 'p', to: 'f' },
   ],
+};
+
+const simpleSpec = {
+  name: 'guided_flow',
+  goal: 'Do the work',
+  model: 'worker',
+  steps: [{ id: 'work', task: 'Do it with the configured tool', tools: ['srv/tool_a'] }],
 };
 
 function textOf(result: { content: Array<{ type: string }> }): string {
@@ -80,20 +98,64 @@ beforeEach(() => {
 });
 
 describe('tool definitions', () => {
-  it('exposes exactly the three authoring tools, recognized by isAuthoringTool', () => {
+  it('exposes the authoring tools, recognized by isAuthoringTool', () => {
     const defs = authoringToolDefinitions();
     expect(defs.map((t) => t.name)).toEqual([...AUTHORING_TOOL_NAMES]);
     for (const name of AUTHORING_TOOL_NAMES) expect(isAuthoringTool(name)).toBe(true);
     expect(isAuthoringTool('some_flow_tool')).toBe(false);
   });
 
-  it('embeds the canonical FlowSpec documentation in the spec-taking tools', () => {
+  it('uses the compact schema instead of embedding the advanced guide in every tool', () => {
     const defs = authoringToolDefinitions();
     const create = defs.find((t) => t.name === 'create_flow')!;
     const validate = defs.find((t) => t.name === 'validate_flow_spec')!;
-    expect(create.description).toContain(FLOWSPEC_DOC);
-    expect(validate.description).toContain(FLOWSPEC_DOC);
+    const draft = defs.find((t) => t.name === 'draft_flow')!;
+    expect(create.description).not.toContain(FLOWSPEC_DOC);
+    expect(validate.description).not.toContain(FLOWSPEC_DOC);
+    expect(draft.description).not.toContain(FLOWSPEC_DOC);
+    expect(create.description!.length).toBeLessThan(400);
     expect(create.inputSchema).toEqual(expect.objectContaining({ required: ['spec'] }));
+    expect(JSON.stringify(create.inputSchema)).toContain(JSON.stringify(SIMPLE_FLOW_SPEC_SCHEMA.required));
+  });
+
+  // #338/A2c: a 30B-class model reads all descriptions before it can pick
+  // one. Long-form rules belong in get_flow_authoring_guide or the per-argument
+  // schema descriptions, not in the always-resent tool block.
+  it('keeps every authoring tool description within the wire budget', () => {
+    const oversized = authoringToolDefinitions()
+      .map((tool) => ({ name: tool.name, length: (tool.description ?? '').length }))
+      .filter((entry) => entry.length > MAX_AUTHORING_TOOL_DESCRIPTION_CHARS);
+    expect(oversized).toEqual([]);
+    for (const tool of authoringToolDefinitions()) {
+      expect((tool.description ?? '').length).toBeGreaterThan(0);
+    }
+  });
+
+  // Compacting the descriptions must not drop the install safety posture: the
+  // third-party-code warning stays on the wire, the mechanics move into the
+  // argument schema.
+  it('keeps the third-party-code warning on both install tools', () => {
+    const defs = authoringToolDefinitions();
+    const install = defs.find((t) => t.name === 'install_mcp_server')!;
+    const best = defs.find((t) => t.name === 'install_best_mcp_server')!;
+    expect(install.description).toContain('DOWNLOADS AND RUNS third-party code');
+    expect(install.description).toContain('consent-gated');
+    expect(best.description).toContain('DOWNLOADS AND MAY RUN third-party code');
+    expect(JSON.stringify(install.inputSchema)).toContain('server.json');
+    expect(JSON.stringify(install.inputSchema)).toContain('GitHub URL');
+  });
+});
+
+describe('get_flow_authoring_guide', () => {
+  it('returns the compact schema by default and the full guide only on demand', async () => {
+    const simple = payload(await authoringCallTool('get_flow_authoring_guide', {}));
+    expect(simple.profile).toBe('simple');
+    expect(simple.schema).toEqual(SIMPLE_FLOW_SPEC_SCHEMA);
+    expect(simple.guide.join(' ')).not.toContain(FLOWSPEC_DOC);
+
+    const advanced = payload(await authoringCallTool('get_flow_authoring_guide', { profile: 'advanced' }));
+    expect(advanced.profile).toBe('advanced');
+    expect(advanced.guide).toBe(FLOWSPEC_DOC);
   });
 });
 
@@ -116,6 +178,23 @@ describe('list_flow_building_blocks', () => {
     const text = textOf(await authoringCallTool('list_flow_building_blocks', {}));
     expect(text).not.toContain('enc');
     expect(text).not.toContain('ApiKey');
+  });
+
+  it('filters categories, connection state, and names without changing the full default catalog', async () => {
+    const blocks = payload(await authoringCallTool('list_flow_building_blocks', {
+      include: ['servers'],
+      connected: true,
+      query: 'tool_a',
+    }));
+    expect(blocks).toEqual({
+      servers: [{ name: 'srv', connected: true, tools: [{ name: 'tool_a', description: 'does a' }] }],
+    });
+  });
+
+  it('rejects unsupported list arguments instead of silently ignoring them', async () => {
+    const result = await authoringCallTool('list_flow_building_blocks', { status: 'connected' });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Unsupported list argument');
   });
 });
 
@@ -141,11 +220,58 @@ describe('validate_flow_spec', () => {
     expect(body.validation.errorCount).toBe(0);
   });
 
+  it('defaults a guided steps spec to the simple profile', async () => {
+    const body = payload(await authoringCallTool('validate_flow_spec', { spec: simpleSpec }));
+    expect(body.profile).toBe('simple');
+    expect(body.validation.errorCount).toBe(0);
+    expect(body.flowName).toBe('guided_flow');
+  });
+
   it('errors helpfully when spec is missing or unparseable', async () => {
     const missing = await authoringCallTool('validate_flow_spec', {});
     expect(missing.isError).toBe(true);
     const garbled = await authoringCallTool('validate_flow_spec', { spec: '{not json' });
     expect(garbled.isError).toBe(true);
+  });
+});
+
+describe('draft_flow', () => {
+  it('returns the complete bundle without saving', async () => {
+    const result = await authoringCallTool('draft_flow', { spec: simpleSpec });
+    expect(result.isError).toBeUndefined();
+    const body = payload(result);
+    expect(body.saved).toBe(false);
+    expect(body.rootFlowId).toBe(body.flow.id);
+    expect(body.flows).toHaveLength(1);
+    expect(body.flow.nodes.some((node: { type: string }) => node.type === 'process')).toBe(true);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('draft_generated_flow', () => {
+  it('uses the production generator hardening pipeline and never saves', async () => {
+    const incompleteSpec = {
+      name: 'harden_me',
+      nodes: [
+        { key: 'work', type: 'process', model: 'worker', prompt: 'Do the work' },
+      ],
+      edges: [],
+    };
+    const result = await authoringCallTool('draft_generated_flow', { spec: incompleteSpec });
+    expect(result.isError).toBeUndefined();
+    const body = payload(result);
+    expect(body.pipeline).toBe('production-generator');
+    expect(body.saved).toBe(false);
+    expect(body.spec.nodes.map((node: { type: string }) => node.type))
+      .toEqual(expect.arrayContaining(['start', 'process', 'finish']));
+    expect(body.hardening.repairChanges.length).toBeGreaterThan(0);
+    const process = body.flow.nodes.find((node: { type: string }) => node.type === 'process');
+    expect(process.data.properties).toEqual(expect.objectContaining({
+      inputMode: 'full-history',
+      outputMode: 'latest-message',
+    }));
+    expect(body.validation.errorCount).toBe(0);
+    expect(saveFlowMock).not.toHaveBeenCalled();
   });
 });
 
@@ -175,6 +301,33 @@ describe('create_flow', () => {
     const body = payload(result);
     expect(body.issues).toContainEqual(expect.objectContaining({ code: 'no-usable-nodes' }));
     expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('assisted authoring tools', () => {
+  const flow = { id: 'draft', name: 'Draft', nodes: [], edges: [] };
+
+  it('routes single-step suggestions and approved application without saving', async () => {
+    suggestToolsMock.mockResolvedValue({ nodeId: 'work', suggestions: [], proposedPrompt: 'Do it' });
+    applyToolsMock.mockResolvedValue(flow);
+    expect(payload(await authoringCallTool('suggest_tools_for_flow_step', {
+      flow,
+      nodeId: 'work',
+      modelId: 'model-1',
+    }))).toEqual({ nodeId: 'work', suggestions: [], proposedPrompt: 'Do it' });
+    expect(payload(await authoringCallTool('apply_tools_to_flow_step', {
+      flow,
+      nodeId: 'work',
+      selections: [],
+    }))).toEqual({ saved: false, flow });
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('routes whole-bundle plausibility checks', async () => {
+    checkPlausibilityMock.mockResolvedValue({ contexts: [], issues: [], patches: [], repairedFlow: flow, repairedFlows: [flow] });
+    const body = payload(await authoringCallTool('check_flow_plausibility', { flow, relatedFlows: [flow] }));
+    expect(body.repairedFlows).toEqual([flow]);
+    expect(checkPlausibilityMock).toHaveBeenCalledWith(expect.objectContaining({ flow, relatedFlows: [flow] }));
   });
 });
 

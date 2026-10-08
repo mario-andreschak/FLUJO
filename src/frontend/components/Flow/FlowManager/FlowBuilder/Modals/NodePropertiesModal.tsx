@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -16,23 +15,33 @@ import {
   FormControlLabel,
   Typography,
   Box,
-  IconButton,
   Divider,
   Tabs,
   Tab,
 } from '@mui/material';
 import PromptBuilder from '@/frontend/components/shared/PromptBuilder';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface NodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
-const getNodeProperties = (nodeType: string) => {
+interface NodePropertyDefinition {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select' | 'boolean';
+  multiline?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+}
+
+const getNodeProperties = (nodeType: string): NodePropertyDefinition[] => {
   switch (nodeType) {
     case 'start':
       return [
@@ -66,7 +75,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null>(null);
   
   // Tab state for the modal sections
@@ -81,7 +90,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
     }
   }, [node, open]);
 
-  const handlePropertyChange = (key: string, value: any) => {
+  const handlePropertyChange = (key: string, value: unknown) => {
     setNodeData((prev) => {
       if (!prev) return null;
       return {
@@ -101,7 +110,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
     }
   };
 
-  const renderField = (property: any) => {
+  const renderField = (property: NodePropertyDefinition) => {
     if (!nodeData) return null;
     
     const value = nodeData.properties?.[property.key] ?? '';
@@ -115,7 +124,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
             label={property.label}
             multiline={property.multiline}
             rows={property.multiline ? 4 : 1}
-            value={value}
+            value={typeof value === 'string' ? value : ''}
             onChange={(e) => handlePropertyChange(property.key, e.target.value)}
             margin="normal"
           />
@@ -127,7 +136,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
             fullWidth
             type="number"
             label={property.label}
-            value={value}
+            value={typeof value === 'number' || typeof value === 'string' ? value : ''}
             inputProps={{
               min: property.min,
               max: property.max,
@@ -142,11 +151,11 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
           <FormControl key={property.key} fullWidth margin="normal">
             <InputLabel>{property.label}</InputLabel>
             <Select
-              value={value || ''}
+              value={typeof value === 'string' || typeof value === 'number' ? value : ''}
               label={property.label}
               onChange={(e) => handlePropertyChange(property.key, e.target.value)}
             >
-              {property.options.map((option: string) => (
+              {(property.options ?? []).map((option) => (
                 <MenuItem key={option} value={option}>
                   {option}
                 </MenuItem>
@@ -160,7 +169,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
             key={property.key}
             control={
               <Switch
-                checked={value || false}
+                checked={typeof value === 'boolean' ? value : false}
                 onChange={(e) => handlePropertyChange(property.key, e.target.checked)}
               />
             }
@@ -193,16 +202,10 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
         }
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {nodeData.label || `${nodeTypeLabel} Node`} Properties
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={`${nodeData.label || `${nodeTypeLabel} Node`} Properties`}
+        onClose={onClose}
+      />
       
       <Divider />
       
@@ -261,7 +264,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
           {activeTab === 1 && (
             <Box sx={{ mt: 2 }}>
               <PromptBuilder 
-                value={nodeData.properties?.prompt || ''}
+                value={typeof nodeData.properties?.prompt === 'string' ? nodeData.properties.prompt : ''}
                 onChange={(value) => handlePropertyChange('prompt', value)}
                 label="Prompt Template"
               />

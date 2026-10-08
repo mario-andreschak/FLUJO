@@ -43,12 +43,16 @@ import {
   MAX_GENERATED_FLOWS,
 } from '@/utils/shared/flowSpecCompiler';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
-import { repairFlowSpec, RepairChange } from '@/utils/shared/flowAutoRepair';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { gatherGenerationContext, mergeIssues, GenerationContext } from './generationContext';
+import {
+  compileGeneratedDraft,
+  DEFAULT_GENERATED_SUBFLOW_DEPTH,
+  GENERATED_FLOW_AUTHORING_POLICY,
+} from './generationDraft';
 
 const log = createLogger('backend/services/flow/generateFlow');
 
@@ -58,7 +62,7 @@ const MAX_REPAIRS_CAP = 2;
 /** Search/install tool-calling turns allowed within one attempt. */
 const MAX_TOOL_TURNS = 8;
 /** Default nesting depth for multi-level generation (issue #94); hard cap is MAX_SUBFLOW_DEPTH. */
-const DEFAULT_MAX_DEPTH = 2;
+const DEFAULT_MAX_DEPTH = DEFAULT_GENERATED_SUBFLOW_DEPTH;
 
 function clampDepth(value: number | undefined): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return DEFAULT_MAX_DEPTH;
@@ -82,8 +86,8 @@ export interface GenerateFlowInput {
   /**
    * Let the generator author MULTI-LEVEL flows (issue #94): a subflow node may carry an
    * inline child spec (`subflowSpec`) or a recursive generation instruction
-   * (`generateSubflow`), producing a whole BUNDLE of draft flows. Off by default; when
-   * off, subflows may only reference existing flows.
+   * (`generateSubflow`), producing a whole BUNDLE of draft flows. On by default; when
+   * explicitly disabled, subflows may only reference existing flows.
    */
   allowSubflows?: boolean;
   /** Max subflow nesting depth (default 2, hard cap MAX_SUBFLOW_DEPTH). Only used with allowSubflows. */
@@ -164,11 +168,11 @@ function buildSystemPrompt(
 
   const acquisition = allowInstall
     ? `CAPABILITY ACQUISITION — you are allowed to EXPAND this FLUJO instance:
-- If the task needs a capability none of the configured servers provides (voice, vision, browsing, email, code execution, …), use search_mcp_marketplace to find a server for it, then install_mcp_server to install the best match. Prefer servers that need no API keys (empty requiredEnv); if the best option needs keys, install a keyless alternative or note the requirement in the flow description.
+- If the task needs a capability none of the configured servers provides (voice, vision, browsing, email, code execution, …), use find_mcp_server to find a server for it, then install_mcp_server to install the selected source. Prefer servers that need no API keys (empty requiredEnv); if the best option needs keys, install a keyless alternative or note the requirement in the flow description.
 - After a successful install, reference the returned server name in a process node's "servers" list and enable the tools it reported.
 - Be ambitious: an actual capability (real audio, real browsing, real files) beats a text approximation. Search with several short terms ("voice", "tts", "speech") — the registry matches server NAMES only.`
     : `CAPABILITY DISCOVERY — you may search but NOT install:
-- If the task needs a capability none of the configured servers provides, you may use search_mcp_marketplace to see what exists. Do NOT reference unconfigured servers in the spec; instead mention the recommended server (its registry name) in the flow "description" so the user can install it.`;
+- If the task needs a capability none of the configured servers provides, you may use find_mcp_server to see what exists. Do NOT reference unconfigured servers in the spec; instead mention the recommended server (its registry name) in the flow "description" so the user can install it.`;
 
   return `You design workflows for FLUJO, an MCP-first workflow builder. The user describes what they want; you emit a flow specification as JSON.
 
@@ -176,7 +180,7 @@ OUTPUT FORMAT — when you are done (after any tool use), respond with ONLY one 
 
 ${FLOWSPEC_DOC}
 
-GENERATED-FLOW DEFAULTS (context saving): process nodes you leave without an explicit inputMode/outputMode are compiled with inputMode "latest-message" and outputMode "latest-message" — each step sees only the current task and later steps see only its final response, not its tool calls/results. When a step genuinely needs the whole conversation or later steps need its intermediate work, set "full-history" / "full-conversation" explicitly.
+${GENERATED_FLOW_AUTHORING_POLICY}
 
 ${acquisition}
 
@@ -193,12 +197,12 @@ function issueLines(issues: Array<{ severity: string; message: string }>): strin
 // Generator tools (marketplace search / install)
 // ---------------------------------------------------------------------------
 
-function generatorTools(allowInstall: boolean): OpenAI.ChatCompletionTool[] {
-  const tools: OpenAI.ChatCompletionTool[] = [
+function generatorTools(allowInstall: boolean): OpenAI.ChatCompletionFunctionTool[] {
+  const tools: OpenAI.ChatCompletionFunctionTool[] = [
     {
       type: 'function',
       function: {
-        name: 'search_mcp_marketplace',
+        name: 'find_mcp_server',
         description:
           'Search the public MCP server registry. The registry matches the query against server NAMES only (substring), so use short single terms ("voice", "tts", "browser") and try several. Returns name, description, whether FLUJO can install it, and which env vars/keys it requires.',
         parameters: {
@@ -243,7 +247,7 @@ async function executeGeneratorTool(
   allowInstall: boolean,
   state: ToolLoopState
 ): Promise<unknown> {
-  if (name === 'search_mcp_marketplace') {
+  if (name === 'find_mcp_server') {
     const query = typeof args.query === 'string' ? args.query : '';
     try {
       return await searchRegistry(query);
@@ -304,7 +308,7 @@ async function runModelTurn(
   model: Model,
   apiKey: string,
   messages: OpenAI.ChatCompletionMessageParam[],
-  tools: OpenAI.ChatCompletionTool[],
+  tools: OpenAI.ChatCompletionFunctionTool[],
   allowInstall: boolean,
   state: ToolLoopState
 ): Promise<string> {
@@ -418,7 +422,7 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
     return { success: false, error: 'A generator model id is required', statusCode: 400 };
   }
   const allowInstall = input.allowInstall === true;
-  const allowSubflows = input.allowSubflows === true;
+  const allowSubflows = input.allowSubflows !== false;
   // No nesting allowed when the option is off (0 caps any stray subflowSpec the model emits).
   const maxDepth = allowSubflows ? clampDepth(input.maxDepth) : 0;
 
@@ -426,8 +430,13 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
   if (!model) {
     return { success: false, error: `Generator model not found: ${input.modelId}`, statusCode: 404 };
   }
-  const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  if (!apiKey) {
+  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  // Codex supports a keyless ChatGPT subscription login.  In that case the
+  // SDK deliberately receives an empty key and the CLI uses `codex login`.
+  // Keep this exception here (as in ModelHandler) rather than rejecting the
+  // request before the Codex adapter can choose its authentication path.
+  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+  if (apiKey === null) {
     return { success: false, error: 'Could not resolve the generator model API key', statusCode: 500 };
   }
 
@@ -572,55 +581,28 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
       state.contextDirty = false;
     }
 
-    // Forgiving generation: deterministically add a missing start/finish and chain
-    // disconnected steps in author order BEFORE compiling, so common wiring omissions the
-    // model makes don't burn its repair budget (recurses into inline subflow children). Best
-    // effort — a repair failure just compiles the spec as-is.
-    let specToCompile: FlowSpec = spec;
-    let repairChanges: RepairChange[] = [];
-    try {
-      const repaired = repairFlowSpec(spec);
-      if (repaired.changes.length > 0) {
-        specToCompile = repaired.spec;
-        repairChanges = repaired.changes;
-        log.info(`Attempt ${attempts}: auto-repair adjusted the spec (${repairChanges.length} change(s))`);
-      }
-    } catch (err) {
-      log.warn('Auto-repair of the generated spec failed; compiling the spec as-is', err);
-    }
-    const repairIssues = repairChanges.map((c) => ({ severity: 'warning' as const, code: c.code, message: c.message }));
-
-    const compiled = compileFlowSpec(specToCompile, context.compile, { maxDepth, maxFlows: MAX_GENERATED_FLOWS });
-    if (!compiled.flow) {
+    // The production and editable Flow-based generators share this exact deterministic
+    // hardening pipeline. Prompt tuning can change the authored design without losing
+    // scratchpad safety, structural repair, generated defaults, or bundle validation.
+    const compiled = compileGeneratedDraft(spec, context, {
+      maxDepth,
+      maxFlows: MAX_GENERATED_FLOWS,
+    });
+    if (!compiled.success) {
       messages.push(
         { role: 'assistant', content: raw },
         { role: 'user', content: `The specification could not be compiled:\n${issueLines(compiled.issues)}\nFix these problems and re-emit the COMPLETE corrected JSON (only the JSON).` }
       );
       continue;
     }
-    // Generation-only context-saving defaults (announced in the system prompt): process
-    // nodes without an explicit inputMode/outputMode run scoped to the latest message and
-    // hide their tool exchanges from later steps. Applied to EVERY flow in the bundle.
-    for (const f of compiled.flows) applyGenerationDefaults(f);
-
-    const perFlow: GeneratedFlowEntry[] = compiled.flows.map((f) => ({
-      flow: f,
-      validation: validateFlow(f, {
-        models: context.compile.models,
-        servers: context.validatorServers,
-        serverTools: context.compile.serverTools,
-      }),
-    }));
-    // One merged result across the WHOLE bundle (auto-repair changes + compile issues + every
-    // flow's validation) drives the repair loop and the caller's error/warning counts. The
-    // auto-repair warnings tell the reviewer what wiring was added for them.
-    const validation = mergeIssues([...repairIssues, ...compiled.issues], {
-      issues: perFlow.flatMap((p) => p.validation.issues),
-      errorCount: 0,
-      warningCount: 0,
-      isRunnable: true,
-    });
-    best = { flows: perFlow, rootFlow: compiled.flow, validation };
+    if (compiled.guardChanges.length > 0) {
+      log.info(`Attempt ${attempts}: scratchpad-var guard rewrote ${compiled.guardChanges.length} reference(s)`);
+    }
+    if (compiled.repairChanges.length > 0) {
+      log.info(`Attempt ${attempts}: auto-repair adjusted the spec (${compiled.repairChanges.length} change(s))`);
+    }
+    const validation = compiled.validation;
+    best = { flows: compiled.flows, rootFlow: compiled.flow, validation };
 
     if (validation.errorCount === 0) break;
 
@@ -680,6 +662,11 @@ export interface ImproveFlowInput {
    * as {@link generateFlow} — strictly opt-in per request. Searching is always allowed.
    */
   allowInstall?: boolean;
+  /**
+   * Other unsaved flows in the draft bundle. They are compile-time references only:
+   * the improver edits `flow`, preserves these descendants, and never persists them.
+   */
+  relatedFlows?: Flow[];
 }
 
 /**
@@ -713,13 +700,28 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
   if (!flow || typeof flow !== 'object' || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
     return { success: false, error: 'A valid flow to improve is required', statusCode: 400 };
   }
+  const relatedFlows = (Array.isArray(input.relatedFlows) ? input.relatedFlows : [])
+    .filter((candidate): candidate is Flow => (
+      !!candidate &&
+      typeof candidate === 'object' &&
+      typeof candidate.id === 'string' &&
+      candidate.id !== flow.id &&
+      Array.isArray(candidate.nodes) &&
+      Array.isArray(candidate.edges)
+    ))
+    .filter((candidate, index, all) => (
+      all.findIndex((other) => other.id === candidate.id) === index
+    ));
 
   const model = await modelService.getModel(input.modelId);
   if (!model) {
     return { success: false, error: `Generator model not found: ${input.modelId}`, statusCode: 404 };
   }
-  const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  if (!apiKey) {
+  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  // An empty Codex key means use the local ChatGPT-plan session from
+  // `codex login`; all other unresolved keys remain an error.
+  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+  if (apiKey === null) {
     return { success: false, error: 'Could not resolve the generator model API key', statusCode: 500 };
   }
 
@@ -745,12 +747,23 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
 
   // The flow's own id is dropped from the compile context each round (see above): keep the
   // name, forbid self-subflow. Recomputed after any install re-gathers the context.
-  const compileContextFor = (ctx: GenerationContext) => ({
-    models: ctx.compile.models,
-    servers: ctx.compile.servers,
-    serverTools: ctx.compile.serverTools,
-    flows: (ctx.compile.flows ?? []).filter((f) => f.id !== flow.id),
-  });
+  const compileContextFor = (ctx: GenerationContext) => {
+    const references = new Map(
+      (ctx.compile.flows ?? [])
+        .filter((candidate) => candidate.id !== flow.id)
+        .map((candidate) => [candidate.id, candidate])
+    );
+    // Prefer the current unsaved bundle over a stored flow with the same id/name.
+    for (const related of relatedFlows) {
+      references.set(related.id, { id: related.id, name: related.name });
+    }
+    return {
+      models: ctx.compile.models,
+      servers: ctx.compile.servers,
+      serverTools: ctx.compile.serverTools,
+      flows: [...references.values()],
+    };
+  };
 
   const userPrompt = `EXISTING FLOW (modify this — keep unchanged parts intact, and KEEP each node's "key" for any node you do NOT restructure so its canvas position is preserved):\n${JSON.stringify(
     currentSpec
@@ -822,7 +835,19 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
       serverTools: context.compile.serverTools,
     });
     const validation = mergeIssues(compiled.issues, flowValidation);
-    best = { flows: [{ flow: compiled.flow, validation: flowValidation }], rootFlow: compiled.flow, validation };
+    const relatedEntries = relatedFlows.map((related) => ({
+      flow: related,
+      validation: validateFlow(related, {
+        models: context.compile.models,
+        servers: context.validatorServers,
+        serverTools: context.compile.serverTools,
+      }),
+    }));
+    best = {
+      flows: [...relatedEntries, { flow: compiled.flow, validation: flowValidation }],
+      rootFlow: compiled.flow,
+      validation,
+    };
 
     if (validation.errorCount === 0) break;
 

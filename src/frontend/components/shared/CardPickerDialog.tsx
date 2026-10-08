@@ -3,25 +3,32 @@
 import React from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
-  Box,
-  IconButton,
   Typography,
   Divider,
+  useMediaQuery,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DialogHeaderActions from './DialogHeaderActions';
 import CardPickerGrid, { CardPickerGridProps } from './CardPickerGrid';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTheme } from '@mui/material/styles';
 
 export interface CardPickerDialogProps extends CardPickerGridProps {
   open: boolean;
   onClose: () => void;
-  title: React.ReactNode;
+  /** Omit to render the picker without a visible heading. */
+  title?: React.ReactNode;
+  /** Accessible name used when the visible title is intentionally omitted. */
+  ariaLabel?: string;
   /** Optional helper text shown above the grid. */
   description?: React.ReactNode;
   maxWidth?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+  /** Let compact hosts use the full phone viewport instead of a cramped modal. */
+  fullScreen?: boolean;
+  /** Optional exact trigger to restore focus to after the closing transition. */
+  restoreFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 /**
@@ -34,31 +41,76 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
   open,
   onClose,
   title,
+  ariaLabel,
   description,
   maxWidth = 'md',
+  fullScreen,
+  restoreFocusRef,
+  autoFocusSearch: autoFocusSearchProp,
+  autoFocusDelayMs: autoFocusDelayMsProp,
   ...gridProps
 }) => {
+  const { t } = useI18n();
+  const theme = useTheme();
+  const compactViewport = useMediaQuery(theme.breakpoints.down('sm'));
+  const resolvedFullScreen = fullScreen ?? compactViewport;
+  const titleId = React.useId();
+  const descriptionId = React.useId();
+  const openingTriggerRef = React.useRef<HTMLElement | null>(null);
+  const wasOpenRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      openingTriggerRef.current = restoreFocusRef?.current
+        ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    }
+    wasOpenRef.current = open;
+  }, [open, restoreFocusRef]);
+
+  const restoreFocus = () => {
+    (restoreFocusRef?.current ?? openingTriggerRef.current)?.focus();
+  };
+
+  // #372: re-trigger auto-focus every time this dialog opens; the delay lets
+  // MUI's Dialog focus trap settle first so the two don't fight over focus.
+  const autoFocusSearch = autoFocusSearchProp ?? open;
+  const autoFocusDelayMs = autoFocusDelayMsProp ?? 120;
   return (
-    <Dialog open={open} onClose={onClose} maxWidth={maxWidth} fullWidth>
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">{title}</Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
-      <Divider />
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth={maxWidth}
+      fullWidth
+      fullScreen={resolvedFullScreen}
+      aria-labelledby={!ariaLabel && title !== undefined && title !== null ? titleId : undefined}
+      aria-describedby={description ? descriptionId : undefined}
+      PaperProps={ariaLabel ? { 'aria-label': ariaLabel } : undefined}
+      TransitionProps={{ onExited: restoreFocus }}
+    >
+      {title !== undefined && title !== null && (
+        <>
+          <DialogHeaderActions
+            title={<span id={titleId}>{title}</span>}
+            onClose={onClose}
+            showAskFlujo={false}
+          />
+          <Divider />
+        </>
+      )}
       <DialogContent sx={{ p: 3 }}>
         {description && (
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography id={descriptionId} variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {description}
           </Typography>
         )}
-        <CardPickerGrid {...gridProps} />
+        <CardPickerGrid
+          {...gridProps}
+          autoFocusSearch={autoFocusSearch}
+          autoFocusDelayMs={autoFocusDelayMs}
+        />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
       </DialogActions>
     </Dialog>
   );

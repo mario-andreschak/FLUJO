@@ -2,17 +2,25 @@ name: Publish Docker Image
 
 # Builds the official FLUJO image and pushes it to GHCR as
 # ghcr.io/mario-andreschak/flujo (issue #57). Consumers like the brain stack
-# reference :latest; every push to main also gets the package.json version and
-# a commit-sha tag for pinning.
+# reference :latest. The workflow is dispatched explicitly by `npm run release`
+# or `npm run dockerbuild`; builds from main also get the package.json version
+# and a commit-sha tag for pinning.
 #
 # NOTE: the first published package is PRIVATE by default. Make it public once
 # under https://github.com/users/mario-andreschak/packages/container/flujo/settings
 # or anonymous `docker pull` keeps failing with "denied".
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Optional exact npm release commit
+        type: string
+        required: false
+      expected_version:
+        description: Optional exact npm release version
+        type: string
+        required: false
 
 concurrency:
   group: publish-image-${{ github.ref }}
@@ -24,20 +32,71 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Require exact-commit main verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.expected_sha }}
+          RELEASE_VERSION: ${{ inputs.expected_version }}
+        run: node scripts/require-release-verification.mjs image
+
+      - name: Build and validate synchronized MCP release artifacts
+        run: |
+          npm ci --include=dev
+          npm run build
+          npm run test:mcp-process-boundary
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+
       - uses: docker/setup-buildx-action@v3
+
+      - name: Read package.json version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Build local image for process-boundary smoke
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: flujo-process-boundary-smoke:${{ github.sha }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha
+
+      - name: Exercise MCP proxy in the local image
+        shell: bash
+        run: |
+          set -euo pipefail
+          volume="flujo-smoke-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container="flujo-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run -d --name "$container" \
+            -p 127.0.0.1:4200:4200 \
+            -v "$volume:/app/data" \
+            "flujo-process-boundary-smoke:${{ github.sha }}"
+          node scripts/smoke-mcp-artifacts.mjs --proxy-only http://127.0.0.1:4200
 
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read package.json version
-        id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata (tags + OCI labels)
         id: meta
@@ -56,5 +115,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

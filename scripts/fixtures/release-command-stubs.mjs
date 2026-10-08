@@ -1,0 +1,68 @@
+// Every child-process call is intercepted. Even a guard regression cannot run
+// real git/npm/gh commands, change versions, or publish anything from this test.
+import childProcess from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import path from 'node:path';
+
+const record = (command) => appendFileSync(process.env.RELEASE_TEST_COMMAND_LOG, `${JSON.stringify(command)}\n`);
+let appBuilt = false;
+for (const method of ['exec', 'execFile', 'execFileSync', 'fork', 'spawn']) {
+  childProcess[method] = () => {
+    record(`blocked child_process.${method}`);
+    throw new Error(`Unexpected child_process.${method} blocked by release test`);
+  };
+}
+childProcess.execSync = (command) => {
+  record(command);
+  if (command === 'git rev-parse --abbrev-ref HEAD') return 'main\n';
+  if (command === 'git status --porcelain') return '';
+  if (command === 'git remote get-url --all origin') return process.env.RELEASE_TEST_FETCH_ORIGIN ?? 'https://github.com/mario-andreschak/FLUJO.git';
+  if (command === 'git remote get-url --push --all origin') return process.env.RELEASE_TEST_PUSH_ORIGIN ?? 'git@github.com:mario-andreschak/FLUJO.git';
+  if (command === 'git fetch origin main "+refs/tags/v*:refs/tags/v*"') return '';
+  if (command === 'git rev-parse main' || command === 'git rev-parse origin/main') return 'synthetic-release-head\n';
+  if (command === 'git rev-parse HEAD') return `${process.env.RELEASE_TEST_LOCAL_HEAD ?? 'a'.repeat(40)}\n`;
+  if (command === 'git rev-parse --git-path flujo-release.json') return path.join(process.cwd(), 'flujo-release.json');
+  if (command === 'gh auth status') return '';
+  if (command === 'npm whoami') return 'synthetic-release-user\n';
+  if (command === 'npm view flujo-ai maintainers --json') return '["synthetic-release-user <synthetic@example.invalid>"]';
+  if (command === 'npm run build:mcp') return '';
+  if (command === 'npm run build') {
+    if (process.env.RELEASE_TEST_FAIL_BUILD === '1') throw new Error('Synthetic app build failed');
+    appBuilt = true;
+    return '';
+  }
+  if (command === 'npm run validate:mcp-release') {
+    if (!appBuilt) throw new Error('Fresh checkout has no app build to validate');
+    return '';
+  }
+  throw new Error(`Unexpected release command blocked by test: ${command}`);
+};
+childProcess.spawnSync = (command, args) => {
+  record([command, ...args].join(' '));
+  if (command === 'gh' && args.length === 1 && args[0] === '--version') return { status: 0 };
+  if (command === 'gh' && args[0] === 'api') {
+    if (args[1] === 'repos/mario-andreschak/FLUJO/actions/workflows/publish-npm.yml') {
+      return { status: 0, stdout: JSON.stringify({ id: 456, path: '.github/workflows/publish-npm.yml', state: 'active' }) };
+    }
+    if (/^repos\/mario-andreschak\/FLUJO\/actions\/runs\/\d+$/.test(args[1])) {
+      const sha = process.env.RELEASE_TEST_RUN_SHA ?? 'a'.repeat(40);
+      const version = process.env.RELEASE_TEST_RUN_VERSION ?? '0.0.1';
+      return { status: 0, stdout: JSON.stringify({
+        id: Number(args[1].split('/').at(-1)),
+        repository: { full_name: process.env.RELEASE_TEST_RUN_REPOSITORY ?? 'mario-andreschak/FLUJO' },
+        path: '.github/workflows/publish-npm.yml', workflow_id: 456,
+        head_branch: 'main', event: 'workflow_dispatch', head_sha: sha,
+        display_title: `Release FLUJO ${version} at ${sha}`,
+        status: 'completed', conclusion: process.env.RELEASE_TEST_RUN_CONCLUSION ?? 'failure',
+      }) };
+    }
+    if (args[1] === 'repos/mario-andreschak/FLUJO/git/ref/heads/main') {
+      return { status: 0, stdout: process.env.RELEASE_TEST_MAIN_HEAD ?? 'a'.repeat(40) };
+    }
+  }
+  if (command === 'gh' && args[0] === 'run' && args[1] === 'rerun') return { status: 0, stdout: '' };
+  if (command === 'gh' && args[0] === 'run' && args[1] === 'watch' && process.env.RELEASE_TEST_RUN_CONCLUSION === 'success') return { status: 0, stdout: '' };
+  throw new Error(`Unexpected release subprocess blocked by test: ${command}`);
+};
+syncBuiltinESMExports();

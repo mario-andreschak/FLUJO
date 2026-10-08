@@ -213,6 +213,48 @@ describe('improveFlow — identity & layout', () => {
     await improveFlow({ flow, description: 'x', modelId: 'model-gen' });
     expect(saveFlowMock).not.toHaveBeenCalled();
   });
+
+  it('preserves unsaved subflow descendants while revising the root draft', async () => {
+    const child = compileFlowSpec({
+      name: 'draft_child',
+      nodes: [
+        { key: 'cs', type: 'start' },
+        { key: 'cf', type: 'finish' },
+      ],
+      edges: [{ from: 'cs', to: 'cf' }],
+    }, buildContext).flow!;
+    child.id = 'draft-child';
+    const parent = compileFlowSpec({
+      name: 'draft_parent',
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'sub', type: 'subflow', flow: child.id },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'sub' },
+        { from: 'sub', to: 'f' },
+      ],
+    }, {
+      ...buildContext,
+      flows: [...(buildContext.flows ?? []), { id: child.id, name: child.name }],
+    }).flow!;
+    parent.id = 'draft-parent';
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(flowToSpec(parent))));
+
+    const result = await improveFlow({
+      flow: parent,
+      relatedFlows: [child],
+      description: 'make the parent clearer',
+      modelId: 'model-gen',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.flows.map((entry) => entry.flow.id)).toEqual([child.id, parent.id]);
+    expect(result.flow.nodes.find((node) => node.type === 'subflow')?.data.properties?.subflowId)
+      .toBe(child.id);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -285,6 +327,18 @@ describe('improveFlow — input validation & failures', () => {
     expect(await improveFlow({ flow: makeExistingFlow(), description: 'x', modelId: 'ghost' })).toEqual(
       expect.objectContaining({ success: false, statusCode: 404 })
     );
+  });
+
+  it('uses an empty key for a Codex model authenticated by codex login', async () => {
+    const flow = makeExistingFlow();
+    getModelMock.mockResolvedValue({ ...generatorModel, adapter: 'codex-cli', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(flowToSpec(flow))));
+
+    const result = await improveFlow({ flow, description: 'x', modelId: 'model-gen' });
+
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
   });
 
   it('502 when the adapter call throws', async () => {

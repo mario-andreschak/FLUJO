@@ -313,6 +313,16 @@ describe('generateFlow — hard failures', () => {
     );
   });
 
+  it('uses an empty key for a Codex model authenticated by codex login', async () => {
+    getModelMock.mockResolvedValue({ ...generatorModel, adapter: 'codex-cli', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
+
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
+  });
+
   it('502 when the adapter call throws', async () => {
     createCompletionMock.mockRejectedValue(new Error('Premature close'));
     const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
@@ -357,14 +367,14 @@ describe('generateFlow — marketplace tools', () => {
     const withoutInstall = (createCompletionMock.mock.calls[0][0].tools ?? []).map(
       (t: { function: { name: string } }) => t.function.name
     );
-    expect(withoutInstall).toEqual(['search_mcp_marketplace']);
+    expect(withoutInstall).toEqual(['find_mcp_server']);
 
     createCompletionMock.mockClear();
     await generateFlow({ description: 'x', modelId: 'model-gen', allowInstall: true });
     const withInstall = (createCompletionMock.mock.calls[0][0].tools ?? []).map(
       (t: { function: { name: string } }) => t.function.name
     );
-    expect(withInstall).toEqual(['search_mcp_marketplace', 'install_mcp_server']);
+    expect(withInstall).toEqual(['find_mcp_server', 'install_mcp_server']);
   });
 
   it('search → install → spec: executes the tools, reports installs, and re-gathers context', async () => {
@@ -392,7 +402,7 @@ describe('generateFlow — marketplace tools', () => {
     }));
 
     createCompletionMock
-      .mockResolvedValueOnce(toolCallCompletion('search_mcp_marketplace', { query: 'voice' }))
+      .mockResolvedValueOnce(toolCallCompletion('find_mcp_server', { query: 'voice' }))
       .mockResolvedValueOnce(toolCallCompletion('install_mcp_server', { name: 'io.github.acme/voice' }, 'call_2'))
       .mockResolvedValueOnce(completionWith(JSON.stringify(specWithNewServer)));
 
@@ -430,7 +440,7 @@ describe('generateFlow — marketplace tools', () => {
   it('withdraws tools after the turn budget and demands the spec', async () => {
     createCompletionMock.mockImplementation(async (input: { tools?: unknown[] }) => {
       if (input.tools && input.tools.length > 0) {
-        return toolCallCompletion('search_mcp_marketplace', { query: 'loop' });
+        return toolCallCompletion('find_mcp_server', { query: 'loop' });
       }
       return completionWith(JSON.stringify(goodSpec));
     });
@@ -443,7 +453,7 @@ describe('generateFlow — marketplace tools', () => {
   it('a search failure is fed to the model as an error result, not thrown', async () => {
     searchRegistryMock.mockRejectedValue(new Error('registry down'));
     createCompletionMock
-      .mockResolvedValueOnce(toolCallCompletion('search_mcp_marketplace', { query: 'voice' }))
+      .mockResolvedValueOnce(toolCallCompletion('find_mcp_server', { query: 'voice' }))
       .mockResolvedValueOnce(completionWith(JSON.stringify(goodSpec)));
     const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
     expect(result.success).toBe(true);
@@ -500,6 +510,10 @@ describe('generateFlow — multi-level (issue #94)', () => {
     const child = result.flows.find((f) => f.flow.id !== result.rootFlowId)!.flow;
     const sub = result.flow.nodes.find((n) => n.type === 'subflow')!;
     expect(sub.data.properties!.subflowId).toBe(child.id);
+    expect(sub.data.properties).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
     expect(result.validation.errorCount).toBe(0);
     // Two model turns: the root, then the child generation.
     expect(createCompletionMock).toHaveBeenCalledTimes(2);
@@ -507,7 +521,11 @@ describe('generateFlow — multi-level (issue #94)', () => {
 
   it('does NOT expand generateSubflow when allowSubflows is off (surfaces as a compile error)', async () => {
     createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(rootSpecWithGen)));
-    const result = await generateFlow({ description: 'x', modelId: 'model-gen' }); // allowSubflows default false
+    const result = await generateFlow({
+      description: 'x',
+      modelId: 'model-gen',
+      allowSubflows: false,
+    });
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.flows).toHaveLength(1);
@@ -554,5 +572,79 @@ describe('generateFlow — signals (issue #132)', () => {
     expect(signal).toBeDefined();
     expect(signal!.data.properties!.topic).toBe('review-blocked');
     expect(signal!.data.properties!.payloadTemplate).toBe('blockers found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scratchpad-variable guard (issue #217)
+// ---------------------------------------------------------------------------
+
+describe('generateFlow — scratchpad-var guard (issue #217)', () => {
+  it('injects the generated-flow data-flow policy into the system prompt', async () => {
+    await generateFlow({ description: 'x', modelId: 'model-gen' });
+    const prompt = createCompletionMock.mock.calls[0][0].messages[0].content as string;
+    expect(prompt).toContain('GENERATED-FLOW DATA-FLOW POLICY');
+    expect(prompt).toContain('${res:NAME}');
+    expect(prompt).toContain('DO NOT emit ${var:NAME}');
+  });
+
+  it('rewrites a dangling ${var:NAME} out of the returned flow and reports it', async () => {
+    const varSpec = {
+      name: 'leaky_flow',
+      description: 'reads a variable nobody captures',
+      nodes: [
+        { key: 's', type: 'start', prompt: 'You do work.' },
+        { key: 'a', type: 'process', model: 'model-abc', prompt: 'Do the first step.' },
+        { key: 'b', type: 'process', model: 'model-abc', prompt: 'Continue using: ${var:missing}.' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'a' },
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'f' },
+      ],
+    };
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(varSpec)));
+    const result = await generateFlow({ description: 'do two steps', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // No dangling scratchpad reference survives anywhere in the compiled flow.
+    expect(JSON.stringify(result.flow)).not.toContain('${var:');
+    // The guard surfaces what it did as an advisory warning.
+    expect(result.validation.issues.some((i) => i.code === 'var-dangling')).toBe(true);
+  });
+
+  it('moves an isolated var reader to full history instead of synthesizing a passive resource', async () => {
+    const varSpec = {
+      name: 'report_flow',
+      description: 'writer then isolated critic',
+      nodes: [
+        { key: 's', type: 'start', prompt: 'You coordinate writing.' },
+        { key: 'w', type: 'process', model: 'model-abc', prompt: 'Draft the report.', captureVariable: 'report' },
+        {
+          key: 'c',
+          type: 'process',
+          model: 'model-abc',
+          inputMode: 'isolated',
+          isolatedPrompt: 'Critique this report:\n\n${var:report}',
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'w' },
+        { from: 'w', to: 'c' },
+        { from: 'c', to: 'f' },
+      ],
+    };
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(varSpec)));
+    const result = await generateFlow({ description: 'write then critique', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const flat = JSON.stringify(result.flow);
+    expect(flat).not.toContain('${var:report}');
+    const critic = result.flow.nodes.find((node) => node.data.properties?.boundModel === 'model-abc' &&
+      node.data.properties?.promptTemplate === '');
+    expect(critic?.data.properties?.inputMode).toBe('full-history');
+    expect(result.validation.issues.some((i) => i.code === 'var-history')).toBe(true);
   });
 });

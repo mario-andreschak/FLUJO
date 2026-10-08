@@ -51,6 +51,15 @@ jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: jest.fn(async () => locked),
 }));
 
+const mockRecordStatisticsEvent = jest.fn();
+jest.mock('@/backend/services/statistics', () => ({
+  classifySchedulerSkip: jest.fn(() => 'unknown'),
+  createStatisticsEvent: jest.fn((event: Record<string, unknown>) => event),
+  recordStatisticsEvent: jest.fn((event: Record<string, unknown>) =>
+    mockRecordStatisticsEvent(event)
+  ),
+}));
+
 const completedResult = {
   status: 'completed',
   outputText: 'All done',
@@ -88,6 +97,7 @@ describe('SchedulerService overlap strategy (#121)', () => {
     runFlowMock.mockReset();
     pendingRuns = [];
     locked = false;
+    mockRecordStatisticsEvent.mockReset();
     scheduler = new SchedulerService();
   });
 
@@ -109,6 +119,26 @@ describe('SchedulerService overlap strategy (#121)', () => {
     pendingRuns[0](completedResult);
     const first = await p1;
     expect(first.status).toBe('completed');
+    expect(scheduler.isRunning(execution!.id)).toBe(false);
+  });
+
+  it('enforces Singleton through the configured non-parallel overlap policy', async () => {
+    blockRunFlow();
+    const { execution } = await scheduler.create(input({
+      startRestriction: 'singleton',
+      overlapStrategy: 'skip',
+    }));
+
+    const first = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
+    await flush();
+    const second = await scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
+
+    expect(second.status).toBe('skipped');
+    expect(second.error).toBe('Previous run still in progress');
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    pendingRuns[0](completedResult);
+    await first;
     expect(scheduler.isRunning(execution!.id)).toBe(false);
   });
 
@@ -168,6 +198,23 @@ describe('SchedulerService overlap strategy (#121)', () => {
 
     // Only the first is running; the other two are queued.
     expect(runFlowMock).toHaveBeenCalledTimes(1);
+    expect(mockRecordStatisticsEvent.mock.calls.map(([event]) => event)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'scheduler.fire',
+          runId: expect.any(String),
+          outcome: 'fired',
+          conversationId: expect.any(String),
+          plannedExecution: { id: execution!.id, name: execution!.name },
+        }),
+        expect.objectContaining({
+          type: 'scheduler.fire',
+          runId: expect.any(String),
+          outcome: 'queued',
+          plannedExecution: { id: execution!.id, name: execution!.name },
+        }),
+      ]),
+    );
 
     pendingRuns[0](completedResult);
     const r1 = await p1;
@@ -188,6 +235,12 @@ describe('SchedulerService overlap strategy (#121)', () => {
     expect(r2.triggerSummary).toBe('second');
     expect(r3.triggerSummary).toBe('third');
     [r1, r2, r3].forEach(r => expect(r.status).toBe('completed'));
+    expect(mockRecordStatisticsEvent.mock.calls.filter(
+      ([event]) => event.type === 'scheduler.fire' && event.outcome === 'fired'
+    )).toHaveLength(3);
+    expect(mockRecordStatisticsEvent.mock.calls.filter(
+      ([event]) => event.type === 'scheduler.fire' && event.outcome === 'queued'
+    )).toHaveLength(2);
     expect(scheduler.isRunning(execution!.id)).toBe(false);
   });
 
@@ -359,3 +412,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
   });
 });
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (
+    _id: string,
+    task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+  ) => task({ assertOwned: async () => undefined }),
+}));

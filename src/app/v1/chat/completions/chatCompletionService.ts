@@ -11,8 +11,25 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { modelService } from '@/backend/services/model';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
+import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
+import { normalizeChatError, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
+import { createHash } from 'crypto';
+import {
+  getPersonaFlowDispatch,
+  PersonaFlowDispatchTimeoutError,
+  submitPersonaFlowDispatch,
+  waitForPersonaFlowDispatch,
+  type PersonaFlowDispatchRecord,
+  type PersonaFlowDispatchSubmission,
+} from '@/backend/services/enduringAgents/personaDispatcher';
+import type { PersonaChatCompletionTarget } from './requestParser';
+import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
+
+const PERSONA_COMPLETION_WAIT_MS = 30_000;
 
 // Simple token counter (approximation) - Keep as is
 export function countTokens(text: string): number {
@@ -22,17 +39,6 @@ export function countTokens(text: string): number {
 
 // Using OpenAI's type for token usage - Keep as is
 export type TokenUsage = OpenAI.CompletionUsage;
-
-// isRetryableError - Keep as is
-export function isRetryableError(error: any): boolean {
-  log.verbose('Checking if error is retryable', { errorType: typeof error, status: error.status, code: error.code, message: error.message }); // Changed to verbose
-  if (error.status === 429) return true;
-  if (error.status >= 500 && error.status < 600) return true;
-  if (error.message?.includes('timeout') || error.code === 'ETIMEDOUT') return true;
-  if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') return true;
-  log.verbose('Error is not retryable', { error }); // Changed to verbose
-  return false;
-}
 
 // Persist conversation state WITHOUT the in-memory-only debug execution trace
 // (keeps the on-disk conversation lean). See persistConversationState.
@@ -49,9 +55,10 @@ async function processChatCompletionInternal(
   requireApproval: boolean,
   flujodebug: boolean,
   conversationId?: string,
-  // When true, a debug session (debugMode) runs freely until a terminal/
-  // approval/breakpoint state instead of pausing after every step. Used by the
-  // "Continue" control; "Step" leaves this false so it pauses each step.
+  // When true, bypass debugger single-stepping and run until a natural stop.
+  // The Continue route now clears debugMode/breakpoints before using this so
+  // Continue is a real detach; legacy/internal callers can still use the flag
+  // to prevent an already-debug-marked state from single-stepping.
   continueDebug: boolean = false,
   // True only for a fresh user-initiated turn (the public completions route).
   // Such a turn re-syncs debugMode to the request's flujodebug flag so toggling
@@ -74,6 +81,8 @@ async function processChatCompletionInternal(
   const result = await runFlow({
     modelName: data.model,
     messages: data.messages,
+    mcpAppContexts: data.mcpAppContexts,
+    mcpSkillSelections: data.mcpSkillSelections,
     processNodeId: data.processNodeId,
     mode: 'conversation',
     conversationId,
@@ -82,9 +91,10 @@ async function processChatCompletionInternal(
     debug: flujodebug,
     continueDebug,
     userTurn,
-    // Tag origin so GET /api/runs/active can distinguish ad-hoc completions
-    // runs from scheduled fires (issue #113).
-    source: 'api',
+    ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
+    // The same HTTP adapter serves interactive chat and an unattended worker.
+    // Worker runs must drive forward and never wait for an absent chat user.
+    source: isWorkerMode() ? 'internal' : 'chat',
   });
 
   // --- Flow not found → 400 (OpenAI invalid_request) ---
@@ -97,10 +107,16 @@ async function processChatCompletionInternal(
   // --- Paused debug → custom structure with the full debug state ---
   if (result.status === 'paused_debug') {
     log.info(`Returning paused debug state for conv ${result.conversationId}`);
+    const debugState = data.compactToolPayloads
+      ? {
+          ...result.sharedState,
+          messages: await projectLazyToolPayloads(result.sharedState.messages, result.conversationId),
+        }
+      : result.sharedState;
     return NextResponse.json({
       status: 'paused_debug',
       conversation_id: result.conversationId,
-      debugState: result.sharedState,
+      debugState,
     });
   }
 
@@ -109,13 +125,24 @@ async function processChatCompletionInternal(
     const errorMessage = result.error?.message ?? 'Unknown error during execution';
     const errorDetails = result.error?.details ?? { message: errorMessage };
     const statusCode = result.error?.statusCode ?? 500;
+    // Issue #383 (gap 3/4): source the envelope from the same normalizer that
+    // shapes the SSE `error` event and the persisted `lastError`, so the
+    // code/type/status/errorClass reported by the OpenAI-compatible API can
+    // never drift from what the chat UI shows for the same failure.
+    const normalized =
+      result.sharedState?.lastError
+      ?? deriveLastErrorFromLastResponse(result.sharedState?.lastResponse)
+      ?? normalizeChatError(errorMessage);
     log.error(`Returning error response for conv ${result.conversationId}`, { errorMessage, errorDetails, statusCode });
     return NextResponse.json({
       error: {
-        message: errorMessage,
-        type: errorDetails.type || 'api_error',
-        code: errorDetails.code || 'internal_error',
+        message: normalized.message || errorMessage,
+        type: normalized.providerType || errorDetails.type || 'api_error',
+        code: normalized.code || errorDetails.code || 'internal_error',
         param: errorDetails.param,
+        status: normalized.httpStatus ?? errorDetails.status,
+        error_class: normalized.errorClass,
+        retry_after: normalized.retryAfter,
         details: errorDetails,
       },
     }, { status: statusCode });
@@ -127,6 +154,18 @@ async function processChatCompletionInternal(
     content: result.outputText,
     tool_calls: result.toolCalls,
   };
+  let latestAssistantMedia: ModelMediaPart[] | undefined;
+  let latestModelUsage: FlujoChatMessage['usage'];
+  for (let index = result.messages.length - 1; index >= 0; index--) {
+    const message = result.messages[index];
+    if (message.role !== 'assistant') continue;
+    if (!latestAssistantMedia && message.media?.length) latestAssistantMedia = message.media;
+    if (!latestModelUsage && message.usage) latestModelUsage = message.usage;
+    if (latestAssistantMedia && latestModelUsage) break;
+  }
+  if (latestAssistantMedia?.length) {
+    (responseMessage as unknown as { media?: ModelMediaPart[] }).media = latestAssistantMedia;
+  }
 
   // Determine finish reason. Order matters: awaiting_tool_approval reports as a
   // plain stop (the frontend keys off status, not this reason).
@@ -139,15 +178,29 @@ async function processChatCompletionInternal(
     finish_reason = 'length';
   }
 
-  // Calculate usage (simplified, mirrors the legacy behavior).
-  const promptTokens = countTokens(result.messages.map(m => m.content || '').join('\n'));
-  const completionTokens = countTokens(result.outputText);
+  // Prefer the provider-reported latest call. In append-only Chat mode, joining
+  // and recounting the entire saved transcript would put O(history) work back
+  // on the response path we just made incremental.
+  const promptTokens = latestModelUsage?.promptTokens
+    ?? countTokens((data.appendMessages ? data.messages : result.messages).map(m => m.content || '').join('\n'));
+  const completionTokens = latestModelUsage?.completionTokens ?? countTokens(result.outputText);
   const usage: TokenUsage = {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: promptTokens + completionTokens,
   };
 
+  // The stateful Chat UI already receives transcript deltas over SSE and does
+  // one authoritative snapshot fetch at the terminal boundary. Echoing the
+  // entire transcript here makes every send response grow forever and forces
+  // React to reconcile the same history again. `appendMessages` therefore
+  // returns only completion metadata; classic OpenAI-compatible requests keep
+  // the historical full-message extension unchanged.
+  const responseMessages = data.appendMessages
+    ? undefined
+    : data.compactToolPayloads
+      ? await projectLazyToolPayloads(result.messages, result.conversationId)
+      : result.messages;
   const responseData = {
     id: `chatcmpl-${Date.now()}`,
     object: 'chat.completion',
@@ -159,7 +212,7 @@ async function processChatCompletionInternal(
       finish_reason,
     }],
     usage,
-    messages: result.messages as FlujoChatMessage[],
+    ...(responseMessages ? { messages: responseMessages as FlujoChatMessage[] } : {}),
     conversation_id: result.conversationId,
     status: result.sharedState.status || (result.finalAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     pendingToolCalls: result.sharedState.pendingToolCalls,
@@ -171,6 +224,279 @@ async function processChatCompletionInternal(
   return NextResponse.json(responseData);
 }
 
+function personaIdempotencyKey(
+  target: PersonaChatCompletionTarget,
+  data: ChatCompletionRequest,
+  conversationId: string,
+  flags: {
+    flujo: boolean;
+    requireApproval: boolean;
+    flujodebug: boolean;
+    continueDebug: boolean;
+    userTurn: boolean;
+  },
+): string {
+  if (target.idempotencyKey) return target.idempotencyKey;
+  const requestDigest = createHash('sha256')
+    .update(JSON.stringify({
+      personaId: target.personaId,
+      behaviorSlotKey: target.behaviorSlotKey,
+      model: data.model,
+      messages: data.messages,
+      mcpAppContexts: data.mcpAppContexts,
+      mcpSkillSelections: data.mcpSkillSelections,
+      processNodeId: data.processNodeId,
+      conversationId,
+      ...flags,
+    }))
+    .digest('hex');
+  return `chat:${conversationId}:${requestDigest}`;
+}
+
+function personaAcceptedResponse(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  submission: PersonaFlowDispatchSubmission,
+  conversationId: string,
+) {
+  return NextResponse.json({
+    id: `dispatch-${submission.dispatch.id}`,
+    object: 'chat.completion.accepted',
+    created: Math.floor(Date.now() / 1000),
+    model: data.model,
+    accepted: true,
+    status: submission.dispatch.state,
+    dispatch_id: submission.dispatch.id,
+    conversation_id: submission.dispatch.outcome?.conversationId ?? conversationId,
+    persona_id: target.personaId,
+    routing_decision: submission.decision,
+  }, { status: 202 });
+}
+
+function personaErrorResponse(record: PersonaFlowDispatchRecord) {
+  const cancelled = record.state === 'cancelled';
+  return NextResponse.json({
+    error: {
+      message: record.error?.message ?? (cancelled
+        ? 'Persona execution was cancelled.'
+        : 'Persona execution failed.'),
+      type: cancelled ? 'conflict_error' : 'api_error',
+      code: record.error?.code ?? (cancelled
+        ? 'persona_dispatch_cancelled'
+        : 'persona_dispatch_error'),
+      param: null,
+    },
+    dispatch_id: record.id,
+  }, { status: cancelled ? 409 : 500 });
+}
+
+function personaCompletionResponse(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  record: PersonaFlowDispatchRecord,
+  conversationId: string,
+  startedAt: number,
+) {
+  const outputText = record.outcome?.outputText ?? '';
+  const promptTokens = countTokens(JSON.stringify(data.messages));
+  const completionTokens = countTokens(outputText);
+  const finishReason: OpenAI.ChatCompletion.Choice['finish_reason'] =
+    record.outcome?.finalAction === STAY_ON_NODE_ACTION ? 'length' : 'stop';
+  const responseMessage: OpenAI.ChatCompletionAssistantMessageParam = {
+    role: 'assistant',
+    content: outputText,
+  };
+
+  return NextResponse.json({
+    id: `chatcmpl-${record.id}`,
+    object: 'chat.completion',
+    created: Math.floor(startedAt / 1000),
+    model: data.model,
+    choices: [{
+      index: 0,
+      message: responseMessage,
+      finish_reason: finishReason,
+    }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
+    messages: [...data.messages, responseMessage] as unknown as FlujoChatMessage[],
+    conversation_id: record.outcome?.conversationId ?? conversationId,
+    status: record.outcome?.status ?? 'completed',
+    dispatch_id: record.id,
+    persona_id: target.personaId,
+  });
+}
+
+/**
+ * Replays a terminal Persona dispatch without depending on the process-local
+ * execution-event buffer. An idempotent retry can arrive after a restart, when
+ * the durable dispatch still exists but the original SSE events and live
+ * conversation projection do not.
+ */
+function personaTerminalStreamingResponse(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  record: PersonaFlowDispatchRecord,
+  conversationId: string,
+  startedAt: number,
+) {
+  const encoder = new TextEncoder();
+  const outputText = record.outcome?.outputText ?? '';
+  const finishReason = record.outcome?.finalAction === STAY_ON_NODE_ACTION ? 'length' : 'stop';
+  const durableConversationId = record.outcome?.conversationId ?? conversationId;
+  const baseChunk = (delta: unknown, finish_reason: string | null) => ({
+    id: `chatcmpl-${record.id}`,
+    object: 'chat.completion.chunk',
+    created: Math.floor(startedAt / 1000),
+    model: data.model,
+    choices: [{ index: 0, delta, finish_reason }],
+    conversation_id: durableConversationId,
+    dispatch_id: record.id,
+    persona_id: target.personaId,
+  });
+  const chunks = [
+    baseChunk({ role: 'assistant', content: '' }, null),
+    ...(outputText ? [baseChunk({ content: outputText }, null)] : []),
+    baseChunk({}, finishReason),
+  ];
+  const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;
+
+  return new Response(encoder.encode(body), {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+
+async function processPersonaChatCompletion(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  flujo: boolean,
+  requireApproval: boolean,
+  flujodebug: boolean,
+  conversationId: string | undefined,
+  continueDebug: boolean,
+  userTurn: boolean,
+) {
+  const startedAt = Date.now();
+  const effectiveConvId = conversationId || crypto.randomUUID();
+  const submission = await submitPersonaFlowDispatch({
+    personaId: target.personaId,
+    idempotencyKey: personaIdempotencyKey(target, data, effectiveConvId, {
+      flujo,
+      requireApproval,
+      flujodebug,
+      continueDebug,
+      userTurn,
+    }),
+    kind: 'interactive_chat',
+    source: { kind: 'chat', sourceId: effectiveConvId },
+    ...(target.behaviorSlotKey ? { behaviorSlotKey: target.behaviorSlotKey } : {}),
+    relationKey: effectiveConvId,
+    relatedAction: 'steer',
+    summary: 'Interactive chat completion',
+    flowInput: {
+      messages: data.messages,
+      mcpAppContexts: data.mcpAppContexts,
+      mcpSkillSelections: data.mcpSkillSelections,
+      processNodeId: data.processNodeId,
+      mode: 'conversation',
+      conversationId: effectiveConvId,
+      flujo,
+      requireApproval,
+      debug: flujodebug,
+      continueDebug,
+      userTurn,
+      ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
+      source: isWorkerMode() ? 'internal' : 'chat',
+    },
+  }, { waitForCompletion: false });
+
+  // A steer/coalesce admission has been durably delivered into an existing
+  // Activity. It is intentionally non-terminal from this request's point of
+  // view, so return its safe durable handle rather than waiting indefinitely.
+  if (submission.dispatch.state === 'waiting') {
+    return personaAcceptedResponse(data, target, submission, effectiveConvId);
+  }
+
+  if (data.stream === true) {
+    if (submission.dispatch.state === 'error' || submission.dispatch.state === 'cancelled') {
+      return personaErrorResponse(submission.dispatch);
+    }
+    if (submission.dispatch.state === 'completed') {
+      if (!submission.dispatch.outcome) {
+        return personaAcceptedResponse(data, target, submission, effectiveConvId);
+      }
+      if (
+        submission.dispatch.outcome.status === 'steered'
+        || submission.dispatch.outcome.status === 'coalesced'
+      ) {
+        return personaAcceptedResponse(data, target, submission, effectiveConvId);
+      }
+      return personaTerminalStreamingResponse(
+        data,
+        target,
+        submission.dispatch,
+        effectiveConvId,
+        startedAt,
+      );
+    }
+    // Persona execution emits through runFlow's existing conversation event
+    // bus. Its replay buffer closes the race between durable submit and SSE
+    // subscription, without starting a second fire-and-forget run here.
+    return createStreamingResponse(data.model, effectiveConvId);
+  }
+
+  let record = submission.dispatch;
+  if (record.state !== 'completed' && record.state !== 'error' && record.state !== 'cancelled') {
+    try {
+      record = await waitForPersonaFlowDispatch(record.id, {
+        timeoutMs: PERSONA_COMPLETION_WAIT_MS,
+      });
+    } catch (error) {
+      if (!(error instanceof PersonaFlowDispatchTimeoutError)) throw error;
+      record = await getPersonaFlowDispatch(record.id) ?? record;
+      return personaAcceptedResponse(
+        data,
+        target,
+        { ...submission, dispatch: record },
+        effectiveConvId,
+      );
+    }
+  }
+
+  if (record.state === 'error' || record.state === 'cancelled') {
+    return personaErrorResponse(record);
+  }
+  if (record.state !== 'completed' || !record.outcome) {
+    return personaAcceptedResponse(
+      data,
+      target,
+      { ...submission, dispatch: record },
+      effectiveConvId,
+    );
+  }
+  // Delivery-only dispatches finish once their message has been durably
+  // steered/coalesced into the active Activity. They do not own a completion
+  // payload, so keep the request at the accepted boundary instead of
+  // fabricating an empty assistant response.
+  if (record.outcome.status === 'steered' || record.outcome.status === 'coalesced') {
+    return personaAcceptedResponse(
+      data,
+      target,
+      { ...submission, dispatch: record },
+      effectiveConvId,
+    );
+  }
+
+  return personaCompletionResponse(data, target, record, effectiveConvId, startedAt);
+}
+
 // Main entry point for chat completion processing
 export async function processChatCompletion(
   data: ChatCompletionRequest,
@@ -179,14 +505,39 @@ export async function processChatCompletion(
   flujodebug: boolean,
   conversationId?: string,
   continueDebug: boolean = false,
-  userTurn: boolean = false
+  userTurn: boolean = false,
+  personaTarget?: PersonaChatCompletionTarget,
 ) {
+  if (personaTarget && typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
+    return NextResponse.json({
+      error: {
+        message: 'Persona targeting is only supported for Flow completions.',
+        type: 'invalid_request_error',
+        code: 'persona_model_not_supported',
+        param: 'model',
+      },
+    }, { status: 400 });
+  }
+
+  if (personaTarget) {
+    return processPersonaChatCompletion(
+      data,
+      personaTarget,
+      flujo,
+      requireApproval,
+      flujodebug,
+      conversationId,
+      continueDebug,
+      userTurn,
+    );
+  }
+
   // --- Direct model completions (`model-<identifier>`) ---
   // Issue #53: `/v1/chat/completions` differentiates `flow-` vs `model-`
   // requests. `model-` routes to a single-turn ModelService completion (no
   // flow, no conversation persistence, no MCP tool loop). Everything else
   // (`flow-` or legacy/unprefixed ids) keeps the existing flow path unchanged.
-  if (typeof data.model === 'string' && data.model.startsWith('model-')) {
+  if (typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     // Flow-only flags are meaningless here; ignore them (but note it).
     if (flujo || requireApproval || flujodebug || conversationId) {
       log.debug('Ignoring flow-only flags on a direct model completion', {
@@ -220,6 +571,13 @@ export async function processChatCompletion(
             success: false,
             error: error instanceof Error ? error.message : String(error)
           };
+          // Issue #383: keep lastError in sync for this background-catch failure
+          // (a throw that escaped runFlow entirely) so the GET route / summary
+          // still has a message + code for it.
+          if (!errorState.errorEventEmitted) {
+            errorState.errorEventEmitted = true;
+            errorState.lastError = normalizeChatError(error);
+          }
           FlowExecutor.conversationStates.set(effectiveConvId, errorState);
 
           // Also save to storage
@@ -233,7 +591,11 @@ export async function processChatCompletion(
         // the run threw before emitting run:done (runFlow emits run:done on its
         // own error paths, but a throw before/around it would otherwise hang the
         // stream).
-        executionEventBus.emitterFor(effectiveConvId)({ type: 'run:done', status: 'error' });
+        executionEventBus.emitterFor(effectiveConvId)({
+          type: 'run:done',
+          status: 'error',
+          ...(errorState?.lastError ? { error: errorState.lastError } : {}),
+        });
       });
 
     // Return streaming response immediately
@@ -252,7 +614,7 @@ export async function processChatCompletion(
 // response. Tools supplied by the client are forwarded per standard OpenAI
 // semantics (the client executes its own tools).
 async function processDirectModelCompletion(data: ChatCompletionRequest) {
-  const identifier = data.model.slice('model-'.length);
+  const identifier = data.model.startsWith('policy/') ? data.model : data.model.slice('model-'.length);
   log.info('Processing direct model completion', {
     model: data.model,
     messageCount: data.messages?.length || 0,
@@ -281,6 +643,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
           type: result.error.type,
           code: result.error.code,
           param: result.error.param ?? null,
+          ...(result.error.flujo_routing ? { flujo_routing: result.error.flujo_routing } : {}),
         },
       },
       { status: result.statusCode }
@@ -288,10 +651,13 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
   }
 
   if (data.stream === true) {
-    return createDirectModelStreamingResponse(data.model, result.completion);
+    return createDirectModelStreamingResponse(result.completion.flujo_routing ? result.completion.model : data.model, result.completion, result.media);
   }
 
-  return NextResponse.json(result.completion);
+  return NextResponse.json({
+    ...result.completion,
+    ...(result.media?.length ? { media: result.media } : {}),
+  });
 }
 
 // Emulate SSE streaming for a completion that already arrived in full — the
@@ -302,7 +668,8 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
 // which this path bypasses entirely.
 function createDirectModelStreamingResponse(
   model: string,
-  completion: OpenAI.Chat.Completions.ChatCompletion
+  completion: OpenAI.Chat.Completions.ChatCompletion & { flujo_routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt },
+  media?: ModelMediaPart[],
 ) {
   const encoder = new TextEncoder();
   const chunkId = completion.id || `chatcmpl-${Date.now()}`;
@@ -321,6 +688,7 @@ function createDirectModelStreamingResponse(
         created: createdTimestamp,
         model,
         choices: [{ index: 0, delta, finish_reason }],
+        ...(completion.flujo_routing ? { flujo_routing: completion.flujo_routing } : {}),
       });
 
       // Initial chunk announcing the assistant role (OpenAI convention).
@@ -329,6 +697,9 @@ function createDirectModelStreamingResponse(
       const content = typeof choice?.message?.content === 'string' ? choice.message.content : '';
       if (content.length > 0) {
         send(baseChunk({ content }, null));
+      }
+      if (media && media.length > 0) {
+        send(baseChunk({ media }, null));
       }
 
       const toolCalls = choice?.message?.tool_calls;
@@ -363,11 +734,10 @@ function createDirectModelStreamingResponse(
 // This subscribes to the in-process ExecutionEventBus (the same stream the live
 // chat view uses) rather than polling the conversation over HTTP. The previous
 // implementation fetched `http://localhost:4200/v1/chat/conversations/{id}`
-// once per second and diffed the assistant content — an HTTP round-trip to the
-// server's own port plus up-to-1s latency. Because the model layer is
-// non-streamed, each assistant message arrives complete in a single `message`
-// event, so we forward its content as one OpenAI chunk; the (non-standard)
-// `conversation` field is read from the in-memory conversationStates map.
+// once per second and diffed assistant content. Native `model:delta` events are
+// forwarded immediately; adapters without a delta still fall back to the final
+// assistant `message` event. The non-standard `conversation` field is read from
+// the in-memory conversationStates map.
 export function createStreamingResponse(
   model: string,
   conversationId: string
@@ -383,6 +753,13 @@ export function createStreamingResponse(
       let unsubscribe: (() => void) | null = null;
       // Replay + live can both deliver an event; de-dupe on monotonic seq.
       let lastSeq = -1;
+      // Final durable messages reuse their draft id. Avoid replaying the full
+      // content after already forwarding its native token deltas.
+      const streamedTextMessageIds = new Set<string>();
+      const streamedToolParts = new Map<
+        string,
+        Map<number, { id: boolean; name: boolean; arguments: boolean }>
+      >();
 
       const send = (obj: unknown) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
@@ -419,14 +796,68 @@ export function createStreamingResponse(
         if (event.seq <= lastSeq) return; // de-dupe replay vs live
         lastSeq = event.seq;
 
-        if (event.type === 'message') {
+        if (event.type === 'model:delta') {
+          const delta: Record<string, unknown> = {};
+          if (event.delta) {
+            streamedTextMessageIds.add(event.messageId);
+            delta.content = event.delta;
+          }
+          if (event.mediaPart) {
+            delta.media = [event.mediaPart];
+          }
+          if (event.toolCallDelta) {
+            const part = event.toolCallDelta;
+            const calls = streamedToolParts.get(event.messageId) ?? new Map();
+            const seen = calls.get(part.index) ?? { id: false, name: false, arguments: false };
+            seen.id ||= Boolean(part.id);
+            seen.name ||= Boolean(part.nameDelta);
+            seen.arguments ||= Boolean(part.argumentsDelta);
+            calls.set(part.index, seen);
+            streamedToolParts.set(event.messageId, calls);
+            delta.tool_calls = [{
+              index: part.index,
+              ...(part.id ? { id: part.id, type: 'function' } : {}),
+              function: {
+                ...(part.nameDelta ? { name: part.nameDelta } : {}),
+                ...(part.argumentsDelta ? { arguments: part.argumentsDelta } : {}),
+              },
+            }];
+          }
+          if (Object.keys(delta).length > 0) send(baseChunk(delta, null));
+        } else if (event.type === 'message') {
           const msg = event.message;
-          if (msg && msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.length > 0) {
+          if (msg && msg.role === 'assistant') {
             // Content chunks carry ONLY the delta. The full conversation state
             // (the non-standard `conversation` field) is attached once, on the
             // final chunk in finish() — embedding it per chunk serialized the
             // entire growing conversation O(chunks) times per run.
-            send(baseChunk({ content: msg.content }, null));
+            if (
+              !streamedTextMessageIds.has(msg.id) &&
+              typeof msg.content === 'string' &&
+              msg.content.length > 0
+            ) {
+              send(baseChunk({ content: msg.content }, null));
+            }
+            if (msg.media && msg.media.length > 0) {
+              send(baseChunk({ media: msg.media }, null));
+            }
+            const seenToolParts = streamedToolParts.get(msg.id);
+            const missingToolCalls = requireFunctionToolCalls(msg.tool_calls).flatMap((toolCall, index) => {
+              const seen = seenToolParts?.get(index);
+              const missingFunction = {
+                ...(!seen?.name ? { name: toolCall.function.name } : {}),
+                ...(!seen?.arguments ? { arguments: toolCall.function.arguments } : {}),
+              };
+              if (seen?.id && seen.name && seen.arguments) return [];
+              return [{
+                index,
+                ...(!seen?.id ? { id: toolCall.id, type: 'function' as const } : {}),
+                function: missingFunction,
+              }];
+            });
+            if (missingToolCalls.length > 0) {
+              send(baseChunk({ tool_calls: missingToolCalls }, null));
+            }
           }
         } else if (event.type === 'run:done') {
           finish(event.status === 'error' ? 'error' : 'completed');

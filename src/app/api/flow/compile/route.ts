@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -19,7 +20,7 @@ const log = createLogger('app/api/flow/compile/route');
  * flows via `subflowSpec` (#94). `save` only persists when validation finds ZERO
  * errors across the whole bundle; iterate on the returned issues until clean.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -27,12 +28,13 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => null)) as {
       spec?: unknown;
       save?: boolean;
+      keepPills?: boolean;
     } | null;
     if (!body || typeof body !== 'object') {
       return json({ error: 'Request body must be a JSON object with a "spec" field' }, 400);
     }
 
-    const result = await compileSpec(body.spec, { save: body.save === true });
+    const result = await compileSpec(body.spec, { save: body.save === true, keepPills: body.keepPills === true });
 
     if (!result.success) {
       return json({ error: result.error, ...(result.issues ? { issues: result.issues } : {}) }, result.statusCode);
@@ -46,3 +48,5 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

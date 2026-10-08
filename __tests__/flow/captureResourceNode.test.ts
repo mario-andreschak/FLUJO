@@ -24,6 +24,7 @@ jest.mock('@/backend/services/runResources', () => ({
 }));
 
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
+import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
 import type {
   SharedState,
   SubflowNodeParams,
@@ -96,5 +97,28 @@ describe('SubflowNode.post — captureResource', () => {
     const exec = { success: true, outputText: 'CHILD OUT' } as SubflowNodeExecResult;
     await node.post(prep, exec, makeState({ ephemeral: true }), params);
     expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('compileFlowSpec — process captureResource contract', () => {
+  it('warns and omits a passive process capture the runtime cannot perform', () => {
+    const result = compileFlowSpec({
+      name: 'artifact_contract',
+      nodes: [
+        { key: 'start', type: 'start' },
+        { key: 'writer', type: 'process', model: 'm1', captureResource: 'report' },
+        { key: 'finish', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'writer' },
+        { from: 'writer', to: 'finish' },
+      ],
+    }, { models: [{ id: 'm1' }] });
+
+    const writer = result.flow?.nodes.find((node) => node.type === 'process');
+    expect((writer?.data.properties as { captureResource?: string }).captureResource).toBeUndefined();
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'process-capture-resource-unsupported', nodeKey: 'writer' }),
+    ]));
   });
 });

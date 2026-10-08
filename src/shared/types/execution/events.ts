@@ -1,22 +1,143 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import type { ModelDispatchOutcome, ModelTurnIndexEntry } from '@/shared/types/modelTurn';
+
+/** Additive, durable recovery semantics. Existing SharedState.status values stay
+ * unchanged so older snapshots and clients remain readable. */
+export type RecoveryClassification =
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'retryable_failure'
+  | 'permanent_failure'
+  | 'capped';
+
+export type RecoveryFailureCategory =
+  | 'user_cancelled'
+  | 'ancestor_cancelled'
+  | 'transport_failure'
+  | 'provider_failure'
+  | 'rate_limit'
+  | 'context_limit'
+  | 'input_limit'
+  | 'session_loss'
+  | 'model_empty_response'
+  | 'model_truncated_response'
+  | 'tool_failure'
+  | 'unclean_process_interruption'
+  | 'unknown';
+
+export interface RecoveryLaneIdentity {
+  laneIndex: number;
+  laneCount?: number;
+  laneTitle?: string;
+  conversationId?: string;
+  /** Durable Subflow-node visit that owns this lane. Unlike parentRunId, this
+   *  distinguishes two separate visits to the same node in one parent run. */
+  invocationId?: string;
+  /** Stable lane id inside invocationId. The child keeps this across retries so
+   *  a later successful continuation can satisfy the original parent join. */
+  laneId?: string;
+  /** Parent Subflow node parked at the join. */
+  parentNodeId?: string;
+  /** Resolved user-facing key for a persisted keyed child session. */
+  sessionKey?: string;
+  /** Internal stable correlation identity for the reusable child session. */
+  sessionIdentity?: string;
+  /** 1-based ordinal of the visit currently executing in this child. */
+  sessionVisit?: number;
+}
+
+export type RecoveryCheckpointPhase =
+  | 'node:before'
+  | 'node:after'
+  | 'tool:before'
+  | 'tool:after'
+  | 'tool:unknown';
+
+export interface RecoveryToolEffect {
+  toolCallId: string;
+  name: string;
+  readOnly: boolean;
+  idempotent: boolean;
+  destructive?: boolean;
+}
+
+export interface RecoveryCheckpointRef {
+  id: string;
+  phase: RecoveryCheckpointPhase;
+  nodeId?: string;
+  turnEntryNodeId?: string;
+  attempt: number;
+  inputFingerprint: string;
+  safe: boolean;
+  effectStatus: 'none' | 'pending' | 'completed' | 'unknown';
+  parentRunId?: string;
+  lane?: RecoveryLaneIdentity;
+  tools?: RecoveryToolEffect[];
+  createdAt: number;
+}
+
+export interface RecoveryFailureDetails {
+  category: RecoveryFailureCategory;
+  message: string;
+  code?: string;
+  status?: number;
+  retryable: boolean;
+}
+
+/** Version 1 recovery record persisted additively on SharedState. */
+export interface RecoveryRecord {
+  version: 1;
+  runId: string;
+  attemptId: string;
+  attempt: number;
+  classification: RecoveryClassification;
+  failure?: RecoveryFailureDetails;
+  retryAfterAt?: number;
+  parentRunId?: string;
+  lane?: RecoveryLaneIdentity;
+  currentCheckpoint?: RecoveryCheckpointRef;
+  lastSafeCheckpoint?: RecoveryCheckpointRef;
+  ownerId?: string;
+  ownerHeartbeatAt?: number;
+  startedAt: number;
+  updatedAt: number;
+  terminalAt?: number;
+  cancellationRequestedAt?: number;
+  manualActionRequired?: boolean;
+  sideEffectWarning?: string;
+}
 
 /**
  * Execution events emitted by the flow engine during a run.
  *
  * These are a *live projection* of what the executor is doing. The persisted
  * SharedState remains the source of truth for resume/reconnect; events carry
- * a monotonic `seq` per conversation so consumers can order, dedupe, and
- * replay from a known position (see ExecutionEventBus).
+ * an authoritative, durable, monotonic `seq` per conversation (allocated by the
+ * conversation log, issue #261) so consumers can order, dedupe, and resume from
+ * a known position across runs and restarts (see conversationLog.allocateSeq).
  */
 export type ExecutionEventType =
   | 'run:start'
   | 'run:paused'
   | 'run:awaiting_approval'
+  | 'run:awaiting_elicitation'
+  | 'run:awaiting_question'
   | 'run:done'
+  | 'recovery:checkpoint'
+  | 'recovery:transition'
+  | 'recovery:retry'
   | 'node:enter'
   | 'node:exit'
+  | 'node:snapshot'
+  | 'node:changed-files'
   | 'model:start'
+  | 'model:dispatch'
+  | 'model:dispatch-result'
   | 'model:delta'
   | 'model:end'
   | 'tool:call'
@@ -30,6 +151,7 @@ export type ExecutionEventType =
   | 'subflow:done'
   | 'resource:read'
   | 'resource:write'
+  | 'todo:update'
   | 'breakpoint:hit'
   | 'error';
 
@@ -41,7 +163,8 @@ export interface NodeRef {
 
 export interface ExecutionEventBase {
   conversationId: string;
-  seq: number;       // monotonic per conversation, assigned by the bus
+  seq: number;       // authoritative durable monotonic per conversation; the
+                     // log allocates it (issue #261), the bus stamps it at emit
   timestamp: number; // ms since epoch, assigned by the bus
   type: ExecutionEventType;
   /**
@@ -71,14 +194,95 @@ export interface RunPausedEvent extends ExecutionEventBase {
   type: 'run:paused';
   reason: 'debug' | 'breakpoint';
   node?: NodeRef;
+  /** Stable runtime boundary at which execution was parked. */
+  phase?:
+    | 'before-node'
+    | 'after-node'
+    | 'before-model'
+    | 'after-model'
+    | 'before-tool'
+    | 'after-tool'
+    | 'before-handoff'
+    | 'after-handoff';
+  /** Model-facing tool name when a tool breakpoint caused the pause. */
+  toolName?: string;
 }
 export interface RunAwaitingApprovalEvent extends ExecutionEventBase {
   type: 'run:awaiting_approval';
-  pendingToolCalls: OpenAI.ChatCompletionMessageToolCall[];
+  pendingToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[];
+}
+export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
+  type: 'run:awaiting_elicitation';
+  /** Stable ID for correlating the SSE event to the /respond route call. */
+  elicitationId: string;
+  /** Human-readable prompt from the server. */
+  message: string;
+  /** JSON Schema object subset describing the fields to collect. */
+  requestedSchema: Record<string, unknown>;
+}
+/** One prompt of a model-initiated `question` tool call (issue #258). */
+export interface QuestionPrompt {
+  /** The question text shown to the user. */
+  prompt: string;
+  /** The offered options (already including any auto-appended free-text option). */
+  options: string[];
+  /** Whether more than one option may be selected. */
+  multiple?: boolean;
+  /** Whether a free-text "Type your own answer" option is offered. */
+  custom?: boolean;
+}
+/**
+ * A model asked the user a structured multiple-choice question mid-run via the
+ * synthetic `question` tool and the turn is BLOCKED awaiting the answer
+ * (issue #258). The frontend renders a QuestionCard and answers/declines via
+ * the `/respond` route; the headless approvals API can answer too.
+ */
+export interface RunAwaitingQuestionEvent extends ExecutionEventBase {
+  type: 'run:awaiting_question';
+  node?: NodeRef;
+  /** Stable ID for correlating the SSE event to the /respond route call. */
+  questionId: string;
+  /** The questions to ask, in order. */
+  questions: QuestionPrompt[];
 }
 export interface RunDoneEvent extends ExecutionEventBase {
   type: 'run:done';
-  status: 'completed' | 'error';
+  // 'capped' (issue #253): the run landed gracefully at a Process node's
+  // agentic-turn budget with a forced text-only summary — a success-like
+  // terminal state, distinct from 'error', so the UI can show it differently.
+  status: 'completed' | 'error' | 'capped';
+  /** Issue #383: normalized terminal error, set when status === 'error' so a
+   *  client that missed the mid-stream `error` event still learns why. */
+  error?: NormalizedChatError;
+}
+export interface RecoveryCheckpointEvent extends ExecutionEventBase {
+  type: 'recovery:checkpoint';
+  checkpoint: RecoveryCheckpointRef;
+}
+export interface RecoveryTransitionEvent extends ExecutionEventBase {
+  type: 'recovery:transition';
+  recovery: RecoveryRecord;
+}
+/**
+ * The run hit a bounded, replayable provider limit and is WAITING before it
+ * retries the same call (issue #400). It is not a terminal event: the run stays
+ * alive and cancellable, and a later `run:done`/`error` (or simply further
+ * progress) supersedes it.
+ *
+ * Only sanitized timing/classification metadata is carried — never provider
+ * bodies, headers beyond the parsed delay, credentials, or prompt content.
+ */
+export interface RecoveryRetryEvent extends ExecutionEventBase {
+  type: 'recovery:retry';
+  /** 1-based number of the attempt that will run once the wait elapses. */
+  attempt: number;
+  /** Absolute deadline (ms since epoch, server clock) of the wait. */
+  retryAt: number;
+  failure: RecoveryFailureDetails;
+  /** Total attempts this run may make, so the UI can show "2 of 4". */
+  maxAttempts?: number;
+  /** Node that owns the waiting model call, when known. */
+  node?: NodeRef;
 }
 export interface NodeEnterEvent extends ExecutionEventBase {
   type: 'node:enter';
@@ -89,20 +293,78 @@ export interface NodeExitEvent extends ExecutionEventBase {
   node: NodeRef;
   action: string;
 }
+/** One changed path in a filesystem snapshot diff (issue #250). */
+export interface SnapshotChangedFile {
+  /** Repo-relative POSIX path. */
+  path: string;
+  /** git name-status code: A/M/D/R… */
+  status: string;
+}
+/**
+ * A filesystem snapshot of a confinement root was taken before/after a Process
+ * node that had a snapshot-capable host-path server armed (issue #250).
+ * `snapshotId` is the shadow-repo commit SHA; `root` is the captured root.
+ */
+export interface NodeSnapshotEvent extends ExecutionEventBase {
+  type: 'node:snapshot';
+  node?: NodeRef;
+  phase: 'before' | 'after';
+  root: string;
+  snapshotId: string;
+}
+/**
+ * The set of files a Process node changed within a confinement root, computed
+ * from the diff between its before/after snapshots (issue #250). Powers the
+ * per-node changed-file view and the "Revert to here" action.
+ */
+export interface NodeChangedFilesEvent extends ExecutionEventBase {
+  type: 'node:changed-files';
+  node?: NodeRef;
+  root: string;
+  startSnapshot: string;
+  endSnapshot: string;
+  changedFiles: SnapshotChangedFile[];
+  /** Persisted unified patch for this root, when storage caps allowed it. */
+  patchResourceUri?: string;
+}
 export interface ModelStartEvent extends ExecutionEventBase {
   type: 'model:start';
   node?: NodeRef;
   model?: string;
 }
+export interface ModelDispatchEvent extends ExecutionEventBase {
+  type: 'model:dispatch';
+  turn: ModelTurnIndexEntry;
+}
+export interface ModelDispatchResultEvent extends ExecutionEventBase {
+  type: 'model:dispatch-result';
+  dispatchId: string;
+  outcome: Exclude<ModelDispatchOutcome, 'running'>;
+}
 export interface ModelDeltaEvent extends ExecutionEventBase {
   type: 'model:delta';
   node?: NodeRef;
-  delta: string;
+  /** Stable assistant-message id shared with the final durable message. */
+  messageId: string;
+  /** Append-only assistant text delta. */
+  delta?: string;
+  /** Complete provider-neutral media item produced during the stream. */
+  mediaPart?: import('@/shared/types/model/media').ModelMediaPart;
+  /** Append-only function-call metadata/argument delta. */
+  toolCallDelta?: {
+    index: number;
+    id?: string;
+    nameDelta?: string;
+    argumentsDelta?: string;
+  };
 }
 export interface ModelEndEvent extends ExecutionEventBase {
   type: 'model:end';
   node?: NodeRef;
   content?: string;
+  /** Draft to finalize or discard after an interrupted/failed stream. */
+  messageId?: string;
+  discard?: boolean;
 }
 export interface ToolCallEvent extends ExecutionEventBase {
   type: 'tool:call';
@@ -150,6 +412,8 @@ export interface UsageEvent extends ExecutionEventBase {
   costUsd?: number;
   /** Subset of promptTokens re-read cheaply from the provider prompt cache (#87). */
   cacheReadTokens?: number;
+  /** Subset of promptTokens written to the provider prompt cache. */
+  cacheWriteTokens?: number;
 }
 /** A new message was appended to the conversation (assistant, tool result, etc.). */
 export interface MessageEvent extends ExecutionEventBase {
@@ -160,8 +424,8 @@ export interface MessageEvent extends ExecutionEventBase {
 /**
  * A message was removed from the conversation (the chat client sends the full,
  * possibly pruned, history each turn — see runFlow's turn-start reconcile).
- * Log-only: written straight to the conversation log (seq -1), never emitted on
- * the live bus.
+ * Log-only: written straight to the conversation log (with a freshly allocated
+ * authoritative seq, issue #261), never emitted on the live bus.
  */
 export interface MessageRemovedEvent extends ExecutionEventBase {
   type: 'message:removed';
@@ -181,16 +445,24 @@ export interface SubflowStartEvent extends ExecutionEventBase {
   /** The lane's persisted sidebar conversation (present only when
    *  saveConversation is on) — lets the live view deep-link into the lane. */
   laneConversationId?: string;
+  /** Resolved display key for a keyed child session. */
+  sessionKey?: string;
+  /** 1-based ordinal of the current session visit. */
+  sessionVisit?: number;
 }
 /** The child run of a SubflowNode reached a terminal state. */
 export interface SubflowDoneEvent extends ExecutionEventBase {
   type: 'subflow:done';
   node?: NodeRef;
   subflowId: string;
-  status: 'completed' | 'error';
+  status: 'completed' | 'error' | 'capped';
   /** See SubflowStartEvent — duplicated here for late-joining clients. */
   laneTitle?: string;
   laneConversationId?: string;
+  /** Resolved display key for a keyed child session. */
+  sessionKey?: string;
+  /** 1-based ordinal of the visit that reached this terminal state. */
+  sessionVisit?: number;
 }
 /**
  * A resource was read during execution. `source` says through which mechanism:
@@ -225,27 +497,66 @@ export interface ResourceWriteEvent extends ExecutionEventBase {
   name?: string;
   mimeType?: string;
   size?: number;
-  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args';
+  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args' | 'snapshot';
   toolCallId?: string;
+  /** Snapshot metadata used by the first-party DevCanvas diff view. */
+  snapshot?: {
+    root: string;
+    startSnapshot: string;
+    endSnapshot: string;
+    changedFiles: SnapshotChangedFile[];
+  };
 }
 export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';
   node: NodeRef;
+  kind?: 'node' | 'tool' | 'attach';
+  toolName?: string;
+}
+/** One task in a `todo:update` event (issue #259) — mirrors SharedState.todos. */
+export interface TodoEventItem {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'done' | 'cancelled';
+  createdAt: number;
+  updatedAt: number;
+}
+/**
+ * The run-scoped `todo` list was created/updated by a model via the synthetic
+ * `todo` tool (issue #259). Carries the FULL current list (not a delta) so a
+ * late-joining / replaying client rebuilds the checklist from the bus ring
+ * buffer. Live-view only; the authoritative copy lives on SharedState.todos.
+ */
+export interface TodoUpdateEvent extends ExecutionEventBase {
+  type: 'todo:update';
+  node?: NodeRef;
+  todos: TodoEventItem[];
 }
 export interface ErrorEvent extends ExecutionEventBase {
   type: 'error';
   node?: NodeRef;
   message: string;
+  /** Issue #383: normalized error detail (code/status/class/redacted body). */
+  error?: NormalizedChatError;
 }
 
 export type ExecutionEvent =
   | RunStartEvent
   | RunPausedEvent
   | RunAwaitingApprovalEvent
+  | RunAwaitingElicitationEvent
+  | RunAwaitingQuestionEvent
   | RunDoneEvent
+  | RecoveryCheckpointEvent
+  | RecoveryTransitionEvent
+  | RecoveryRetryEvent
   | NodeEnterEvent
   | NodeExitEvent
+  | NodeSnapshotEvent
+  | NodeChangedFilesEvent
   | ModelStartEvent
+  | ModelDispatchEvent
+  | ModelDispatchResultEvent
   | ModelDeltaEvent
   | ModelEndEvent
   | ToolCallEvent
@@ -259,6 +570,7 @@ export type ExecutionEvent =
   | SubflowDoneEvent
   | ResourceReadEvent
   | ResourceWriteEvent
+  | TodoUpdateEvent
   | BreakpointHitEvent
   | ErrorEvent;
 
@@ -286,5 +598,14 @@ export interface UsageTotals {
    * show the honest "fresh (+cached)" split.
    */
   cacheReadTokens?: number;
-  byNode: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd: number; cacheReadTokens?: number }>;
+  /** Sum of prompt tokens written to provider caches. */
+  cacheWriteTokens?: number;
+  byNode: Record<string, {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  }>;
 }

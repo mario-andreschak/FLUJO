@@ -1,63 +1,104 @@
 'use client';
 
 import React from 'react';
-import { Chip, Box } from '@mui/material';
+import { Chip, Box, Tooltip } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import WifiIcon from '@mui/icons-material/Wifi';
 import StreamIcon from '@mui/icons-material/Stream';
 import HttpIcon from '@mui/icons-material/Http';
 import { useThemeUtils } from '@/frontend/utils/theme';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface TransportBadgeProps {
   transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
   size?: 'small' | 'medium';
+  /**
+   * Icon-only presentation for space constrained surfaces such as the simple
+   * server picker (#393). The localized transport label is still exposed via a
+   * tooltip and as the accessible name, so no information is lost. Defaults to
+   * false so management cards keep the labeled chip.
+   */
+  compact?: boolean;
 }
 
-const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'small' }) => {
+const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'small', compact = false }) => {
   const { colors } = useThemeUtils();
-  const t = colors.domain.transport;
+  const transportColors = colors.domain.transport;
+  const { t } = useI18n();
 
   const getTransportConfig = () => {
     switch (transport) {
       case 'stdio':
         return {
-          label: 'STDIO',
+          label: t('mcp.server.transport.stdio'),
           icon: <TerminalIcon fontSize="small" />,
-          color: t.stdio.fg,
-          bgColor: t.stdio.bg
+          color: transportColors.stdio.fg,
+          bgColor: transportColors.stdio.bg
         };
       case 'websocket':
         return {
-          label: 'WebSocket',
+          label: t('mcp.server.transport.websocket'),
           icon: <WifiIcon fontSize="small" />,
-          color: t.websocket.fg,
-          bgColor: t.websocket.bg
+          color: transportColors.websocket.fg,
+          bgColor: transportColors.websocket.bg
         };
       case 'sse':
         return {
-          label: 'SSE',
+          label: t('mcp.server.transport.sse'),
           icon: <StreamIcon fontSize="small" />,
-          color: t.sse.fg,
-          bgColor: t.sse.bg
+          color: transportColors.sse.fg,
+          bgColor: transportColors.sse.bg
         };
       case 'streamable':
         return {
-          label: 'HTTP Stream',
+          label: t('mcp.server.transport.streamable'),
           icon: <HttpIcon fontSize="small" />,
-          color: t.streamable.fg,
-          bgColor: t.streamable.bg
+          color: transportColors.streamable.fg,
+          bgColor: transportColors.streamable.bg
         };
       default:
         return {
-          label: 'UNKNOWN',
+          label: t('mcp.server.unknownError'),
           icon: <TerminalIcon fontSize="small" />,
-          color: t.default.fg,
-          bgColor: t.default.bg
+          color: transportColors.default.fg,
+          bgColor: transportColors.default.bg
         };
     }
   };
 
   const config = getTransportConfig();
+
+  if (compact) {
+    // Non-interactive wrapper on purpose: the picker card itself is the click
+    // target, so nesting a button here would break selection/keyboard behavior.
+    return (
+      <Tooltip title={config.label} arrow placement="top" disableInteractive>
+        <Box
+          component="span"
+          role="img"
+          tabIndex={0}
+          aria-label={config.label}
+          data-testid="transport-badge-compact"
+          sx={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            width: size === 'small' ? 26 : 32,
+            height: size === 'small' ? 26 : 32,
+            borderRadius: '50%',
+            backgroundColor: config.bgColor,
+            color: config.color,
+            lineHeight: 0,
+            outlineOffset: 2,
+            '& svg': { fontSize: size === 'small' ? 17 : 20, color: 'inherit' },
+          }}
+        >
+          {config.icon}
+        </Box>
+      </Tooltip>
+    );
+  }
 
   return (
     <Chip

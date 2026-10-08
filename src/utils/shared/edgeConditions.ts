@@ -49,6 +49,19 @@ export function isValidConditionKind(kind: unknown): kind is EdgeConditionKind {
   return typeof kind === 'string' && (EDGE_CONDITION_KINDS as readonly string[]).includes(kind);
 }
 
+/** Runtime guard for condition data loaded from persisted or imported flows. */
+export function isEdgeCondition(value: unknown): value is EdgeCondition {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return isValidConditionKind(candidate.kind)
+    && (candidate.value === undefined || typeof candidate.value === 'string')
+    && (candidate.target === undefined
+      || (typeof candidate.target === 'string'
+        && (EDGE_CONDITION_TARGETS as readonly string[]).includes(candidate.target)))
+    && (candidate.ignoreCase === undefined || typeof candidate.ignoreCase === 'boolean')
+    && (candidate.negate === undefined || typeof candidate.negate === 'boolean');
+}
+
 /** True when `pattern` compiles as a JS RegExp (used by validation to warn early). */
 export function isRegexCompilable(pattern: string): boolean {
   try {
@@ -71,16 +84,20 @@ export function isRegexCompilable(pattern: string): boolean {
  * Returns '' for a missing/invalid condition so callers can treat it as
  * "render no badge".
  */
-export function formatConditionLabel(cond: EdgeCondition | undefined | null): string {
+export function formatConditionLabel(
+  cond: EdgeCondition | undefined | null,
+  labels?: Partial<Record<EdgeConditionKind, string>>,
+): string {
   if (!cond || !isValidConditionKind(cond.kind)) return '';
   const prefix = cond.negate ? '!' : '';
-  if (cond.kind === 'always') return `${prefix}always`;
+  const kindLabel = labels?.[cond.kind] ?? cond.kind;
+  if (cond.kind === 'always') return `${prefix}${kindLabel}`;
   const ci = cond.ignoreCase ? ' i' : '';
   const raw = typeof cond.value === 'string' ? cond.value : '';
   const MAX = 8;
   const shown = raw.length > MAX ? `${raw.slice(0, MAX)}…` : raw;
   const body = cond.kind === 'regex' ? `/${shown}/` : `"${shown}"`;
-  return `${prefix}${cond.kind}:${body}${ci}`;
+  return `${prefix}${kindLabel}:${body}${ci}`;
 }
 
 /**

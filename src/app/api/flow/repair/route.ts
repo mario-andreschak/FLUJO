@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -24,7 +25,7 @@ const log = createLogger('app/api/flow/repair/route');
  * Both return an UNSAVED draft — the builder applies it to the canvas for review; nothing is
  * persisted here and nothing key-shaped is ever returned.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => null)) as {
       flow?: Flow;
@@ -85,3 +86,5 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

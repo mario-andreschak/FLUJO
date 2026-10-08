@@ -74,6 +74,59 @@ describe('SignalNode', () => {
     expect(action).toBe('next'); // transparent: first successor
   });
 
+  it('uses a Process handoff body as the payload and resolves run variables', async () => {
+    const events: FlowEvent[] = [];
+    const unsub = getFlowRunEventBus().subscribe((e) => events.push(e));
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 'review-blocked', payloadTemplate: 'authored fallback' });
+    const state = makeState({
+      variables: { reason: 'missing approval' },
+      handoffInput: {
+        targetNodeId: 'sig',
+        prompt: '',
+        fromHandoffTool: true,
+        signalBody: 'Caller says: ${var:reason}',
+      },
+    });
+
+    await node.post(await node.prep(state, p), {}, state, p);
+    unsub();
+
+    expect((events[0] as FlowSignalEvent).payload).toBe('Caller says: missing approval');
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('rejects a malformed Process handoff without a non-empty body', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 'review-blocked', payloadTemplate: 'must not be used' });
+    const state = makeState({
+      handoffInput: { targetNodeId: 'sig', prompt: '', fromHandoffTool: true },
+    });
+
+    await expect(node.prep(state, p)).rejects.toThrow('requires a non-empty body');
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('ignores handoff input scoped to a different node', async () => {
+    const events: FlowEvent[] = [];
+    const unsub = getFlowRunEventBus().subscribe((e) => events.push(e));
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 't', payloadTemplate: 'authored' });
+    const state = makeState({
+      handoffInput: {
+        targetNodeId: 'other-signal',
+        prompt: '',
+        fromHandoffTool: true,
+        signalBody: 'wrong payload',
+      },
+    });
+
+    await node.post(await node.prep(state, p), {}, state, p);
+    unsub();
+
+    expect((events[0] as FlowSignalEvent).payload).toBe('authored');
+  });
+
   it('never mutates the conversation messages', async () => {
     const node = nodeWithSuccessor();
     const p = params({ topic: 't', payloadTemplate: 'x' });
@@ -94,6 +147,72 @@ describe('SignalNode', () => {
 
     expect(events).toHaveLength(1);
     expect((events[0] as FlowSignalEvent).chainDepth).toBe(1);
+  });
+
+  it('suppresses a stale Persona signal at the publication boundary while the successor emits', async () => {
+    const events: FlowEvent[] = [];
+    const unsub = getFlowRunEventBus().subscribe((event) => events.push(event));
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 'generation-safe', payloadTemplate: '${var:value}' });
+    let currentGeneration = 1;
+    let releaseAssertion!: () => void;
+    const assertionGate = new Promise<void>((resolve) => {
+      releaseAssertion = resolve;
+    });
+    const staleAuthority = {
+      signal: new AbortController().signal,
+      assertCurrent: jest.fn(async () => {
+        await assertionGate;
+        if (currentGeneration !== 1) throw new Error('old Persona Activity lost its lease');
+      }),
+    };
+    const attribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'revision-1',
+    };
+
+    const stalePost = node.post(
+      await node.prep(makeState(), p),
+      {},
+      makeState({
+        variables: { value: 'stale' },
+        executionAuthority: staleAuthority,
+        personaAttribution: attribution,
+      }),
+      p,
+    );
+    currentGeneration = 2;
+    releaseAssertion();
+
+    await expect(stalePost).resolves.toBe('next');
+    expect(staleAuthority.assertCurrent).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+
+    const successorAuthority = {
+      signal: new AbortController().signal,
+      assertCurrent: jest.fn(async () => {
+        if (currentGeneration !== 2) throw new Error('successor lost authority');
+      }),
+    };
+    await node.post(
+      await node.prep(makeState(), p),
+      {},
+      makeState({
+        variables: { value: 'successor' },
+        executionAuthority: successorAuthority,
+        personaAttribution: { ...attribution, activityId: 'activity-2' },
+      }),
+      p,
+    );
+    unsub();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: 'signal',
+      topic: 'generation-safe',
+      payload: 'successor',
+    });
   });
 
   it('emits nothing when no topic is set but still passes through', async () => {

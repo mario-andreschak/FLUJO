@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -11,25 +12,26 @@ const log = createLogger('app/api/flow/improve/route');
  * POST /api/flow/improve
  * Revise an EXISTING flow from a natural-language change request (issue #99).
  *
- * Body: { flow: Flow, description: string, modelId: string, maxRepairs?: number,
- *         allowInstall?: boolean }
+ * Body: { flow: Flow, relatedFlows?: Flow[], description: string, modelId: string,
+ *         maxRepairs?: number, allowInstall?: boolean }
  * Response: { flow, validation, flows, rootFlowId, attempts, installedServers } —
  * `flow` is the UNSAVED revised draft (same id as the flow that was sent, so the builder
- * applies it in place for review). `flows` is a single-entry bundle for shape-parity with
- * /api/flow/generate. Nothing is persisted here, and nothing key-shaped is ever returned
- * (the model call runs entirely backend-side).
+ * applies it in place for review). `flows` also carries any unsaved related subflows
+ * supplied by the caller, in dependency order. Nothing is persisted here, and nothing
+ * key-shaped is ever returned (the model call runs entirely backend-side).
  *
  * `allowInstall` lets the improver INSTALL MCP servers from the public registry (download +
  * run third-party packages) when the requested change needs a missing capability — strictly
  * opt-in per request; installs are listed in `installedServers`.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
     const body = (await request.json().catch(() => null)) as {
       flow?: Flow;
+      relatedFlows?: Flow[];
       description?: string;
       modelId?: string;
       maxRepairs?: number;
@@ -53,9 +55,24 @@ export async function POST(request: NextRequest) {
     if (typeof body.modelId !== 'string' || !body.modelId.trim()) {
       return json({ error: 'A generator model id is required' }, 400);
     }
+    if (
+      body.relatedFlows !== undefined &&
+      (
+        !Array.isArray(body.relatedFlows) ||
+        body.relatedFlows.some((related) => (
+          !related ||
+          typeof related !== 'object' ||
+          !Array.isArray(related.nodes) ||
+          !Array.isArray(related.edges)
+        ))
+      )
+    ) {
+      return json({ error: 'relatedFlows must contain valid flows' }, 400);
+    }
 
     const result = await improveFlow({
       flow: flow as Flow,
+      relatedFlows: body.relatedFlows,
       description: body.description,
       modelId: body.modelId,
       maxRepairs: body.maxRepairs,
@@ -81,3 +98,5 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

@@ -13,7 +13,8 @@
  * signal every adapter forwards to its SDK. An abort is reported as a clean
  * 'cancelled' model error, not a provider failure.
  */
-import type { SharedState } from '@/backend/execution/flow/types';
+import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
+import type { CompletionInput } from '@/backend/services/model/adapters/types';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
@@ -32,7 +33,7 @@ jest.mock('@/backend/services/model', () => ({
 // 'hang-until-abort' never resolves until the passed signal aborts.
 let adapterBehavior: 'complete' | 'hang-until-abort' = 'complete';
 const createCompletionMock = jest.fn(
-  (input: { signal?: AbortSignal }) =>
+  (input: CompletionInput) =>
     new Promise((resolve, reject) => {
       if (adapterBehavior === 'hang-until-abort') {
         if (input.signal?.aborted) return reject(new Error('Request was aborted.'));
@@ -56,8 +57,38 @@ jest.mock('@/backend/services/model/adapters', () => ({
   getCompletionAdapter: () => ({ createCompletion: createCompletionMock }),
 }));
 
+const mockAppendRawForState = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/backend/execution/flow/conversationLog', () => ({
+  ...jest.requireActual('@/backend/execution/flow/conversationLog'),
+  appendRawForState: (...args: unknown[]) => mockAppendRawForState(...args),
+}));
+
+let archiveDispatchCounter = 0;
+const archiveModelDispatchMock = jest.fn(async (input: Record<string, unknown>): Promise<Record<string, unknown>> => ({
+  id: `dispatch-${++archiveDispatchCounter}`,
+  conversationId: input.conversationId,
+  node: { nodeId: input.nodeId },
+  modelId: input.modelId,
+  modelName: input.modelName,
+  adapter: input.adapter,
+  operation: input.operation,
+  timestamp: 1,
+  outcome: 'running',
+  attempt: input.attempt,
+  canonicalMessageCount: Array.isArray(input.canonicalMessages) ? input.canonicalMessages.length : 0,
+  wireMessageCount: Array.isArray(input.genericWire) ? input.genericWire.length : 0,
+  mediaCount: 0,
+  archiveVersion: 1,
+}));
+const updateModelDispatchOutcomeMock = jest.fn(async (..._args: unknown[]) => undefined);
+jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
+  archiveModelDispatch: (...args: [Record<string, unknown>]) => archiveModelDispatchMock(...args),
+  updateModelDispatchOutcome: (...args: unknown[]) => updateModelDispatchOutcomeMock(...args),
+}));
+
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -92,12 +123,108 @@ const callModel = (conversationId?: string) =>
 beforeEach(() => {
   conversationStates.clear();
   createCompletionMock.mockClear();
+  mockAppendRawForState.mockClear();
+  archiveModelDispatchMock.mockClear();
+  archiveDispatchCounter = 0;
+  updateModelDispatchOutcomeMock.mockClear();
   adapterBehavior = 'complete';
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
 });
 
 describe('mid-flight completion cancellation', () => {
+  it.each([false, true])('persists context separately from run usage (transcript: %s)', async (withTranscript) => {
+    const contextUsage = { promptTokens: 165897, completionTokens: 390, totalTokens: 166287, contextWindow: 258400 };
+    createCompletionMock.mockImplementationOnce(async () => ({
+      completion: {
+        id: 'context-result', object: 'chat.completion', created: 1, model: 'test-model',
+        choices: [{ index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'done', refusal: null } }],
+        usage: { prompt_tokens: 5606187, completion_tokens: 27510, total_tokens: 5633697 },
+      },
+      contextUsage,
+      ...(withTranscript ? { transcript: [{ role: 'assistant', content: 'done', id: 'a1', timestamp: 1 }] } : {}),
+    }));
+    const result = await callModel();
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.value.messages.at(-1)).toMatchObject({
+      contextUsage, usage: { promptTokens: 5606187, completionTokens: 27510, totalTokens: 5633697 },
+    });
+  });
+
+  it('archives steering in the canonical and wire views of the next internal dispatch', async () => {
+    seedState('conv-steering-archive');
+    const streamedAssistant = {
+      id: 'assistant-before-steering',
+      timestamp: 2,
+      role: 'assistant',
+      content: 'I started with the first approach.',
+    } as const;
+    const injectedUser = {
+      id: 'steer-1',
+      timestamp: 3,
+      role: 'user',
+      content: 'Are we over-engineering this?',
+      injected: true,
+    } as const;
+    createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+      await input.onSdkRequest?.({
+        adapter: 'codex-cli',
+        operation: 'thread.runStreamed',
+        request: { input: 'initial' },
+      });
+      input.onTranscriptMessage?.(streamedAssistant);
+      input.onTranscriptMessage?.(injectedUser);
+      await input.onSdkRequest?.({
+        adapter: 'codex-cli',
+        operation: 'thread.runStreamed',
+        request: { input: injectedUser.content },
+        wireMessages: [injectedUser],
+      });
+      return {
+        completion: {
+          id: 'cmpl-steered',
+          object: 'chat.completion',
+          created: 3,
+          model: 'test-model',
+          choices: [
+            { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'No.', refusal: null } },
+          ],
+        },
+        transcript: [streamedAssistant, injectedUser],
+      };
+    });
+
+    const result = await ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'hi',
+      messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-steering-archive',
+      archiveModelTurns: true,
+    } as Parameters<typeof ModelHandler.callModel>[0]);
+
+    expect(result.success).toBe(true);
+    expect(archiveModelDispatchMock).toHaveBeenCalledTimes(2);
+    const first = archiveModelDispatchMock.mock.calls[0][0] as {
+      canonicalMessages: Array<{ id: string }>;
+      genericWire: Array<{ role: string; content: unknown }>;
+    };
+    const second = archiveModelDispatchMock.mock.calls[1][0] as typeof first;
+    expect(first.canonicalMessages.map(message => message.id)).toEqual(['u1']);
+    expect(second.canonicalMessages.map(message => message.id)).toEqual([
+      'u1',
+      'assistant-before-steering',
+      'steer-1',
+    ]);
+    expect(second.genericWire).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Are we over-engineering this?' }),
+    ]);
+  });
+
   it('completes normally when the conversation is never cancelled', async () => {
     seedState('conv-ok');
     const result = await callModel('conv-ok');
@@ -147,6 +274,115 @@ describe('mid-flight completion cancellation', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error.code).toBe('cancelled');
     expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('removes only streamed Claude prose when the SDK fails after tool activity (issue #296)', async () => {
+    const state = seedState('conv-claude-failure');
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'claude-test', provider: 'claude-subscription', adapter: 'claude-cli' });
+    createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+      input.onTranscriptMessage?.({ id: 'prose-1', timestamp: 1, role: 'assistant', content: 'I will call the tool.' });
+      input.onTranscriptMessage?.({
+        id: 'tool-call-1',
+        timestamp: 2,
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+      });
+      input.onTranscriptMessage?.({ id: 'tool-result-1', timestamp: 3, role: 'tool', tool_call_id: 'call-1', content: 'done' });
+      throw new Error('Claude SDK parse failed');
+    });
+
+    const result = await callModel('conv-claude-failure');
+
+    expect(result.success).toBe(false);
+    expect(state.messages.map((message) => message.id)).toEqual(['tool-call-1', 'tool-result-1']);
+    expect(mockAppendRawForState).toHaveBeenCalledTimes(1);
+    expect(mockAppendRawForState).toHaveBeenCalledWith(
+      state,
+      [{ type: 'message:removed', messageId: 'prose-1' }]
+    );
+  });
+
+  it('discards a self-orchestrating transcript callback that arrives after authority loss', async () => {
+    const state = seedState('conv-stale-transcript');
+    getModelMock.mockResolvedValue({
+      id: 'model-1',
+      name: 'claude-test',
+      provider: 'claude-subscription',
+      adapter: 'claude-cli',
+    });
+    let releaseLateOutput!: () => void;
+    const outputGate = new Promise<void>((resolve) => { releaseLateOutput = resolve; });
+    let markProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+    createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+      markProviderStarted();
+      await outputGate;
+      input.onTranscriptMessage?.({
+        id: 'stale-prose',
+        timestamp: 5,
+        role: 'assistant',
+        content: 'This belongs to the old generation.',
+      });
+      await Promise.resolve();
+      return {
+        completion: {
+          id: 'cmpl-stale',
+          object: 'chat.completion',
+          created: 5,
+          model: 'claude-test',
+          choices: [
+            { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'done', refusal: null } },
+          ],
+        },
+        transcript: [{
+          id: 'stale-prose',
+          timestamp: 5,
+          role: 'assistant',
+          content: 'This belongs to the old generation.',
+        }],
+      };
+    });
+
+    let current = true;
+    const lost = new Error('Persona generation replaced before transcript callback');
+    const assertCurrent = jest.fn(async () => {
+      if (!current) throw lost;
+    });
+    const commitWhileCurrent = jest.fn(async <T>(task: () => Promise<T>): Promise<T> => {
+      if (!current) throw lost;
+      return task();
+    }) as unknown as jest.MockedFunction<NonNullable<FlowExecutionAuthority['commitWhileCurrent']>>;
+    const emit = jest.fn();
+    const emitterSpy = jest.spyOn(executionEventBus, 'emitterFor').mockReturnValue(emit);
+
+    const pending = ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'hi',
+      messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-stale-transcript',
+      executionAuthority: {
+        assertCurrent,
+        commitWhileCurrent,
+        signal: new AbortController().signal,
+      },
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    });
+
+    await providerStarted;
+    current = false;
+    releaseLateOutput();
+
+    await expect(pending).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    expect(state.messages).toEqual([]);
+    expect(emit).not.toHaveBeenCalled();
+    expect(mockAppendRawForState).not.toHaveBeenCalled();
+    expect(commitWhileCurrent).toHaveBeenCalled();
+    emitterSpy.mockRestore();
   });
 
   it('passes no signal-driven abort for calls without a conversation (no watch, normal completion)', async () => {

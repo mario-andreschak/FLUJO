@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — Flows-as-tools endpoint (#38, Item D / #17).
  *
@@ -7,21 +8,19 @@
  * answer to "can the LLM pick a flow like an MCP tool?". A `tools/call` runs the
  * chosen flow through the execution keystone (`runFlow`) and returns its output.
  *
- * Inbound transport: the official `StreamableHTTPServerTransport` in STATELESS
- * mode (fresh Server+transport per request; the SDK does all protocol work). We
- * bridge Next.js's Web `Request`/`Response` to the Node `http` objects the SDK
- * transport expects via `fetch-to-node`. The tool logic lives in
+ * Inbound transport: the official Web-standard streamable HTTP transport in
+ * STATELESS mode (fresh Server+transport per request; the SDK does all protocol
+ * work directly with Next.js's Web `Request`/`Response`). The tool logic lives in
  * `backend/services/mcp/flowTools.ts` so it stays transport-agnostic and testable.
  *
  * Posture (single-user/localhost): the same localhost guard as `/mcp-proxy` blocks
  * the DNS-rebinding vector; no bearer token in v1.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { toReqRes, toFetchResponse } from 'fetch-to-node';
 import { isLocalRequest } from '@/backend/services/mcp/proxyForward';
 import { flowToolsListTools, flowToolsCallTool } from '@/backend/services/mcp/flowTools';
+import { handleStatelessMcpRequest } from '@/backend/services/mcp/statelessHttpTransport';
 import {
   authoringToolDefinitions,
   authoringCallTool,
@@ -29,11 +28,11 @@ import {
 } from '@/backend/services/mcp/flowAuthoringTools';
 import { createLogger } from '@/utils/logger';
 
-// The SDK transport + fetch-to-node need Node APIs — never the edge runtime.
+// Flow execution and MCP services use Node APIs — never the edge runtime.
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-flows/route');
-const SERVER_VERSION = '3.27.0';
+const SERVER_VERSION = '3.46.2';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -42,9 +41,20 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
+// MCP 2026-07-28 note: the new spec introduces `Mcp-Method` and `Mcp-Name` HTTP request
+// headers as advisory routing hints for load balancers and intermediate proxies. FLUJO
+// re-terminates every inbound MCP request (a fresh `Server` + Web-standard transport
+// is created per HTTP request), so routing is already handled by the URL path (`/mcp-flows`).
+// The `Mcp-Method`/`Mcp-Name` headers are safely ignored by the v1
+// transport; no implementation is needed here.
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },
+    // MCP Tasks (#404) is deliberately NOT advertised: this endpoint has no
+    // caller identity at all, so a durable task could only be addressed by
+    // task id — an authorization hole across stateless requests. Long-running
+    // flow runs therefore stay synchronous here until a caller-bound ownership
+    // mechanism exists. See docs/features/mcp-tasks.md ("Server-side status").
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -80,48 +90,27 @@ async function handle(request: Request): Promise<Response> {
   }
 
   const server = buildFlowsServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless: no session validation, fresh per request
-    enableJsonResponse: true,
-  });
-
-  const { req, res } = toReqRes(request);
 
   try {
-    await server.connect(transport);
-    // Let the transport read & parse the body from the (fetch-to-node) Node stream.
-    // Do NOT call request.json() here: that locks the same body ReadableStream that
-    // `req` streams from, causing "Invalid state: ReadableStream is locked".
-    await transport.handleRequest(req, res);
-    return await toFetchResponse(res);
+    return await handleStatelessMcpRequest(server, request);
   } catch (error) {
     log.error('Flows MCP request failed', { error });
     return jsonError(500, 'Internal MCP server error.');
-  } finally {
-    // Close once, here — NOT on a res 'close' listener (see the /mcp-proxy route
-    // for the "Controller is already closed" rationale). For stateless JSON the
-    // body is buffered by now; swallow benign already-closed errors.
-    try {
-      await transport.close();
-    } catch {
-      /* already closed */
-    }
-    try {
-      await server.close();
-    } catch {
-      /* already closed */
-    }
   }
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POST_handler(request: Request): Promise<Response> {
   return handle(request);
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function GET_handler(request: Request): Promise<Response> {
   return handle(request);
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function DELETE_handler(request: Request): Promise<Response> {
   return handle(request);
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

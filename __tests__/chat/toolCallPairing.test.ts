@@ -70,6 +70,50 @@ describe('pairToolCallsWithResults', () => {
     expect(consumedToolCallIds.has('call_1')).toBe(true);
   });
 
+  it('carries lazy argument and result references onto the render pair', () => {
+    const assistant = assistantWithToolCalls([{ id: 'call_lazy', name: 'search' }], {
+      toolPayloads: {
+        call_lazy: { arguments: { uri: 'flujo://run/c/a', href: '/args', size: 9000 } },
+      },
+    });
+    const result = toolResult('call_lazy');
+    result.toolPayloads = {
+      call_lazy: { result: { uri: 'flujo://run/c/r', href: '/result', size: 12000 } },
+    };
+
+    const pair = pairToolCallsWithResults([assistant, result]).pairsByMessageId.get(assistant.id)![0];
+
+    expect(pair.argumentPayload?.href).toBe('/args');
+    expect(pair.resultPayload?.href).toBe('/result');
+  });
+
+  it('recovers an exact run-resource marker from hydrated tool-result history', () => {
+    const assistant = assistantWithToolCalls([{ id: 'call_capture', name: 'large_tool' }]);
+    const result = toolResult(
+      'call_capture',
+      '[FLUJO stored this text/plain as run resource flujo://run/conv-1/res-123. Read it back.]',
+    );
+
+    const pair = pairToolCallsWithResults([assistant, result]).pairsByMessageId.get(assistant.id)![0];
+
+    expect(pair.capturedResource).toEqual({ uri: 'flujo://run/conv-1/res-123' });
+  });
+
+  it('does not treat ordinary or malformed tool-result text as a captured resource', () => {
+    const assistant = assistantWithToolCalls([
+      { id: 'call_plain', name: 'plain_tool' },
+      { id: 'call_bad', name: 'bad_tool' },
+    ]);
+    const pairs = pairToolCallsWithResults([
+      assistant,
+      toolResult('call_plain', 'ordinary output'),
+      toolResult('call_bad', 'flujo://run/conv-1/../escape'),
+    ]).pairsByMessageId.get(assistant.id)!;
+
+    expect(pairs[0].capturedResource).toBeUndefined();
+    expect(pairs[1].capturedResource).toBeUndefined();
+  });
+
   it('handles multiple tool calls in one assistant turn', () => {
     const assistant = assistantWithToolCalls([
       { id: 'call_a', name: 'read' },

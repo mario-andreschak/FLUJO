@@ -6,6 +6,12 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('utils/mcp/configparse/typescript');
 
+interface PackageJsonShape {
+  packageManager?: string;
+  main?: string;
+  scripts?: Record<string, string>;
+}
+
 /**
  * Parse TypeScript/JavaScript repository configuration
  */
@@ -31,7 +37,7 @@ export async function parseTypeScriptConfig(options: ConfigParseOptions): Promis
   
   try {
     // Parse package.json
-    const packageJson = JSON.parse(packageJsonResult.content);
+    const packageJson = JSON.parse(packageJsonResult.content) as PackageJsonShape;
     log.debug(`Successfully parsed package.json for ${repoPath}`);
     
     // Extract configuration
@@ -85,7 +91,7 @@ export async function parseTypeScriptConfig(options: ConfigParseOptions): Promis
 /**
  * Determine the appropriate install command based on package.json
  */
-function determineInstallCommand(packageJson: any): string {
+function determineInstallCommand(packageJson: PackageJsonShape): string {
   // Check for yarn.lock, pnpm-lock.yaml, or package-lock.json to determine package manager
   if (packageJson.packageManager) {
     if (packageJson.packageManager.startsWith('yarn')) {
@@ -104,7 +110,7 @@ function determineInstallCommand(packageJson: any): string {
 /**
  * Determine the appropriate build command based on package.json scripts
  */
-function determineBuildCommand(packageJson: any): string {
+function determineBuildCommand(packageJson: PackageJsonShape): string {
   const scripts = packageJson.scripts || {};
   
   // Check for common build script names
@@ -126,7 +132,7 @@ function determineBuildCommand(packageJson: any): string {
  * Determine the appropriate run command and arguments based on package.json
  * Instead of using npm scripts directly, we resolve to the actual node command
  */
-function determineRunCommand(packageJson: any): string {
+function determineRunCommand(_packageJson: PackageJsonShape): string {
   // Always use node directly instead of npm scripts
   return 'node';
 }
@@ -135,7 +141,7 @@ function determineRunCommand(packageJson: any): string {
  * Determine the arguments for the run command
  * This resolves npm scripts to their actual entry points
  */
-async function determineArgs(packageJson: any, repoPath: string): Promise<string[]> {
+async function determineArgs(packageJson: PackageJsonShape, repoPath: string): Promise<string[]> {
   const scripts = packageJson.scripts || {};
   const main = packageJson.main || '';
   const args: string[] = [];

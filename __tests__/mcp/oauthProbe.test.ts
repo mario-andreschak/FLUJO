@@ -55,6 +55,30 @@ describe('probeOAuthSupport', () => {
     expect(result.authorizationServers).toEqual(['https://auth.example.com']);
   });
 
+  it('detects OAuth 2.1 dynamic client registration from authorization-server metadata', async () => {
+    const metaUrl = 'https://mcp.example.com/.well-known/oauth-protected-resource';
+    mockFetch((url) => {
+      if (url === 'https://mcp.example.com/mcp') {
+        return { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${metaUrl}"` } };
+      }
+      if (url === metaUrl) {
+        return { status: 200, json: { resource: 'https://mcp.example.com', authorization_servers: ['https://auth.example.com'] } };
+      }
+      if (url === 'https://auth.example.com/.well-known/oauth-authorization-server') {
+        return { status: 200, json: { registration_endpoint: 'https://auth.example.com/register' } };
+      }
+      return { status: 404 };
+    });
+
+    await expect(probeOAuthSupport('https://mcp.example.com/mcp')).resolves.toEqual(
+      expect.objectContaining({
+        oauthCapable: true,
+        dynamicClientRegistration: true,
+        registrationEndpoint: 'https://auth.example.com/register',
+      }),
+    );
+  });
+
   it('falls back to the RFC 9728 default well-known path when the challenge has no pointer', async () => {
     const wellKnown = 'https://mcp.example.com/.well-known/oauth-protected-resource';
     mockFetch((url) => {
@@ -82,6 +106,21 @@ describe('probeOAuthSupport', () => {
 
     const result = await probeOAuthSupport('https://mcp.example.com/mcp');
     expect(result.oauthCapable).toBe(true);
+  });
+
+  it('does not follow Registry-research metadata into local networks', async () => {
+    const localMetadata = 'http://127.0.0.1:9999/private-metadata';
+    mockFetch((url) => {
+      if (url === 'https://mcp.example.com/mcp') {
+        return { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${localMetadata}"` } };
+      }
+      return { status: 404 };
+    });
+
+    const result = await probeOAuthSupport('https://mcp.example.com/mcp', { publicOnly: true });
+
+    expect(result.oauthCapable).toBe(true); // Bearer remains a valid OAuth signal.
+    expect((global.fetch as jest.Mock).mock.calls.some(([url]) => String(url).includes('127.0.0.1'))).toBe(false);
   });
 
   it('reports NOT capable for a static-bearer server (401, no Bearer challenge, no metadata)', async () => {

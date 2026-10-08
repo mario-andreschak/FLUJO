@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -14,12 +13,14 @@ import {
   Collapse,
 } from '@mui/material';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface SignalNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
 /**
@@ -38,11 +39,12 @@ interface SignalNodePropertiesModalProps {
  * surface — existing flows that carry a payload keep emitting it unchanged.
  */
 export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: SignalNodePropertiesModalProps) => {
+  const { t } = useI18n();
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -69,41 +71,38 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
     properties.topic = topic;
     // Display name == signal name (#164). Fall back to a stable placeholder so
     // a not-yet-named node still renders something sensible on the canvas.
-    const label = topic || 'Signal';
+    const label = topic || t('flows.signal.defaultName');
     onSave(node.id, { ...nodeData, label, properties });
   };
 
   if (!nodeData) return null;
 
-  const topic: string = nodeData.properties?.topic ?? '';
-  const payloadTemplate: string = nodeData.properties?.payloadTemplate ?? '';
+  const topic = typeof nodeData.properties?.topic === 'string' ? nodeData.properties.topic : '';
+  const payloadTemplate = typeof nodeData.properties?.payloadTemplate === 'string' ? nodeData.properties.payloadTemplate : '';
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Signal Node</DialogTitle>
+      <DialogHeaderActions title={t('flows.signal.title')} onClose={onClose} />
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
           <TextField
-            label="Signal Name (topic)"
+            label={t('flows.signal.name')}
             value={topic}
             onChange={(e) => setProperty('topic', e.target.value)}
             fullWidth
             required
             autoFocus
             error={!topic.trim()}
-            placeholder="e.g. review-blocked"
+            placeholder={t('flows.signal.placeholder')}
             helperText={
               !topic.trim()
-                ? 'A signal name is required — a flow-event trigger listens for this exact name.'
-                : 'A free-form shared name (no registry). A planned execution reacts to it via a flow-event trigger with this signal name. This is also the node’s display name.'
+                ? t('flows.signal.required')
+                : t('flows.signal.nameHelp')
             }
           />
 
           <Alert severity="info">
-            When execution reaches this node it emits the signal and continues
-            immediately (fire-and-forget). To emit conditionally, put a
-            conditioned edge into this node. Runaway signal chains are bounded by
-            the trigger&rsquo;s max chain depth.
+            {t('flows.signal.behavior')}
           </Alert>
 
           <Link
@@ -113,25 +112,25 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
             onClick={() => setShowAdvanced((v) => !v)}
             sx={{ alignSelf: 'flex-start' }}
           >
-            {showAdvanced ? 'Hide advanced' : 'Advanced — optional payload'}
+            {showAdvanced ? t('flows.signal.hideAdvanced') : t('flows.signal.showAdvanced')}
           </Link>
           <Collapse in={showAdvanced} unmountOnExit>
             <TextField
-              label="Payload template (optional)"
+              label={t('flows.signal.payload')}
               value={payloadTemplate}
               onChange={(e) => setProperty('payloadTemplate', e.target.value)}
               fullWidth
               multiline
               minRows={3}
-              placeholder="e.g. Review found blockers: ${var:reviewSummary}"
-              helperText="Optional. Emitted as the signal payload and handed to the triggered flow. ${var:NAME} is resolved from run variables at emit time."
+              placeholder={t('flows.signal.payloadPlaceholder')}
+              helperText={t('flows.signal.payloadHelp')}
             />
           </Collapse>
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave} variant="contained">Save</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
+        <Button onClick={handleSave} variant="contained">{t('flows.modal.save')}</Button>
       </DialogActions>
     </Dialog>
   );

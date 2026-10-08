@@ -33,6 +33,23 @@ export type EnvVarValue = string | {
 export type MCPHeaderValue = EnvVarValue;
 
 /**
+ * Parameters fixed by the user before an MCP tool is advertised to a model.
+ * The outer key is the server tool name and the inner key is a top-level input
+ * parameter. Values may be literals, `${global:NAME}`, or dynamic `@` refs.
+ */
+export type MCPToolParameterPresets = Record<string, Record<string, unknown>>;
+
+/**
+ * Which HOME/config/cache roots a local stdio MCP server inherits.
+ *
+ * `inherit` defers to the workspace-wide preference, `isolated` opts this
+ * server into FLUJO's private workspace runtime home, and `host` explicitly
+ * keeps the MCP SDK's normal host-home inheritance. A process environment
+ * override may still take precedence over every persisted setting.
+ */
+export type MCPRuntimeHomeMode = 'inherit' | 'isolated' | 'host';
+
+/**
  * How an MCP server was installed (#193). A machine-readable, discriminated
  * record of each server's install-origin, so downstream features (notably the
  * by-reference package export, #192) can serialize *installation instructions*
@@ -52,10 +69,32 @@ export type MCPServerSource =
   | { type: 'remote' }
   | { type: 'local' };
 
+/**
+ * Optional host-path security contract for a persisted stdio server. It is
+ * attached to the installed record and therefore survives rename operations;
+ * runtime code never infers these privileges from the server display name.
+ */
+export type MCPHostPathAccessConfig = {
+  environmentRootVariables: string[];
+  snapshots: boolean;
+};
+
+/**
+ * Presentation metadata for an MCP server. Registry installs retain the safe
+ * http(s) icons published in server.json; FLUJO's bundled servers use trusted
+ * same-origin SVG assets. The metadata is optional so existing configs remain
+ * fully compatible.
+ */
+export type MCPServerIcon = {
+  src: string;
+  sizes?: string[];
+  mimeType?: string;
+  theme?: 'light' | 'dark';
+};
+
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
-  autoApprove: string[];
   rootPath: string;
   env: Record<string, EnvVarValue>
   _buildCommand: string;
@@ -68,6 +107,10 @@ export type MCPManagerConfig = {
    * packageable-vs-abort purely from `source.type`.
    */
   source?: MCPServerSource;
+  /** Optional logo variants displayed by MCP management and picker cards. */
+  icons?: MCPServerIcon[];
+  /** Name-independent host-path security metadata supplied by an installer. */
+  hostPathAccess?: MCPHostPathAccessConfig;
   /**
    * When true, FLUJO re-exposes this server's tools to external MCP clients at
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
@@ -75,13 +118,16 @@ export type MCPManagerConfig = {
   exposeAsMcpServer?: boolean;
   /**
    * MCP Apps (SEP-1865 / #97): opt-in switch letting this server render its
-   * interactive `ui://` UI resources in the chat tool-call timeline. Off by
+   * interactive `ui://` UI resources in chat or the docked canvas. Off by
    * default — when absent/false FLUJO never fetches or renders server-supplied
    * HTML for this server (the security opt-in is authoritative server-side: the
-   * `ui` link is only attached to a tool message when this is enabled). Phase 1
-   * renders read-only in a strict sandbox; there is no iframe->host bridge yet.
+   * `ui` link is only attached to a tool message when this is enabled). Enabling
+   * it also negotiates the UI extension and allows the isolated AppBridge to
+   * broker same-server app tool/resource requests.
    */
   enableMcpApps?: boolean;
+  /** Experimental SEP-2640 Skills support. Disabled unless explicitly true. */
+  enableMcpSkills?: boolean;
   /**
    * Optional, user-assigned folder for organizing server cards in the MCP
    * manager (#71). Absent/empty means "Ungrouped". Frontend-only organization —
@@ -95,13 +141,6 @@ export type MCPManagerConfig = {
    * has no effect on the server connection.
    */
   favorite?: boolean;
-  /**
-   * Marks FLUJO's own built-in in-process server (the synthetic "flujo" entry
-   * that exposes FLUJO's backend API as MCP tools to its own flows). Built-in
-   * configs are synthesized at load time, never persisted (saveConfig drops
-   * them), and cannot be edited, renamed, disabled, or deleted.
-   */
-  builtIn?: boolean;
   /**
    * MCP roots (#15/#46): workspace folders this server is scoped to. Each entry is a
    * filesystem path or a `file://` URI (and may contain `${global:VAR}` references,
@@ -121,7 +160,34 @@ export type MCPManagerConfig = {
    * forwarded onward). Enabling this lets the server spend your model's API budget.
    */
   sampling?: MCPSamplingPolicy;
+  /**
+   * MCP elicitation (#238): opt-in capability letting this server ask the user for
+   * additional input during a tool call (server -> client `elicitation/create`, spec
+   * revision 2026-07-28). Opt-in: when absent/disabled, FLUJO declares NO elicitation
+   * form capability and rejects form requests. Unattended/scheduled runs auto-cancel
+   * elicitation requests rather than blocking. URL-mode is separately available only
+   * while the user is explicitly starting a negotiated mcp-stdio-oauth flow.
+   */
+  elicitation?: MCPElicitationPolicy;
+  /**
+   * Issue #252: optional cap on how many of this server's tool calls FLUJO runs
+   * concurrently within a single model turn. A turn's tool calls are dispatched
+   * in parallel (bounded), but each server is limited to this many in flight at
+   * once so a server that tolerates little parallelism is never overwhelmed.
+   * Absent / non-positive ⇒ the conservative module default
+   * (DEFAULT_TOOL_CALL_CONCURRENCY). Config-only for now (no dedicated UI).
+   */
+  maxConcurrency?: number;
+  /** Server-wide tool argument defaults. A node may override individual keys. */
+  toolParameterPresets?: MCPToolParameterPresets;
+  /** Runtime-home policy for stdio servers. Missing means `inherit`. */
+  runtimeHomeMode?: MCPRuntimeHomeMode;
 }
+
+export type MCPElicitationPolicy = {
+  /** Master switch. When false/undefined, FLUJO does not advertise elicitation at all. */
+  enabled: boolean;
+};
 
 export type MCPSamplingPolicy = {
   /** Master switch. When false/undefined, FLUJO does not advertise sampling at all. */
@@ -134,8 +200,29 @@ export type MCPSamplingPolicy = {
   maxCallsPerMinute?: number;
 };
 
-export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
+export type MCPStdioConfig = Omit<StdioServerParameters, 'env'> & MCPManagerConfig & {
   transport: 'stdio';
+};
+
+/**
+ * Launch-and-connect (#392): the process FLUJO would start before connecting to
+ * `serverUrl`. Deliberately ORTHOGONAL to `transport` — the discriminant keeps
+ * answering "how do we talk to it", while `launch` answers "who starts it".
+ * Modelling this as a fifth union member would force a review of ~67 transport
+ * discriminant checks across 15+ files; as an optional field every existing
+ * check keeps its exact meaning and code that ignores `launch` behaves as today.
+ *
+ * NOTE (Phase 1): FLUJO does NOT spawn this process yet. The spec is persisted
+ * and displayed read-only so the user can start it themselves; owning the
+ * process lifecycle (readiness polling, teardown, orphan reaping) is Phase 2.
+ */
+export type MCPLaunchSpec = {
+  command: string;
+  args?: string[];
+  env?: Record<string, EnvVarValue>;
+  cwd?: string;
+  /** How long to poll serverUrl before declaring failure (Phase 2). Default 30_000. */
+  readyTimeoutMs?: number;
 };
 
 export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
@@ -144,6 +231,8 @@ export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
   // Values may be secret (masked/encrypted) or bound to a global variable (#84).
   headers?: Record<string, MCPHeaderValue>;
+  /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
+  launch?: MCPLaunchSpec;
 };
 
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
@@ -161,7 +250,14 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthClientInformation?: OAuthClientInformation;
   oauthTokens?: OAuthTokens;
   oauthCodeVerifier?: string;
+  /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
+  oauthState?: string;
+  /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */
+  oauthStateWorkspace?: string;
+  oauthStateCreatedAt?: number;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
+  /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
+  launch?: MCPLaunchSpec;
 };
 
 export type MCPWebSocketConfig = MCPManagerConfig & {
@@ -170,6 +266,43 @@ export type MCPWebSocketConfig = MCPManagerConfig & {
 };
 
 export type MCPServerConfig = MCPStdioConfig | MCPWebSocketConfig | MCPSSEConfig | MCPStreamableConfig;
+
+// ---------------------------------------------------------------------------
+// MCP Tasks extension (SEP-2663 / spec 2026-07-28)
+// Servers that support the Tasks extension may respond to tools/call with a
+// task handle instead of a CallToolResult. FLUJO detects this shape, enters a
+// poll loop (tasks/get), and maps tasks/cancel onto its cancellation ancestry.
+// ---------------------------------------------------------------------------
+
+/** SEP-2663 task handle returned by tools/call instead of a CallToolResult */
+export interface MCPTaskHandle {
+  taskId: string;
+  status: 'working' | 'input_required' | 'completed' | 'failed' | 'cancelled';
+  /** Server-suggested poll interval in ms */
+  pollInterval?: number;
+  /** Present when status === 'completed' */
+  result?: unknown;
+  /** Present when status === 'failed' */
+  error?: string;
+}
+
+/** Top-level result shape from tools/call when the server returns a task */
+export interface MCPTaskCallResponse {
+  task: MCPTaskHandle;
+}
+
+/**
+ * Type guard: distinguishes a task-handle response from a classic CallToolResult.
+ * The discriminator is the presence of a `task` object with a string `taskId`.
+ */
+export function isTaskCallResponse(r: unknown): r is MCPTaskCallResponse {
+  return (
+    typeof r === 'object' &&
+    r !== null &&
+    'task' in r &&
+    typeof (r as MCPTaskCallResponse).task?.taskId === 'string'
+  );
+}
 
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
@@ -205,15 +338,42 @@ export interface MCPConnectionAttempt {
   error?: string;
 }
 
-// Define ServerState as an intersection type
-export type MCPServerState = MCPServerConfig & {
+/** A downstream OAuth authorization reported by the mcp-stdio-oauth extension. */
+export interface MCPStdioOAuthAuthorization {
+  /** Stable, opaque identifier supplied back to the server when authorization starts. */
+  id: string;
+  /** Optional provider display hint. It must not be used for security decisions. */
+  provider?: string;
+  /** Human-readable account/provider name, for example "Google Workspace". */
+  label: string;
+  /** Extension-defined state. `ready` is the only universally non-blocking state. */
+  state: string;
+  /** Whether a headless flow must stop until this requirement is ready. */
+  blocksUnattendedUse: boolean;
+  /** Optional safe-to-display explanation from the server. */
+  message?: string;
+}
+
+/** Negotiated mcp-stdio-oauth readiness included with an MCP server's status. */
+export interface MCPStdioOAuthStatus {
+  supported: boolean;
+  authorizations: MCPStdioOAuthAuthorization[];
+  /** The first authorization currently preventing unattended tool execution. */
+  blockingAuthorization?: MCPStdioOAuthAuthorization;
+}
+
+type WithMCPServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
   tools: Array<{
     name: string;
     description: string;
-    inputSchema: Record<string, any>;
+    inputSchema: Record<string, unknown>;
   }>;
   error?: string;
   stderrOutput?: string;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
-};
+  stdioOAuth?: MCPStdioOAuthStatus;
+  env: Record<string, EnvVarValue>;
+} : never;
+
+export type MCPServerState = WithMCPServerState<MCPServerConfig>;

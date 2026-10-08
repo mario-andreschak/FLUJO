@@ -34,17 +34,24 @@ jest.mock('@/backend/services/mcp/connection', () => ({
   safelyCloseClient: jest.fn(async () => {}),
 }));
 
-// The built-in-server registry reads persisted overrides from on-disk storage
-// (loadItem). This suite is about MCPService's reconnect logic in isolation and
-// runs under fake timers; a real fs read inside the retry callback would not
-// settle within advanceTimersByTimeAsync and would mask the reconnect. Mock it
-// to pure, no-I/O behavior (mirrors the ./config and ./connection mocks above).
-// 'srv' is a user server, so isBuiltInServerName('srv') is false and none of the
-// built-in short-circuits ever engage.
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  isBuiltInServerName: (name: string) => ['flujo', 'filesystem', 'bash'].includes(name),
-  builtInServerConfigsWithOverrides: jest.fn(async () => []),
-  setInternalServerDisabled: jest.fn(async () => {}),
+// The experimental beta-protocol gate reads the Settings blob from on-disk
+// storage on every connect (betaClient.ts). Mock it to pure, no-I/O behavior
+// so the gate resolves
+// within advanceTimersByTimeAsync — and so this suite is hermetic against the
+// developer's local settings.
+jest.mock('@/backend/services/mcp/betaClient', () => ({
+  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+  createNewBetaClient: jest.fn(),
+  createBetaTransport: jest.fn(),
+  isBetaClient: jest.fn(() => false),
+  negotiatedProtocolVersion: jest.fn(() => undefined),
+}));
+
+// This second connection preference also reads workspace Settings. Keep real
+// filesystem I/O outside the fake-timer reconnect test; the policy itself is
+// covered by runtimeHomeIsolation.test.ts.
+jest.mock('@/backend/services/mcp/runtimeHomeIsolation', () => ({
+  resolveRuntimeHomeIsolation: jest.fn(async () => false),
 }));
 
 import { MCPService } from '@/backend/services/mcp';
@@ -82,7 +89,6 @@ const SERVER: MCPServerConfig = {
   args: ['dist/index.js'],
   env: {},
   disabled: false,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',

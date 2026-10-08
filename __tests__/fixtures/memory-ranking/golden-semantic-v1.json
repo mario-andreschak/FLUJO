@@ -1,0 +1,65 @@
+{
+  "version": "golden-semantic-v1",
+  "description": "Deterministic semantic recall fixture for issue #471; all scores are checked in and no provider is called.",
+  "items": [
+    {
+      "id": "release-branch",
+      "content": "Deploys run from the release branch.",
+      "importance": 0.6,
+      "confidence": 0.9,
+      "trust": "verified_tool",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "weekly-notes",
+      "content": "Weekly notes are published each Friday.",
+      "importance": 0.5,
+      "confidence": 0.8,
+      "trust": "explicit_user",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    },
+    {
+      "id": "unrelated",
+      "content": "The preferred chart color is violet.",
+      "importance": 0.5,
+      "confidence": 0.8,
+      "trust": "model_inference",
+      "updatedAt": 1999913600000,
+      "kind": "semantic",
+      "scope": "persona",
+      "status": "active"
+    }
+  ],
+  "queries": [
+    {
+      "id": "ship-process",
+      "query": "how do we ship?",
+      "asOf": 2000000000000,
+      "topK": 1,
+      "relevantIds": ["release-branch"],
+      "expectedOrder": ["release-branch"],
+      "candidateIds": ["release-branch", "weekly-notes", "unrelated"],
+      "semanticScores": {
+        "release-branch": 0.92,
+        "weekly-notes": 0.2,
+        "unrelated": 0.1
+      }
+    },
+    {
+      "id": "lexical-weekly",
+      "query": "weekly",
+      "asOf": 2000000000000,
+      "topK": 1,
+      "relevantIds": ["weekly-notes"],
+      "expectedOrder": ["weekly-notes"],
+      "candidateIds": ["weekly-notes", "unrelated"]
+    }
+  ],
+  "duplicates": []
+}

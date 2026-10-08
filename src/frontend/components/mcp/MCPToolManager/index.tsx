@@ -1,21 +1,24 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import ToolTester from './ToolTester';
+import ToolTester, { type ToolTesterPrefill } from './ToolTester';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { useThemeUtils } from '@/frontend/utils/theme';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager');
 
 interface ToolManagerProps {
   serverName: string | null;
   onClose?: () => void; // Optional handler to dismiss the tool tester panel
+  prefill?: ToolTesterPrefill;
 }
 
-const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
+const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill }) => {
+  const { t, formatNumber } = useI18n();
   const {
     tools,
     isLoading,
@@ -28,7 +31,7 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
   } = useServerTools(serverName);
 
   // Handle tool testing
-  const handleTestTool = async (toolName: string, params: Record<string, any>, timeout?: number) => {
+  const handleTestTool = async (toolName: string, params: Record<string, unknown>, timeout?: number) => {
     log.debug(`Testing tool ${toolName} with params:`, params);
     if (timeout !== undefined) {
       log.debug(`Using timeout: ${timeout} seconds`);
@@ -63,10 +66,10 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
         color: getThemeValue('#333', '#f0f0f0')
       }}>
         <h3 className="text-lg font-semibold mb-4" style={{ color: getThemeValue('#111', '#f8f8f8') }}>
-          Tool Manager - {serverName || 'No Server Selected'}
+          {t('mcp.tools.managerServer', { server: serverName || t('mcp.tools.noServer') })}
         </h3>
         <div className="text-red-500">
-          <p>Error loading tools: {error}</p>
+          <p>{t('mcp.tools.errorLoading', { error })}</p>
           <button
             onClick={() => {
               // Clear cache first to ensure we get fresh data
@@ -81,14 +84,14 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
             {isRetrying ? (
               <>
                 <Spinner size="small" color="white" className="mr-2" />
-                Retrying...
+                {t('mcp.tools.retrying')}
               </>
             ) : (
-              'Retry'
+              t('mcp.tools.retry')
             )}
           </button>
           {retryCount > 0 && (
-            <p className="text-sm mt-1">Retry attempt: {retryCount}</p>
+            <p className="text-sm mt-1">{t('mcp.tools.retryAttempt', { count: formatNumber(retryCount) })}</p>
           )}
         </div>
       </div>
@@ -104,10 +107,10 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
         color: getThemeValue('#333', '#f0f0f0')
       }}>
         <h3 className="text-lg font-semibold mb-4" style={{ color: getThemeValue('#111', '#f8f8f8') }}>
-          Tool Manager
+          {t('mcp.tools.manager')}
         </h3>
         <p style={{ color: getThemeValue('#6b7280', '#9ca3af') }}>
-          Please select a server to view and test tools.
+          {t('mcp.tools.selectServer')}
         </p>
       </div>
     );
@@ -120,17 +123,18 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
         tools={tools}
         onTestTool={handleTestTool}
         onClose={onClose}
+        prefill={prefill}
       />
       {isLoading && (
         <div className="mt-4 flex items-center space-x-2 text-blue-500">
           <Spinner size="small" color="primary" />
-          <p>Loading tools...</p>
+          <p>{t('mcp.tools.loading')}</p>
         </div>
       )}
       {error && tools && tools.length > 0 && (
         <div className="mt-2 text-yellow-500">
-          <p>Warning: {error}</p>
-          <p className="text-sm">Using cached tools. Some tools may be unavailable.</p>
+          <p>{t('mcp.tools.warning', { error })}</p>
+          <p className="text-sm">{t('mcp.tools.cached')}</p>
           <button
             onClick={() => {
               // Clear cache first to ensure we get fresh data
@@ -145,14 +149,14 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
             {isRetrying ? (
               <>
                 <Spinner size="small" color="white" className="mr-1" />
-                <span className="text-xs">Retrying...</span>
+                <span className="text-xs">{t('mcp.tools.retrying')}</span>
               </>
             ) : (
-              'Retry'
+              t('mcp.tools.retry')
             )}
           </button>
           {retryCount > 0 && (
-            <p className="text-xs mt-1">Retry attempt: {retryCount}</p>
+            <p className="text-xs mt-1">{t('mcp.tools.retryAttempt', { count: formatNumber(retryCount) })}</p>
           )}
         </div>
       )}

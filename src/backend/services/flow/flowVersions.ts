@@ -16,6 +16,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import { Flow } from '@/shared/types/flow';
+import { FlowSnapshotSchema } from '@/shared/types/enduringAgent';
 import {
   saveCollectionItem,
   loadCollectionItem,
@@ -23,7 +24,7 @@ import {
   listCollectionItems,
   assertSafeCollectionId,
 } from '@/utils/storage/backend';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/services/flow/flowVersions');
@@ -68,7 +69,13 @@ export async function archiveFlowVersion(previous: Flow): Promise<string | null>
     const collection = versionsCollection(previous.id);
     const savedAt = Date.now();
     const versionId = newVersionId(savedAt);
-    const record: FlowVersionRecord = { versionId, flowId: previous.id, savedAt, flow: previous };
+    const canonicalPrevious = FlowSnapshotSchema.parse(previous);
+    const record: FlowVersionRecord = {
+      versionId,
+      flowId: canonicalPrevious.id,
+      savedAt,
+      flow: canonicalPrevious,
+    };
     await saveCollectionItem(collection, versionId, record);
     await pruneOldVersions(previous.id);
     return versionId;
@@ -110,7 +117,14 @@ export async function listFlowVersions(flowId: string): Promise<FlowVersionSumma
 
 export async function getFlowVersion(flowId: string, versionId: string): Promise<FlowVersionRecord | null> {
   try {
-    return await loadCollectionItem<FlowVersionRecord | null>(versionsCollection(flowId), versionId, null);
+    const record = await loadCollectionItem<FlowVersionRecord | null>(
+      versionsCollection(flowId),
+      versionId,
+      null,
+    );
+    return record
+      ? { ...record, flow: FlowSnapshotSchema.parse(record.flow) }
+      : null;
   } catch (error) {
     log.debug(`getFlowVersion: could not load ${flowId}/${versionId}`, error);
     return null;
@@ -121,7 +135,7 @@ export async function getFlowVersion(flowId: string, versionId: string): Promise
 export async function wipeFlowVersions(flowId: string): Promise<void> {
   try {
     assertSafeCollectionId(flowId);
-    await fs.rm(path.join(getDataDir(), 'db', 'flow-versions', flowId), { recursive: true, force: true });
+    await fs.rm(path.join(getWorkspaceDataDir(), 'db', 'flow-versions', flowId), { recursive: true, force: true });
   } catch (error) {
     log.warn(`Could not remove version history of flow ${flowId}`, error);
   }

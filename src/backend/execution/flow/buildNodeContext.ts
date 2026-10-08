@@ -1,11 +1,13 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot, ModelInputProvenanceEntry } from './types';
+import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
 
 /** True when this assistant turn is mid-action (made tool calls). */
 function isToolCallTurn(
   m: FlujoChatMessage
-): m is FlujoChatMessage & { role: 'assistant'; tool_calls: OpenAI.ChatCompletionMessageToolCall[] } {
+): m is FlujoChatMessage & { role: 'assistant'; tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] } {
   return m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
 }
 
@@ -33,20 +35,48 @@ function currentToolTail(messages: FlujoChatMessage[]): FlujoChatMessage[] {
 }
 
 /**
+ * Split off the run of MID-RUN STEERING messages at the very end of the history
+ * (see FlujoChatMessage.injected). The run loop appends them after whatever the
+ * node was doing, which would otherwise confuse two tail-sensitive computations:
+ * `currentToolTail` walks back from the end and would see a plain user message,
+ * concluding the node's in-flight tool exchange had settled — so a
+ * `latest-message`/`isolated` node would lose its own tool loop from the wire
+ * mid-loop, and `collapseNodeOutputs` would become free to fold that live
+ * exchange away. Peeling the injected run first keeps both looking at the same
+ * tail they saw before the injection; callers re-append the run at the end.
+ */
+function splitTrailingInjected(
+  messages: FlujoChatMessage[],
+): { base: FlujoChatMessage[]; injectedTail: FlujoChatMessage[] } {
+  let i = messages.length;
+  while (i > 0 && messages[i - 1].injected) i--;
+  if (i === messages.length) return { base: messages, injectedTail: [] };
+  return { base: messages.slice(0, i), injectedTail: messages.slice(i) };
+}
+
+/**
  * Narrow a node's assembled context (a leading system message + threaded
  * history, as produced by buildNodeContext) to just what the MODEL should see
  * for the given inputMode. This shapes only the WIRE view — the caller keeps the
  * full history for persistence — so it must be safe to recompute every tool-loop
  * iteration:
  *   - 'full-history' (default): unchanged.
- *   - 'latest-message': the leading system message(s), then everything from the
- *     most recent user message onward (which includes any in-flight tool
- *     exchange for the current turn). Falls back to the full list when there is
- *     no user message.
+ *   - 'latest-message': the leading system message(s), then the most recent
+ *     EXCHANGE — the last user message and the last settled assistant response
+ *     — plus any in-flight tool exchange for the current turn (so a tool-using
+ *     node can continue its loop across re-entries). Turns in between (earlier
+ *     nodes' outputs, settled tool exchanges) since the last user message are
+ *     dropped. Falls back to the full list when there is no user message.
  *   - 'isolated': the leading system message(s), then `isolatedPrompt` as a
  *     single synthetic user message, then the current in-flight tool tail (so a
  *     tool-using isolated node can continue its loop across re-entries). The
  *     prior conversation is dropped. The synthetic user message is wire-only.
+ *
+ * MID-RUN STEERING: user messages flagged `injected` that trail the history are
+ * ALWAYS appended to the wire, in every mode. A correction the user typed at the
+ * running agent has to reach that agent — dropping it because the node happens
+ * to be `isolated` would make steering silently do nothing, which is the exact
+ * failure the feature exists to prevent.
  *
  * ADAPTER CAVEAT (issue #160): this narrowing is provider-agnostic, but what a
  * given provider does with the scoped wire differs. Request/response adapters
@@ -67,7 +97,9 @@ export function scopeMessagesForInput(
 ): FlujoChatMessage[] {
   if (!inputMode || inputMode === 'full-history') return messages;
 
-  const system = messages.filter((m) => m.role === 'system');
+  // Steering messages are re-appended verbatim at the end of every branch below.
+  const { base: messages_, injectedTail } = splitTrailingInjected(messages);
+  const system = messages_.filter((m) => m.role === 'system');
 
   if (inputMode === 'isolated') {
     const userMsg: FlujoChatMessage = {
@@ -78,22 +110,45 @@ export function scopeMessagesForInput(
       id: 'isolated-input',
       timestamp: 0,
     };
-    return [...system, userMsg, ...currentToolTail(messages)];
+    return [...system, userMsg, ...currentToolTail(messages_), ...injectedTail];
   }
 
-  // 'latest-message'
+  // 'latest-message': the most recent EXCHANGE — the last user message and the
+  // last settled assistant response — plus any in-flight tool tail for the
+  // current turn. This is narrower than "everything from the last user message
+  // onward": when several nodes have appended output since the last user turn
+  // (e.g. an orchestrator → worker chain), only the LATEST assistant message
+  // survives, not every one. The in-flight tool tail is peeled off first (it is
+  // re-attached verbatim so a tool-using node can re-enter its loop), and the
+  // last-assistant search skips mid-loop tool-call turns so no dangling
+  // tool_calls survive without their results — a settled region always ends on a
+  // plain/handoff turn, and a trailing handoff turn's prose still reaches the
+  // model via the tail + stripHandoffPlumbing.
+  const tail = currentToolTail(messages_);
+  const settledEnd = messages_.length - tail.length;
   let lastUserIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') { lastUserIdx = i; break; }
+  for (let i = settledEnd - 1; i >= 0; i--) {
+    if (messages_[i].role === 'user') { lastUserIdx = i; break; }
   }
   if (lastUserIdx === -1) return messages; // no user turn — keep everything
-  return [...system, ...messages.slice(lastUserIdx)];
+  let lastAssistant: FlujoChatMessage | undefined;
+  for (let i = settledEnd - 1; i > lastUserIdx; i--) {
+    const m = messages_[i];
+    if (m.role === 'assistant' && !isToolCallTurn(m)) { lastAssistant = m; break; }
+  }
+  return [
+    ...system,
+    messages_[lastUserIdx],
+    ...(lastAssistant ? [lastAssistant] : []),
+    ...tail,
+    ...injectedTail,
+  ];
 }
 
 /** True when this tool-call turn contains a FLUJO handoff call — i.e. it is a
  *  node's TERMINAL routing turn (a plain turn would have ended the loop instead). */
 function hasHandoffCall(
-  m: FlujoChatMessage & { tool_calls: OpenAI.ChatCompletionMessageToolCall[] }
+  m: FlujoChatMessage & { tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] }
 ): boolean {
   return m.tool_calls.some((tc) => tc.type === 'function' && isHandoffToolName(tc.function.name));
 }
@@ -135,7 +190,12 @@ export function collapseNodeOutputs(
 ): FlujoChatMessage[] {
   if (collapsedNodeIds.size === 0) return messages;
 
-  const settledEnd = messages.length - currentToolTail(messages).length;
+  // Peel trailing steering injections before locating the in-flight exchange,
+  // so injecting a message can't make the live tool tail look settled (and thus
+  // collapsible) while the node is still looping. Injected messages sit at
+  // index >= settledEnd and pass through the copy loop untouched.
+  const { base } = splitTrailingInjected(messages);
+  const settledEnd = base.length - currentToolTail(base).length;
 
   // Segment the settled region into node "visits" — contiguous runs of
   // messages stamped with the same processNodeId (ModelHandler stamps every
@@ -273,7 +333,7 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
       Array.isArray(m.tool_calls) &&
       m.tool_calls.some((tc) => tc.type === 'function' && isHandoffToolName(tc.function.name))
     ) {
-      const realToolCalls = m.tool_calls.filter(
+      const realToolCalls = requireFunctionToolCalls(m.tool_calls).filter(
         (tc) => !(tc.type === 'function' && isHandoffToolName(tc.function.name)),
       );
       if (realToolCalls.length > 0) {
@@ -304,11 +364,184 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
  * "400 Bad Request". The wire payload must contain only what the OpenAI chat
  * spec defines.
  */
-export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
-  return stripHandoffPlumbing(messages).map(
-    ({ id, timestamp, disabled, processNodeId, depth, usage, ...rest }) =>
-      rest as OpenAI.ChatCompletionMessageParam
+function mediaReferencePart(part: ModelMediaPart): Record<string, unknown> | undefined {
+  // Prefer the durable URI over the display URL. The latter is normally a
+  // relative FLUJO HTTP route that a cloud provider cannot fetch; ModelHandler
+  // resolves flujo:// references to private data URLs immediately before the
+  // provider call.
+  const url = part.resourceUri ?? mediaDataUrl(part);
+  if (!url) return undefined;
+  if (part.type === 'image') {
+    return { type: 'image_url', image_url: { url } };
+  }
+  if (part.type === 'audio') {
+    return {
+      type: 'audio_url',
+      audio_url: { url, ...(part.mimeType ? { mime_type: part.mimeType } : {}) },
+    };
+  }
+  if (part.type === 'video') {
+    return {
+      type: 'video_url',
+      video_url: { url, ...(part.mimeType ? { mime_type: part.mimeType } : {}) },
+    };
+  }
+  return {
+    type: 'file',
+    file: {
+      file_data: url,
+      ...(part.name ? { filename: part.name } : {}),
+      ...(part.mimeType ? { mime_type: part.mimeType } : {}),
+    },
+  };
+}
+
+/**
+ * Describe generated media to the next model independently of whether that
+ * model can consume the bytes. Same-host tools need the materialized path;
+ * video/image-capable providers additionally receive the binary attachment
+ * below. The run-resource URI is only model-facing when no host path could be
+ * materialized and `read_resource` is genuinely required.
+ */
+function mediaArtifactSummary(media: ModelMediaPart[]): string {
+  const lines = media.map((part, index) => {
+    const label = part.name?.trim() || `${part.type} ${index + 1}`;
+    const mime = part.mimeType ? ` (${part.mimeType})` : '';
+    if (part.localPath) return `- ${label}${mime}: ${part.localPath}`;
+    if (part.resourceUri) {
+      return `- ${label}${mime}: ${part.resourceUri} (use read_resource to obtain a host-local path)`;
+    }
+    if (part.url && !part.url.startsWith('data:')) return `- ${label}${mime}: ${part.url}`;
+    return `- ${label}${mime}: attached media`;
+  });
+  return ['[Available generated artifacts]', ...lines].join('\n');
+}
+
+function userContentWithMedia(
+  content: OpenAI.ChatCompletionUserMessageParam['content'],
+  media: ModelMediaPart[],
+): OpenAI.ChatCompletionUserMessageParam['content'] {
+  const parts: Array<Record<string, unknown>> = Array.isArray(content)
+    ? content.map(part => ({ ...(part as unknown as Record<string, unknown>) }))
+    : (content ? [{ type: 'text', text: content }] : []);
+  const seen = new Set(parts.map(part => {
+    const nested = part.image_url ?? part.audio_url ?? part.video_url ?? part.file;
+    return `${String(part.type ?? '')}|${JSON.stringify(nested ?? '')}`;
+  }));
+  const artifactSummary = mediaArtifactSummary(media);
+  const existingText = [...parts].reverse().find(
+    part => part.type === 'text' && typeof part.text === 'string',
   );
+  const existingTextValue = typeof existingText?.text === 'string' ? existingText.text : undefined;
+  if (existingText && existingTextValue && !existingTextValue.includes(artifactSummary)) {
+    existingText.text = `${existingTextValue}\n\n${artifactSummary}`;
+  } else if (!existingText) {
+    parts.push({ type: 'text', text: artifactSummary });
+  }
+  for (const item of media) {
+    const reference = mediaReferencePart(item);
+    if (!reference) continue;
+    const nested =
+      reference.image_url ?? reference.audio_url ?? reference.video_url ?? reference.file;
+    const key = `${String(reference.type ?? '')}|${JSON.stringify(nested ?? '')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(reference);
+  }
+  return parts as unknown as OpenAI.ChatCompletionUserMessageParam['content'];
+}
+
+/**
+ * Media reaches a model only through an INPUT channel.
+ *
+ * Neither the OpenAI chat spec nor any provider accepts binary parts inside a
+ * `role:'tool'` message, so media produced by a TOOL (a screenshot, a rendered
+ * chart, a decoded audio clip) has to be carried forward and re-emitted on the
+ * next user turn — exactly the hop already performed for assistant-generated
+ * media. Buffering both in one place keeps `(Model|MCP) -> conversation ->
+ * (Model|MCP)` lossless: whatever any participant puts out as media gets back
+ * in through the correct channel.
+ *
+ * Tool messages deliberately do NOT flush the buffer: a tool block sits between
+ * an assistant turn and the next user turn, and injecting a user message in the
+ * middle of it would orphan the pending tool_calls and 400 on every provider.
+ * The buffer is flushed at the first message that legally CAN follow a tool
+ * block — the next user turn (folded in) or the next assistant turn (a synthetic
+ * user turn inserted just before it).
+ *
+ * Flushing at that fixed position, rather than at the end of the wire, is what
+ * makes this idempotent: re-rendering the same history on a later turn puts the
+ * media back in exactly the same slot, so the picture stays anchored to the tool
+ * call that produced it and the prompt-cache prefix stays stable.
+ */
+export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
+  const out: OpenAI.ChatCompletionMessageParam[] = [];
+  let pendingMedia: ModelMediaPart[] = [];
+
+  /** Emit the buffered media as its own user turn (used before assistant turns). */
+  const flushAsSyntheticUserTurn = (): void => {
+    if (pendingMedia.length === 0) return;
+    out.push({
+      role: 'user',
+      content: userContentWithMedia('[Media produced in the preceding turn]', pendingMedia),
+    } as OpenAI.ChatCompletionMessageParam);
+    pendingMedia = [];
+  };
+
+  for (const message of stripHandoffPlumbing(messages)) {
+    const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, injected, agentMessage, media, ...rest } = message;
+
+    if (rest.role === 'tool') {
+      // Tool-produced media (captureToolResult) rides on the tool message but
+      // cannot stay there — buffer it until the tool block is over.
+      if (media?.length) pendingMedia.push(...media);
+      out.push(rest as OpenAI.ChatCompletionMessageParam);
+      continue;
+    }
+
+    if (rest.role === 'assistant') {
+      // The tool block (if any) has ended: media owed to the model must be
+      // delivered BEFORE the turn that reacts to it, or the model is answering
+      // about something it cannot see.
+      flushAsSyntheticUserTurn();
+      if (Array.isArray(rest.content)) {
+        const text = rest.content
+          .filter((part): part is OpenAI.ChatCompletionContentPartText =>
+            !!part && (part as { type?: string }).type === 'text'
+          )
+          .map(part => part.text)
+          .join('');
+        out.push({
+          ...rest,
+          content: text || null,
+        } as OpenAI.ChatCompletionMessageParam);
+      } else {
+        out.push(rest as OpenAI.ChatCompletionMessageParam);
+      }
+      if (media?.length) pendingMedia.push(...media);
+      continue;
+    }
+
+    if (rest.role === 'user' && pendingMedia.length > 0) {
+      out.push({
+        ...rest,
+        content: userContentWithMedia(rest.content, pendingMedia),
+      } as OpenAI.ChatCompletionMessageParam);
+      pendingMedia = [];
+      continue;
+    }
+
+    out.push(rest as OpenAI.ChatCompletionMessageParam);
+  }
+
+  // A flow can hand an image/video-producing node directly to another model
+  // before a new human turn exists, and a tool block is normally the LAST thing
+  // on the wire before the model is asked to continue. Keep that media reachable
+  // with a synthetic user turn; strict Chat Completions providers also require
+  // user-last input.
+  flushAsSyntheticUserTurn();
+
+  return out;
 }
 
 // --- Debugger: explain how a conversation reaches the model (issue #153) ------

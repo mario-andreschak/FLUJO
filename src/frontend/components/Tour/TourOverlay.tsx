@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useEffect, useLayoutEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Box, Button, Paper, Typography, MobileStepper } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import IconButton from '@mui/material/IconButton';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTour } from '@/frontend/contexts/TourContext';
 import { TOUR_STEPS, TourStep } from '@/frontend/components/Tour/tourSteps';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const SPOTLIGHT_PADDING = 8;
 const CARD_WIDTH = 360;
@@ -74,12 +76,17 @@ function clamp({
   // For center-anchored transforms, keep the whole card within the viewport.
   if (transform.includes('-50%, -100%') || transform.includes('-50%, 0')) {
     clampedLeft = Math.min(Math.max(left, half + 8), vw - half - 8);
+  } else if (transform.includes('-100%')) {
+    clampedLeft = Math.min(Math.max(left, CARD_WIDTH + 8), vw - 8);
+  } else if (transform.startsWith('translate(0')) {
+    clampedLeft = Math.min(Math.max(left, 8), vw - CARD_WIDTH - 8);
   }
   return { top, left: clampedLeft, transform };
 }
 
 export default function TourOverlay() {
   const { isActive, stepIndex, next, back, endTour } = useTour();
+  const { t } = useI18n();
   const pathname = usePathname();
   const router = useRouter();
   const [rect, setRect] = useState<Rect | null>(null);
@@ -89,8 +96,12 @@ export default function TourOverlay() {
   // Navigate to the step's page if we're not already there.
   useEffect(() => {
     if (!step) return;
-    if (pathname !== step.path) {
-      router.push(step.path);
+    const destination = step.route ?? step.path;
+    const currentRoute = typeof window === 'undefined'
+      ? pathname
+      : `${pathname}${window.location.search}`;
+    if (pathname !== step.path || currentRoute !== destination) {
+      router.push(destination);
     }
   }, [step, pathname, router]);
 
@@ -112,7 +123,18 @@ export default function TourOverlay() {
 
     const measure = () => {
       if (step.target) {
-        const el = document.querySelector(step.target) as HTMLElement | null;
+        const el = Array.from(document.querySelectorAll<HTMLElement>(step.target)).find((candidate) => {
+          const candidateRect = candidate.getBoundingClientRect();
+          const style = window.getComputedStyle(candidate);
+          return candidateRect.width > 0
+            && candidateRect.height > 0
+            && candidateRect.right > 0
+            && candidateRect.bottom > 0
+            && candidateRect.left < window.innerWidth
+            && candidateRect.top < window.innerHeight
+            && style.display !== 'none'
+            && style.visibility !== 'hidden';
+        }) ?? null;
         if (el) {
           if (!scrolledIntoView) {
             el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -143,7 +165,7 @@ export default function TourOverlay() {
   const isFirst = stepIndex === 0;
   const isLast = stepIndex === TOUR_STEPS.length - 1;
 
-  return (
+  return createPortal((
     <Box
       sx={{
         position: 'fixed',
@@ -196,7 +218,7 @@ export default function TourOverlay() {
         }}
       >
         <IconButton
-          aria-label="Close tour"
+          aria-label={t('tour.close')}
           size="small"
           onClick={endTour}
           sx={{ position: 'absolute', top: 6, right: 6 }}
@@ -205,10 +227,10 @@ export default function TourOverlay() {
         </IconButton>
 
         <Typography variant="h6" gutterBottom sx={{ pr: 3 }}>
-          {step.title}
+          {t(step.title)}
         </Typography>
 
-        {step.body.split('\n\n').map((para, i) => (
+        {t(step.body).split('\n\n').map((para, i) => (
           <Typography key={i} variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             {para}
           </Typography>
@@ -222,12 +244,12 @@ export default function TourOverlay() {
           sx={{ background: 'transparent', px: 0, mt: 1 }}
           nextButton={
             <Button size="small" variant="contained" onClick={next}>
-              {isLast ? 'Finish' : 'Next'}
+              {isLast ? t('common.finish') : t('common.next')}
             </Button>
           }
           backButton={
             <Button size="small" onClick={back} disabled={isFirst}>
-              Back
+              {t('common.back')}
             </Button>
           }
         />
@@ -235,11 +257,11 @@ export default function TourOverlay() {
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 0.5 }}>
           {!isLast && (
             <Button size="small" color="inherit" onClick={endTour} sx={{ opacity: 0.7 }}>
-              Skip tour
+              {t('tour.skip')}
             </Button>
           )}
         </Box>
       </Paper>
     </Box>
-  );
+  ), document.body);
 }

@@ -9,6 +9,15 @@
   outline: none;
 }
 
+.global-reference-editor.bare,
+.global-reference-editor.bare .global-reference-editable {
+  height: 100%;
+}
+
+.global-reference-editable p {
+  margin: 0;
+}
+
 /* Tool reference wrapper and container styles */
 .tool-reference-wrapper {
   position: relative;
@@ -159,4 +168,35 @@ code.tool-reference.runres {
   background-color: #e0f2f1;
   color: #00796b;
   border: 1px solid #b2dfdb;
+}
+
+/* Global-variable references are purple and never display the variable value. */
+.tool-reference-container.global {
+  background-color: #f3e5f5;
+  border: 1px solid #e1bee7;
+}
+
+.tool-reference.global,
+.tool-reference-delete.global,
+.tool-reference-preview.global {
+  color: #7b1fa2;
+}
+
+.tool-reference-preview.global,
+code.tool-reference.global {
+  background-color: #f3e5f5;
+  border-color: #e1bee7;
+}
+
+
+/* References outside the current node/chat catalog remain editable and literal. */
+.tool-reference-container.invalid {
+  background-color: #ffebee;
+  border-color: #ef9a9a;
+  text-decoration: underline wavy #c62828;
+  text-underline-offset: 3px;
+}
+
+.tool-reference.invalid {
+  color: #c62828;
 }

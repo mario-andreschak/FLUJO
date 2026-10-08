@@ -15,16 +15,32 @@
  */
 import type OpenAI from 'openai';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
+import type { FlujoChatMessage } from '@/shared/types/chat';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 // Capture the options the adapter passes to the Agent SDK's query().
 const queryMock = jest.fn();
+const callToolMock = jest.fn();
+const loadServerConfigsMock = jest.fn();
+let sdkToolsMock: Array<{
+  name: string;
+  handler: (args: Record<string, unknown>) => Promise<unknown>;
+}> = [];
 
 // Mock the ESM Agent SDK so it is never really loaded (that ESM load is the very
 // reason the adapter imports it lazily). createSdkMcpServer/tool return inert
 // stand-ins — we only care about the options handed to query().
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...a: unknown[]) => queryMock(...(a as [])),
-  createSdkMcpServer: (cfg: unknown) => ({ __server: cfg }),
+  createSdkMcpServer: (cfg: {
+    tools?: Array<{
+      name: string;
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    }>;
+  }) => {
+    sdkToolsMock = cfg.tools ?? [];
+    return { __server: cfg };
+  },
   tool: (name: string, description: string, shape: unknown, handler: unknown) => ({
     name,
     description,
@@ -36,7 +52,36 @@ jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
 // The adapter imports mcpService at module scope; stub it (a tools-less run never
 // calls it, but we must not drag in its dependency graph).
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { callTool: jest.fn() },
+  mcpService: {
+    callTool: (...a: unknown[]) => callToolMock(...(a as [])),
+    loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
+    isMcpAppAccessEnabled: async (serverName: string) => {
+      const configs = await loadServerConfigsMock();
+      return Array.isArray(configs)
+        && configs.some((config: { name?: string; enableMcpApps?: boolean }) =>
+          config.name === serverName && config.enableMcpApps === true);
+    },
+  },
+}));
+
+const boundToolResultMock = jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content }));
+jest.mock('@/backend/services/runResources', () => ({
+  getRunResourceSettings: jest.fn(async () => ({})),
+}));
+jest.mock('@/backend/services/runResources/boundToolResult', () => ({
+  boundToolResult: (...args: unknown[]) => boundToolResultMock(...(args as [{ content: string }])),
+}));
+
+jest.mock('@/backend/services/model/adapters/claudeRuntimeHome', () => ({
+  prepareClaudeRuntimeEnvironment: jest.fn(async () => ({
+    home: 'C:\\flujo\\db\\claude-runtime',
+    workingDirectory: 'C:\\flujo\\db\\claude-runtime\\workspace',
+    env: {
+      PATH: 'C:\\Windows',
+      CLAUDE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+    },
+  })),
 }));
 
 import { ClaudeSubscriptionAdapter } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
@@ -68,12 +113,227 @@ const capturedOptions = () => {
   return queryMock.mock.calls[0][0].options as Record<string, unknown>;
 };
 
+it('returns per-query totals independently from the latest root request context', async () => {
+  queryMock.mockImplementation(() => (async function* () {
+    yield { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start', message: {
+      id: 'api-message', model: 'claude-test', usage: { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 1 },
+    } } };
+    yield { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_delta', usage: { output_tokens: 50 } } };
+    yield { type: 'result', subtype: 'success', result: 'done', session_id: 'session-telemetry',
+      usage: { input_tokens: 999999, output_tokens: 9999 },
+      modelUsage: { 'claude-test': {
+        inputTokens: 500, cacheReadInputTokens: 5000, cacheCreationInputTokens: 200,
+        outputTokens: 200, contextWindow: 200000,
+      } },
+    };
+  })());
+  const result = await new ClaudeSubscriptionAdapter().createCompletion(baseInput());
+  expect(result.completion.usage).toMatchObject({ prompt_tokens: 5700, completion_tokens: 200, total_tokens: 5900 });
+  expect(result.contextUsage).toEqual({ promptTokens: 1000, completionTokens: 50, totalTokens: 1050,
+    contextWindow: 200000, contextWindowSource: 'runtime' });
+});
+
 beforeEach(() => {
   queryMock.mockReset();
+  callToolMock.mockReset();
+  loadServerConfigsMock.mockReset();
+  loadServerConfigsMock.mockResolvedValue([
+    { name: 'my-server', enableMcpApps: true },
+  ]);
+  boundToolResultMock.mockReset();
+  boundToolResultMock.mockImplementation(async ({ content }: { content: string }) => ({ spilled: false, content }));
+  sdkToolsMock = [];
   queryMock.mockImplementation(() => successStream());
 });
 
+describe('ClaudeSubscriptionAdapter — mid-run steering', () => {
+  it('does not call the SDK after archive authority is lost', async () => {
+    const lost = new FlowExecutionAuthorityError('Persona was deleted');
+    await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => { throw lost; },
+    }))).rejects.toBe(lost);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates authority loss from SDK outcome persistence', async () => {
+    const lost = new FlowExecutionAuthorityError('Lease expired');
+    await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => 'dispatch_lost',
+      onSdkRequestResult: async () => { throw lost; },
+    }))).rejects.toBe(lost);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses one open input stream and delivers during a quiet SDK turn', async () => {
+    const streamedInputs: Array<{ message: { content: unknown } }> = [];
+    let resolveInitial!: () => void;
+    let resolveCorrection!: () => void;
+    const initial = new Promise<void>(resolve => { resolveInitial = resolve; });
+    const correction = new Promise<void>(resolve => { resolveCorrection = resolve; });
+    let pump: Promise<void>;
+    queryMock.mockImplementation(({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+      pump = (async () => {
+        for await (const message of prompt) {
+          streamedInputs.push(message);
+          if (streamedInputs.length === 1) resolveInitial();
+          else resolveCorrection();
+        }
+      })();
+      return (async function* () {
+        yield { type: 'system', session_id: 'sess-1' };
+        // No output event arrives to trigger delivery: only the inbox listener
+        // can unblock this quiet provider operation.
+        await correction;
+        yield { type: 'result', subtype: 'success', result: 'old turn', session_id: 'sess-1' };
+        yield { type: 'assistant', session_id: 'sess-1', uuid: 'corrected-turn',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'corrected answer' }] } };
+        yield { type: 'result', subtype: 'success', result: 'corrected answer', session_id: 'sess-1' };
+      })();
+    });
+    const injected = { id: 'steer-claude-1', role: 'user', content: 'change direction now', timestamp: 123, injected: true } as FlujoChatMessage;
+    const beforeSend = jest.fn(async () => undefined);
+    const acknowledge = jest.fn(async () => undefined);
+    const requeue = jest.fn();
+    let pending = false;
+    let notify!: () => void;
+    const unsubscribe = jest.fn();
+    const onTranscriptMessage = jest.fn();
+    const running = new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      onTranscriptMessage,
+      steering: {
+        take: async () => {
+          if (!pending) return undefined;
+          pending = false;
+          return { messages: [injected], beforeSend, acknowledge, requeue };
+        },
+        subscribe: listener => { notify = listener; return unsubscribe; },
+      },
+    }));
+    await initial;
+    pending = true; notify();
+    const result = await running;
+    await pump!;
+    expect(streamedInputs).toHaveLength(2);
+    expect(streamedInputs[1].message.content).toBe('change direction now');
+    expect(result.completion.choices[0].message.content).toBe('corrected answer');
+    expect(result.transcript).toEqual([
+      expect.objectContaining({ id: injected.id, content: injected.content }),
+      expect.objectContaining({ role: 'assistant', content: 'corrected answer' }),
+    ]);
+    expect(beforeSend).toHaveBeenCalledTimes(1);
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(requeue).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ClaudeSubscriptionAdapter — cooperative terminal controls', () => {
+  it('stops before another SDK turn can narrate after a terminal local control', async () => {
+    let turnEnded = false;
+    queryMock.mockImplementation(() => (async function* () {
+      yield { type: 'system', session_id: 'sess-1' };
+      turnEnded = true;
+      yield {
+        type: 'assistant',
+        session_id: 'sess-1',
+        uuid: 'post-control-turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'This narration must not escape.' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'This narration must not escape.',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const result = await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      shouldEndAgenticTurn: () => turnEnded,
+    }));
+
+    expect(result.transcript).toEqual([]);
+    expect(result.completion.choices[0].message.content).toBeNull();
+    const abortController = capturedOptions().abortController as AbortController;
+    expect(abortController.signal.aborted).toBe(true);
+  });
+});
+
+describe('ClaudeSubscriptionAdapter — malformed tool-call prose quarantine (#298)', () => {
+  it('keeps a contaminated SDK turn out of the transcript and live callback', async () => {
+    const malformed =
+      'Assistant [tool call] mcp__flujo__filesystem__read_file {"path":"secret"}\n' +
+      "The model's tool call could not be parsed (retry also failed)";
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'assistant',
+        session_id: 'sess-1',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: malformed }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'safe terminal fallback',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      };
+    })());
+    const onTranscriptMessage = jest.fn();
+
+    const result = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({ onTranscriptMessage }),
+    );
+
+    expect(result.transcript).toHaveLength(1);
+    expect(result.transcript![0]).toMatchObject({ role: 'assistant', content: 'safe terminal fallback' });
+    expect(onTranscriptMessage).toHaveBeenCalledTimes(1);
+    expect(onTranscriptMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'safe terminal fallback' }),
+    );
+    expect(JSON.stringify(result.transcript)).not.toContain('mcp__flujo__');
+    expect(JSON.stringify(onTranscriptMessage.mock.calls)).not.toContain('retry also failed');
+  });
+});
+
 describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () => {
+  it('uses the workspace Claude runtime and disables inherited filesystem settings', async () => {
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({ tools: [] }));
+
+    const options = capturedOptions();
+    expect(options.cwd).toBe('C:\\flujo\\db\\claude-runtime\\workspace');
+    expect(options.settingSources).toEqual([]);
+    expect(options.env).toMatchObject({
+      CLAUDE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token',
+      MAX_MCP_OUTPUT_TOKENS: String(256 * 1024),
+    });
+    expect((options.env as Record<string, unknown>).ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('raises the SDK persistence limit to FLUJO\'s configured inline boundary', async () => {
+    const { getRunResourceSettings } = jest.requireMock('@/backend/services/runResources') as {
+      getRunResourceSettings: jest.Mock;
+    };
+    getRunResourceSettings.mockResolvedValueOnce({ toolResultMaxBytes: 900_000 });
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      conversationId: 'conv-1',
+      tools: [],
+    }));
+
+    const env = capturedOptions().env as Record<string, string>;
+    expect(env.MAX_MCP_OUTPUT_TOKENS).toBe('900000');
+  });
+
   it('disables all built-in tools on the query options for a tools-less node', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     await adapter.createCompletion(baseInput({ tools: [] }));
@@ -89,6 +349,270 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     }
     // The adapter must NOT auto-allow anything (allowedTools bypasses canUseTool).
     expect(options.allowedTools).toBeUndefined();
+  });
+
+  it('passes the configured reasoning effort to the Agent SDK', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    await adapter.createCompletion(
+      baseInput({
+        model: {
+          id: 'm1',
+          name: 'sonnet',
+          ApiKey: 'oauth-token',
+          provider: 'claude-subscription',
+          adapter: 'claude-cli',
+          reasoningEffort: 'high',
+        },
+      }),
+    );
+
+    expect(capturedOptions().effort).toBe('high');
+  });
+
+  it('enables partial SDK events and reconciles streamed text with the final transcript id', async () => {
+    // REAL SDK shape (verified against 0.3.220): every `stream_event` carries a
+    // FRESH wrapper uuid, and the durable `assistant` frame has yet another one.
+    // Only the API message id (`message_start.message.id`, repeated as the
+    // assistant frame's `message.id`) is stable, so both the live drafts and the
+    // durable message must be keyed on it — otherwise each token chunk opens its
+    // own bubble and the final message duplicates all of them.
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_1', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-2',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'hel' },
+        },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-3',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'lo' },
+        },
+      };
+      yield {
+        type: 'assistant',
+        uuid: 'frame-uuid-1',
+        session_id: 'sess-1',
+        message: {
+          id: 'msg_1',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hello' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'hello',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+    const deltas: unknown[] = [];
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({ onModelDelta: delta => deltas.push(delta) }),
+    );
+
+    expect(capturedOptions().includePartialMessages).toBe(true);
+    // Both chunks stream under ONE id (not one per event uuid)…
+    expect(deltas).toEqual([
+      expect.objectContaining({ messageId: 'stream_claude_msg_1', contentDelta: 'hel' }),
+      expect.objectContaining({ messageId: 'stream_claude_msg_1', contentDelta: 'lo' }),
+    ]);
+    // …and the durable message reuses exactly that id, so the UI upsert replaces
+    // the draft instead of appending a second bubble with the same prose.
+    expect(transcript?.filter(m => m.role === 'assistant')).toHaveLength(1);
+    expect(transcript?.[0]).toMatchObject({
+      id: 'stream_claude_msg_1',
+      role: 'assistant',
+      content: 'hello',
+    });
+  });
+
+  it('streams tool-call arguments even though each stream event has a new uuid', async () => {
+    // content_block_start and its input_json_delta events arrive with DIFFERENT
+    // wrapper uuids, so a uuid-keyed block map silently dropped every argument
+    // delta. The block must be tracked per API message id + block index.
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_tool', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-2',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' },
+        },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-3',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'input_json_delta', partial_json: '{"command":' },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const deltas: Array<{ messageId: string; toolCallDelta?: Record<string, unknown> }> = [];
+    await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        onModelDelta: (delta: { messageId: string; toolCallDelta?: Record<string, unknown> }) =>
+          deltas.push(delta),
+      } as Partial<CompletionInput>),
+    );
+
+    expect(deltas).toEqual([
+      expect.objectContaining({
+        messageId: 'stream_claude_msg_tool_tool_1',
+        toolCallDelta: expect.objectContaining({ id: 'toolu_1', nameDelta: 'Bash' }),
+      }),
+      expect.objectContaining({
+        messageId: 'stream_claude_msg_tool_tool_1',
+        toolCallDelta: expect.objectContaining({ argumentsDelta: '{"command":' }),
+      }),
+    ]);
+  });
+
+  it('merges an aborted assistant frame with its continuation into ONE message id', async () => {
+    // SDK >= 0.3.220: an interrupted/max-output-tokens turn arrives as an
+    // assistant frame with wrapper-level `aborted: true` whose content ends
+    // mid-word; the SDK continues the SAME prose in a follow-up assistant
+    // frame with a NEW uuid. The adapter must reconcile both onto one stable
+    // message id — otherwise the UI shows a mid-word bubble split
+    // ("Toolchain conf" / "irmed. Now building…").
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-a1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_a', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-a2',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'Toolchain conf' },
+        },
+      };
+      yield {
+        type: 'assistant',
+        uuid: 'frame-a',
+        session_id: 'sess-1',
+        aborted: true,
+        message: {
+          id: 'msg_a',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Toolchain conf' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-b1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_b', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-b2',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'irmed.' },
+        },
+      };
+      yield {
+        type: 'assistant',
+        uuid: 'frame-b',
+        session_id: 'sess-1',
+        message: {
+          id: 'msg_b',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'irmed.' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'Toolchain confirmed.',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const deltas: Array<{ messageId: string; contentDelta?: string }> = [];
+    const streamed: FlujoChatMessage[] = [];
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        onModelDelta: (delta: { messageId: string; contentDelta?: string }) => deltas.push(delta),
+        onTranscriptMessage: (message: FlujoChatMessage) => streamed.push(message),
+      } as Partial<CompletionInput>),
+    );
+
+    // Continuation deltas keep the FIRST frame's stable id, so the live view
+    // appends into the same bubble instead of opening a new draft.
+    expect(deltas).toEqual([
+      expect.objectContaining({ messageId: 'stream_claude_msg_a', contentDelta: 'Toolchain conf' }),
+      expect.objectContaining({ messageId: 'stream_claude_msg_a', contentDelta: 'irmed.' }),
+    ]);
+    // Exactly ONE durable assistant prose message, holding the merged text.
+    const prose = (transcript ?? []).filter(m => m.role === 'assistant');
+    expect(prose).toHaveLength(1);
+    expect(prose[0]).toMatchObject({
+      id: 'stream_claude_msg_a',
+      role: 'assistant',
+      content: 'Toolchain confirmed.',
+    });
+    // The merged continuation was re-emitted live under the SAME id, so the
+    // frontend's id-keyed upsert replaces the truncated bubble in place.
+    const liveUnderStableId = streamed.filter(m => m.id === 'stream_claude_msg_a');
+    expect(liveUnderStableId.length).toBeGreaterThanOrEqual(2);
+    expect(liveUnderStableId[liveUnderStableId.length - 1].content).toBe('Toolchain confirmed.');
   });
 
   it('canUseTool DENIES an arbitrary built-in tool with the #166 message', async () => {
@@ -125,7 +649,7 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
 
   it('still disables built-ins when the node HAS bound (handoff) tools', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
-    const tools: OpenAI.ChatCompletionTool[] = [
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [
       {
         type: 'function',
         function: {
@@ -143,4 +667,269 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     // The node's own tools ARE exposed via the in-process MCP server.
     expect(options.mcpServers).toBeDefined();
   });
+});
+
+const mcpAppTool: OpenAI.ChatCompletionFunctionTool = {
+  type: 'function',
+  function: {
+    name: 'mcp_hashed_name',
+    description: 'Lists things',
+    parameters: { type: 'object', properties: { q: { type: 'string' } } },
+  },
+};
+
+describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
+  it('surfaces a tool call before its handler begins execution', async () => {
+    const order: string[] = [];
+    callToolMock.mockImplementationOnce(async () => {
+      order.push('execute');
+      return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
+    });
+    queryMock.mockImplementation(({ options }: {
+      options: {
+        canUseTool: (
+          toolName: string,
+          input: unknown,
+          opts: { toolUseID: string },
+        ) => Promise<{ behavior: string }>;
+      };
+    }) => (async function* () {
+      await options.canUseTool(
+        `mcp__flujo__${sdkToolsMock[0].name}`,
+        { q: 'x' },
+        { toolUseID: 'call-live-1' },
+      );
+      order.push('allowed');
+      await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: { server: 'my-server', tool: 'list_things' },
+        },
+        onTranscriptMessage: message => {
+          if (message.role === 'assistant' && message.tool_calls?.length) {
+            order.push('call-visible');
+          }
+        },
+      }),
+    );
+
+    expect(order).toEqual(['call-visible', 'allowed', 'execute']);
+    expect(transcript?.[0]).toMatchObject({
+      role: 'assistant',
+      tool_calls: [{ id: 'call-live-1' }],
+    });
+    expect(transcript?.[1]).toMatchObject({ role: 'tool', tool_call_id: 'call-live-1' });
+  });
+
+  it('preserves native media when oversized text is replaced by a bounded preview', async () => {
+    const image = { type: 'image' as const, data: 'BASE64_IMAGE', mimeType: 'image/png' };
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'x'.repeat(60_000) }, image] },
+    });
+    boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
+    let sdkResult: unknown;
+    queryMock.mockImplementation(() => (async function* () {
+      sdkResult = await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conv-1',
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: { server: 'my-server', tool: 'list_things' },
+        },
+      }),
+    );
+
+    expect(sdkResult).toMatchObject({
+      content: [image, { type: 'text', text: '[bounded text preview]' }],
+    });
+    const toolMessage = transcript!.find(message => message.role === 'tool');
+    expect(toolMessage?.content).toContain('[bounded text preview]');
+    expect(toolMessage?.content).not.toContain('BASE64_IMAGE');
+    expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.not.stringContaining('BASE64_IMAGE'),
+    }));
+  });
+
+  it('preserves the advertised UI, ignores a result redirect, and propagates abort', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: 'ok' }],
+        _meta: { ui: { resourceUri: 'ui://unadvertised-redirect' } },
+      },
+    });
+    queryMock.mockImplementation(() => (async function* () {
+      await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conversation-current',
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            timeout: 30,
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
+      }),
+    );
+
+    expect(callToolMock).toHaveBeenCalledWith(
+      'my-server',
+      'list_things',
+      { q: 'x' },
+      30,
+      undefined,
+      undefined,
+      expect.any(AbortSignal),
+      'model',
+      'conversation:conversation-current',
+      { conversationId: 'conversation-current' },
+    );
+    const toolMsg = transcript!.find(message => message.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+    });
+  });
+
+  it('forwards MCP progress from an SDK-owned tool loop to FLUJO live progress', async () => {
+    const onToolProgress = jest.fn();
+    callToolMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const report = args[4] as ((value: { progress: number; total?: number; message?: string }) => void);
+      report({ progress: 3, total: 4, message: 'rendering' });
+      return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
+    });
+    queryMock.mockImplementation(() => (async function* () {
+      await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      tools: [mcpAppTool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+      onToolProgress,
+    }));
+
+    expect(onToolProgress).toHaveBeenCalledWith({
+      toolCallId: expect.any(String),
+      name: 'my-server__list_things',
+      progress: 3,
+      total: 4,
+      message: 'rendering',
+    });
+  });
+
+  it('records approval rejection as an MCP App cancellation', async () => {
+    queryMock.mockImplementation(({ options }: {
+      options: {
+        canUseTool: (
+          toolName: string,
+          input: unknown,
+          opts: { toolUseID: string },
+        ) => Promise<{ behavior: string }>;
+      };
+    }) => (async function* () {
+      const denied = await options.canUseTool(
+        `mcp__flujo__${sdkToolsMock[0].name}`,
+        { q: 'x' },
+        { toolUseID: 'approval-call-1' },
+      );
+      expect(denied.behavior).toBe('deny');
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'adjusted',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
+        requestToolApproval: jest.fn(async () => false),
+      }),
+    );
+
+    expect(callToolMock).not.toHaveBeenCalled();
+    const toolMsg = transcript!.find(message => message.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+      cancelledReason: 'tool denied',
+      isError: true,
+    });
+  });
+});
+
+
+it('requeues Claude steering when its authority check rejects before the SDK write', async () => {
+  queryMock.mockImplementation(({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+    const pump = (async () => { for await (const _message of prompt) { /* SDK input pump */ } })();
+    void pump.catch(() => {});
+    return (async function* () {
+      yield { type: 'system', session_id: 'session' };
+      await pump;
+    })();
+  });
+  const batch = {
+    messages: [{ id: 'rejected', role: 'user' as const, content: 'Correction', timestamp: 1 }],
+    beforeSend: jest.fn(async () => { throw new Error('delivery fence rejected'); }),
+    acknowledge: jest.fn(async () => undefined), requeue: jest.fn(),
+  };
+  let pending = true;
+  await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({ steering: {
+    take: async () => { if (!pending) return undefined; pending = false; return batch; },
+    subscribe: () => () => {},
+  } }))).rejects.toThrow('delivery fence rejected');
+  expect(batch.requeue).toHaveBeenCalledTimes(1);
+  expect(batch.acknowledge).not.toHaveBeenCalled();
 });

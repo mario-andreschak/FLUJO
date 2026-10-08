@@ -5,6 +5,7 @@ import { SharedState, SignalNodeParams } from '../types';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { FEATURES } from '@/config/features';
+import { assertFlowExecutionCurrent } from '../executionAuthority';
 
 const log = createLogger('backend/flow/execution/nodes/SignalNode');
 
@@ -28,11 +29,35 @@ const log = createLogger('backend/flow/execution/nodes/SignalNode');
  *    at runDepth 0): a signal is an explicit authored emission and should fire
  *    wherever placed. Loop safety comes from the shared `chainDepth`.
  */
-export class SignalNode extends BaseNode {
-  async prep(_sharedState: SharedState, node_params?: SignalNodeParams): Promise<{ topic: string; payloadTemplate: string }> {
+export class SignalNode extends BaseNode<
+  SignalNodeParams,
+  SharedState,
+  { topic: string; payloadTemplate: string },
+  Record<string, never>
+> {
+  async prep(sharedState: SharedState, node_params?: SignalNodeParams): Promise<{ topic: string; payloadTemplate: string }> {
     const topic = (node_params?.properties?.topic ?? '').trim();
-    const payloadTemplate = node_params?.properties?.payloadTemplate ?? '';
-    log.info('prep() started', { nodeId: node_params?.id, topic, payloadTemplateLength: payloadTemplate.length });
+    const authoredPayloadTemplate = node_params?.properties?.payloadTemplate ?? '';
+    const handoffInput = sharedState.handoffInput;
+    const isCallerHandoff =
+      handoffInput?.fromHandoffTool === true &&
+      handoffInput.targetNodeId === node_params?.id;
+    const callerBody = handoffInput?.signalBody?.trim() ?? '';
+
+    if (isCallerHandoff) {
+      sharedState.handoffInput = undefined;
+      if (!callerBody) {
+        throw new Error('Process-to-Signal handoff requires a non-empty body argument.');
+      }
+    }
+
+    const payloadTemplate = isCallerHandoff ? callerBody : authoredPayloadTemplate;
+    log.info('prep() started', {
+      nodeId: node_params?.id,
+      topic,
+      payloadTemplateLength: payloadTemplate.length,
+      callerSuppliedPayload: isCallerHandoff,
+    });
     return { topic, payloadTemplate };
   }
 
@@ -68,6 +93,11 @@ export class SignalNode extends BaseNode {
         const payload = resolveRunVars(prepResult.payloadTemplate ?? '', sharedState.variables);
         const firedBy: FlowRunFiredBy =
           sharedState.source === 'schedule' ? 'schedule' : sharedState.source === 'api' ? 'api' : 'chat';
+        // A signal is intentionally fire-and-forget, but it is still an
+        // externally visible side effect. Resolve everything first, then check
+        // the Persona lease / meeting generation at the last possible boundary
+        // so a recovered successor never receives an event from the stale run.
+        await assertFlowExecutionCurrent(sharedState);
         getFlowRunEventBus().publish({
           kind: 'signal',
           topic,

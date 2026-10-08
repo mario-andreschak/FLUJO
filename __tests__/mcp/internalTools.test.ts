@@ -19,6 +19,13 @@ jest.mock('@/backend/services/model', () => ({
     loadModels: jest.fn(),
   },
 }));
+// create_ticket_for_human writes through the ticket service (#379); stub it so
+// the dispatch contract is pinned without touching the tickets collection.
+jest.mock('@/backend/services/ticket', () => ({
+  ticketService: {
+    createTicket: jest.fn(),
+  },
+}));
 jest.mock('@/backend/services/scheduler', () => {
   const list = jest.fn();
   const runNow = jest.fn();
@@ -41,6 +48,17 @@ jest.mock('@/backend/services/mcp/flowAuthoringTools', () => ({
   ],
   authoringCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'authored' }] })),
 }));
+jest.mock('@/backend/services/mcp/personaCompositionTools', () => ({
+  isPersonaCompositionTool: (name: string) => name === 'read_persona_composition',
+  personaCompositionToolDefinitions: () => [{
+    name: 'read_persona_composition',
+    description: 'persona composition',
+    inputSchema: { type: 'object', properties: {} },
+  }],
+  callPersonaCompositionTool: jest.fn(async () => ({
+    content: [{ type: 'text', text: 'persona composition' }],
+  })),
+}));
 // update_flow goes through compileSpec, which pulls gatherGenerationContext -> mcpService.
 jest.mock('@/backend/services/flow/compileFlow', () => ({
   compileSpec: jest.fn(),
@@ -58,14 +76,25 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({
   executionEventBus: { currentSeq: jest.fn(() => 0) },
 }));
-// list_conversations reads db/conversations under the data dir; point it at a
-// per-test temp dir when set (terminal tests keep the real data dir).
+// list_conversations reads db/conversations under the selected workspace; point
+// its parent data root at a per-test temp dir (terminal tests keep the real root).
 jest.mock('@/utils/paths', () => {
   const actual = jest.requireActual('@/utils/paths');
   return {
     ...actual,
     getDataDir: () =>
       (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir ?? actual.getDataDir(),
+  };
+});
+// Mock the workspace resolver directly as well: setup modules can import it
+// before this suite replaces paths, so relying only on getDataDir is order-sensitive.
+jest.mock('@/utils/workspace', () => {
+  const actual = jest.requireActual('@/utils/workspace');
+  return {
+    ...actual,
+    getWorkspaceDataDir: () =>
+      (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir
+      ?? actual.getWorkspaceDataDir(),
   };
 });
 
@@ -77,14 +106,15 @@ import {
   internalCallTool,
   InternalDispatchService,
 } from '@/backend/services/mcp/internalTools';
-import { INTERNAL_SERVER_NAME } from '@/backend/services/mcp/internalServerConfig';
+import { FLUJO_FLOW_TOOLS } from '@/backend/services/mcp/flujoControlApi';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
+import { callPersonaCompositionTool } from '@/backend/services/mcp/personaCompositionTools';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
-import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
+import { flushConversationLog, readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
 const flows = flowService as unknown as {
   loadFlows: jest.Mock;
@@ -102,6 +132,7 @@ const scheduler = (
 const runFlowMock = runFlow as jest.Mock;
 const compileSpecMock = compileSpec as jest.Mock;
 const loadConversationStateMock = loadConversationState as jest.Mock;
+const flushConversationLogMock = flushConversationLog as jest.Mock;
 const readConversationLogMock = readConversationLog as jest.Mock;
 const projectMessagesMock = projectMessages as jest.Mock;
 
@@ -133,8 +164,12 @@ describe('internalToolDefinitions', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
+        'read_persona_composition',
+        'propose_ui_action',
         'list_flows',
+        'discover_capabilities',
         'execute_flow',
+        'explain_flow',
         'read_flow',
         'update_flow',
         'list_flow_versions',
@@ -157,13 +192,105 @@ describe('internalToolDefinitions', () => {
       ])
     );
   });
+
+  it('keeps read_flow strict while advertising filters on list_flow_versions', () => {
+    const definitions = internalToolDefinitions();
+    const readFlow = definitions.find((tool) => tool.name === 'read_flow');
+    const listVersions = definitions.find((tool) => tool.name === 'list_flow_versions');
+
+    expect(readFlow?.inputSchema).toEqual({
+      type: 'object',
+      properties: {
+        flow: expect.any(Object),
+      },
+      required: ['flow'],
+    });
+    expect(listVersions?.inputSchema).toEqual(expect.objectContaining({
+      additionalProperties: false,
+      properties: expect.objectContaining({
+        flow: expect.any(Object),
+        query: expect.any(Object),
+        savedAfter: expect.any(Object),
+        savedBefore: expect.any(Object),
+        limit: expect.objectContaining({ maximum: 200 }),
+        cursor: expect.any(Object),
+      }),
+      required: ['flow'],
+    }));
+    expect(listVersions?.outputSchema).toEqual(expect.objectContaining({
+      required: ['items', 'total', 'hasMore'],
+    }));
+  });
+
+  it('declares strict schemas for every list tool and paged output for flat lists', () => {
+    const listTools = internalToolDefinitions().filter((tool) => tool.name.startsWith('list_'));
+    expect(listTools.length).toBeGreaterThan(0);
+    for (const tool of listTools) {
+      expect(tool.inputSchema).toEqual(expect.objectContaining({ additionalProperties: false }));
+      if (tool.name !== 'list_flow_building_blocks') {
+        expect(tool.inputSchema.properties).toEqual(expect.objectContaining({
+          query: expect.any(Object),
+          limit: expect.objectContaining({ maximum: 200 }),
+          cursor: expect.any(Object),
+        }));
+        expect(tool.outputSchema).toEqual(expect.objectContaining({
+          required: ['items', 'total', 'hasMore'],
+        }));
+      }
+    }
+  });
+});
+
+describe('propose_ui_action', () => {
+  it('is assigned to the standalone FLUJO flow-control route', () => {
+    expect(FLUJO_FLOW_TOOLS).toContain('propose_ui_action');
+  });
+
+  it('returns a reviewable screen-edit proposal without mutating backend state', async () => {
+    const result = await internalCallTool(makeService(), 'propose_ui_action', {
+      type: 'set_value',
+      target: { kind: 'model-field', field: 'displayName' },
+      value: 'Terra UI Test',
+    });
+
+    expect(JSON.parse(text(result))).toEqual(expect.objectContaining({
+      type: 'flujo_ui_action',
+      accepted: true,
+      action: expect.objectContaining({
+        type: 'set_value',
+        target: { kind: 'model-field', field: 'displayName' },
+        value: 'Terra UI Test',
+      }),
+    }));
+  });
+
+  it('rejects a value-less screen edit', async () => {
+    const result = await internalCallTool(makeService(), 'propose_ui_action', {
+      type: 'set_value',
+      target: { kind: 'model-field', field: 'displayName' },
+    });
+
+    expect(result.isError).toBe(true);
+  });
 });
 
 describe('list_flows', () => {
-  it('advertises an empty-object input schema', () => {
+  it('advertises bounded filters and rejects undeclared properties', () => {
     const def = internalToolDefinitions().find((t) => t.name === 'list_flows');
     expect(def).toBeDefined();
-    expect(def!.inputSchema).toEqual({ type: 'object', properties: {} });
+    expect(def!.inputSchema).toEqual(expect.objectContaining({
+      type: 'object',
+      additionalProperties: false,
+      properties: expect.objectContaining({
+        query: expect.any(Object),
+        limit: expect.objectContaining({ maximum: 200 }),
+        cursor: expect.any(Object),
+        folder: expect.any(Object),
+        favorite: expect.any(Object),
+        sort: expect.objectContaining({ enum: expect.arrayContaining(['name-asc', 'updated-desc']) }),
+      }),
+    }));
+    expect(def!.outputSchema).toEqual(expect.objectContaining({ required: ['items', 'total', 'hasMore'] }));
   });
 
   it('returns lightweight per-flow metadata only (id, name, description?, nodeCount)', async () => {
@@ -220,6 +347,38 @@ describe('list_flows', () => {
     expect(JSON.parse(text(r))).toEqual([]);
   });
 
+  it('filters, sorts, and paginates with an opaque next cursor', async () => {
+    flows.loadFlows.mockResolvedValue([
+      { id: 'z', name: 'Zulu', folder: 'ops', favorite: false, updatedAt: 100, nodes: [{}] },
+      { id: 'a', name: 'Alpha', folder: 'ops', favorite: true, updatedAt: 300, nodes: [{}, {}] },
+      { id: 'b', name: 'Beta', folder: 'other', favorite: true, updatedAt: 200, nodes: [] },
+    ]);
+    const first = await internalCallTool(makeService(), 'list_flows', {
+      folder: 'ops',
+      sort: 'updated-desc',
+      limit: 1,
+    });
+    expect(JSON.parse(text(first)).map((flow: { id: string }) => flow.id)).toEqual(['a']);
+    const firstPage = first.structuredContent as { total: number; hasMore: boolean; nextCursor: string };
+    expect(firstPage).toMatchObject({ total: 2, hasMore: true });
+
+    const second = await internalCallTool(makeService(), 'list_flows', {
+      folder: 'ops',
+      sort: 'updated-desc',
+      limit: 1,
+      cursor: firstPage.nextCursor,
+    });
+    expect(JSON.parse(text(second)).map((flow: { id: string }) => flow.id)).toEqual(['z']);
+    expect(second.structuredContent).toEqual(expect.objectContaining({ total: 2, hasMore: false }));
+  });
+
+  it('returns an explicit error for unsupported filters', async () => {
+    const result = await internalCallTool(makeService(), 'list_flows', { status: 'completed' });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Unsupported list argument');
+    expect(flows.loadFlows).not.toHaveBeenCalled();
+  });
+
   it('returns a graceful error result (no throw) when loadFlows rejects', async () => {
     flows.loadFlows.mockRejectedValue(new Error('disk gone'));
     const r = await internalCallTool(makeService(), 'list_flows', {});
@@ -234,6 +393,16 @@ describe('authoring tool routing', () => {
     expect(authoringCallTool).toHaveBeenCalledWith('create_flow', { spec: {} });
     expect(text(r)).toBe('authored');
   });
+
+  it('routes Persona composition tools through the closed registry', async () => {
+    const args = { persona_id: 'persona_1' };
+    const r = await internalCallTool(makeService(), 'read_persona_composition', args);
+    expect(callPersonaCompositionTool).toHaveBeenCalledWith(
+      'read_persona_composition',
+      args,
+    );
+    expect(text(r)).toBe('persona composition');
+  });
 });
 
 describe('execute_flow', () => {
@@ -244,7 +413,7 @@ describe('execute_flow', () => {
     const r = await internalCallTool(makeService(), 'execute_flow', { flow: 'My Flow', input: 'hi' });
 
     expect(runFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ flowId: 'f1', prompt: 'hi', mode: 'ephemeral' })
+      expect.objectContaining({ flowId: 'f1', prompt: 'hi', source: 'internal', mode: 'ephemeral' })
     );
     expect(r.isError).toBeUndefined();
     expect(text(r)).toBe('done');
@@ -498,19 +667,169 @@ describe('list_mcp_servers', () => {
     expect(out).not.toContain('secret-token');
     expect(out).not.toContain('oauth-secret');
   });
+
+  it('filters by enabled state, live status, transport, and query', async () => {
+    const service = makeService();
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'alpha-web', transport: 'streamable', disabled: false, folder: 'web' },
+      { name: 'beta-shell', transport: 'stdio', disabled: false, folder: 'local' },
+      { name: 'gamma-off', transport: 'stdio', disabled: true, folder: 'local' },
+    ]);
+    service.getServerStatus.mockImplementation(async (name: string) => ({
+      status: name === 'alpha-web' ? 'connected' : 'error',
+    }));
+
+    const result = await internalCallTool(service, 'list_mcp_servers', {
+      enabled: true,
+      statuses: ['connected'],
+      transports: ['streamable'],
+      query: 'web',
+    });
+    expect(JSON.parse(text(result))).toEqual([
+      { name: 'alpha-web', transport: 'streamable', enabled: true, status: 'connected', folder: 'web' },
+    ]);
+    expect(service.getServerStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('discover_capabilities', () => {
+  it('searches flows and enabled MCP tools and returns exact invocation recipes', async () => {
+    flows.loadFlows.mockResolvedValue([
+      { id: 'research-flow', name: 'Research Brief', description: 'Research a topic and produce a brief.', nodes: [], edges: [] },
+      { id: 'unrelated', name: 'Invoice', nodes: [], edges: [] },
+    ]);
+    const service = makeService();
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'browser', transport: 'stdio', disabled: false },
+      { name: 'disabled-browser', transport: 'stdio', disabled: true },
+    ]);
+    service.listServerTools.mockResolvedValue({
+      tools: [{
+        name: 'research_web',
+        description: 'Research the web for a topic.',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      }],
+    });
+
+    const result = await internalCallTool(service, 'discover_capabilities', { query: 'research' });
+    const payload = JSON.parse(text(result));
+
+    expect(payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'flow',
+        id: 'research-flow',
+        invocation: { tool: 'execute_flow', arguments: { flow: 'research-flow', input: '<user request>' } },
+        explanation: { tool: 'explain_flow', arguments: { flow: 'research-flow' } },
+      }),
+      expect.objectContaining({
+        kind: 'mcp_tool',
+        server: 'browser',
+        name: 'research_web',
+        inputSchema: expect.objectContaining({ required: ['query'] }),
+        invocation: { tool: 'call_mcp_tool', arguments: { server: 'browser', tool: 'research_web', args: {} } },
+      }),
+    ]));
+    expect(service.listServerTools).toHaveBeenCalledTimes(1);
+    expect(result.structuredContent).toEqual(expect.objectContaining({ total: 2, hasMore: false }));
+  });
+
+  it('supports a server-scoped MCP-only search', async () => {
+    const service = makeService();
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'github', transport: 'stdio', disabled: false },
+      { name: 'browser', transport: 'stdio', disabled: false },
+    ]);
+    service.listServerTools.mockResolvedValue({ tools: [{ name: 'create_issue', description: 'Create issue', inputSchema: {} }] });
+
+    await internalCallTool(service, 'discover_capabilities', {
+      query: 'issue',
+      kinds: ['mcp_tool'],
+      server: 'github',
+    });
+
+    expect(flows.loadFlows).not.toHaveBeenCalled();
+    expect(service.listServerTools).toHaveBeenCalledTimes(1);
+    expect(service.listServerTools).toHaveBeenCalledWith('github', 'all');
+  });
+});
+
+describe('explain_flow', () => {
+  it('explains ordered steps, subflow semantics, signals, conditions, and Waves links', async () => {
+    flows.loadFlows.mockResolvedValue([
+      {
+        id: 'parent',
+        name: 'Parent Pipeline',
+        description: 'Coordinates research and publishes an event.',
+        nodes: [
+          { id: 'start', type: 'start', data: { type: 'start', label: 'Begin', properties: {} } },
+          { id: 'worker', type: 'subflow', data: { type: 'subflow', label: 'Research workers', properties: {
+            subflowId: 'child', inputMode: 'latest-message', spawnBriefs: ['facts', 'risks'], outputMode: 'final-only', saveConversation: false,
+          } } },
+          { id: 'signal', type: 'signal', data: { type: 'signal', label: 'Publish ready', properties: { topic: 'brief-ready' } } },
+          { id: 'finish', type: 'finish', data: { type: 'finish', label: 'Done', properties: {} } },
+        ],
+        edges: [
+          { id: 'e1', source: 'start', target: 'worker' },
+          { id: 'e2', source: 'worker', target: 'signal', data: { condition: { kind: 'always' } } },
+          { id: 'e3', source: 'signal', target: 'finish' },
+        ],
+      },
+      { id: 'child', name: 'Research Child', nodes: [], edges: [] },
+      { id: 'consumer', name: 'Publish Brief', nodes: [], edges: [] },
+    ]);
+    scheduler.list.mockResolvedValue([
+      {
+        execution: {
+          id: 'root-exec', name: 'Daily parent', enabled: true, flowId: 'parent', prompt: 'run',
+          trigger: { type: 'schedule', cron: '0 9 * * *' }, createdAt: '', updatedAt: '',
+        },
+        status: { nextRun: null },
+      },
+      {
+        execution: {
+          id: 'consumer-exec', name: 'Publish on ready', enabled: true, flowId: 'consumer', prompt: 'publish',
+          trigger: { type: 'flow-event', source: { topic: 'brief-ready' } }, createdAt: '', updatedAt: '',
+        },
+        status: {},
+      },
+    ]);
+
+    const result = await internalCallTool(makeService(), 'explain_flow', { flow: 'parent' });
+    const explanation = text(result);
+
+    expect(explanation).toContain('# Parent Pipeline');
+    expect(explanation).toContain('**Research workers** (`subflow`)');
+    expect(explanation).toContain('"Research Child" (child)');
+    expect(explanation).toContain('ordered child-job queue with at most 4 active children');
+    expect(explanation).toContain('call this Subflow handoff any number of times');
+    expect(explanation).toContain('2 parallel child run(s)');
+    expect(explanation).toContain('Only the child’s final output');
+    expect(explanation).toContain('signal topic `brief-ready`');
+    expect(explanation).toContain('“Research workers” → “Publish ready” when always');
+    expect(explanation).toContain('Planned execution “Daily parent”');
+    expect(explanation).toContain('can start signal `brief-ready` and then invoke “Publish on ready”');
+  });
+});
+
+describe('list_mcp_server_tools', () => {
+  it('searches, sorts, paginates, and can omit large schemas', async () => {
+    const service = makeService();
+    service.listServerTools.mockResolvedValue({
+      tools: [
+        { name: 'zeta_read', description: 'Read a record', inputSchema: { type: 'object' } },
+        { name: 'alpha_read', description: 'Read another record', inputSchema: { type: 'object' } },
+        { name: 'write', description: 'Write a record', inputSchema: { type: 'object' } },
+      ],
+    });
+    const result = await internalCallTool(service, 'list_mcp_server_tools', {
+      server: 'records', query: 'read', sort: 'name-asc', limit: 1, includeSchema: false,
+    });
+    expect(JSON.parse(text(result))).toEqual([{ name: 'alpha_read', description: 'Read another record' }]);
+    expect(result.structuredContent).toEqual(expect.objectContaining({ total: 2, hasMore: true }));
+  });
 });
 
 describe('call_mcp_tool', () => {
-  it('refuses to call the internal server through itself', async () => {
-    const service = makeService();
-    const r = await internalCallTool(service, 'call_mcp_tool', {
-      server: INTERNAL_SERVER_NAME,
-      tool: 'anything',
-    });
-    expect(r.isError).toBe(true);
-    expect(service.callTool).not.toHaveBeenCalled();
-  });
-
   it('passes the downstream CallToolResult through on success', async () => {
     const service = makeService();
     service.callTool.mockResolvedValue({
@@ -518,9 +837,47 @@ describe('call_mcp_tool', () => {
       data: { content: [{ type: 'text', text: 'downstream' }] },
     });
     const r = await internalCallTool(service, 'call_mcp_tool', { server: 's', tool: 't', args: { x: 1 } });
-    expect(service.callTool).toHaveBeenCalledWith('s', 't', { x: 1 }, undefined);
+    expect(service.callTool).toHaveBeenCalledWith(
+      's',
+      't',
+      { x: 1 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'host',
+    );
     expect(text(r)).toBe('downstream');
   });
+
+  it.each(['model', 'app'] as const)(
+    'preserves the %s audience for nested downstream calls',
+    async (source) => {
+      const service = makeService();
+      service.callTool.mockResolvedValue({
+        success: true,
+        data: { content: [{ type: 'text', text: 'downstream' }] },
+      });
+
+      await internalCallTool(
+        service,
+        'call_mcp_tool',
+        { server: 's', tool: 't' },
+        source,
+      );
+
+      expect(service.callTool).toHaveBeenCalledWith(
+        's',
+        't',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        source,
+      );
+    },
+  );
 
   it('maps a tool failure to an isError result', async () => {
     const service = makeService();
@@ -540,15 +897,6 @@ describe('set_mcp_server_enabled', () => {
     expect(r.isError).toBeUndefined();
   });
 
-  it('refuses to disable the internal server', async () => {
-    const service = makeService();
-    const r = await internalCallTool(service, 'set_mcp_server_enabled', {
-      server: INTERNAL_SERVER_NAME,
-      enabled: false,
-    });
-    expect(r.isError).toBe(true);
-    expect(service.updateServerConfig).not.toHaveBeenCalled();
-  });
 });
 
 describe('list_models', () => {
@@ -562,6 +910,20 @@ describe('list_models', () => {
     expect(out).toContain('"GPT"');
     expect(out).not.toContain('encrypted-secret');
     expect(out).not.toContain('ApiKey');
+  });
+
+  it('filters safe capability metadata without exposing credentials', async () => {
+    models.loadModels.mockResolvedValue([
+      { id: 'm1', name: 'tool-model', provider: 'openai', adapter: 'openai', supportsTools: true, contextWindow: 128000, ApiKey: 'secret' },
+      { id: 'm2', name: 'text-model', provider: 'ollama', adapter: 'openai', supportsTools: false, contextWindow: 8000, ApiKey: '' },
+    ]);
+    const result = await internalCallTool(makeService(), 'list_models', {
+      providers: ['openai'], supportsTools: true, minContextWindow: 100000,
+    });
+    expect(JSON.parse(text(result))).toEqual([
+      expect.objectContaining({ id: 'm1', provider: 'openai', supportsTools: true }),
+    ]);
+    expect(text(result)).not.toContain('secret');
   });
 });
 
@@ -586,6 +948,28 @@ describe('planned executions', () => {
     expect(out).toContain('"webhook"');
     expect(out).toContain('"Nightly"');
     expect(out).not.toContain('hook-secret');
+  });
+
+  it('filters by operational state, trigger, flow, and last-run status', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'Target Flow' }]);
+    scheduler.list.mockResolvedValue([
+      {
+        execution: { id: 'pe1', name: 'Good', enabled: true, flowId: 'f1', folder: 'ops', prompt: 'go', trigger: { type: 'schedule' }, createdAt: '2026-01-01' },
+        status: { armed: true, running: true },
+        lastRun: { status: 'completed', firedAt: '2026-01-02' },
+      },
+      {
+        execution: { id: 'pe2', name: 'Bad', enabled: true, flowId: 'f2', prompt: 'go', trigger: { type: 'webhook' }, createdAt: '2026-01-01' },
+        status: { armed: true, running: false },
+        lastRun: { status: 'error', firedAt: '2026-01-03' },
+      },
+    ]);
+    const result = await internalCallTool(makeService(), 'list_planned_executions', {
+      states: ['running'], triggerTypes: ['schedule'], lastRunStatuses: ['completed'], flow: 'Target Flow', folder: 'ops',
+    });
+    expect(JSON.parse(text(result))).toEqual([
+      expect.objectContaining({ id: 'pe1', running: true, triggerType: 'schedule', folder: 'ops' }),
+    ]);
   });
 
   it('run_planned_execution returns the run record', async () => {
@@ -799,10 +1183,13 @@ describe('delete_planned_execution', () => {
 
 describe('list_conversations', () => {
   let dataDir: string;
+  let workspaceDbDir: string;
 
   beforeAll(async () => {
     dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-test-'));
-    const convDir = path.join(dataDir, 'db', 'conversations');
+    const workspaceDir = path.join(dataDir, 'workspaces', 'default-workspace');
+    workspaceDbDir = path.join(workspaceDir, 'db');
+    const convDir = path.join(workspaceDbDir, 'conversations');
     await fsp.mkdir(convDir, { recursive: true });
     await fsp.writeFile(
       path.join(convDir, 'c1.json'),
@@ -821,10 +1208,12 @@ describe('list_conversations', () => {
       JSON.stringify({ conversationId: 'c2', title: 'Newer', flowId: 'f2', status: 'running', createdAt: 2, updatedAt: 200 })
     );
     (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir = dataDir;
+    (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir = workspaceDir;
   });
 
   afterAll(async () => {
     delete (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir;
+    delete (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir;
     await fsp.rm(dataDir, { recursive: true, force: true });
   });
 
@@ -844,11 +1233,35 @@ describe('list_conversations', () => {
     const list = JSON.parse(text(r)) as Array<Record<string, unknown>>;
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('c2');
+    const page = r.structuredContent as { total: number; hasMore: boolean; nextCursor: string };
+    expect(page).toMatchObject({ total: 2, hasMore: true });
+    const next = await internalCallTool(makeService(), 'list_conversations', { limit: 1, cursor: page.nextCursor });
+    expect(JSON.parse(text(next)).map((conversation: { id: string }) => conversation.id)).toEqual(['c1']);
+  });
+
+  it('filters on reconciled status and bound flow', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f2', name: 'Second Flow' }]);
+    const errored = await internalCallTool(makeService(), 'list_conversations', {
+      statuses: ['error'], flow: 'Second Flow',
+    });
+    expect(JSON.parse(text(errored)).map((conversation: { id: string }) => conversation.id)).toEqual(['c2']);
+
+    const completed = await internalCallTool(makeService(), 'list_conversations', { statuses: ['completed'] });
+    expect(JSON.parse(text(completed)).map((conversation: { id: string }) => conversation.id)).toEqual(['c1']);
+  });
+
+  it('builds reusable summary sidecars without copying transcript bodies', async () => {
+    await internalCallTool(makeService(), 'list_conversations', {});
+    const summaryPath = path.join(workspaceDbDir, 'conversation-summaries', 'c1.json');
+    const summary = await fsp.readFile(summaryPath, 'utf8');
+    expect(summary).toContain('"id": "c1"');
+    expect(summary).not.toContain('transcript-body-must-not-leak');
   });
 });
 
 describe('read_conversation', () => {
   beforeEach(() => {
+    flushConversationLogMock.mockClear();
     readConversationLogMock.mockResolvedValue(undefined);
     projectMessagesMock.mockReturnValue([]);
   });
@@ -858,6 +1271,47 @@ describe('read_conversation', () => {
     const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'nope' });
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('nope');
+  });
+
+  it('rejects Persona conversations before flushing or reading their log', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pending target', { personaTargetId: 'persona-1' }],
+    ['frozen instruction context', { personaInstructionContext: { personaId: 'persona-1' } }],
+    ['corrupt null attribution', { personaAttribution: null }],
+    ['corrupt empty target', { personaTargetId: '' }],
+  ])('rejects %s ownership markers before flushing or reading the log', async (_label, markers) => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      ...markers,
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
   });
 
   it('falls back to snapshot messages and excludes system-role messages', async () => {
@@ -946,5 +1400,112 @@ describe('unknown tools and thrown errors', () => {
     const r = await internalCallTool(makeService(), 'list_models', {});
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('storage exploded');
+  });
+});
+
+describe('create_ticket_for_human (#379)', () => {
+  const tickets = (
+    jest.requireMock('@/backend/services/ticket') as { ticketService: { createTicket: jest.Mock } }
+  ).ticketService;
+
+  const created = (overrides: Record<string, unknown> = {}) => ({
+    success: true,
+    ticket: {
+      id: 'ticket-1',
+      message: 'Please review the deploy',
+      labels: ['ops', 'review'],
+      status: 'open',
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    },
+  });
+
+  it('is advertised with a required message and bounded optional context', () => {
+    const def = internalToolDefinitions().find((t) => t.name === 'create_ticket_for_human');
+
+    expect(def).toBeDefined();
+    expect(def!.inputSchema).toEqual(expect.objectContaining({
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+    }));
+    expect(Object.keys((def!.inputSchema as { properties: Record<string, unknown> }).properties)).toEqual(
+      expect.arrayContaining(['message', 'labels', 'title', 'conversation_id', 'flow_id']),
+    );
+  });
+
+  it('dispatches to the ticket service and reports the created id and labels', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'Please review the deploy',
+      labels: 'ops, review',
+      title: 'Deploy',
+    }, 'model');
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Please review the deploy',
+      labels: 'ops, review',
+      title: 'Deploy',
+      source: 'agent',
+    }));
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(text(result))).toEqual({ created: true, id: 'ticket-1', labels: ['ops', 'review'] });
+  });
+
+  it('carries snake_case provenance arguments over to the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'context',
+      conversation_id: 'conv-1',
+      message_id: 'msg-1',
+      flow_id: 'flow-1',
+    }, 'model');
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      flowId: 'flow-1',
+    }));
+  });
+
+  it('marks host-originated tickets as host', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    await internalCallTool(makeService(), 'create_ticket_for_human', { message: 'from the host' });
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({ source: 'host' }));
+  });
+
+  it('rejects an empty message without calling the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', { message: '   ' });
+
+    expect(result.isError).toBe(true);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe provenance ids without calling the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'hi',
+      conversation_id: '../../etc/passwd',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a service failure as an error result', async () => {
+    tickets.createTicket.mockResolvedValue({ success: false, error: 'Open ticket limit reached.' });
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', { message: 'hi' });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Open ticket limit reached.');
   });
 });

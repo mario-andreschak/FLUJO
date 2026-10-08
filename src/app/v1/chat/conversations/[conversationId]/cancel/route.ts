@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -8,11 +9,17 @@ import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { StorageKey } from '@/shared/types/storage';
 import { listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
+import { cancelAllToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
+import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
+import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheckpoint';
+import { cancelPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -41,7 +48,7 @@ export async function POST(
       log.debug(`Loaded state from memory`, { requestId, conversationId });
     } else {
       try {
-        sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+        sharedState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
         if (sharedState) {
           log.debug(`Loaded state from storage`, { requestId, conversationId });
           // Add to memory map if loaded from storage, so the flag is checked
@@ -62,9 +69,85 @@ export async function POST(
       return NextResponse.json({ success: true, message: 'Conversation not found, assumed cancelled.' });
     }
 
-    // 3. Set the cancellation flag
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const notLoopback = assertLocalRequest(request);
+      if (notLoopback) return notLoopback;
+    }
+    if (sharedState.personaArchived) {
+      return NextResponse.json(
+        { error: 'An anonymized Persona archive cannot be cancelled or resumed.' },
+        { status: 409 },
+      );
+    }
+    if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+      return NextResponse.json({
+        error: 'Persona conversation attribution is incomplete; refusing an unfenced cancellation.',
+      }, { status: 409 });
+    }
+
+    if (sharedState.personaAttribution) {
+      const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
+      if (!activityId || !behaviorRevisionId) {
+        return NextResponse.json({
+          error: 'Persona conversation attribution is incomplete; refusing an unfenced cancellation.',
+        }, { status: 409 });
+      }
+      // These registries are process-local wake/abort aids only. Durable state
+      // finalization and Activity cancellation remain dispatcher-owned.
+      clearSteeringInbox(conversationId);
+      cancelAllToolCalls(conversationId);
+      if (listPendingToolCalls(conversationId).length > 0) {
+        clearPendingApprovals(conversationId);
+      }
+      const dispatch = await cancelPersonaFlowDispatch({
+        personaId,
+        activityId,
+        behaviorRevisionId,
+        conversationId,
+        reason: 'Execution was cancelled by the user.',
+      }, { waitForCompletion: true });
+      if (dispatch.state === 'error') {
+        return NextResponse.json({
+          error: dispatch.error?.message ?? 'Persona cancellation failed.',
+          code: dispatch.error?.code ?? 'persona_dispatch_error',
+          dispatch_id: dispatch.id,
+        }, { status: 500 });
+      }
+      return NextResponse.json({
+        success: true,
+        message: 'Cancellation request processed.',
+        dispatch_id: dispatch.id,
+        dispatch_state: dispatch.state,
+      }, { status: dispatch.state === 'cancelled' ? 200 : 202 });
+    }
+
+    // 3. Durably record the cancellation request BEFORE signalling the live
+    // state. The legacy isCancelled flag remains the cooperative abort signal;
+    // recovery metadata distinguishes this from provider/tool failure.
+    log.info(`Persisting cancellation transition for conversation`, { requestId, conversationId });
+    await commitRecoveryTransition(storageKey, sharedState, 'cancelled', {
+      failure: {
+        category: 'user_cancelled',
+        message: 'Execution was cancelled by the user.',
+        retryable: false,
+      },
+      cancellationRequestedAt: Date.now(),
+    }, executionEventBus.emitterFor(conversationId));
     log.info(`Setting cancellation flag for conversation`, { requestId, conversationId });
     sharedState.isCancelled = true;
+
+    // Stopping the run also discards any mid-run steering message that has not
+    // been folded in yet: the user stopped this run, so a correction aimed at it
+    // must not silently resurface at the start of the next one.
+    clearSteeringInbox(conversationId);
+
+    // Issue #357: Stop must also interrupt tool calls that are ALREADY in
+    // flight — the isCancelled flag alone is only polled before the next call,
+    // so a stalling MCP request used to keep the run alive until its timeout.
+    const abortedInFlight = cancelAllToolCalls(conversationId);
+    if (abortedInFlight > 0) {
+      log.info(`Aborted in-flight tool call(s) on cancel`, { requestId, conversationId, abortedInFlight });
+    }
 
     // 3a. In-request agentic approvals (Claude subscription): the run is live,
     // blocked inside canUseTool. Reject every pending call so the adapter
@@ -89,6 +172,27 @@ export async function POST(
       sharedState.status = 'error';
       sharedState.pendingToolCalls = undefined;
       sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+      // Issue #256: clearing pendingToolCalls leaves the paused assistant
+      // tool_calls turn unanswered in the transcript, which every provider 400s
+      // on when the conversation is later continued. Synthesize a cancellation
+      // result for each dangling call and fold it into the append-only log so
+      // the conversation is left well-formed and the repair is auditable.
+      try {
+        const repaired = repairDanglingToolCalls(sharedState, 'Tool execution cancelled by user before it finished.');
+        if (repaired.length) {
+          log.info(`Synthesized ${repaired.length} tool result(s) for cancelled parked run`, { requestId, conversationId });
+          await appendRawForState(sharedState, repaired.map(m => ({ type: 'message', message: m })));
+        }
+      } catch (repairError) {
+        log.warn(`Failed to synthesize tool results on cancel; continuing`, { requestId, conversationId, repairError });
+      }
+      sharedState.debugMode = false;
+      sharedState.debugPauseRequested = false;
+      sharedState.debugResumeAfterDetach = false;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugPendingToolCalls = undefined;
+      sharedState.breakpoints = [];
+      sharedState.lastBreakNodeId = undefined;
     }
 
     // 4. Save updated state (both memory and storage)
@@ -121,3 +225,5 @@ export async function POST(
     return NextResponse.json({ error: 'Internal server error processing cancellation' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);
