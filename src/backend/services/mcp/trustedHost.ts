@@ -114,6 +114,22 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   const workloadEnvironment = getPendingWorkloadEnvironment(captured, workload);
   const cancellation = new AbortController();
   let retired = false;
+  const attachedAt = performance.now();
+  type LaunchPhase = 'attached' | 'pre-start' | 'workload-activation' | 'transport-start' | 'post-start' | 'ready';
+  let launchPhase: LaunchPhase = 'attached';
+  const retireWithReason = (reason: 'explicit' | 'close' | 'onclose' | 'start-failed') => {
+    const errors: unknown[] = [];
+    try { revokePendingWorkload(workload); } catch (error) { errors.push(error); }
+    if (!retired) {
+      retired = true; cancellation.abort();
+      try {
+        if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-retirement]', reason,
+          launchPhase, Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(performance.now() - attachedAt))));
+      } catch { /* Observation cannot replace retirement or cleanup. */ }
+      try { onRetire?.(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Trusted host retirement failed.');
+  };
   const start = transport.start.bind(transport);
   const close = transport.close.bind(transport);
   const checkLive = () => {
@@ -124,15 +140,7 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   };
   const managed: ManagedTrustedHost = Object.freeze({
     workspace: initial.workspace, serverName: config.name, generation: randomUUID(),
-    retire: () => {
-      const errors: unknown[] = [];
-      try { revokePendingWorkload(workload); } catch (error) { errors.push(error); }
-      if (!retired) {
-        retired = true; cancellation.abort();
-        try { onRetire?.(); } catch (error) { errors.push(error); }
-      }
-      if (errors.length) throw new AggregateError(errors, 'Trusted host retirement failed.');
-    },
+    retire: () => retireWithReason('explicit'),
     assertCurrent: async (current: MCPStdioConfig) => {
       checkLive();
       if (current.name !== captured.name || current.disabled || !sameTrustedHostConsent(current, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -151,7 +159,7 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   managedHosts.set(transport, managed);
   const wrapClose = (callback: (() => void) | undefined) => () => {
     const errors: unknown[] = [];
-    try { managed.retire(); } catch (error) { errors.push(error); }
+    try { retireWithReason('onclose'); } catch (error) { errors.push(error); }
     try { callback?.(); } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'Trusted host close callback failed.');
   };
@@ -163,12 +171,13 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   });
   transport.close = async () => {
     const errors: unknown[] = [];
-    try { managed.retire(); } catch (error) { errors.push(error); }
+    try { retireWithReason('close'); } catch (error) { errors.push(error); }
     try { await close(); } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'Trusted host close failed.');
   };
   transport.start = async () => {
     try {
+      launchPhase = 'pre-start';
       // Runtime consent performs no package preparation or installer execution.
       await managed.assertCurrent(await currentConfig(captured.name));
       const fresh = await currentConfig(captured.name);
@@ -178,6 +187,7 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
       if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
           || !sameTrustedHostConsent(final, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       if (workload) {
+        launchPhase = 'workload-activation';
         const proof = Object.freeze({});
         workloadStartProofs.set(proof, { capsule: workload, verified: Object.freeze({ config: captured,
           generation: managed.generation, ownerId: initial.ownerId, digest: initial.digest, assertLive: checkLive }) });
@@ -185,12 +195,15 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
         await managed.assertCurrent(await currentConfig(captured.name));
         checkLive();
       }
+      launchPhase = 'transport-start';
       await start();
       // A revocation while the SDK awaited process startup closes this generation.
+      launchPhase = 'post-start';
       await managed.assertCurrent(await currentConfig(captured.name));
+      launchPhase = 'ready';
     } catch (error) {
       const cleanupErrors: unknown[] = [];
-      try { managed.retire(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+      try { retireWithReason('start-failed'); } catch (cleanup) { cleanupErrors.push(cleanup); }
       try { await close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
       if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'Trusted host start and cleanup failed.', { cause: error });
       if (error instanceof TrustedHostMcpError) throw error;
