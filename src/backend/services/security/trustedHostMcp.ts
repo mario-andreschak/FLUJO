@@ -143,12 +143,7 @@ export function fingerprintTrustedHostExecutable(filename: string): string {
     const hash = createHash('sha256');
     readStableFile(filename, MAX_EXECUTABLE_BYTES, chunk => hash.update(chunk));
     return hash.digest('hex');
-  } catch {
-    try {
-      if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read');
-    } catch { /* Preserve the original source-refusal disposition. */ }
-    throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-  }
+  } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
 }
 
 /** Fingerprint every admitted package member; never run package or inspection code. */
@@ -571,7 +566,12 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
           || JSON.stringify(inspected.dependencies.map(item => item.directory)) !== JSON.stringify(bundle.dependencyDirectories)) throw new Error();
     }
     if (executable.digest !== before.policy.executableDigest || source !== before.policy.sourceDigest) throw new Error();
-  } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
+  } catch {
+    try {
+      if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read');
+    } catch { /* Preserve the original source-refusal disposition. */ }
+    throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+  }
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const after = await trustedHostMcpApprovalAsync(captured, signal);
   if (after.ownerId !== before.ownerId || after.digest !== before.digest || after.workspace !== before.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
