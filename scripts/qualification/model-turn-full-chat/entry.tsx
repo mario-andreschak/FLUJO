@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { ThemeProvider } from '@/frontend/contexts/ThemeContext';
 import Chat from '@/frontend/components/Chat';
 import { I18nProvider } from '@/frontend/contexts/I18nContext';
 import { StorageProvider } from '@/frontend/contexts/StorageContext';
@@ -19,7 +19,7 @@ const root = createRoot(document.getElementById('root')!);
 root.render(
   <AppRouterContext.Provider value={router}>
     <PathnameContext.Provider value="/chat">
-      <ThemeProvider theme={createTheme()}>
+      <ThemeProvider>
         <I18nProvider><StorageProvider><AskFlujoProvider><Chat /></AskFlujoProvider></StorageProvider></I18nProvider>
       </ThemeProvider>
     </PathnameContext.Provider>
