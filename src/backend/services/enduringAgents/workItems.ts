@@ -438,7 +438,8 @@ export async function assignPersonaWorkItem(
       || dispatch.admission.kind !== 'assignment'
       || dispatch.admission.source.kind !== 'assignment'
       || dispatch.admission.source.sourceId !== workItemId
-      || dispatch.admission.relationKey !== assignmentRelationKey(workItemId)) {
+      || dispatch.admission.relationKey !== assignmentRelationKey(workItemId)
+      || dispatch.admission.assignmentExpectedUpdatedAt !== parsed.expectedUpdatedAt) {
       throw new PersonaDomainConflictError('Caller attempt does not match this Task assignment.');
     }
     if (!dispatch.mailboxItemId && !dispatch.activityId
@@ -480,6 +481,7 @@ export async function assignPersonaWorkItem(
         sourceId: workItemId,
       },
       relationKey: assignmentRelationKey(workItemId),
+      ...(!options.attemptKey ? { assignmentExpectedUpdatedAt: parsed.expectedUpdatedAt } : {}),
       summary: inspected.title,
       flowInput: {
         messages: [{ role: 'user', content: assignmentPrompt(inspected) }],

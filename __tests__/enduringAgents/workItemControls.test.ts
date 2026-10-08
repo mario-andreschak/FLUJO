@@ -105,7 +105,7 @@ describe('Persona Task work controls', () => {
       const saved = new Map<string, unknown>();
       getPersonaFlowDispatchMock.mockImplementation(async (id: string) => saved.get(id) ?? null);
       submitPersonaFlowDispatchMock.mockImplementationOnce(async (
-        input: { idempotencyKey: string },
+        input: { idempotencyKey: string; assignmentExpectedUpdatedAt?: number },
         options: { validateAdmission?: () => Promise<void> },
       ) => {
         await options.validateAdmission?.();
@@ -115,7 +115,8 @@ describe('Persona Task work controls', () => {
           personaId,
           idempotencyDigest: createHash('sha256').update(input.idempotencyKey).digest('hex'),
           admission: { kind: 'assignment', source: { kind: 'assignment', sourceId: task.id },
-            relationKey: 'persona-task:' + task.id },
+            relationKey: 'persona-task:' + task.id,
+            assignmentExpectedUpdatedAt: input.assignmentExpectedUpdatedAt },
           state: 'queued', mailboxItemId: 'mailbox_saved',
         });
         throw new Error('ACK lost after dispatch save');
@@ -126,9 +127,16 @@ describe('Persona Task work controls', () => {
       expect(recovered).toMatchObject({ admission: 'already_queued', dispatchId: expect.any(String) });
       expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(1);
 
-      await updatePersonaWorkItem(personaId, task.id, { nextAction: 'Inspect the receipt' });
+      const changed = await updatePersonaWorkItem(personaId, task.id, {
+        title: 'Review changed work', nextAction: 'Inspect the receipt', status: 'in_progress',
+      });
       const retry = await assignPersonaWorkItem(personaId, task.id, input);
       expect(retry.dispatchId).toBe(recovered.dispatchId);
+      expect(retry.workItem).toMatchObject({ id: task.id, updatedAt: changed.updatedAt });
+      expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(1);
+      await expect(assignPersonaWorkItem(personaId, task.id, {
+        ...input, expectedUpdatedAt: changed.updatedAt,
+      })).rejects.toMatchObject({ code: 'PERSONA_DOMAIN_CONFLICT' });
       expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(1);
       await expect(assignPersonaWorkItem(personaId, task.id, {
         ...input, idempotencyKey: 'caller-2',
