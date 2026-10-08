@@ -23,6 +23,8 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const originalMkdtemp = promises.mkdtemp;
   let injected = 0;
   let operator;
+  let created;
+  let ownerBytes;
   let primary;
   const cleanupErrors = [];
   const savedData = process.env.FLUJO_DATA_DIR;
@@ -31,6 +33,8 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
     if (process.platform === 'win32') promises.mkdtemp = async (...args) => {
       const directory = await originalMkdtemp.apply(promises, args);
       if (!String(args[0]).includes('flujo-smoke-operator-')) return directory;
+      const parent = path.dirname(path.resolve(String(args[0])));
+      created = { directory, parent, identity: fs.lstatSync(directory, { bigint: true }), parentIdentity: fs.lstatSync(parent, { bigint: true }) };
       // Introduce a real inheritable foreign-reader rule on this freshly owned
       // directory before the operator helper runs. chmod alone cannot fix it.
       const executable = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
@@ -50,12 +54,13 @@ if (-not @($directory.GetAccessControl().GetAccessRules($true,$true,[Security.Pr
     };
     const { createSmokeOperator } = await import(pathToFileURL(path.join(sourceRoot, 'scripts/smoke-bundled-operator.mjs')).href);
     operator = await createSmokeOperator();
+    created = undefined; // The successfully returned operator owns restoration.
     promises.mkdtemp = originalMkdtemp;
     if (process.platform === 'win32') assert.equal(injected, 1);
     const filename = operator.env.FLUJO_OWNER_AUTH_FILE;
     process.env.FLUJO_DATA_DIR = path.join(path.dirname(filename), 'unrelated-data');
     delete process.env.FLUJO_PARENT_DATA_DIR;
-    const bytes = fs.readFileSync(filename);
+    const bytes = ownerBytes = fs.readFileSync(filename);
     const { readPrivateApprovalAsync } = require(path.join(sourceRoot, 'src/backend/services/security/trustedHostMcp.ts'));
     const { ownerPolicySchema, authenticateOwnerBearer } = require(path.join(sourceRoot, 'src/backend/services/security/ownerCredentials.ts'));
     const policy = ownerPolicySchema.parse(await readPrivateApprovalAsync(filename, AbortSignal.timeout(30_000)));
@@ -68,6 +73,21 @@ if (-not @($directory.GetAccessControl().GetAccessRules($true,$true,[Security.Pr
   finally {
     promises.mkdtemp = originalMkdtemp;
     if (operator) try { await operator.restore(); } catch (error) { cleanupErrors.push(error); }
+    else if (created) try {
+      const { directory, parent, identity, parentIdentity } = created;
+      let current;
+      try { current = fs.lstatSync(directory, { bigint: true }); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (current) {
+        const currentParent = fs.lstatSync(parent, { bigint: true });
+        if (path.dirname(path.resolve(directory)) !== parent || !/^flujo-smoke-operator-[A-Za-z0-9]+$/.test(path.basename(directory))
+            || !current.isDirectory() || current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino
+            || currentParent.dev !== parentIdentity.dev || currentParent.ino !== parentIdentity.ino
+            || path.relative(fs.realpathSync(parent), parent) !== '' || fs.readdirSync(directory).length) throw new Error('Uncertain owned setup cleanup.');
+        fs.rmdirSync(directory); // Empty only; never recursively delete unexpected contents.
+      }
+    } catch (error) { cleanupErrors.push(error); }
+    ownerBytes?.fill(0);
     if (savedData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = savedData;
     if (savedParent === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = savedParent;
     Module._resolveFilename = originalResolve;
