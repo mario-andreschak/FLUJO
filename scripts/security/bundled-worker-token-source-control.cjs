@@ -1,5 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),Module=require('node:module'),assert=require('node:assert/strict');
+const {closeAndRestoreFixture}=require('./owned-source-fixture-cleanup.cjs');
 const sourceRoot=path.resolve(process.argv[2]||path.join(__dirname,'../..'));
 const ts=require(path.join(sourceRoot,'node_modules/typescript')),resolve=Module._resolveFilename;
 Module._resolveFilename=function(name,...args){
@@ -13,7 +14,7 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
 (async()=>{
  const {installTrustedHostProfile}=require(path.join(sourceRoot,'__tests__/mcp/fixtures/trustedHostProfile.ts'));
  const fixture=installTrustedHostProfile(),vars=['FLUJO_APP_ROOT','FLUJO_BASE_URL','FLUJO_WORKER_MODE','FLUJO_SNAPSHOT_CONTROL_TOKEN'];
- const saved=Object.fromEntries(vars.map(name=>[name,process.env[name]]));let transport;
+ const saved=Object.fromEntries(vars.map(name=>[name,process.env[name]]));let transport,primaryError;
  try{
   process.env.FLUJO_APP_ROOT=sourceRoot;process.env.FLUJO_BASE_URL='http://127.0.0.1:1';delete process.env.FLUJO_WORKER_MODE;delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
   const {issueOwnerCredential}=require(path.join(sourceRoot,'src/backend/services/security/ownerCredentials.ts'));
@@ -57,5 +58,12 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
    const pid=transport.pid;await transport.close();transport=undefined;if(pid)assert.throws(()=>process.kill(pid,0),error=>error.code==='ESRCH');
    console.log(JSON.stringify({sourceControl:'bundled-worker-token',sdk:era,actualPrivateOwnerGrant:true,actualShippedFlujoRevision:true,actualSdkInitialization:true,runtimeOnlyWorkerTokenReleased:true,persistedCaseVariantsRefused:true,exactRunnerAudienceAndSelectedWorkspaceBound:true,runnerAudienceDriftRefused:true,capturedGenerationTokenRotationRefused:true,ownedRootPidAbsentAfterClose:true,scope:'Source-built actual shipped flujo/real private consent/nonmatching local SDK graph; no downstream HTTP/provider call, worker bootstrap, packed-installed acceptance or scanner clearance'}));
   }
- }finally{if(transport)await transport.close();for(const[name,value]of Object.entries(saved)){if(value===undefined)delete process.env[name];else process.env[name]=value;}fixture.restore();}
+  const failureFixture=installTrustedHostProfile(),failurePath=failureFixture.config.cwd,failureOwner=process.env.FLUJO_OWNER_AUTH_FILE;
+  const failureSaved=Object.fromEntries(vars.map(name=>[name,process.env[name]])),failure=new Error('Forced owned close rejection');let environmentRestored=false,fixtureRestored=false;
+  process.env.FLUJO_WORKER_MODE='synthetic-changed-mode';process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN='synthetic-changed-token';process.env.FLUJO_APP_ROOT='synthetic-changed-app';process.env.FLUJO_BASE_URL='synthetic-changed-audience';
+  await assert.rejects(closeAndRestoreFixture({close:async()=>{throw failure;}},()=>{for(const[name,value]of Object.entries(failureSaved)){if(value===undefined)delete process.env[name];else process.env[name]=value;}environmentRestored=true;},()=>{failureFixture.restore();fixtureRestored=true;}),error=>error===failure);
+  assert.equal(environmentRestored,true);assert.equal(fixtureRestored,true);assert.equal(fs.existsSync(failurePath),false);assert.equal(fs.existsSync(failureOwner),false);
+  for(const[name,value]of Object.entries(failureSaved))assert.equal(process.env[name],value);
+  console.log(JSON.stringify({sourceControl:'owned-source-cleanup',forcedCloseRejectionPreserved:true,allWorkerTokenAppAudienceEnvironmentRestored:true,actualOwnedPrivateFixtureRemoved:true}));
+ }catch(error){primaryError=error;throw error;}finally{await closeAndRestoreFixture(transport,()=>{for(const[name,value]of Object.entries(saved)){if(value===undefined)delete process.env[name];else process.env[name]=value;}},()=>fixture.restore(),primaryError);}
 })().catch(error=>{console.error(error);process.exitCode=1;});
