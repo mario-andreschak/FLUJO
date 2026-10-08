@@ -252,14 +252,23 @@ function closeOwnedFile(file: OwnedFile) {
     assertOwnedParent(file); readExact(file);
     if (file.bytes.length) readPrivateApproval(file.filename);
     witness = fs.openSync(file.filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const acquired = { fd: witness as number | undefined, uncertainDescriptor: undefined as number | undefined };
+    file.recoveryWriter = acquired;
     try {
       if (!same(file.identity, fs.fstatSync(witness, { bigint: true }))) throw new BundledFlujoWorkloadError();
       readExact(file); assertOwnedParent(file);
     } catch (error) {
       // This freshly opened witness is owned independently of the writer.
-      try { fs.closeSync(witness); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Workload close witness failed.', { cause: error }); }
+      acquired.fd = undefined;
+      try { fs.closeSync(witness); } catch (cleanup) {
+        acquired.uncertainDescriptor = witness;
+        try { settleDescriptor(acquired); } catch { /* Preserve ambiguous witness ownership. */ }
+        throw new AggregateError([error, cleanup], 'Workload close witness failed.', { cause: error });
+      }
+      file.recoveryWriter = undefined;
       throw error;
     }
+    file.recoveryWriter = undefined;
   }
   const before = file.identity;
   const fd = file.fd; file.fd = undefined;
