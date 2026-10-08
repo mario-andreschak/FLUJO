@@ -51,10 +51,20 @@ export async function withNativeHeldLineageRead<T>(
   const { loadConversationStateReadOnly } = await import('../loadConversationState');
   const seen = new Set<string>();
   let id: string | undefined = originConversationId;
+  const assertAdmissionGuardEligibility = (state?: unknown) => {
+    if (hasExecutionReadGuards() || (state && typeof state === 'object'
+      && ((state as { executionExtensionOwned?: boolean }).executionExtensionOwned
+        || (state as { executionExtensionContext?: unknown }).executionExtensionContext))) {
+      throw new UnsupportedNativeHeldRead();
+    }
+  };
   while (id) {
-    if (seen.has(id) || seen.size >= 256) throw new UnsupportedNativeHeldRead();
+    if (seen.has(id) || seen.size >= 256) throw new Error('Native held-read admission lineage is invalid.');
     seen.add(id);
-    const state = await loadConversationStateReadOnly(id);
+    // Check eligibility before each original access guard: no arbitrary guard
+    // runs and no swallowed ordinary guard failure can become a fallback.
+    const state = await loadConversationStateReadOnly(id, assertAdmissionGuardEligibility);
+    if (!state) throw new Error('Native held-read admission state is unavailable.');
     const candidate = state?.executionAuthority;
     if (!candidate || state?.executionExtensionOwned || state?.executionExtensionContext
       || flowAssertionRoot(candidate) !== root || registry?.get(candidate) !== binding
@@ -62,7 +72,7 @@ export async function withNativeHeldLineageRead<T>(
     if (id === rootConversationId) break;
     id = state.parentRunId;
   }
-  if (!seen.has(rootConversationId)) throw new UnsupportedNativeHeldRead();
+  if (!seen.has(rootConversationId)) throw new Error('Native held-read admission root is unavailable.');
   const dispatcher = await import('@/backend/services/enduringAgents/personaDispatcher');
   const assertPersonaAuthority: (value: unknown) => asserts value is FlowExecutionAuthority = dispatcher.assertPersonaFlowExecutionAuthority;
   assertPersonaAuthority(root);
