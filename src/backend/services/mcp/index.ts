@@ -16,6 +16,7 @@ import {
   getWorkspaceDataDir,
 } from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
+import { MCP_APPS_EXTENSION_ID } from './appsProtocol';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertMcpIsolationDispatch } from './isolation';
@@ -2641,6 +2642,30 @@ export class MCPService {
       };
     }
     return { success: true, data: { client, capability } };
+  }
+
+  async getServerProxyCapabilities(serverName: string): Promise<{
+    skillsCapability?: McpSkillsExtensionCapability;
+    appsCapability?: Record<string, unknown>;
+  }> {
+    const config = await this.getServerConfig(serverName);
+    if (!config || config.disabled) return {};
+    const connect = await this.connectServer(serverName);
+    if (!connect.success) return {};
+    // Read both negotiated extensions from the same freshly checked connection.
+    // There is no asynchronous work between these metadata reads.
+    const client = this.getClient(serverName);
+    const skillsCapability = getMcpSkillsCapability(
+      client, config.enableMcpSkills === true && !isProtectedExecutionServer(serverName),
+    );
+    const capabilities = client?.getServerCapabilities() as
+      | { extensions?: Record<string, unknown> }
+      | undefined;
+    const apps = capabilities?.extensions?.[MCP_APPS_EXTENSION_ID];
+    const appsCapability = apps && typeof apps === 'object' && !Array.isArray(apps)
+      ? { ...(apps as Record<string, unknown>) }
+      : undefined;
+    return { skillsCapability, appsCapability };
   }
 
   async getServerSkillsCapability(

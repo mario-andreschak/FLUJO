@@ -89,6 +89,32 @@ beforeEach(() => {
   global.__mcp_clients?.clear();
 });
 
+describe('MCPService.getServerProxyCapabilities', () => {
+  it('reads both negotiated extensions behind one fresh connection check', async () => {
+    const svc = new MCPService();
+    const connect = jest.spyOn(svc, 'connectServer').mockResolvedValue({ success: true });
+    jest.spyOn(svc, 'getClient').mockReturnValue(makeClient({
+      getServerCapabilities: () => ({ extensions: {
+        'io.modelcontextprotocol/skills': { directoryRead: true },
+        'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] },
+      } }),
+    }) as never);
+    const configs = await loadServerConfigsMock();
+    loadServerConfigsMock.mockResolvedValue(configs.map(config => ({ ...config, enableMcpSkills: true })));
+    expect(await svc.getServerProxyCapabilities('srv')).toEqual({
+      skillsCapability: { directoryRead: true },
+      appsCapability: { mimeTypes: ['text/html;profile=mcp-app'] },
+    });
+    expect(connect).toHaveBeenCalledTimes(1);
+    loadServerConfigsMock.mockResolvedValue(configs);
+    expect((await svc.getServerProxyCapabilities('srv')).skillsCapability).toBeUndefined();
+    connect.mockResolvedValue({ success: false, error: 'retired' });
+    expect(await svc.getServerProxyCapabilities('srv')).toEqual({});
+    connect.mockRestore();
+    jest.restoreAllMocks();
+  });
+});
+
 describe('MCPService.listServerResources', () => {
   it('returns resources directly when the connection is healthy', async () => {
     createNewClientMock.mockReturnValue(makeClient());
