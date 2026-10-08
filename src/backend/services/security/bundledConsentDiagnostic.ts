@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 const stages = ['CONFIG', 'ASSETS', 'DEP_LAYOUT', 'DEP_GRAPH', 'DEP_LINKS',
   'SOURCE_FINGERPRINT', 'EXEC_FINGERPRINT', 'CONSENT_DIGEST', 'CONSENT_POLICY_SCHEMA',
   'CONSENT_LAUNCH', 'CONSENT_BUNDLE', 'CONSENT_ENVIRONMENT', 'CONSENT_CAPABILITIES',
@@ -58,5 +60,3 @@ export function consentDiagnosticStageSync<T>(stage: Stage, operation: () => T):
 export function consentDiagnosticCode(error: unknown): Stage {
   return error instanceof BundledConsentDiagnostic && stages.includes(error.stage) ? error.stage : 'CONFIG';
 }
-import { performance } from 'node:perf_hooks';
-
