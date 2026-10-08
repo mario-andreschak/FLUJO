@@ -93,6 +93,12 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
 });
 
 test('real private consent activates only at guarded start, owner drift denies, and retirement removes its owned pair', async () => {
+  const startedAt = performance.now();
+  const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
+  const timed = async <T,>(name: string, operation: () => Promise<T>): Promise<T> => {
+    stamp(`${name}:start`);
+    try { return await operation(); } finally { stamp(`${name}:settled`); }
+  };
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
   let readerB!: typeof import('@/backend/services/security/trustedHostMcp');
   jest.isolateModules(() => {
@@ -127,14 +133,14 @@ test('real private consent activates only at guarded start, owner drift denies, 
     write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
     write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
     fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
-    await ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']);
+    await timed('package-copy', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
     const proposed = createShippedServerConfig(descriptor);
-    expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
+    expect((await timed('persist-config', () => saveConfig(new Map([[proposed.name, proposed]])))).success).toBe(true);
     owner = installBundledFixtureOwner();
-    const preview = await previewBundledHostConsent(proposed.name, { runtimeHome: 'host' });
-    const approved = await approveBundledHostConsent(owner.request(proposed.name), proposed.name, {
+    const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
+    const approved = await timed('approve', () => approveBundledHostConsent(owner!.request(proposed.name), proposed.name, {
       runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
-    });
+    }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
     const token = environment.FLUJO_MCP_WORKLOAD_TOKEN;
@@ -145,9 +151,9 @@ test('real private consent activates only at guarded start, owner drift denies, 
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
     attachTrustedHost(transport, approved.config, undefined, capsule);
-    await transport.start();
+    await timed('guarded-start', () => transport!.start());
     expect(start).toHaveBeenCalledTimes(1);
-    expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('authorized');
+    expect((await timed('resolve-active', () => resolveBundledFlujoWorkloadRequest(request()))).kind).toBe('authorized');
     const admittedRequest = request();
     const admitted = await resolveBundledFlujoWorkloadRequest(admittedRequest);
     if (admitted.kind !== 'authorized') throw new Error('Genuine request not admitted.');
@@ -155,8 +161,8 @@ test('real private consent activates only at guarded start, owner drift denies, 
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       expect(() => graphB.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow(graphB.BundledFlujoWorkloadError);
       const service = Reflect.get(globalThis, serviceKey) as typeof capturedService;
-      await service.assertEffect();
-      await graphB.assertBundledFlujoWorkloadAction('listTools', 'GET', '/api/mcp/flujo/tools');
+      await timed('graph-b-effect', () => service.assertEffect());
+      await timed('graph-b-action', () => graphB.assertBundledFlujoWorkloadAction('listTools', 'GET', '/api/mcp/flujo/tools'));
       producer();
     });
     expect(producer).toHaveBeenCalledTimes(1);
@@ -175,12 +181,14 @@ test('real private consent activates only at guarded start, owner drift denies, 
       const continuation = new Promise<void>(resolve => { release = resolve; });
       const read = jest.spyOn(readerB, 'readPrivateApprovalAsync').mockImplementation(async (filename, signal) => {
         const value = await actualRead(filename, signal);
-        if (filename === ownerFilename && !paused) { paused = true; enter(); await continuation; }
+        if (filename === ownerFilename && !paused) { paused = true; stamp('owner-read:entered'); enter(); await continuation; }
         return value;
       });
-      const checking = capturedService.assertEffect();
+      const checking = timed('graph-b-drift', () => capturedService.assertEffect());
       try {
-        await entered;
+        // Observe early completion/refusal as well as the gate; always release
+        // and drain the real guard in finally before restoring its reader.
+        await Promise.race([entered, checking.then(() => { throw new Error('Workload guard completed before owner-read gate.'); })]);
         fs.writeFileSync(ownerFilename, JSON.stringify(changed));
         release();
         await expect(checking).rejects.toBeInstanceOf(jest.requireActual('@/backend/services/security/bundledFlujoWorkload').BundledFlujoWorkloadError);
@@ -199,7 +207,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
-      await transport!.close(); transport = undefined;
+      await timed('durable-retire', () => transport!.close()); transport = undefined;
       await expect(capturedService.assertEffect()).rejects.toThrow();
       expect(() => graphB.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow();
     });
@@ -210,6 +218,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
     primaryFailed = true; primaryError = error; throw error;
   } finally {
     const cleanupErrors: unknown[] = [];
+    stamp('cleanup:start');
     try { Reflect.deleteProperty(globalThis, serviceKey); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
     try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
@@ -223,5 +232,6 @@ test('real private consent activates only at guarded start, owner drift denies, 
     } catch (error) { cleanupErrors.push(error); }
     if (cleanupErrors.length) throw new AggregateError(primaryFailed ? [primaryError, ...cleanupErrors] : cleanupErrors,
       'Workload fixture cleanup failed.', primaryFailed ? { cause: primaryError } : undefined);
+    stamp('cleanup:settled');
   }
 }, 60_000);
