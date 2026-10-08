@@ -139,7 +139,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
     owner = installBundledFixtureOwner();
     const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
     const approved = await timed('approve', () => approveBundledHostConsent(owner!.request(proposed.name), proposed.name, {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner!.expiresAt,
     }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
