@@ -553,20 +553,28 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
   const captured = structuredClone(config);
   const before = await trustedHostMcpApprovalAsync(captured, signal);
   try {
-    // Independent byte inspections retain their own held-FD/path witnesses.
-    // Drain both on refusal before package inspection or the final authority read.
+    // Every independent inspection obtains fresh evidence and retains its own
+    // witnesses. Drain all three before refusing or rereading final authority.
+    const provenance = async () => {
+      const bundle = before.policy.bundledInstallation;
+      if (!bundle) return undefined;
+      const { inspectShippedWorkspaceProvenance } = await import('../mcp/shippedWorkspacePackages');
+      return inspectShippedWorkspaceProvenance(getWorkspaceDataDir(), bundle.packageDirectory, bundle.installationRoot);
+    };
     const byteChecks = await Promise.allSettled([
       hashStableFileAsync(captured.command, MAX_EXECUTABLE_BYTES, signal),
       fingerprintSourceAsync(before.policy.sourceRoot, signal, before.policy.bundledInstallation?.dependencyLinks),
+      provenance(),
     ] as const);
     if (byteChecks[0].status === 'rejected') throw byteChecks[0].reason;
     if (byteChecks[1].status === 'rejected') throw byteChecks[1].reason;
+    if (byteChecks[2].status === 'rejected') throw byteChecks[2].reason;
     const executable = byteChecks[0].value;
     const source = byteChecks[1].value;
     if (before.policy.bundledInstallation) {
       const bundle = before.policy.bundledInstallation;
-      const { inspectShippedWorkspaceProvenance } = await import('../mcp/shippedWorkspacePackages');
-      const inspected = await inspectShippedWorkspaceProvenance(getWorkspaceDataDir(), bundle.packageDirectory, bundle.installationRoot);
+      const inspected = byteChecks[2].value;
+      if (!inspected) throw new Error();
       if (signal?.aborted || inspected.assetDigest !== bundle.assetDigest
           || canonical(inspected.dependencyNamespaceRoot) !== canonical(bundle.dependencyNamespaceRoot)
           || inspected.dependencyGraph.digest !== bundle.dependencyGraphDigest

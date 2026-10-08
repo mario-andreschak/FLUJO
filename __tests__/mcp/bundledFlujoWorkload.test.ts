@@ -16,6 +16,7 @@ import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/ba
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
 
 function reportRetirementSites(error: unknown, seen = new Set<unknown>()) {
   if (!(error instanceof Error) || seen.has(error)) return;
@@ -105,7 +106,7 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
 });
 
 test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
-  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous'] as const)
+  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous', 'verification-threeway-drain'] as const)
 ('real private consent and fresh guarded workload contract: %s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
@@ -170,6 +171,59 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const approved = await timed('approve', () => approveBundledHostConsent(new Request(fixtureOwner.request(proposed.name), { signal: cancellation.signal }), proposed.name, {
       runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
     }));
+    if (mode === 'verification-threeway-drain') {
+      const actualOpen = fs.promises.open.bind(fs.promises);
+      const sourceFile = approved.config.trustedHost!.entryPoint;
+      const dependencyFile = path.join(application, 'node_modules', 'fixture-dependency', 'index.js');
+      let sourceEntered!: () => void, dependencyEntered!: () => void, executableFinished!: () => void;
+      let releaseSource!: () => void, releaseDependency!: () => void;
+      const sourceGate = new Promise<void>(resolve => { sourceEntered = resolve; });
+      const dependencyGate = new Promise<void>(resolve => { dependencyEntered = resolve; });
+      const executableGate = new Promise<void>(resolve => { executableFinished = resolve; });
+      const sourceFinish = new Promise<void>(resolve => { releaseSource = resolve; });
+      const dependencyFinish = new Promise<void>(resolve => { releaseDependency = resolve; });
+      let sourceClosed = false, dependencyClosed = false, executableClosed = false, settled = false;
+      const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await actualOpen(...args), filename = String(args[0]);
+        const read = handle.read.bind(handle), close = handle.close.bind(handle);
+        if (filename === approved.config.command) {
+          handle.read = (async () => { throw new Error('Actual executable read refused.'); }) as typeof handle.read;
+          handle.close = async () => { await close(); executableClosed = true; executableFinished(); };
+        } else if (filename === sourceFile || filename === dependencyFile) {
+          handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+            if (filename === sourceFile) { sourceEntered(); await sourceFinish; }
+            else { dependencyEntered(); await dependencyFinish; }
+            return read(...readArgs);
+          }) as typeof handle.read;
+          handle.close = async () => { await close(); if (filename === sourceFile) sourceClosed = true; else dependencyClosed = true; };
+        }
+        return handle;
+      });
+      const verification = verifyTrustedHostMcp(approved.config, cancellation.signal);
+      const outcome = verification.then(() => { settled = true; return undefined; }, error => { settled = true; return error; });
+      let abort!: () => void;
+      const aborted = new Promise<never>((_, reject) => {
+        abort = () => reject(new Error('Threeway fixture cancelled before held readers entered.'));
+        cancellation.signal.addEventListener('abort', abort, { once: true });
+      });
+      try {
+        await Promise.race([Promise.all([sourceGate, dependencyGate, executableGate]), aborted,
+          outcome.then(() => { throw new Error('Verification settled before all genuine reader gates.'); })]);
+        await new Promise<void>(resolve => { setImmediate(resolve); });
+        expect(executableClosed).toBe(true); expect(settled).toBe(false);
+        releaseSource();
+        await new Promise<void>(resolve => { setImmediate(resolve); });
+        expect(settled).toBe(false); expect(dependencyClosed).toBe(false);
+        releaseDependency();
+        expect((await outcome).message).toContain('package revision changed');
+        expect(sourceClosed).toBe(true); expect(dependencyClosed).toBe(true); expect(executableClosed).toBe(true);
+      } finally {
+        releaseSource(); releaseDependency();
+        await outcome;
+        cancellation.signal.removeEventListener('abort', abort); spy.mockRestore();
+      }
+      return;
+    }
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
     const token = environment.FLUJO_MCP_WORKLOAD_TOKEN;
