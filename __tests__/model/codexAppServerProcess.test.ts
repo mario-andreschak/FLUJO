@@ -1,11 +1,14 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
+import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, probeCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
+import { probeRuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
+let uncertainProbe=false;
 let unavailableBirthReads=0,birthReads=0,lastBirthPid=0;
 jest.mock('@/backend/services/enduringAgents/runtimeLock',()=>{
   const actual=jest.requireActual<typeof import('@/backend/services/enduringAgents/runtimeLock')>('@/backend/services/enduringAgents/runtimeLock');
-  return {...actual,captureRuntimeChildIdentity:async(pid:number)=>{
+  return {...actual,probeRuntimeProcessIdentity:async(identity:Parameters<typeof actual.probeRuntimeProcessIdentity>[0])=>
+    uncertainProbe?false:actual.probeRuntimeProcessIdentity(identity),captureRuntimeChildIdentity:async(pid:number)=>{
     birthReads++;lastBirthPid=pid;
     if(unavailableBirthReads-->0)throw new Error('Offline uncertain birth read');
     return actual.captureRuntimeChildIdentity(pid);
@@ -30,7 +33,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 let root: string;
 const children: Array<Awaited<ReturnType<typeof startOwnedCodexAppServer>>> = [];
 const registrations: CodexOwnedProcessRegistration[] = [];
-beforeEach(async()=>{unavailableBirthReads=0;birthReads=0;lastBirthPid=0;root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
+beforeEach(async()=>{uncertainProbe=false;unavailableBirthReads=0;birthReads=0;lastBirthPid=0;root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
 afterEach(async()=>{
   await Promise.all(children.splice(0).map(child=>child.stop()));
   for(const registration of registrations.splice(0)){registration.requestStop();await registration.close;}
@@ -46,6 +49,17 @@ function options(mode='normal') {
     onNotification:()=>{},register:async(registration: CodexOwnedProcessRegistration)=>{registrations.push(registration);}};
 }
 async function wire() {return fs.readFile(path.join(root,'wire.jsonl'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});}
+
+it('retains only the same owned original with positive OS identity and refuses uncertainty or closure',async()=>{
+  const input=options();const child=await startOwnedCodexAppServer(input);children.push(child);
+  expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBe(child.registration);
+  expect(await probeRuntimeProcessIdentity({...child.registration.identity,processBirthMarkerV2:'invalid'})).toBe(false);
+  uncertainProbe=true;expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBeNull();
+  uncertainProbe=false;
+  await expect(probeCodexOwnedProcessRegistration({...child.registration},input.owner)).rejects.toThrow('mismatched');
+  await expect(probeCodexOwnedProcessRegistration(child.registration,{})).rejects.toThrow('mismatched');
+  await child.stop();expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBeNull();
+});
 
 it('rechecks an uncertain OS birth read on the same child before any wire input',async()=>{
   unavailableBirthReads=1;const child=await startOwnedCodexAppServer(options());children.push(child);

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { captureRuntimeChildIdentity, type RuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
+import { captureRuntimeChildIdentity, probeRuntimeProcessIdentity, type RuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 
 export interface CodexOwnedProcessRegistration {
   readonly identity: Readonly<RuntimeProcessIdentity>;
@@ -10,10 +10,19 @@ export interface CodexOwnedProcessRegistration {
 
 const registrationRoot = globalThis as typeof globalThis & { __flujoCodexOwnedRegistrations?: WeakMap<object, object> };
 const registrations = registrationRoot.__flujoCodexOwnedRegistrations ??= new WeakMap<object, object>();
+const probeRoot=globalThis as typeof globalThis & {__flujoCodexOwnedProbes?:WeakMap<object,()=>Promise<boolean>>};
+const probes=probeRoot.__flujoCodexOwnedProbes??=new WeakMap<object,()=>Promise<boolean>>();
 export function assertCodexOwnedProcessRegistration(value: unknown, owner: object): asserts value is CodexOwnedProcessRegistration {
   if (!value || typeof value !== 'object' || registrations.get(value) !== owner) {
     throw new Error('Owned Codex process registration is unavailable or mismatched.');
   }
+}
+
+/** Return the same owned registration only after a fresh positive OS birth
+ * observation. Session phases, JSON identities and PID-only probes cannot pass. */
+export async function probeCodexOwnedProcessRegistration(value:unknown,owner:object):Promise<CodexOwnedProcessRegistration|null> {
+  assertCodexOwnedProcessRegistration(value,owner);
+  return await probes.get(value)?.() ? value : null;
 }
 
 type Message = {id?: number | string; method?: string; params?: unknown; result?: unknown; error?: unknown};
@@ -118,6 +127,11 @@ export async function startOwnedCodexAppServer(input: {
     if (exited || closed || input.signal?.aborted) throw unavailable();
     const registration=Object.freeze({identity,requestStop,exit,close});
     registrations.set(registration,input.owner);
+    probes.set(registration,async()=>{
+      if(exited||closed||stopping||input.signal?.aborted)return false;
+      const live=await probeRuntimeProcessIdentity(identity);
+      return live&&!exited&&!closed&&!stopping&&!input.signal?.aborted;
+    });
     let admissionTimer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([input.register(registration),close.then(()=>{throw unavailable();}),

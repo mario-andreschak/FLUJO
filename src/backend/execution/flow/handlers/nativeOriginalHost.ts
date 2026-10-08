@@ -8,7 +8,7 @@ import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import type { FlowExecutionAuthority } from '../types';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
-import { withWorkspaceRuntimeLock, isRuntimeProcessIdentityAlive } from '@/backend/services/enduringAgents/runtimeLock';
+import { withWorkspaceRuntimeLock, probeRuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 import { getPersonaActivity, getPersonaWorkItem } from '@/backend/services/enduringAgents/store';
 import { createNativeBrokerAuthority, nativeDigest } from './nativeToolBroker';
 import { createNativeLineageRootBinding } from './nativeOriginLineage';
@@ -406,7 +406,7 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!child || exited || closed || !original) return held();
       if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
       await assertCurrent();
-      if (!await isRuntimeProcessIdentityAlive(child.identity) || exited || closed) return held();
+      if (!await probeRuntimeProcessIdentity(child.identity) || exited || closed) return held();
       await assertCurrent();
     },
     waitForExit: async () => {
