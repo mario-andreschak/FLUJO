@@ -5,7 +5,7 @@ export type InitializationStep = 'layout' | 'snapshot-import' | 'snapshot-restor
   | 'runtime-snapshot' | 'codex-auth' | 'mcp-reinstall' | 'mcp-start' | 'mcp-config' | 'mcp-status'
   | 'scheduler-import' | 'scheduler-start' | 'transfer-config' | 'transfer-existing'
   | 'bundled-authority' | 'bundled-digest' | 'bundled-config' | 'transfer-prepare'
-  | 'bundled-provision' | 'transfer-save' | 'transfer-marker' | 'transfer-connect';
+  | 'bundled-provision' | 'transfer-rebind' | 'transfer-save' | 'transfer-marker' | 'transfer-connect';
 type Diagnostic = Readonly<{ step: InitializationStep; state: 'enter' | 'ready' | 'failed'; elapsedMs: number }>;
 type Scope = { observer: (event: Diagnostic) => unknown; started: number; count: number };
 const scopes = new AsyncLocalStorage<Scope>();

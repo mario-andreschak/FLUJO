@@ -385,8 +385,10 @@ it('preserves genuine bundled approval on retry and refuses a revoked grant with
     const approved = loaded.find(value => value.name === config.name)!;
     loadConfigs.mockResolvedValue([approved]);
     expect(await reinstallWorkspaceMcpServers(plan)).toEqual({ ok: true, servers: [{ name: config.name, status: 'ready' }] });
-    expect(updateConfig.mock.calls[0][1]).toEqual(approved);
-    expect(updateConfig.mock.calls[0][1].command).toBe(process.execPath);
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(approved.command).toBe(process.execPath);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledWith(config.name);
     expect(await loadServerConfigs()).toEqual(loaded);
     await revokeBundledHostConsent(owner.request(config.name), config.name);
     updateConfig.mockClear();

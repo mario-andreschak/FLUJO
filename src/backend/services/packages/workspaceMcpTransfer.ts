@@ -278,6 +278,8 @@ function mapEnvironment(env: Record<string, EnvVarValue>, mappings: Array<[strin
 }
 
 interface PreparedRuntime {
+  /** Only the actual approved-bundled path may preserve an unchanged stored row. */
+  preserveStoredConfig?: true;
   config: MCPServerConfig;
   requiredFiles: string[];
 }
@@ -392,7 +394,7 @@ async function existingRuntime(
       || !isDeepStrictEqual(structuredClone(stored), captured)) {
       throw new Error('The approved bundled configuration changed during worker preparation.');
     }
-    return { config: captured, requiredFiles: [] };
+    return { config: captured, requiredFiles: [], preserveStoredConfig: true };
   }
   if (entry.kind !== 'github' && entry.kind !== 'registry') return undefined;
   const { file, recipeHash } = preparationIdentity(entry, plan);
@@ -551,8 +553,20 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
       const prepared = await observeInitializationAwait('transfer-existing', () => existingRuntime(entry, original, plan))
         ?? await observeInitializationAwait('transfer-prepare', () => prepareConfig(entry, original, plan));
       const { config } = prepared;
-      const saved = await observeInitializationAwait('transfer-save', () => mcpService.updateServerConfig(entry.name, config));
-      if ('success' in saved && !saved.success) throw new Error('Could not save the restored MCP configuration.');
+      if (prepared.preserveStoredConfig) {
+        // existingRuntime already did fresh protected authority/provenance,
+        // digest and exact config checks. Rebind once more instead of saving
+        // the identical row: updateServerConfig also connects/reapplies it,
+        // redundantly preceding the explicit guarded handshake below.
+        const current = await observeInitializationAwait('transfer-rebind', () => loadServerConfigs());
+        const stored = Array.isArray(current) ? current.find(value => value.name === entry.name) : undefined;
+        if (!stored || !isDeepStrictEqual(structuredClone(stored), config)) {
+          throw new Error('The approved bundled configuration changed before worker connection.');
+        }
+      } else {
+        const saved = await observeInitializationAwait('transfer-save', () => mcpService.updateServerConfig(entry.name, config));
+        if ('success' in saved && !saved.success) throw new Error('Could not save the restored MCP configuration.');
+      }
       // A completed build is durable even if its first handshake fails. Retry
       // connection independently so a transient server failure cannot replay installs.
       await observeInitializationAwait('transfer-marker', () => recordPreparedRuntime(entry, prepared, plan));

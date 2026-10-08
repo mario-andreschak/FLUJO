@@ -64,6 +64,14 @@ connection. The existing plan validation, provenance checks, preparation branche
 and real handshake remain intact. Categories carry no server names or paths;
 this Source instrumentation supplies neither installation nor execution authority.
 
+Approved bundled reuse now preserves a byte-identical authoritative config
+after fresh protected authority/provenance/digest checks and a final config
+rebind. It avoids `updateServerConfig`'s redundant save/connect for that one
+unchanged branch. The explicit real guarded `connectServer` handshake and later
+startup checks remain; changed/prepared configurations still use the existing
+save path. This Source change is unqualified and does not establish that duplicate
+connection work caused any previous readiness timeout. All deadlines remain.
+
 The unchanged 75-second effect wait requests at most three actual scheduler
 list/lastRun observations, with each diagnostic wait capped at 500 milliseconds
 inside the original deadline. Output contains only fixed categories: arming,
