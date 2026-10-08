@@ -30,6 +30,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const {issueOwnerCredential}=require(path.join(sourceRoot,'src/backend/services/security/ownerCredentials.ts'));
   const credential=issueOwnerCredential(['control:admin','mcp:access','secrets:read'],Date.now()+600000);
   fs.writeFileSync(process.env.FLUJO_OWNER_AUTH_FILE,JSON.stringify({schemaVersion:1,ownerId:'synthetic-fixture-owner',credentials:[credential.record]}),{mode:0o600});
+  const ledgerFilename=process.env.FLUJO_MCP_TRUSTED_HOST_FILE;assert.equal(fs.lstatSync(ledgerFilename).isSymbolicLink(),false);fs.unlinkSync(ledgerFilename);
   await require(path.join(sourceRoot,'__tests__/utils/privateProfileFixture.ts')).unlockPrivateFixtureInCurrentWorkspace();
   const workspace=require(path.join(sourceRoot,'src/utils/workspace.ts'));
   const copied=require(path.join(sourceRoot,'src/backend/services/mcp/shippedWorkspacePackages.ts'));
@@ -50,7 +51,9 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    const previewMs=performance.now()-started;
    console.log(JSON.stringify({stage:'bundle-preview',sdk:era,elapsedMs:previewMs,dependencyPackages:preview.revision.dependencyGraph.packages.length}));
    await assert.rejects(consent.approveBundledHostConsent(new Request('http://127.0.0.1'),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000}),e=>e.response?.status===401);
+   if(era==='v1')assert.equal(fs.existsSync(ledgerFilename),false);
    await assert.rejects(consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:'0'.repeat(64),expiresAt:Date.now()+120000}));
+   if(era==='v1'){const initialized=JSON.parse(fs.readFileSync(ledgerFilename,'utf8'));assert.equal(initialized.ownerId,'synthetic-fixture-owner');assert.deepEqual(initialized.approvals,[]);console.log(JSON.stringify({stage:'operator-ledger-initialized',missingBearerCreatedNoFile:true,actualPrivateOwnerInitializedEmptyLedger:true,staleReviewCreatedNoGrant:true}));}
    const approvalStarted=performance.now();
    await consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000});
    const approvalMs=performance.now()-approvalStarted;
