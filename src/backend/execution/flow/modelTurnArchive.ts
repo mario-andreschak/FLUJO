@@ -477,7 +477,7 @@ async function updateModelDispatchOutcomeWithinMutation(
 }
 
 export function readModelTurnSnapshotResponse(
-  conversationId: string, dispatchId: string, signal?: AbortSignal,
+  conversationId: string, dispatchId: string, signal?: AbortSignal, framed = false,
 ): Promise<ReadableStream<Uint8Array> | undefined> {
   return withModelTurnArchiveResponse(async () => {
     let source;
@@ -495,7 +495,7 @@ export function readModelTurnSnapshotResponse(
     let outcome;
     try { outcome = version === 2 ? await readOutcome(conversationId, dispatchId, signal) : undefined; }
     catch (error) { await closeModelTurnResponseDescriptor(source, error); throw error; }
-    return prepareModelTurnSnapshotResponse(source, { version, conversationId, dispatchId }, outcome?.outcome, signal);
+    return prepareModelTurnSnapshotResponse(source, { version, conversationId, dispatchId }, outcome?.outcome, signal, framed);
   }, signal);
 }
 

@@ -1,3 +1,4 @@
+import { ArchivedModelTurnValue } from '@/frontend/services/chat/modelTurnInspection';
 export const MODEL_TURN_TEXT_PAGE_CHARS = 64 * 1024;
 const TOKEN_CHARS = 4096;
 type ValueToken = { value: unknown; depth: number };
@@ -49,6 +50,7 @@ function* tokens(value: unknown, depth: number): Generator<string | ValueToken> 
 export function modelTurnJsonPage(value: unknown, page: number): { text: string; hasNext: boolean } {
   if (!Number.isSafeInteger(page) || page < 0) throw new RangeError('Invalid inspector page');
   if (value === undefined) return { text: '', hasNext: false };
+  if (value instanceof ArchivedModelTurnValue) return value.readPage(page);
   const start = page * MODEL_TURN_TEXT_PAGE_CHARS;
   const end = start + MODEL_TURN_TEXT_PAGE_CHARS;
   if (typeof value === 'string') return { text: value.slice(start, end), hasNext: value.length > end };

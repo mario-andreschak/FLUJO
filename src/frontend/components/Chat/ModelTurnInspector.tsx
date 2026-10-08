@@ -16,11 +16,12 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import { chatService } from '@/frontend/services/chat';
 import ModelTurnJsonPreview from './ModelTurnJsonPreview';
+import { ArchivedModelTurnValue, isModelTurnInspection, type ModelTurnView } from '@/frontend/services/chat/modelTurnInspection';
 
-export type ModelTurnInspectorTab = 'canonical' | 'wire' | 'request';
+export type ModelTurnInspectorTab = 'canonical' | 'wire' | 'request' | 'archive';
 
 interface ModelTurnInspectorProps {
-  snapshot: ModelTurnSnapshot;
+  snapshot: ModelTurnView;
   conversationId: string;
   tab: ModelTurnInspectorTab;
   onTabChange: (tab: ModelTurnInspectorTab) => void;
@@ -55,14 +56,17 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
  * `thread` diagnostic block, for example, although runStreamed only receives
  * input and options.
  */
-export function invocationView(snapshot: ModelTurnSnapshot): InvocationView {
-  const request = asRecord(snapshot.sdkRequest);
+export function invocationView(snapshot: ModelTurnView): InvocationView {
+  const archived = snapshot.sdkRequest instanceof ArchivedModelTurnValue ? snapshot.sdkRequest : undefined;
+  const request = archived ? undefined : asRecord(snapshot.sdkRequest);
+  const parameter = (name: string) => archived ? archived.child(name) : request?.[name];
+  const hasRequest = request || archived?.isObject;
   const operation = snapshot.entry.operation.replace(/\(stream\)$/, '');
 
-  if (snapshot.entry.adapter === 'codex-cli' && request) {
+  if (snapshot.entry.adapter === 'codex-cli' && hasRequest) {
     const parameters = [
-      { name: 'input', value: request.input },
-      { name: 'options', value: request.options },
+      { name: 'input', value: parameter('input') },
+      { name: 'options', value: parameter('options') },
     ];
     return {
       callee: 'thread.runStreamed',
@@ -71,13 +75,13 @@ export function invocationView(snapshot: ModelTurnSnapshot): InvocationView {
     };
   }
 
-  if (snapshot.entry.adapter === 'claude-cli' && request) {
+  if (snapshot.entry.adapter === 'claude-cli' && hasRequest) {
     return {
       before: 'const prompt = promptStream();',
       callee: 'query',
       parameters: [
-        { name: 'prompt', value: request.prompt },
-        { name: 'options', value: request.options },
+        { name: 'prompt', value: parameter('prompt') },
+        { name: 'options', value: parameter('options') },
       ],
       argumentSource: '{ prompt, options }',
     };
@@ -139,7 +143,7 @@ function CodeToken({
   );
 }
 
-function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnSnapshot }) {
+function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnView }) {
   const invocation = useMemo(() => invocationView(snapshot), [snapshot]);
   const [selectedName, setSelectedName] = useState(invocation.parameters[0]?.name ?? 'request');
   useEffect(() => {
@@ -306,6 +310,7 @@ export default function ModelTurnInspector({
             <ToggleButton value="canonical">Canonical</ToggleButton>
             <ToggleButton value="wire">Wired</ToggleButton>
             <ToggleButton value="request">Request Detail</ToggleButton>
+            {isModelTurnInspection(snapshot) && <ToggleButton value="archive">Original JSON</ToggleButton>}
           </ToggleButtonGroup>
           <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
           <Typography variant="subtitle2">
@@ -358,7 +363,8 @@ export default function ModelTurnInspector({
           <Alert severity="info" variant="outlined" sx={{ mb: 1.25 }}>
             The canonical node-threaded conversation before provider wire shaping.
           </Alert>
-          <MessageList messages={snapshot.canonicalMessages} provenance={snapshot.provenance} />
+          {isModelTurnInspection(snapshot) ? <ModelTurnJsonPreview value={snapshot.canonical} />
+            : <MessageList messages={snapshot.canonicalMessages} provenance={snapshot.provenance} />}
         </>
       )}
 
@@ -367,8 +373,14 @@ export default function ModelTurnInspector({
           <Alert severity="info" variant="outlined" sx={{ mb: 1.25 }}>
             The final hydrated provider-neutral conversation supplied to the adapter.
           </Alert>
-          <MessageList messages={snapshot.genericWire} />
+          {isModelTurnInspection(snapshot) ? <ModelTurnJsonPreview value={snapshot.wire} />
+            : <MessageList messages={snapshot.genericWire} />}
         </>
+      )}
+
+      {tab === 'archive' && isModelTurnInspection(snapshot) && <ModelTurnJsonPreview value={snapshot.source} />}
+      {isModelTurnInspection(snapshot) && snapshot.additionalMetadata && (
+        <Alert severity="info">Additional captured metadata is available in Original JSON.</Alert>
       )}
 
       {tab === 'request' && (
@@ -409,4 +421,9 @@ export default function ModelTurnInspector({
       )}
     </Box>
   );
+}
+
+export function ArchivedModelTurnChat({ snapshot, conversationId }: { snapshot: ModelTurnView; conversationId: string }) {
+  const [tab, setTab] = useState<ModelTurnInspectorTab>('canonical');
+  return <ModelTurnInspector snapshot={snapshot} conversationId={conversationId} tab={tab} onTabChange={setTab} />;
 }
