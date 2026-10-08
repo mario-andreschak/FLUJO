@@ -3,7 +3,8 @@
     "Execution baseline reviewed on 2026-09-16 from complete remediation main results, passing focused corrections, and the passing isolated stage. Historical reference: verify run 34763333121 at commit 26cd39856fd8a5580c77025ee0ec95732572045d.",
     "Only assertions with passed/failed status and suites with completed assertions count. Pending/todo tests require an exact, reasoned intentionalSkips entry; a quarantine never excuses a suite failing to execute.",
     "Reviewed Windows main scope is 763 suites and 6874 tests; portable minima subtract one suite and five Windows-only tests, which have explicit Unix intentionalSkips below. Isolated executed 9 suites and 101 tests. Browser capture, snapshot Git integration and memory lifecycle run in the isolated stage. All nine quarantines are retired; see docs/audits/quarantine-status.md for evidence.",
-    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression."
+    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression.",
+    "2026-10-08: Genuine installed MCP consent moved to the serial integration stage after its unchanged finite hook passed locally. The complete serial stage passed 10 suites/124 assertions. Its portable minimum increases by the transferred one suite/18 assertions; the ordinary-stage minimum is retained. No skip or quarantine is added."
   ],
   "stages": {
     "ci": {
@@ -90,8 +91,8 @@
     },
     "isolated": {
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
-      "minSuites": 9,
-      "minTests": 101,
+      "minSuites": 10,
+      "minTests": 119,
       "intentionalSkips": []
     }
   },

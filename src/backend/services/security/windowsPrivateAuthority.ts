@@ -84,18 +84,21 @@ export async function windowsPrivateAuthorityStampAsync(filename: string | reado
     let failure: Error | undefined;
     let bytes = 0;
     const output: Buffer[] = [];
-    const stop = () => { failure ??= new Error('Windows authority inspection cancelled or exceeded bounds'); child.kill(); };
-    const timer = setTimeout(stop, 5000);
-    signal?.addEventListener('abort', stop, { once: true });
-    child.on('error', error => { failure = error; stop(); });
-    child.stdin.on('error', error => { failure = error; stop(); });
+    const stop = (reason: 'cancelled' | 'deadline exceeded' | 'output bound exceeded') => {
+      failure ??= new Error(`Windows authority inspection ${reason}`); child.kill();
+    };
+    const abort = () => stop('cancelled');
+    const timer = setTimeout(() => stop('deadline exceeded'), 5000);
+    signal?.addEventListener('abort', abort, { once: true });
+    child.on('error', error => { failure = error; abort(); });
+    child.stdin.on('error', error => { failure = error; abort(); });
     for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > 64 * 1024) { stop(); return; }
+      if (bytes > 64 * 1024) { stop('output bound exceeded'); return; }
       if (stream === child.stdout) output.push(chunk);
     });
     child.on('close', (code, exitSignal) => {
-      clearTimeout(timer); signal?.removeEventListener('abort', stop);
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
       try {
         if (failure || code !== 0 || exitSignal || signal?.aborted) throw failure ?? new Error('Windows authority inspection refused');
         resolve(authorityEvidence(Buffer.concat(output).toString('utf8')));
@@ -104,6 +107,6 @@ export async function windowsPrivateAuthorityStampAsync(filename: string | reado
     });
     const request = typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filename.map(item => path.resolve(item)) };
     child.stdin.end(JSON.stringify(request));
-    if (signal?.aborted) stop();
+    if (signal?.aborted) abort();
   });
 }

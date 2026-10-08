@@ -52,7 +52,8 @@ export async function createSmokeOperator() {
     await fs.writeFile(ownerFile, JSON.stringify(policy), { flag: 'wx', mode: 0o600 });
     if (process.platform === 'win32') {
       const authority = await loadSource(path.join(sourceRoot, 'src/backend/services/security/windowsPrivateAuthority.ts'));
-      await authority.windowsPrivateAuthorityStampAsync(ownerFile);
+      try { await authority.windowsPrivateAuthorityStampAsync(ownerFile); }
+      catch (error) { throw new Error('Disposable smoke operator native ACL qualification failed.', { cause: error }); }
     }
     return { token: issued.token, expiresAt: issued.record.expiresAt, env: { FLUJO_OWNER_AUTH_FILE: ownerFile,
       FLUJO_MCP_TRUSTED_HOST_FILE: path.join(directory, 'approval.json') }, restore };
