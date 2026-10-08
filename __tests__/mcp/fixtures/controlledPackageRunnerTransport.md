@@ -27,8 +27,9 @@ Abort does not settle those witnesses. Start/dispatch failure retains ownership;
 close reports failure instead of claiming successful release. Timeout preserves
 ownership and permits another close attempt. Held authority handles remain
 strongly retained on close failure, with disposal available on the thrown error.
-Real held-file read/close barrier controls exercise the exact dispatch drain;
-they remain unrun and do not qualify a child launch or complete transport close.
+Real held-FD task barriers exercise the exact dispatch drain before actual
+read/close calls. They remain unrun and do not prove an in-flight OS read/close
+fault, child launch or complete transport close.
 
 This is an explicitly **modified-npm** candidate, not an original stock-npx
 positive. No test, typecheck, runtime grant, registry/provider access, reify,

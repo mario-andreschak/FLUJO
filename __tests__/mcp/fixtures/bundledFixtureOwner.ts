@@ -2,21 +2,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { issueOwnerCredential, ownerPolicySchema } from '@/backend/services/security/ownerCredentials';
+import { captureOwnedFixtureDirectory, removeOwnedFixtureDirectory } from './ownedFixtureDirectory';
 
 /** Provision an owned operator; approval still goes through the real protected writer. */
 export function installBundledFixtureOwner() {
-  const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
+  const parent = fs.realpathSync.native(path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir()));
   const directory = fs.mkdtempSync(path.join(parent, 'flujo-bundled-owner-'));
+  const directoryOwnership = captureOwnedFixtureDirectory(directory);
   const names = ['FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE'];
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const restore = () => {
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name]; else process.env[name] = value;
     }
-    if (path.dirname(path.resolve(directory)) !== parent
-        || !/^flujo-bundled-owner-[A-Za-z0-9]+$/.test(path.basename(directory))
-        || fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe bundled owner fixture cleanup');
-    fs.rmSync(directory, { recursive: true, force: true });
+    removeOwnedFixtureDirectory(directoryOwnership, parent, 'flujo-bundled-owner-');
   };
   try {
     const expiresAt = Date.now() + 120_000;

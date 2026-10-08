@@ -8,8 +8,9 @@ function gate() {
   return { promise, release };
 }
 
-// Real file read/close ownership controls for the exact drain used by transport.
-// These do not qualify a package grant, child spawn or MCP handshake.
+// Real held-FD task settlement controls for the exact drain used by transport.
+// Gates precede actual reads/closes, not an OS operation already in flight.
+// These do not qualify OS read/close faults, grants, spawns or MCP handshakes.
 describe('admitted dispatch settlement', () => {
   it.each(['read', 'close'] as const)('waits for an actual held-file %s operation after abort', async phase => {
     const owner = installBundledFixtureOwner();
@@ -49,10 +50,13 @@ describe('admitted dispatch settlement', () => {
       expect(handle).toBeUndefined();
     } finally {
       held.release();
-      await operation;
-      // A failed actual close keeps the fixture inspectable.
-      if (handle) throw new Error('Actual held file close remains unresolved');
-      owner.restore();
+      const failures: unknown[] = [];
+      try { await operation; } catch (error) { failures.push(error); }
+      // Environment restoration and identity-guarded owner cleanup are
+      // independent of task rejection; never let it skip owner.restore.
+      try { owner.restore(); } catch (error) { failures.push(error); }
+      if (handle) failures.push(new Error('Actual held file close remains unresolved'));
+      if (failures.length) throw Object.assign(new AggregateError(failures, 'Held-FD task/owner cleanup failed'), { handle });
     }
   });
 
