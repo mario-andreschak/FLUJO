@@ -716,6 +716,9 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     NPM_CONFIG_CACHE: directories.npm,
     PIP_CACHE_DIR: directories.pip,
     UV_CACHE_DIR: directories.uv,
+    FLUJO_PARENT_DATA_DIR: getDataDir(),
+    FLUJO_DATA_DIR: workspaceRoot,
+    FLUJO_WORKSPACE: getCurrentWorkspace(),
   };
   if (process.platform === 'win32') {
     const parsed = path.parse(home);

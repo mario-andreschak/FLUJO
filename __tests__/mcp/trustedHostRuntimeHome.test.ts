@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
-import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
+import { ensureWorkspaceDirs, getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { getDataDir } from '@/utils/paths';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 
 describe('approved host runtime-home isolation', () => {
@@ -44,4 +45,24 @@ describe('approved host runtime-home isolation', () => {
       .toThrow(expect.objectContaining({ code: 'UNSAFE_MCP_RUNTIME_DIRECTORY' }));
     expect(fs.readFileSync(runtimeDirectory(), 'utf8')).toBe('occupied-runtime-anchor');
   });
+
+  it('replaces reviewed stale FLUJO roots with the selected workspace roots for isolated launches', () => {
+    const stale = { ...approved.config, env: { ...approved.config.env,
+      FLUJO_PARENT_DATA_DIR: 'stale-parent', FLUJO_DATA_DIR: 'stale-workspace', FLUJO_WORKSPACE: 'stale-workspace-name' } };
+    approved.approve(stale);
+    const launch = resolveStdioLaunch(stale, { isolateRuntimeHome: true });
+    expect(launch.env.FLUJO_PARENT_DATA_DIR).toBe(getDataDir());
+    expect(launch.env.FLUJO_DATA_DIR).toBe(getWorkspaceDataDir());
+    expect(launch.env.FLUJO_WORKSPACE).toBe(getCurrentWorkspace());
+  });
+
+  it.each(['FLUJO_PARENT_DATA_DIR', 'FLUJO_DATA_DIR', 'FLUJO_WORKSPACE'])(
+    'requires explicit reviewed authority for injected %s', name => {
+      const incomplete = { ...approved.config, trustedHost: { ...approved.config.trustedHost!,
+        environmentNames: approved.config.trustedHost!.environmentNames.filter(value => value !== name) } };
+      approved.approve(incomplete);
+      expect(() => resolveStdioLaunch(incomplete, { isolateRuntimeHome: true }))
+        .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
+    },
+  );
 });
