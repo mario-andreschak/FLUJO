@@ -21,6 +21,7 @@ export interface PackageRunnerPreparation {
   upstreamNpmRoot: string;
   binShim: string;
   binName: string;
+  environment: Readonly<Record<string, string>>;
 }
 export interface PreparedPackageRunnerIntent { readonly digest: string }
 type Evidence = Awaited<ReturnType<typeof collect>>;
@@ -69,6 +70,27 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
     }
   }
   const nativeStage = await inspectPackageRunnerNativeStage(runtime, signal);
+  const environment = preparation.environment;
+  const allowed = new Set(['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'SystemRoot', 'WINDIR', 'COMSPEC',
+    'NPM_CONFIG_CACHE', 'NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_GLOBALCONFIG', 'NPM_CONFIG_PREFIX',
+    'NPM_CONFIG_SCRIPT_SHELL', 'NPM_CONFIG_OFFLINE', 'NPM_CONFIG_IGNORE_SCRIPTS', 'NPM_CONFIG_WORKSPACES',
+    'NPM_CONFIG_UPDATE_NOTIFIER', 'NPM_CONFIG_AUDIT', 'NPM_CONFIG_FUND']);
+  if (!environment || Object.keys(environment).some(key => !allowed.has(key))
+      || Object.values(environment).some(value => typeof value !== 'string' || value.length > 32768 || value.includes('\0'))
+      || environment.HOME !== preparation.lookup.home || environment.USERPROFILE !== preparation.lookup.home
+      || environment.PATH !== [path.dirname(preparation.node), path.dirname(preparation.shell)].join(path.delimiter)
+      || environment.COMSPEC !== preparation.shell || environment.NPM_CONFIG_SCRIPT_SHELL !== preparation.shell
+      || environment.NPM_CONFIG_CACHE !== preparation.lookup.cache
+      || !preparation.lookup.configFiles.includes(environment.NPM_CONFIG_USERCONFIG)
+      || !preparation.lookup.configFiles.includes(environment.NPM_CONFIG_GLOBALCONFIG)
+      || environment.NPM_CONFIG_PREFIX !== preparation.lookup.globalBin
+      || environment.NPM_CONFIG_OFFLINE !== 'true' || environment.NPM_CONFIG_IGNORE_SCRIPTS !== 'true'
+      || environment.NPM_CONFIG_WORKSPACES !== 'false' || environment.NPM_CONFIG_UPDATE_NOTIFIER !== 'false'
+      || environment.NPM_CONFIG_AUDIT !== 'false' || environment.NPM_CONFIG_FUND !== 'false'
+      || environment.SystemRoot !== process.env.SystemRoot || environment.WINDIR !== process.env.SystemRoot
+      || [environment.TEMP, environment.TMP].some(filename => !filename || path.dirname(path.resolve(filename)) !== preparation.lookup.home)) {
+    throw new Error('Runner environment is not the exact closed reviewed environment');
+  }
   // Sequential real observations; no submitted digest becomes evidence.
   if (!preparation.artifactFiles) throw new Error('Actual dependency archives are required for a runner intent');
   const tree = await prepareResolvedPackageTree(preparation.lookup.cwd, config.args[1], signal, preparation.artifactFiles);
@@ -140,3 +162,12 @@ export async function revalidatePackageRunnerIntent(intent: PreparedPackageRunne
 // an ordinary npx process: native protected-stage authority, exact npm resolver
 // interpretation and OS containment of fallback/reify/network are not supplied
 // by filesystem fingerprints. Production's existing npx denial remains intact.
+export function packageRunnerIntentLaunchParameters(intent: PreparedPackageRunnerIntent, config: MCPStdioConfig) {
+  const state = intents.get(intent);
+  packageRunnerIntentSubject(intent, config);
+  if (!state || path.basename(state.preparation.shell).toLowerCase() !== 'cmd.exe'
+      || /[\0\r\n"'`$%!&|<>^]/.test(state.preparation.launcher)) throw new Error('Fixed controlled launcher unavailable');
+  return Object.freeze({ command: state.preparation.shell,
+    args: ['/d', '/s', '/c', `""${state.preparation.launcher}" -y ${config.args![1]}"`],
+    cwd: state.preparation.lookup.cwd, env: Object.freeze({ ...state.preparation.environment }) });
+}
