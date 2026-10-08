@@ -7,6 +7,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { createClaudeOwnedProcessSpawner } from './claudeOwnedProcess';
@@ -1073,7 +1074,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw new Error('Native Claude SDK dispatch receipt differs from its broker origin.');
       }
     } catch (archiveError) {
-      if (nativeToolPort) {
+      if (nativeToolPort || archiveError instanceof ModelTurnArchiveMemoryError) {
         closeInput();
         signal?.removeEventListener('abort', onExternalAbort);
         throw archiveError;
