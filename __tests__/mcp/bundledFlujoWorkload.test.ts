@@ -334,7 +334,20 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       expectedCloseCount = 2;
       if (mode === 'retire-unknown-parent') {
         const held = `${workloadDirectory}.held-recovery`, preserved = `${workloadDirectory}.preserved-unknown`;
-        fs.renameSync(workloadDirectory, held);
+        const before = fs.lstatSync(workloadDirectory, { bigint: true });
+        let moved = false;
+        try { fs.renameSync(workloadDirectory, held); moved = true; }
+        catch (error) {
+          if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+          const after = fs.lstatSync(workloadDirectory, { bigint: true });
+          expect(after.dev).toBe(before.dev); expect(after.ino).toBe(before.ino);
+          expect(fs.existsSync(held)).toBe(false);
+          expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+          // The real held Windows witness prevents the replacement itself.
+          // Still prove retirement preserves an unrelated namespace object.
+          fs.writeFileSync(path.join(workloadDirectory, 'unknown.json'), '{"unknown":"preserve"}', { mode: 0o600 });
+        }
+        if (moved) {
         fs.mkdirSync(workloadDirectory, { mode: 0o700 });
         const unknown = path.join(workloadDirectory, 'unknown.json');
         fs.writeFileSync(unknown, '{"unknown":"preserve"}', { mode: 0o600 });
@@ -344,6 +357,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
         fs.renameSync(held, workloadDirectory);
         expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
         expectedCloseCount = 3;
+        }
       }
     }
     if (mode === 'retire-closed-descriptor-retry') {
@@ -378,6 +392,12 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     expect(producer).not.toHaveBeenCalled();
     } else { await retire(); }
     expect(close).toHaveBeenCalledTimes(expectedCloseCount);
+    if (mode === 'retire-unknown-parent' && fs.existsSync(path.join(workloadDirectory, 'unknown.json'))) {
+      expect(fs.readFileSync(path.join(workloadDirectory, 'unknown.json'), 'utf8')).toBe('{"unknown":"preserve"}');
+      // Only the fixture owner removes its own unrelated evidence after proving
+      // the actual production retirement preserved it.
+      fs.unlinkSync(path.join(workloadDirectory, 'unknown.json'));
+    }
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     for (const fd of foreignDescriptors) expect(fs.fstatSync(fd).isFile()).toBe(true);
