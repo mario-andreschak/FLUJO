@@ -20,12 +20,20 @@ export function captureOwnedFixtureDirectory(directory: string) {
   owned.set(token, observed);
   return token;
 }
-export function removeOwnedFixtureDirectory(token: { readonly path: string }, parent: string, prefix: string) {
+function assertOwned(token: { readonly path: string }, parent: string, prefix: string) {
   const original = owned.get(token);
   if (!original || canonical(fs.realpathSync.native(parent)) !== original.parent
       || path.dirname(path.resolve(token.path)) !== path.resolve(parent)
       || !path.basename(token.path).startsWith(prefix)
       || JSON.stringify(evidence(token.path)) !== JSON.stringify(original)) throw new Error('Owned fixture directory cleanup refused');
+}
+export function removeOwnedFixtureDirectory(token: { readonly path: string }, parent: string, prefix: string) {
+  assertOwned(token, parent, prefix);
   fs.rmSync(token.path, { recursive: true, force: true });
+  owned.delete(token);
+}
+export async function removeOwnedFixtureDirectoryAsync(token: { readonly path: string }, parent: string, prefix: string) {
+  assertOwned(token, parent, prefix);
+  await fs.promises.rm(token.path, { recursive: true, force: true });
   owned.delete(token);
 }

@@ -1,5 +1,6 @@
 import { installPrivateProfileFixture, unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
 import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
+import { captureOwnedFixtureDirectory, removeOwnedFixtureDirectory } from '../mcp/fixtures/ownedFixtureDirectory';
 let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
 let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
 /** Real FlowSpec/engine/scheduler -> production MCP service -> built Bash stdio
@@ -46,6 +47,7 @@ import { getFlowRunEventBus, type FlowEvent } from '@/backend/services/scheduler
 
 const binary = path.resolve(process.cwd(), 'mcp-servers/bash/dist/index.js');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-static-real-bash-'));
+const scratchOwnership = captureOwnedFixtureDirectory(scratch);
 const program = path.join(scratch, 'harmless-probe.cjs');
 fs.writeFileSync(program, [
   'const code = Number(process.argv[2]);',
@@ -80,14 +82,25 @@ function flow(code: number, policy?: 'continue' | 'fail', output = true): Flow {
 describe('Real Bash Static scheduled process result (#537/#538)', () => {
   let scheduler: SchedulerService;
   let events: FlowEvent[];
-  let unsubscribe: () => void;
-  let toolCall: jest.SpyInstance;
-  let expectedErrors: jest.SpyInstance;
+  let unsubscribe: (() => void) | undefined;
+  let toolCall: jest.SpyInstance | undefined;
+  let expectedErrors: jest.SpyInstance | undefined;
+  let preparation: Promise<void> | undefined;
+  let preparationSettled = true;
+  let cleanupUncertain = false;
   let firstCase = true;
   let reviewedBashDigest: string;
   const preparationEpoch = performance.now();
-  const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready' | 'connection-enter' | 'connection-ready') => {
-    console.info(JSON.stringify({ shippedFixture: 'real-bash', stage, elapsedMs: performance.now() - preparationEpoch }));
+  let diagnosticCount = 0;
+  const diagnostic = (value: Record<string, unknown>) => {
+    try { if (diagnosticCount++ < 128) console.info(JSON.stringify(value)); }
+    catch { /* Diagnostic failures cannot replace actual setup or cleanup. */ }
+  };
+  const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready' | 'connection-enter' | 'connection-ready'
+    | 'case-setup-enter' | 'case-setup-ready' | 'disconnect-enter' | 'disconnect-ready' | 'owner-cleanup-enter' | 'owner-cleanup-ready'
+    | 'unlock-enter' | 'unlock-ready' | 'cache-reset-enter' | 'cache-reset-ready' | 'scheduler-create-enter' | 'scheduler-create-ready'
+    | 'case-settlement-enter' | 'case-settlement-ready') => {
+    diagnostic({ shippedFixture: 'real-bash', stage, elapsedMs: performance.now() - preparationEpoch });
   };
   let priorConsentTrace: string | undefined;
 
@@ -106,10 +119,12 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
       runtimeHome: 'host', reviewedDigest: reviewedBashDigest, expiresAt: owner.expiresAt,
     })).config;
     phase('grant-ready');
-    console.info(JSON.stringify({ bashFixturePhase: 'protected-approval', elapsedMs: performance.now() - approvalStarted }));
+    diagnostic({ bashFixturePhase: 'protected-approval', elapsedMs: performance.now() - approvalStarted });
   }
 
-  beforeAll(async () => {
+  beforeAll(() => {
+    preparationSettled = false;
+    preparation = (async () => {
     priorConsentTrace = process.env.FLUJO_BUNDLED_CONSENT_TRACE;
     process.env.FLUJO_BUNDLED_CONSENT_TRACE = '1';
     expect(fs.existsSync(binary)).toBe(true); // CI builds MCP packages before Jest.
@@ -129,74 +144,128 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     const connected = await mcpService.connectServer('bash');
     phase('connection-ready');
     expect(connected).toMatchObject({ success: true });
+    })().finally(() => { preparationSettled = true; });
+    return preparation;
   }, 60_000);
 
-  beforeEach(async () => {
+  beforeEach(() => {
+    if (!preparationSettled || cleanupUncertain) throw new Error('Prior real-Bash setup/cleanup unresolved; refusing another case');
+    preparationSettled = false;
+    preparation = (async () => {
+    phase('case-setup-enter');
     const preparationStarted = performance.now();
     process.env.FLUJO_DATA_DIR = privateFixture.root;
     delete process.env.FLUJO_PARENT_DATA_DIR;
     if (!firstCase) {
       const disconnectStarted = performance.now();
-      expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true });
+      phase('disconnect-enter');
+      expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true, shutdownReceipt: {
+        processOwnership: 'owned', exitOutcome: 'observed_exit', errorClassification: 'none',
+      } });
       expect(mcpService.getClient('bash')).toBeUndefined();
+      phase('disconnect-ready');
+      phase('owner-cleanup-enter');
       owner!.restore();
       owner = undefined;
-      console.info(JSON.stringify({ bashFixturePhase: 'disconnect-and-owner-cleanup', elapsedMs: performance.now() - disconnectStarted }));
+      phase('owner-cleanup-ready');
+      diagnostic({ bashFixturePhase: 'disconnect-and-owner-cleanup', elapsedMs: performance.now() - disconnectStarted });
     }
     store.clear();
     const unlockStarted = performance.now();
+    phase('unlock-enter');
     await unlockPrivateFixtureInCurrentWorkspace(metadata => { store.set('encryption_key', metadata); });
-    console.info(JSON.stringify({ bashFixturePhase: 'unlock', elapsedMs: performance.now() - unlockStarted }));
+    phase('unlock-ready');
+    diagnostic({ bashFixturePhase: 'unlock', elapsedMs: performance.now() - unlockStarted });
     store.set('mcp_servers', { bash: bashConfig });
     if (!firstCase) await approveBash();
     firstCase = false;
     expect(Date.now()).toBeLessThan(owner!.expiresAt);
-    console.info(JSON.stringify({ bashFixtureGrantRemainingMs: owner!.expiresAt - Date.now(),
-      bashFixturePreparationMs: performance.now() - preparationStarted }));
+    diagnostic({ bashFixtureGrantRemainingMs: owner!.expiresAt - Date.now(),
+      bashFixturePreparationMs: performance.now() - preparationStarted });
+    phase('cache-reset-enter');
     FlowExecutor.clearFlowCache();
     FlowExecutor.conversationStates.clear();
+    phase('cache-reset-ready');
+    phase('scheduler-create-enter');
     scheduler = new SchedulerService();
+    phase('scheduler-create-ready');
     events = [];
     unsubscribe = getFlowRunEventBus().subscribe(event => { events.push(event); });
     // Observe the production method without replacing delivery or protocol data.
     toolCall = jest.spyOn(mcpService, 'callTool');
     expectedErrors = jest.spyOn(console, 'error').mockImplementation(() => {});
+    phase('case-setup-ready');
+    })().finally(() => { preparationSettled = true; });
+    return preparation;
   });
 
   afterEach(async () => {
-    toolCall.mockRestore();
-    expectedErrors.mockRestore();
-    unsubscribe();
-    await scheduler.setPaused(true);
-    FlowExecutor.conversationStates.clear();
+    cleanupUncertain = true; // A hook timeout cannot permit another case launch.
+    phase('case-settlement-enter');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const failures: unknown[] = [];
+    try {
+      // Below the existing 15s hook deadline. Timeout does not cancel actual
+      // setup or permit deleting its equipment/starting another case.
+      await Promise.race([preparation?.catch(() => {}), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Actual real-Bash setup remains unsettled')), 14_000);
+      })]);
+      if (!preparationSettled) throw new Error('Actual real-Bash setup remains unsettled');
+      try { toolCall?.mockRestore(); toolCall = undefined; } catch (error) { failures.push(error); }
+      try { expectedErrors?.mockRestore(); expectedErrors = undefined; } catch (error) { failures.push(error); }
+      try { unsubscribe?.(); unsubscribe = undefined; } catch (error) { failures.push(error); }
+      try { if (scheduler) await scheduler.setPaused(true); } catch (error) { failures.push(error); }
+      FlowExecutor.conversationStates.clear();
+      if (failures.length) throw new AggregateError(failures, 'Real-Bash case cleanup failed');
+      cleanupUncertain = false;
+      phase('case-settlement-ready');
+    } catch (error) { cleanupUncertain = true; throw error; }
+    finally { if (timer) clearTimeout(timer); }
   });
   afterAll(async () => {
+    if (!preparationSettled || cleanupUncertain) {
+      // Restore the operator environment independently but preserve equipment
+      // and profile roots while actual setup/cleanup can still use them.
+      owner?.restoreEnvironment();
+      privateFixture?.restoreEnvironment();
+      if (priorConsentTrace === undefined) delete process.env.FLUJO_BUNDLED_CONSENT_TRACE;
+      else process.env.FLUJO_BUNDLED_CONSENT_TRACE = priorConsentTrace;
+      throw new Error('Real-Bash setup/cleanup unresolved; owned fixture roots preserved');
+    }
+    const failures: unknown[] = [];
+    let actualExit = false;
     try {
       if (privateFixture) process.env.FLUJO_DATA_DIR = privateFixture.root;
       delete process.env.FLUJO_PARENT_DATA_DIR;
-      expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true });
+      const disconnected = await mcpService.disconnectServer('bash');
+      expect(disconnected).toMatchObject({ success: true, shutdownReceipt: {
+        processOwnership: 'owned', exitOutcome: 'observed_exit', errorClassification: 'none',
+      } });
       expect(mcpService.getClient('bash')).toBeUndefined();
-    } finally {
-      try { owner?.restore(); } finally {
-        try { await privateFixture?.restore(); } finally {
-          try {
-            const resolved = path.resolve(scratch);
-            expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
-            expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
-            fs.rmSync(resolved, { recursive: true, force: true });
-          } finally {
-            if (priorConsentTrace === undefined) delete process.env.FLUJO_BUNDLED_CONSENT_TRACE;
-            else process.env.FLUJO_BUNDLED_CONSENT_TRACE = priorConsentTrace;
-          }
-        }
+      actualExit = true;
+    } catch (error) { failures.push(error); }
+    try { owner?.restoreEnvironment(); } catch (error) { failures.push(error); }
+    try { privateFixture?.restoreEnvironment(); } catch (error) { failures.push(error); }
+    try {
+      if (actualExit) {
+        try { owner?.removeDirectory(); } catch (error) { failures.push(error); }
+        try { await privateFixture?.restore(); } catch (error) { failures.push(error); }
+        try { removeOwnedFixtureDirectory(scratchOwnership, path.dirname(scratch), 'flujo-static-real-bash-'); }
+        catch (error) { failures.push(error); }
+      } else {
+        failures.push(new Error('Actual owned Bash exit unresolved; owner/profile/scratch roots preserved'));
       }
+    } finally {
+      if (priorConsentTrace === undefined) delete process.env.FLUJO_BUNDLED_CONSENT_TRACE;
+      else process.env.FLUJO_BUNDLED_CONSENT_TRACE = priorConsentTrace;
     }
+    if (failures.length) throw new AggregateError(failures, 'Real-Bash suite retirement failed');
   });
 
   function executedRunIndex() {
-    const indices = toolCall.mock.calls.flatMap((args, index) => args[0] === 'bash' && args[1] === 'run' ? [index] : []);
+    const indices = toolCall!.mock.calls.flatMap((args, index) => args[0] === 'bash' && args[1] === 'run' ? [index] : []);
     expect(indices).toHaveLength(1); // release_owner is a separate, expected cleanup call.
-    expect(toolCall.mock.calls.some(args => args[0] === 'bash' && args[1] === 'release_owner')).toBe(true);
+    expect(toolCall!.mock.calls.some(args => args[0] === 'bash' && args[1] === 'release_owner')).toBe(true);
     return indices[0];
   }
 
@@ -212,7 +281,7 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     const retained = store.get('planned-execution-runs/' + created.execution!.id) as RunRecord[];
     expect(retained).toEqual([record]);
     expect([...store.keys()].some(key => key.startsWith('conversations/'))).toBe(false);
-    const delivered = await toolCall.mock.results[executedRunIndex()].value;
+    const delivered = await toolCall!.mock.results[executedRunIndex()].value;
     expect(delivered.success).toBe(true); // Real MCP delivery remains success even on exit 2.
     const envelope = JSON.parse(delivered.data.content.find((entry: { type: string }) => entry.type === 'text').text);
     return { record, delivered, envelope };

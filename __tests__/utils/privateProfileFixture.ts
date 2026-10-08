@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { StorageKey } from '@/shared/types/storage';
 import { newKeyring, wrapKeyring, type EncryptionMetadata } from '@/utils/encryption/format';
+import { captureOwnedFixtureDirectory, removeOwnedFixtureDirectoryAsync } from '../mcp/fixtures/ownedFixtureDirectory';
 
 const passphrase = 'explicit-test-private-profile-passphrase';
 let profile: Promise<EncryptionMetadata> | undefined;
@@ -26,24 +27,36 @@ export async function installPrivateProfileFixture(persist?: (metadata: Encrypti
     .map(key => [key, process.env[key]]));
   const priorDek = global.__flujo_server_dek;
   const priorSessions = global.__flujo_encryption_sessions;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-unlocked-private-fixture-'));
+  const parent = await fs.realpath(os.tmpdir());
+  const root = await fs.mkdtemp(path.join(parent, 'flujo-unlocked-private-fixture-'));
+  const rootOwnership = captureOwnedFixtureDirectory(root);
   await fs.mkdir(path.join(root, 'workspaces', 'default-workspace', 'db'), { recursive: true });
   process.env.FLUJO_DATA_DIR = root;
   delete process.env.FLUJO_PARENT_DATA_DIR;
   delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
   global.__flujo_server_dek = undefined;
   global.__flujo_encryption_sessions = undefined;
-  await unlockPrivateFixtureInCurrentWorkspace(persist);
+  const restoreEnvironment = () => {
+    global.__flujo_server_dek = priorDek;
+    global.__flujo_encryption_sessions = priorSessions;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+  try { await unlockPrivateFixtureInCurrentWorkspace(persist); }
+  catch (primary) {
+    // Preserve the owned root for inspection on failed actual setup, while
+    // restoring the original globals/environment independently.
+    try { restoreEnvironment(); }
+    catch (cleanup) { throw Object.assign(new AggregateError([primary, cleanup], 'Private profile setup/environment restoration failed'), { root }); }
+    throw Object.assign(new Error('Private profile setup failed; owned root preserved', { cause: primary }), { root });
+  }
   return {
     root,
+    restoreEnvironment,
     async restore() {
-      global.__flujo_server_dek = priorDek;
-      global.__flujo_encryption_sessions = priorSessions;
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[key]; else process.env[key] = value;
-      }
-      // Absolute generated fixture directory; never a repository checkout.
-      await fs.rm(root, { recursive: true, force: true });
+      restoreEnvironment();
+      await removeOwnedFixtureDirectoryAsync(rootOwnership, parent, 'flujo-unlocked-private-fixture-');
     },
   };
 }
