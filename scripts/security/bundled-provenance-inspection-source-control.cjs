@@ -35,9 +35,12 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
  fs.writeFileSync(path.join(b,'index.js'),'throw new Error("Dependency code must never run");');
  fs.writeFileSync(path.join(app,'mcp-servers/filesystem/package.json'),JSON.stringify({name:'@mario.andreschak/mcp-filesystem',version:'synthetic-inspection-only',dependencies:{'synthetic-a':'1'}}));
  fs.writeFileSync(path.join(app,'mcp-servers/filesystem/dist/index.js'),'throw new Error("Package code must never run");');
+ fs.mkdirSync(path.join(app,'mcp-servers/filesystem/userdata'));fs.writeFileSync(path.join(app,'mcp-servers/filesystem/userdata/keep-private.txt'),'installation-owned private runtime data');
  try{
   await copied.ensureShippedWorkspacePackages(workspace,app,['filesystem']);
   const initial=await copied.inspectShippedWorkspaceProvenance(workspace,'filesystem',app);
+  assert.equal(fs.existsSync(path.join(workspace,'mcp-servers/filesystem/userdata')),false);assert.equal(fs.readFileSync(path.join(app,'mcp-servers/filesystem/userdata/keep-private.txt'),'utf8'),'installation-owned private runtime data');
+  console.log(JSON.stringify({sourceControl:'distributed-copy-provenance',unchangedActualCopiedAssetsAcceptedWithInstallationUserdata:true,privateRuntimeDataNotCopied:true,installationPrivateDataPreserved:true,snapshotFullAssetEditDetectionUnchanged:true}));
   assert.equal(initial.dependencyGraph.packages.length,2);assert.equal(initial.dependencyGraph.edges.length,2);assert.equal(initial.dependencyLinks.length,1);
   assert.equal((await copied.inspectShippedWorkspaceProvenance(workspace,'filesystem',app)).dependencyGraph.digest,initial.dependencyGraph.digest);
   const originalOpen=fs.promises.open,originalA=fs.readFileSync(path.join(a,'index.js'));let changedDuringRead=false;

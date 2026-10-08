@@ -69,7 +69,7 @@ async function readPackageAsset(file: string, expected: BigIntStats): Promise<Bu
   }
 }
 
-async function packageDigests(root: string): Promise<{ assetSha256: string; runtimeSha256: string }> {
+async function packageDigests(root: string, distributedOnly = false): Promise<{ assetSha256: string; runtimeSha256: string }> {
   const hash = createHash('sha256');
   const runtimeHash = createHash('sha256');
   const update = (entry: string, runtime: boolean) => {
@@ -79,6 +79,7 @@ async function packageDigests(root: string): Promise<{ assetSha256: string; runt
   const walk = async (directory: string, prefix: string, parentRuntime: boolean) => {
     for (const name of (await fs.readdir(directory)).sort()) {
       if (!prefix && ['node_modules', '.git', TEMPLATE_MARKER].includes(name)) continue;
+      if (!prefix && distributedOnly && !PACKAGE_ASSETS.includes(name)) continue;
       const runtime = prefix ? parentRuntime : ['package.json', 'dist', 'scripts'].includes(name);
       const relative = prefix ? `${prefix}/${name}` : name;
       const file = path.join(directory, name);
@@ -160,7 +161,9 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
   const destination = path.join(path.resolve(workspaceRoot), 'mcp-servers', packageDirectory);
   await validatePackage(source, packageDirectory);
   await validatePackage(destination, packageDirectory);
-  const [installed, copied] = await Promise.all([packageDigests(source), packageDigests(destination)]);
+  // Compare the same distributed assets clonePackage copies. Installation
+  // userdata is excluded from that copy; snapshot edit detection stays broader.
+  const [installed, copied] = await Promise.all([packageDigests(source, true), packageDigests(destination, true)]);
   if (installed.assetSha256 !== copied.assetSha256) throw new Error('Copied package differs from the installed revision.');
   const layout = await dependencyLayout(installation, packageDirectory);
   const runtimeManifest = JSON.parse(await fs.readFile(path.join(source, 'package.json'), 'utf8'));
