@@ -13,7 +13,7 @@ import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/ba
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 
 import { SchedulerService } from '@/backend/services/scheduler';
-import { getAuthorizedBundledFlujoWorkloadToolNames, assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
+import { getAuthorizedBundledFlujoWorkloadToolNames, assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { PlannedExecutionsFile } from '@/shared/types/plannedExecution';
@@ -51,7 +51,7 @@ jest.mock('@/backend/services/scheduler/triggers/schedule', () => ({
   },
 }));
 
-test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
+test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'retired-during-state-guard'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
   mockRunFlow.mockClear();
   mockTimerCompleted = undefined;
   mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
@@ -156,16 +156,39 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled'] as
         ? { ...execution, generationId: randomUUID() } : execution);
       await saveItem(StorageKey.PLANNED_EXECUTIONS, file);
     }
+    if (mode === 'retired-during-state-guard') {
+      const previous = await loadExecutionState(executionId);
+      let releaseGuard!: () => void;
+      let enteredGuard!: () => void;
+      const heldGuard = new Promise<void>(resolve => { releaseGuard = resolve; });
+      const observedGuard = new Promise<void>(resolve => { enteredGuard = resolve; });
+      const publication = withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, () =>
+        saveExecutionState(executionId, { ...previous, pendingFailures: 43 }, async () => {
+          enteredGuard();
+          await heldGuard;
+        }));
+      const completedPublication = publication.then(() => undefined, () => undefined);
+      try {
+        await observedGuard;
+        await transport.close();
+        transport = undefined;
+      } finally {
+        releaseGuard();
+        await completedPublication;
+      }
+      await expect(publication).rejects.toBeInstanceOf(BundledFlujoWorkloadError);
+      expect(await loadExecutionState(executionId)).toEqual(previous);
+    }
     const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE!;
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
-    await transport.close(); transport = undefined;
+    await transport?.close(); transport = undefined;
     expect(close).toHaveBeenCalledTimes(1);
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     mockReleaseTimer();
     await mockTimerCompleted;
-    expect(mockRunFlow).toHaveBeenCalledTimes(mode === 'unchanged' ? 1 : 0);
+    expect(mockRunFlow).toHaveBeenCalledTimes(mode === 'unchanged' || mode === 'retired-during-state-guard' ? 1 : 0);
     await scheduler.update(executionId, { enabled: false });
   } catch (error) {
     failed = true;
