@@ -239,12 +239,21 @@ it('an executable read refusal drains the pending actual source descriptor befor
   const checking = new Promise<void>(resolve => { entered = resolve; });
   const finish = new Promise<void>(resolve => { release = resolve; });
   let sourceClosed = false;
+  let executableReadAttempted = false;
+  let executableClosed = false;
+  let closedExecutable!: () => void;
+  const executableFinished = new Promise<void>(resolve => { closedExecutable = resolve; });
   let settled = false;
   const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
     const handle = await open(...args);
     const filename = String(args[0]);
     if (filename === config.command) {
-      handle.read = (async () => { throw new Error('actual executable read refused'); }) as typeof handle.read;
+      const close = handle.close.bind(handle);
+      handle.read = (async () => {
+        executableReadAttempted = true;
+        throw new Error('actual executable read refused');
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); executableClosed = true; closedExecutable(); };
     } else if (filename === sourceFile) {
       const read = handle.read.bind(handle);
       const close = handle.close.bind(handle);
@@ -259,11 +268,21 @@ it('an executable read refusal drains the pending actual source descriptor befor
   const outcome = verification.then(() => { settled = true; return undefined; }, error => { settled = true; return error; });
   try {
     await checking;
+    await executableFinished;
+    // Let the executable rejection propagate after its real descriptor closes,
+    // while the separately opened source descriptor remains deliberately held.
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    expect(executableReadAttempted).toBe(true);
+    expect(executableClosed).toBe(true);
     expect(settled).toBe(false);
     expect(sourceClosed).toBe(false);
-  } finally { release(); }
-  try {
+    release();
     expect((await outcome).message).toContain('package revision changed');
     expect(sourceClosed).toBe(true);
-  } finally { spy.mockRestore(); }
+    expect(executableClosed).toBe(true);
+  } finally {
+    release();
+    await outcome;
+    spy.mockRestore();
+  }
 });
