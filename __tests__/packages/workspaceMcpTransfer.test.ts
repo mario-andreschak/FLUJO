@@ -10,8 +10,15 @@ import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
+import { captureOwnedFixtureDirectory, removeOwnedFixtureDirectory } from '../mcp/fixtures/ownedFixtureDirectory';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 
 let mockWorkspace = '';
+let mockWorkspaceOwnership: ReturnType<typeof captureOwnedFixtureDirectory> | undefined;
+let transferCleanupUncertain = false;
+let realCase: { controller: AbortController; settled: boolean; cleanupCertain: boolean; body?: Promise<void>;
+  retire?: () => void; retirementFailures: unknown[] } | undefined;
 const mockConfigStorage = new Map<StorageKey, unknown>();
 const mockPreparedConfigs = new Map<string, MCPServerConfig>();
 jest.mock('@/utils/storage/backend', () => ({
@@ -120,10 +127,12 @@ it('does not silently disable unsupported, disabled, or dynamic dependencies of 
 });
 
 beforeEach(async () => {
+  if (transferCleanupUncertain || (realCase && (!realCase.settled || !realCase.cleanupCertain))) throw new Error('Prior actual filesystem case remains unresolved');
   jest.clearAllMocks();
   mockConfigStorage.clear();
   mockPreparedConfigs.clear();
-  mockWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-transfer-'));
+  mockWorkspace = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'flujo-mcp-transfer-'));
+  mockWorkspaceOwnership = captureOwnedFixtureDirectory(mockWorkspace);
   updateConfig.mockImplementation(async (name: string, config: MCPServerConfig) => {
     mockPreparedConfigs.set(name, config);
     return saveConfig(mockPreparedConfigs);
@@ -137,7 +146,23 @@ beforeEach(async () => {
     return { installed: true, config: { transport: 'stdio', rootPath, args: ['./dist/index.js'] } };
   });
 });
-afterEach(async () => { await fs.rm(mockWorkspace, { recursive: true, force: true }); });
+afterEach(async () => {
+  transferCleanupUncertain = true;
+  if (realCase && !realCase.settled) {
+    realCase.controller.abort(new Error('Actual filesystem case retired by cleanup'));
+    try { realCase.retire?.(); } catch (error) { realCase.retirementFailures.push(error); }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([realCase.body?.catch(() => {}), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Actual filesystem case body unsettled; owned roots preserved')), 14_000);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
+  if (realCase && (!realCase.settled || !realCase.cleanupCertain)) throw new Error('Actual filesystem cleanup uncertain; owned roots preserved');
+  if (mockWorkspaceOwnership) removeOwnedFixtureDirectory(mockWorkspaceOwnership, path.dirname(mockWorkspace), 'flujo-mcp-transfer-');
+  mockWorkspaceOwnership = undefined;
+  transferCleanupUncertain = false;
+});
 
 it('exports only recipes and location metadata, with no env/header credentials', () => {
   const config = server({ env: { API_KEY: { value: 'private-token', metadata: { isSecret: true } } } });
@@ -400,8 +425,30 @@ it('preserves genuine bundled approval on retry and refuses a revoked grant with
   } finally { owner.restore(); }
 }, 30_000);
 
-it('starts the rebuilt bundled filesystem process and reads/writes only the target workspace', async () => {
-  const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-transfer-source-'));
+it('starts the rebuilt bundled filesystem process and reads/writes only the target workspace', () => {
+  const context = { controller: new AbortController(), settled: false, cleanupCertain: false,
+    retirementFailures: [] } as NonNullable<typeof realCase>;
+  realCase = context;
+  const epoch = performance.now();
+  let diagnostics = 0;
+  const phase = (stage: 'source-enter' | 'source-ready' | 'reinstall-enter' | 'reinstall-ready' | 'preview-enter' | 'preview-ready'
+    | 'approval-enter' | 'approval-ready' | 'transport-import-enter' | 'transport-import-ready' | 'handshake-enter' | 'handshake-ready'
+    | 'tools-enter' | 'tools-ready' | 'write-enter' | 'write-ready' | 'read-enter' | 'read-ready' | 'close-enter' | 'close-ready') => {
+    try { if (diagnostics++ < 64) console.info(JSON.stringify({ filesystemTransferPhase: stage, elapsedMs: performance.now() - epoch })); }
+    catch { /* Diagnostic output cannot affect actual operations. */ }
+  };
+  const live = () => context.controller.signal.throwIfAborted();
+  // Same original 30-second case budget. Retire the actual owner request and
+  // managed transport; abort is not a body/child settlement witness.
+  const deadline = setTimeout(() => {
+    context.controller.abort(new Error('Original filesystem case deadline reached'));
+    try { context.retire?.(); } catch (error) { context.retirementFailures.push(error); }
+  }, 30_000);
+  context.body = (async () => {
+  live(); phase('source-enter');
+  const sourceRoot = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'flujo-transfer-source-'));
+  const sourceOwnership = captureOwnedFixtureDirectory(sourceRoot);
+  phase('source-ready');
   const client = new Client({ name: 'hot-clone-filesystem-smoke', version: '1.0.0' }, { capabilities: { roots: { listChanged: true } } });
   const sourceFiles = path.join(sourceRoot, 'userdata', 'files');
   const targetFiles = path.join(mockWorkspace, 'userdata', 'files');
@@ -416,33 +463,92 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
   loadConfigs.mockResolvedValue([config]);
   client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(targetFiles).href }] }));
   const owner = installBundledFixtureOwner();
+  let child: ChildProcessWithoutNullStreams | undefined;
+  let startEntered = false;
+  const observed = { exit: false, close: false, stdoutEnd: false, stderrEnd: false };
   connect.mockImplementationOnce(async () => {
     const rebuilt = updateConfig.mock.calls[0][1];
+    live(); phase('preview-enter');
     const { previewBundledHostConsent, approveBundledHostConsent } = await import('@/backend/services/security/bundledMcpConsent');
     const preview = await previewBundledHostConsent(rebuilt.name, { runtimeHome: 'host' });
-    const approved = await approveBundledHostConsent(owner.request(rebuilt.name), rebuilt.name, {
+    phase('preview-ready'); live(); phase('approval-enter');
+    const approved = await approveBundledHostConsent(new Request(owner.request(rebuilt.name), {
+      signal: context.controller.signal,
+    }), rebuilt.name, {
       runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
     });
+    phase('approval-ready'); live(); phase('transport-import-enter');
     // Exercise the managed production transport without changing its reviewed environment.
     const { createStdioTransport } = await import('@/backend/services/mcp/connection');
-    await client.connect(createStdioTransport(approved.config));
+    const { getManagedTrustedHost } = await import('@/backend/services/mcp/trustedHost');
+    phase('transport-import-ready'); live();
+    const transport = createStdioTransport(approved.config);
+    transport.stderr?.resume();
+    context.retire = () => { getManagedTrustedHost(transport)?.retire(); };
+    const start = transport.start.bind(transport);
+    transport.start = async () => {
+      live(); startEntered = true;
+      await start();
+      child = (transport as unknown as { _process?: ChildProcessWithoutNullStreams })._process;
+      if (!child) throw new Error('Actual filesystem child ownership unavailable');
+      observed.exit = child.exitCode !== null || child.signalCode !== null;
+      observed.stdoutEnd = child.stdout.readableEnded;
+      observed.stderrEnd = child.stderr.readableEnded;
+      child.once('exit', () => { observed.exit = true; });
+      child.once('close', () => { observed.close = true; });
+      child.stdout.once('end', () => { observed.stdoutEnd = true; });
+      child.stderr.once('end', () => { observed.stderrEnd = true; });
+    };
+    phase('handshake-enter');
+    await client.connect(transport);
+    phase('handshake-ready'); live();
     return { success: true };
   });
   try {
+    live(); phase('reinstall-enter');
     const result = await reinstallWorkspaceMcpServers(buildWorkspaceMcpTransferPlan([config], sourceRoot));
+    phase('reinstall-ready'); live();
     expect(result).toEqual({ ok: true, servers: [{ name: 'my-files', status: 'ready' }] });
+    phase('tools-enter');
     expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['read_file', 'write_file']));
+    phase('tools-ready'); live();
     const targetFile = path.join(targetFiles, 'worker-result.txt');
+    phase('write-enter');
     const write = await client.callTool({ name: 'write_file', arguments: { path: targetFile, content: 'cloud-worker-smoke' } });
+    phase('write-ready'); live();
     expect(write.isError).not.toBe(true);
+    phase('read-enter');
     const read = await client.callTool({ name: 'read_file', arguments: { path: targetFile } });
+    phase('read-ready'); live();
     expect(read.isError).not.toBe(true);
     expect(JSON.stringify(read)).toContain('cloud-worker-smoke');
     expect(await fs.readFile(targetFile, 'utf8')).toBe('cloud-worker-smoke');
     await expect(fs.access(path.join(sourceFiles, 'worker-result.txt'))).rejects.toThrow();
   } finally {
-    try { await client.close(); } finally {
-      try { owner.restore(); } finally { await fs.rm(sourceRoot, { recursive: true, force: true }); }
+    const failures: unknown[] = [];
+    phase('close-enter');
+    try { await client.close(); } catch (error) { failures.push(error); }
+    if (startEntered) {
+      const end = Date.now() + 5_000;
+      while (child && !(observed.exit && observed.close && observed.stdoutEnd && observed.stderrEnd) && Date.now() < end) {
+        await new Promise<void>(resolve => setTimeout(resolve, 25));
+      }
+      if (!child || !(observed.exit && observed.close && observed.stdoutEnd && observed.stderrEnd)) {
+        failures.push(new Error('Actual filesystem child exit/close/stdio drain unresolved'));
+      }
     }
+    failures.push(...context.retirementFailures);
+    try { owner.restoreEnvironment(); } catch (error) { failures.push(error); }
+    if (!failures.length) {
+      try { owner.removeDirectory(); } catch (error) { failures.push(error); }
+    }
+    if (!failures.length) {
+      try { removeOwnedFixtureDirectory(sourceOwnership, path.dirname(sourceRoot), 'flujo-transfer-source-'); } catch (error) { failures.push(error); }
+    }
+    context.cleanupCertain = failures.length === 0;
+    if (failures.length) throw Object.assign(new AggregateError(failures, 'Actual filesystem fixture cleanup uncertain; roots preserved'), { child, sourceRoot });
+    phase('close-ready');
   }
+  })().finally(() => { clearTimeout(deadline); context.settled = true; });
+  return context.body;
 }, 30_000);
