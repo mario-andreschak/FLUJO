@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
@@ -239,6 +240,8 @@ import {
   resolveConfigHeaders,
   shouldRecreateClient,
   safelyCloseClient,
+  McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired,
 } from "./connection";
 import { registerResourceNotificationHandlers } from "./resourceNotifications";
 import {
@@ -418,6 +421,7 @@ export class MCPService {
       }
 
       configs[index] = { ...stored, oauthScopes: undefined };
+      await assertBundledFlujoWorkloadEffectCurrent();
       const result = await saveConfig(new Map(configs.map((c) => [c.name, c])));
       if (result.success) {
         log.info(
@@ -429,6 +433,7 @@ export class MCPService {
         );
       }
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       // Cleanup is best-effort and must never turn a successful MCP connection into a failure.
       log.warn(
         `Failed to clean inferred OAuth scopes for ${serverName}: ${error instanceof Error ? error.message : String(error)}`,
@@ -548,6 +553,7 @@ export class MCPService {
       await client.subscribeResource({ uri });
       log.debug(`subscribeToResource: server=${serverName} uri=${uri}`);
     } catch (err) {
+      if (err instanceof BundledFlujoWorkloadError) throw err;
       // Non-fatal — subscription is best-effort. The server may not support it, or the
       // resource URI may have no subscription handler. Swallow silently so a missing
       // capability never breaks a flow run.
@@ -674,6 +680,7 @@ export class MCPService {
           this.scheduleConnectionRetry(serverName, currentConfig);
         }
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
         log.error(
           `Error during retry connection for server ${serverName}:`,
           error,
@@ -788,6 +795,7 @@ export class MCPService {
       );
       return serverConfigs;
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       log.warn("loadServerConfigs: Failed to load server configs:", error);
       return {
         success: false,
@@ -865,6 +873,14 @@ export class MCPService {
     const serverName =
       typeof configOrName === "string" ? configOrName : configOrName.name;
 
+    await assertBundledFlujoWorkloadEffectCurrent();
+    try { assertMcpRuntimeAuthorityRetired(serverName); }
+    catch (error) {
+      if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false,
+        error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
+      throw error;
+    }
+
     // Issue #413: de-duplication and teardown ordering now live in the
     // process-wide lifecycle coordinator rather than in this instance's map.
     // `inFlightConnects` was INSTANCE-local, so two Next.js module instances each
@@ -873,6 +889,8 @@ export class MCPService {
     // replacement connection can never be built while its predecessor's child is
     // still exiting.
     return beginConnect(serverName, async () => {
+      await assertBundledFlujoWorkloadEffectCurrent();
+      assertMcpRuntimeAuthorityRetired(serverName);
       // Keep the legacy instance-local map populated: existing tests and
       // status/diagnostic call sites still read it.
       const attempt = this.connectServerInternal(configOrName).finally(() => {
@@ -1002,6 +1020,8 @@ export class MCPService {
       // rebuild on every connect). A rotated bound-global still rebuilds, since the resolved
       // header material — and thus the key — changes.
       config = await resolveConfigHeaders(config);
+      await assertBundledFlujoWorkloadEffectCurrent();
+      assertMcpRuntimeAuthorityRetired(config.name);
 
       // Experimental v2-beta protocol (betaClient.ts). Resolved once per attempt so
       // shouldRecreateClient and the factories below agree; websocket configs always
@@ -1057,6 +1077,7 @@ export class MCPService {
           const closed = await safelyCloseClient(client, config.name, config);
           if (closed.isolation?.cleanupOutcome === 'unknown') throw new McpIsolationError('ISOLATION_UNAVAILABLE');
         } catch (closeError) {
+          if (closeError instanceof McpRuntimeAuthorityRetirementError || closeError instanceof BundledFlujoWorkloadError) throw closeError;
           if (closeError instanceof McpIsolationError) throw closeError;
           log.debug(
             `connectServer: error closing stale client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
@@ -1068,6 +1089,8 @@ export class MCPService {
       // Create a new client (v2-beta when the experimental toggle is on — the beta
       // client negotiates per server and falls back to the classic handshake, so
       // existing servers keep working either way).
+      await assertBundledFlujoWorkloadEffectCurrent();
+      assertMcpRuntimeAuthorityRetired(config.name);
       client = useBeta ? createNewBetaClient(config) : createNewClient(config);
       const transport = useBeta
         ? createBetaTransport(config, transportOptions)
@@ -1307,6 +1330,7 @@ export class MCPService {
       // Handshake. Both handlers above are inert until the transport is registered as
       // the CURRENT one below (their stale guard sees activeTransports unset), so a
       // failure during connect surfaces only through this call's catch.
+      await assertBundledFlujoWorkloadEffectCurrent();
       await client.connect(transport);
       if (config.transport === "stdio" && useBeta) {
         activateStdioOAuthMrtrController(transport);
@@ -1335,6 +1359,7 @@ export class MCPService {
             force: true,
           });
         } catch (authorizationError) {
+          if (authorizationError instanceof BundledFlujoWorkloadError) throw authorizationError;
           log.warn(
             `mcp-stdio-oauth readiness probe failed for ${config.name}:`,
             authorizationError,
@@ -1359,6 +1384,9 @@ export class MCPService {
       );
       return { success: true };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
+      if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false,
+        error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
       // A child may have registered its sidecar before the MCP handshake
       // failed. Never leave that browser route pointing at a dead/reused port.
       if (config.transport === 'stdio') {
@@ -1425,6 +1453,7 @@ export class MCPService {
                 }
               }
             } catch (updateError) {
+          if (updateError instanceof BundledFlujoWorkloadError) throw updateError;
               log.warn(
                 `Failed to update config for ${config.name} to enable OAuth:`,
                 updateError,
@@ -1567,6 +1596,8 @@ export class MCPService {
       // the live connection would (shares createTransport). Global bindings / encrypted
       // secrets are resolved here; plain values pass through unchanged.
       const connectConfig = await resolveConfigHeaders(toTest);
+      await assertBundledFlujoWorkloadEffectCurrent();
+      assertMcpRuntimeAuthorityRetired(connectConfig.name);
       diagnosticRedactor = createMcpDiagnosticRedactor(collectMcpDiagnosticSecrets(toTest, connectConfig));
       stderrRedactor = diagnosticRedactor.stream();
       // Same experimental v2-beta routing as the live connection, so Test Run
@@ -1644,6 +1675,7 @@ export class MCPService {
         message: "Performing MCP handshake...",
       });
       try {
+        await assertBundledFlujoWorkloadEffectCurrent();
         await Promise.race([client.connect(transport), timeoutPromise]);
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -1663,6 +1695,7 @@ export class MCPService {
         const result = await client.listTools();
         toolCount = Array.isArray(result?.tools) ? result.tools.length : 0;
       } catch (listError) {
+          if (listError instanceof BundledFlujoWorkloadError) throw listError;
         log.debug(
           `testConnection: connected to ${config.name} but listTools failed: ${diagnosticRedactor.redact(formatErrorChain(listError))}`,
         );
@@ -1675,6 +1708,7 @@ export class MCPService {
       emit({ type: "result", success: true, data: { toolCount } });
       return { success: true, data: { toolCount } };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       finishDiagnostics();
       log.warn(`testConnection: Failed to connect to ${config.name}:`, diagnosticRedactor.redact(formatErrorChain(error)));
 
@@ -1724,6 +1758,7 @@ export class MCPService {
             killEscalationMs: 2000,
           });
         } catch (closeError) {
+          if (closeError instanceof McpRuntimeAuthorityRetirementError || closeError instanceof BundledFlujoWorkloadError) throw closeError;
           log.debug(
             `testConnection: error closing test client for ${config.name}: ${diagnosticRedactor.redact(formatErrorChain(closeError))}`,
           );
@@ -1768,6 +1803,7 @@ export class MCPService {
       });
       log.debug(`notifyRootsChanged: sent roots/list_changed to ${serverName}`);
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       log.warn(`notifyRootsChanged: failed to notify ${serverName}:`, error);
     }
   }
@@ -1789,9 +1825,23 @@ export class MCPService {
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
 
+    try { assertMcpRuntimeAuthorityRetired(serverName); }
+    catch (error) {
+      if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false,
+        error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
+      throw error;
+    }
     const runtime = peekRuntime(serverName);
     if (runtime?.teardownPromise) {
-      return { success: true, shutdownReceipt: await runtime.teardownPromise };
+      const shutdownReceipt = await runtime.teardownPromise;
+      try { assertMcpRuntimeAuthorityRetired(serverName); }
+      catch (error) {
+        if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false, shutdownReceipt,
+          error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
+        throw error;
+      }
+      await assertBundledFlujoWorkloadEffectCurrent();
+      return { success: true, shutdownReceipt };
     }
     // A repeat request returns the same observation, without closing a new process.
     const client = this.getClient(serverName);
@@ -1807,24 +1857,36 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
+    let retirementFailure: McpRuntimeAuthorityRetirementError | undefined;
     try {
       // Issue #413: run the close through the ONE idempotent, awaitable teardown
       // so overlapping shouts of "close it" (transport error + disable + shutdown
       // arriving together) fold onto a single close instead of racing each other
       // into a double-close that orphans grandchildren.
+      await assertBundledFlujoWorkloadEffectCurrent();
       const shutdownReceipt = await beginTeardown(serverName, "disconnect", async () => {
+        await assertBundledFlujoWorkloadEffectCurrent();
         // Resolve after the coordinator has awaited any pending connect. Publish
         // the shared teardown before asynchronous config reads or deregistration.
         const closingClient = this.getClient(serverName);
         this.deregisterClient(serverName);
         if (!closingClient) return;
         const config = await this.getServerConfig(serverName);
-        return safelyCloseClient(closingClient, serverName, config || undefined);
+        await assertBundledFlujoWorkloadEffectCurrent();
+        try { return await safelyCloseClient(closingClient, serverName, config || undefined); }
+        catch (error) {
+          if (error instanceof McpRuntimeAuthorityRetirementError) retirementFailure = error;
+          throw error;
+        }
       });
 
+      if (retirementFailure) return { success: false, shutdownReceipt,
+        error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
+      await assertBundledFlujoWorkloadEffectCurrent();
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true, shutdownReceipt };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       log.warn(
         `disconnectServer: Failed to disconnect server ${serverName}:`,
         error,
@@ -1877,6 +1939,7 @@ export class MCPService {
         if (result.success) closed.push(serverName);
         else failed.push(serverName);
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
         log.warn(
           `disconnectAll: teardown of ${serverName} threw: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -1957,6 +2020,8 @@ export class MCPService {
    * transport rather than short-circuiting on the stale one still sitting in the map.
    */
   async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
+    await assertBundledFlujoWorkloadEffectCurrent();
+    assertMcpRuntimeAuthorityRetired(serverName);
     log.info(
       `forceReconnect: Forcing fresh connection for server ${serverName}`,
     );
@@ -1970,6 +2035,7 @@ export class MCPService {
       try {
         await safelyCloseClient(existing, serverName, config || undefined);
       } catch (closeError) {
+          if (closeError instanceof McpRuntimeAuthorityRetirementError || closeError instanceof BundledFlujoWorkloadError) throw closeError;
         log.debug(
           `forceReconnect: error closing stale client for ${serverName}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
         );
@@ -2128,6 +2194,7 @@ export class MCPService {
         assertExecutionServerConfig(config);
       }
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_authorization_unavailable',
         statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-authorization' };
     }
@@ -2201,6 +2268,7 @@ export class MCPService {
             };
           }
         } catch (authorizationError) {
+          if (authorizationError instanceof BundledFlujoWorkloadError) throw authorizationError;
           const detail =
             authorizationError instanceof Error
               ? authorizationError.message
@@ -2239,9 +2307,11 @@ export class MCPService {
         : args;
       try { if (client) await assertMcpIsolationDispatch(client, serverName, await this.getServerConfig(serverName)); }
       catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
         return { success: false, error: error instanceof McpIsolationError ? error.code : 'ISOLATION_UNAVAILABLE',
           errorType: 'mcp-isolation', statusCode: error instanceof McpIsolationError && error.code !== 'ISOLATION_UNAVAILABLE' ? 403 : 503 };
       }
+      await assertBundledFlujoWorkloadEffectCurrent();
       const result = await callToolFunction(
         client,
         serverName,
@@ -2265,6 +2335,7 @@ export class MCPService {
               trustedTicketConversationId,
             );
           } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
             // The ticket already exists; keep the tool result truthful while
             // surfacing a storage failure for operators instead of trusting an
             // unverified payload at the HTTP boundary.
@@ -2576,6 +2647,7 @@ export class MCPService {
         capability: prepared.data.capability,
       };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       if (error instanceof McpSkillsUnsupportedError) {
         return {
           resultType: "complete",
@@ -2622,6 +2694,7 @@ export class MCPService {
     try {
       return { success: true, data: await getMcpSkill(prepared.data.client, true, uri) };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : "Failed to get MCP Skill.",
@@ -2644,6 +2717,7 @@ export class MCPService {
         data: await readMcpSkillDirectory(prepared.data.client, true, uri, cursor),
       };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : "Failed to read MCP Skill directory.",
@@ -2673,6 +2747,7 @@ export class MCPService {
         ),
       };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : "Failed to verify MCP Skill resource.",
@@ -2737,6 +2812,7 @@ export class MCPService {
         ),
       };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : "Failed to load MCP Skill.",
@@ -2938,6 +3014,7 @@ export class MCPService {
         `ensureManagedServerRootDir: ensured ${resolved} for ${config.name}`,
       );
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       log.warn(
         `ensureManagedServerRootDir: could not create root dir for ${config.name}:`,
         error,
@@ -3076,6 +3153,7 @@ export class MCPService {
     }
 
     // Save all configs to storage
+    await assertBundledFlujoWorkloadEffectCurrent();
     const saveResult = await saveConfig(
       new Map(configs.map((c) => [c.name, c])),
     );
@@ -3114,6 +3192,7 @@ export class MCPService {
           );
         }
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
         // The config rename is already durable at this point. Do not report the
         // entire rename as failed (which would make a retry address the vanished old
         // name), but retain a high-signal log if flow persistence was unavailable.
@@ -3132,7 +3211,10 @@ export class MCPService {
       // process or surface stale status under the old name. Then drive the connection
       // under the NEW name.
       if (this.clients.has(serverName)) {
-        await this.disconnectServer(serverName);
+        const disconnected = await this.disconnectServer(serverName);
+        if (!disconnected.success && disconnected.errorType === 'mcp-authority-retirement') {
+          throw new McpRuntimeAuthorityRetirementError([], 'MCP authority retirement remains uncertain.');
+        }
       } else {
         this.clearRetryTimer(serverName);
         this.connectionRetryAttempts.delete(serverName);
@@ -3189,8 +3271,12 @@ export class MCPService {
         `handleConnectionStateChange: Disconnecting disabled server ${serverName}`,
       );
       try {
-        await this.disconnectServer(serverName);
+        const disconnected = await this.disconnectServer(serverName);
+        if (!disconnected.success && disconnected.errorType === 'mcp-authority-retirement') {
+          throw new McpRuntimeAuthorityRetirementError([], 'MCP authority retirement remains uncertain.');
+        }
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
         log.warn(
           `handleConnectionStateChange: Failed to disconnect server ${serverName} during update:`,
           error,
@@ -3255,6 +3341,7 @@ export class MCPService {
         }
       }
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       log.error(
         "clearRetryTimersForDisabledServers: Error clearing retry timers:",
         error,
@@ -3273,7 +3360,8 @@ export class MCPService {
       log.info(
         `deleteServerConfig: Disconnecting server ${serverName} before deletion`,
       );
-      await this.disconnectServer(serverName);
+      const disconnected = await this.disconnectServer(serverName);
+      if (!disconnected.success && disconnected.errorType === 'mcp-authority-retirement') return disconnected;
     }
 
     // Load all configs from storage
@@ -3302,6 +3390,7 @@ export class MCPService {
     log.debug(
       `deleteServerConfig: Saving updated configs after deleting ${serverName}`,
     );
+    await assertBundledFlujoWorkloadEffectCurrent();
     const saveResult = await saveConfig(
       new Map(configs.map((c) => [c.name, c])),
     );
@@ -3424,6 +3513,7 @@ export class MCPService {
             };
           }
         } catch (authorizationError) {
+          if (authorizationError instanceof BundledFlujoWorkloadError) throw authorizationError;
           const detail =
             authorizationError instanceof Error
               ? authorizationError.message
@@ -3641,6 +3731,7 @@ export class MCPService {
                   : status.status === "connected",
             };
           } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
             log.warn(
               `getAvailableClients: Error getting status for ${config.name}:`,
               error,
@@ -3655,6 +3746,7 @@ export class MCPService {
         (s: { name: string; status: string }) => `${s.name} (${s.status})`,
       );
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       log.error("getAvailableClients: Error getting available clients:", error);
       return [];
     }

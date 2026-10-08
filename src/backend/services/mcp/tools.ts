@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createLogger } from "@/utils/logger";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -158,6 +159,7 @@ export async function listServerTools(
     log.verbose(`Processed tools for ${audience} audience:`, visibleTools);
     return { tools: visibleTools };
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     log.warn(`Failed to list tools for server ${serverName}:`, error);
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
@@ -330,6 +332,7 @@ export async function callTool(
         : {}),
     };
     await assertMcpIsolationDispatch(client, serverName);
+    await assertBundledFlujoWorkloadEffectCurrent();
     const response = isBetaClient(client)
       ? await (
           client.callTool as unknown as (
@@ -412,6 +415,7 @@ export async function callTool(
       data: stampMcpAppOwnerScope(response, ownerScope),
     };
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     if (error instanceof TrustedHostMcpError) return { success: false, error: error.code,
       errorType: 'mcp-host-consent', statusCode: 403 };
     if (error instanceof McpIsolationError) return { success: false, error: error.code,
