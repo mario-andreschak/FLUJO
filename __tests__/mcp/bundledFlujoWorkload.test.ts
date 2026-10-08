@@ -85,10 +85,10 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
   const frame = kind === 'object' ? { url: 'http://127.0.0.1:4200/api/mcp/flujo/tools', authorization: 'lookalike' }
     : new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { headers: { authorization: 'Bearer unrelated-owner' } });
   await carrier.run(frame, async () => {
-    const module = jest.requireActual<typeof import('@/backend/services/security/bundledFlujoWorkload')>('@/backend/services/security/bundledFlujoWorkload');
-    expect(() => module.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow();
-    await expect(module.assertBundledFlujoWorkloadEffectCurrent()).rejects.toThrow();
-    await expect(module.assertBundledFlujoWorkloadAction('listTools', 'GET', '/api/mcp/flujo/tools')).rejects.toThrow();
+    const workloadModule = jest.requireActual<typeof import('@/backend/services/security/bundledFlujoWorkload')>('@/backend/services/security/bundledFlujoWorkload');
+    expect(() => workloadModule.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow();
+    await expect(workloadModule.assertBundledFlujoWorkloadEffectCurrent()).rejects.toThrow();
+    await expect(workloadModule.assertBundledFlujoWorkloadAction('listTools', 'GET', '/api/mcp/flujo/tools')).rejects.toThrow();
   });
 });
 
