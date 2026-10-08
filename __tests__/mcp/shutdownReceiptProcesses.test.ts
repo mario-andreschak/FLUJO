@@ -96,7 +96,9 @@ it('closes its actual owned process after an awaited config read fails and denie
   const reading = new Promise<void>(resolve => { entered = resolve; });
   let rejectRead!: (error: Error) => void;
   const pendingRead = new Promise<never>((_resolve, reject) => { rejectRead = reject; });
-  jest.spyOn(service, 'getServerConfig').mockImplementationOnce(async () => {
+  // Equipment delays the private config-read boundary; lifecycle and close stay real.
+  const configReader = service as unknown as { getServerConfig(name: string): Promise<never> };
+  jest.spyOn(configReader, 'getServerConfig').mockImplementationOnce(async () => {
     entered();
     return pendingRead;
   });
