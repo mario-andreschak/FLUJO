@@ -15,6 +15,20 @@ export function isArchiveSchema(value: object): value is z.ZodType {
   return !types.isProxy(value) && value instanceof z.ZodType;
 }
 
+/** Intrinsic Object prototypes can come from another VM/structuredClone realm. */
+export function isArchivePlainObject(value: object): boolean {
+  if (types.isProxy(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype === null) return true;
+  if (types.isProxy(prototype) || Object.getPrototypeOf(prototype) !== null) return false;
+  const constructor = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  if (!constructor || !('value' in constructor) || typeof constructor.value !== 'function'
+      || types.isProxy(constructor.value)) return false;
+  const constructorPrototype = Object.getOwnPropertyDescriptor(constructor.value, 'prototype');
+  return constructorPrototype?.value === prototype
+    && Function.prototype.toString.call(constructor.value) === Function.prototype.toString.call(Object);
+}
+
 /** Proposed allocation reservations, not measured V8 heap or an OOM guarantee. */
 export const MODEL_TURN_ARCHIVE_WRITE_LIMITS = Object.freeze({
   processBytes: 512 * 1024 * 1024,
@@ -88,8 +102,7 @@ export function estimateArchivePayload(value: unknown, schemaFound?: () => void,
     if (ArrayBuffer.isView(item)) { add(item.buffer.byteLength); seen.delete(item); return; }
     if (item instanceof ArrayBuffer) { add(item.byteLength); seen.delete(item); return; }
     // Map/Set and arbitrary private graphs are not an admitted archive format.
-    const prototype = Object.getPrototypeOf(item);
-    if (prototype !== Object.prototype && prototype !== null && prototype !== Array.prototype) {
+    if (!Array.isArray(item) && !isArchivePlainObject(item)) {
       if (!archiveProjection) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
       seen.delete(item); return; // Sanitizer omits private graphs without traversal.
     }
