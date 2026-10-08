@@ -121,21 +121,21 @@ describe('middleware honors FLUJO_EXTRA_LOCAL_HOSTS end-to-end', () => {
     return new NextRequest(`http://${host}/api/cwd`, { method: 'GET', headers });
   };
 
-  it('403s the internal tenant hostname when env is unset', () => {
+  it('403s the internal tenant hostname when env is unset', async () => {
     delete process.env[ENV];
-    const res = middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
+    const res = await middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
     expect(res.status).toBe(403);
   });
 
-  it('passes the internal tenant hostname when the suffix is opted in', () => {
+  it('passes the internal tenant hostname when the suffix is opted in', async () => {
     process.env[ENV] = '.vm.brain-tenants-dev.internal';
-    const res = middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
+    const res = await middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
     expect(res.status).toBe(200);
   });
 
-  it('still 403s an attacker Origin against the opted-in host', () => {
+  it('still 403s an attacker Origin against the opted-in host', async () => {
     process.env[ENV] = '.vm.brain-tenants-dev.internal';
-    const res = middleware(
+    const res = await middleware(
       makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200', 'http://evil.com')
     );
     expect(res.status).toBe(403);

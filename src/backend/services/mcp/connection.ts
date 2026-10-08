@@ -134,7 +134,7 @@ export interface TransportWithConfigKey {
   __flujoInnerTransport?: unknown;
 }
 
-/** Durable authority uncertainty must survive another service/module instance. */
+/** Process-wide authority uncertainty survives another service/module instance. */
 export class McpRuntimeAuthorityRetirementError extends AggregateError {}
 interface AuthorityRetirementQuarantine {
   owner: unknown;

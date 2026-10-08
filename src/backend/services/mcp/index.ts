@@ -1009,6 +1009,8 @@ export class MCPService {
     // reports "connecting" (spinner + auto-poll on the MCP page) instead of an error
     // while the attempt is running. Cleared in the finally below.
     this.connectingServers.add(config.name);
+    let attemptClient: Client | undefined;
+    let attemptTransport: Transport | undefined;
 
     try {
       // Clear any previous stderr logs for this server
@@ -1095,6 +1097,8 @@ export class MCPService {
       const transport = useBeta
         ? createBetaTransport(config, transportOptions)
         : createTransport(config, transportOptions);
+      attemptClient = client;
+      attemptTransport = transport;
       if (config.transport === "stdio") {
         registerExternalAuthorizationClient(
           client,
@@ -1384,7 +1388,26 @@ export class MCPService {
       );
       return { success: true };
     } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError) throw error;
+      if (error instanceof BundledFlujoWorkloadError) {
+        // Once this attempt owns a transport, denial cannot cancel its cleanup.
+        const cleanupErrors: unknown[] = [];
+        if (attemptClient && attemptTransport) {
+          this.deregisterClient(config.name);
+          try {
+            if (attemptClient.transport === attemptTransport) {
+              await safelyCloseClient(attemptClient, config.name, config);
+            } else {
+              await attemptTransport.close();
+            }
+          } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+          const retire = (attemptTransport as Transport & { __flujoRetireRuntimeAuthority?: () => void }).__flujoRetireRuntimeAuthority;
+          try { retire?.(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+        }
+        if (cleanupErrors.length) {
+          throw new AggregateError([error, ...cleanupErrors], 'MCP denied startup cleanup failed');
+        }
+        throw error;
+      }
       if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false,
         error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
       // A child may have registered its sidecar before the MCP handshake
@@ -1858,6 +1881,7 @@ export class MCPService {
     }
 
     let retirementFailure: McpRuntimeAuthorityRetirementError | undefined;
+    let teardownFailure: unknown;
     try {
       // Issue #413: run the close through the ONE idempotent, awaitable teardown
       // so overlapping shouts of "close it" (transport error + disable + shutdown
@@ -1865,16 +1889,20 @@ export class MCPService {
       // into a double-close that orphans grandchildren.
       await assertBundledFlujoWorkloadEffectCurrent();
       const shutdownReceipt = await beginTeardown(serverName, "disconnect", async () => {
-        await assertBundledFlujoWorkloadEffectCurrent();
+        try { await assertBundledFlujoWorkloadEffectCurrent(); }
+        catch (error) { teardownFailure = error; throw error; }
         // Resolve after the coordinator has awaited any pending connect. Publish
         // the shared teardown before asynchronous config reads or deregistration.
         const closingClient = this.getClient(serverName);
         this.deregisterClient(serverName);
         if (!closingClient) return;
-        const config = await this.getServerConfig(serverName);
-        await assertBundledFlujoWorkloadEffectCurrent();
-        try { return await safelyCloseClient(closingClient, serverName, config || undefined); }
+        let config: MCPServerConfig | undefined;
+        try { config = (await this.getServerConfig(serverName)) || undefined; }
+        catch (error) { teardownFailure = error; }
+        // Cleanup owns the client now and must finish even after request revocation.
+        try { return await safelyCloseClient(closingClient, serverName, config); }
         catch (error) {
+          teardownFailure = error;
           if (error instanceof McpRuntimeAuthorityRetirementError) retirementFailure = error;
           throw error;
         }
@@ -1882,6 +1910,7 @@ export class MCPService {
 
       if (retirementFailure) return { success: false, shutdownReceipt,
         error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
+      if (teardownFailure) throw teardownFailure;
       await assertBundledFlujoWorkloadEffectCurrent();
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true, shutdownReceipt };
