@@ -25,6 +25,12 @@ export interface PackageRunnerPreparation {
 export interface PreparedPackageRunnerIntent { readonly digest: string }
 type Evidence = Awaited<ReturnType<typeof collect>>;
 const intents = new WeakMap<object, { request: string; preparation: PackageRunnerPreparation; evidence: Evidence }>();
+export function packageRunnerIntentSubject(intent: PreparedPackageRunnerIntent, config: MCPStdioConfig) {
+  const state = intents.get(intent);
+  if (!state || state.request !== requestIdentity(config)) throw new Error('Unknown or changed package runner intent');
+  return Object.freeze({ workspace: getCurrentWorkspace(), serverName: config.name, revision: state.preparation.revision,
+    digest: intent.digest, resolver: 'modified-npm' as const });
+}
 function requestIdentity(config: MCPStdioConfig) {
   return JSON.stringify({ workspace: getCurrentWorkspace(), config: { name: config.name, command: config.command,
     args: config.args, cwd: config.cwd, rootPath: config.rootPath, roots: config.roots,
