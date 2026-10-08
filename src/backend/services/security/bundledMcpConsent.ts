@@ -4,7 +4,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { loadServerConfigs, saveConfig } from '../mcp/config';
-import { shippedDescriptorForConfig, shippedMcpAppRoot } from '../mcp/shippedServers';
+import { shippedDescriptorForConfig, shippedMcpAppRoot, resolvePlaywrightBrowsersPath } from '../mcp/shippedServers';
 import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackages';
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
@@ -107,6 +107,18 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   if (!['node', process.execPath].includes(stored.command) || originalArgs.length < 1
       || path.resolve(revision.sourceRoot, originalArgs[0]) !== entryPoint) throw new Error('The stored command differs from the fixed installed entry.');
   const environment = Object.fromEntries(trustedHostEnvironment(stored));
+  // Normalize durable workspace outputs before they enter the reviewed digest.
+  // The fixed trusted launch must not mutate an already-approved environment.
+  if (descriptor.packageDirectory === 'browser') {
+    if (!environment.PLAYWRIGHT_BROWSERS_PATH?.trim()) {
+      const browsersPath = resolvePlaywrightBrowsersPath(process.env);
+      if (browsersPath) environment.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+    }
+    const root = getWorkspaceDataDir();
+    environment.FLUJO_BROWSER_PROFILE_DIR = path.join(root, 'browser-profile', 'trusted');
+    environment.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(root, 'screenshots', 'browser');
+    environment.FLUJO_BROWSER_RECORD_DIR = path.join(root, 'recordings', 'browser');
+  }
   if (Object.keys(environment).some(name => ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'PERSONA_GOAL_ENDURANCE_FIXTURE_TOKEN', 'FLUJO_WORKER_MODE'].includes(name.toUpperCase()))) throw new Error('Persisted runtime credentials are forbidden.');
   if (descriptor.packageDirectory === 'bash' && options.runtimeHome === 'host') {
     for (const key of HOST_BINDINGS) {

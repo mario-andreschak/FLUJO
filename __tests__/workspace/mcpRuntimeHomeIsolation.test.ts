@@ -15,6 +15,9 @@ import {
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { fingerprintTrustedHostSource, trustedHostEnvironment } from '@/backend/services/security/trustedHostMcp';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
+import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { saveConfig } from '@/backend/services/mcp/config';
+import { previewBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
@@ -66,6 +69,28 @@ const config: MCPStdioConfig = {
 const resolveIsolatedLaunch = (server: MCPStdioConfig) =>
   resolveStdioLaunch(server, { isolateRuntimeHome: true });
 
+// Copy the actual built package and use the production consent proposal. The
+// bootstrap fixture supplies only private owner/grant files, never the launch
+// command, package payload, source digest, or environment normalization.
+async function resolveApprovedBundled(server: MCPStdioConfig, runtimeHome: 'host' | 'isolated') {
+  const fixture = installTrustedHostProfile();
+  try {
+    process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
+    process.env.FLUJO_DATA_DIR = dataRoot;
+    const descriptor = SHIPPED_MCP_SERVERS.find(item => item.defaultName === server.name)!;
+    await ensureShippedWorkspacePackages(getWorkspaceDataDir(), process.cwd(), [descriptor.packageDirectory]);
+    // These positives explicitly review an enabled launch, including records
+    // whose shipped UI default is disabled until the operator opts in.
+    const saved = await saveConfig(new Map([[server.name, { ...server, disabled: false }]]));
+    if (!saved.success) throw new Error(saved.error);
+    const proposal = await previewBundledHostConsent(server.name, { runtimeHome });
+    fixture.approve(proposal.config);
+    return resolveStdioLaunch(proposal.config, { isolateRuntimeHome: runtimeHome === 'isolated' });
+  } finally {
+    fixture.restore();
+  }
+}
+
 // These existing Node positives use a fixed real source and a private grant.
 // This helper does not authorize the distinct dynamic package-runner contract.
 function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
@@ -103,7 +128,7 @@ describe('stdio MCP runtime homes', () => {
       .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('keeps bundled Bash attached to the live host account and removes stale config redirects', () => {
+  it('keeps bundled Bash attached to the live host account and removes stale config redirects', async () => {
     const bash = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'bash')!;
     const tracked = ['HOME', 'USERPROFILE', 'APPDATA', 'GH_CONFIG_DIR', 'FLUJO_BASH_HOST_ENV_TEST'] as const;
     const previous = new Map(tracked.map(key => [key, process.env[key]]));
@@ -127,9 +152,12 @@ describe('stdio MCP runtime homes', () => {
         USERPROFILE: path.join(dataRoot, 'stale-private-profile'),
         APPDATA: path.join(dataRoot, 'stale-private-appdata'),
         GH_CONFIG_DIR: path.join(dataRoot, 'stale-gh-config'),
+        // This nonstandard binding is explicitly part of the reviewed fixture
+        // proposal; it does not broaden ambient host inheritance.
+        FLUJO_BASH_HOST_ENV_TEST: process.env.FLUJO_BASH_HOST_ENV_TEST!,
       };
 
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped));
+      const launch = await runWithWorkspace('runtime-a', () => resolveApprovedBundled(shipped, 'host'));
 
       expect(launch.env.HOME).toBe(hostHome);
       expect(launch.env.USERPROFILE).toBe(hostHome);
@@ -243,7 +271,7 @@ describe('stdio MCP runtime homes', () => {
     );
   });
 
-  it('overrides stale shipped-browser output paths at the final child boundary', () => {
+  it('overrides stale shipped-browser output paths at the final child boundary', async () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -260,14 +288,14 @@ describe('stdio MCP runtime homes', () => {
       FLUJO_BROWSER_RECORD_DIR: 'C:\\shared-recordings',
     };
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
+    const launch = await runWithWorkspace('runtime-b', () => resolveApprovedBundled(shipped, 'isolated'));
     const root = getWorkspaceDataDir('runtime-b');
     expect(launch.env.FLUJO_BROWSER_PROFILE_DIR).toBe(path.join(root, 'browser-profile', 'trusted'));
     expect(launch.env.FLUJO_BROWSER_SCREENSHOT_DIR).toBe(path.join(root, 'screenshots', 'browser'));
     expect(launch.env.FLUJO_BROWSER_RECORD_DIR).toBe(path.join(root, 'recordings', 'browser'));
   });
 
-  it('reattaches the host browser-binary cache to an existing workspace record', () => {
+  it('reattaches the host browser-binary cache to an existing workspace record', async () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -275,7 +303,7 @@ describe('stdio MCP runtime homes', () => {
     delete (shipped.env as Record<string, unknown>).PLAYWRIGHT_BROWSERS_PATH;
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'shared-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
+    const launch = await runWithWorkspace('runtime-b', () => resolveApprovedBundled(shipped, 'isolated'));
 
     expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
       .toBe(path.join(dataRoot, 'shared-browser-binaries'));
@@ -283,7 +311,7 @@ describe('stdio MCP runtime homes', () => {
       .not.toMatch(/^\.\.(?:[\\/]|$)/);
   });
 
-  it('preserves an explicit workspace browser-binary path over the host default', () => {
+  it('preserves an explicit workspace browser-binary path over the host default', async () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -291,7 +319,7 @@ describe('stdio MCP runtime homes', () => {
     });
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'host-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
+    const launch = await runWithWorkspace('runtime-b', () => resolveApprovedBundled(shipped, 'isolated'));
 
     expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
       .toBe(path.join(dataRoot, 'configured-browser-binaries'));
