@@ -53,6 +53,15 @@ jest.mock('@/backend/services/scheduler/triggers/schedule', () => ({
 
 test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'retired-during-state-guard'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
   mockRunFlow.mockClear();
+  const startedAt = performance.now();
+  const timed = async <T,>(stage: string, operation: () => Promise<T>): Promise<T> => {
+    console.info('[workload-scheduler]', mode, stage, 'start', Math.round(performance.now() - startedAt));
+    try { return await operation(); } finally {
+      console.info('[workload-scheduler]', mode, stage, 'settled', Math.round(performance.now() - startedAt));
+    }
+  };
+  const cancellation = new AbortController();
+  const deadline = setTimeout(() => cancellation.abort(new Error('Workload scheduler fixture cancellation deadline.')), 55_000);
   mockTimerCompleted = undefined;
   mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
   mockTimerObserved = new Promise(resolve => { mockTimerEntered = resolve; });
@@ -81,25 +90,26 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
     write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
     fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
-    await ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']);
+    await timed('provision', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
     const proposed = createShippedServerConfig(descriptor);
     expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
     owner = installBundledFixtureOwner();
-    const preview = await previewBundledHostConsent(proposed.name, { runtimeHome: 'host' });
-    const approved = await approveBundledHostConsent(owner.request(proposed.name), proposed.name, {
+    const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
+    const approvalRequest = new Request(owner.request(proposed.name), { signal: cancellation.signal });
+    const approved = await timed('approve', () => approveBundledHostConsent(approvalRequest, proposed.name, {
       runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
-    });
+    }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
     const token = environment.FLUJO_MCP_WORKLOAD_TOKEN;
-    const request = () => new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { headers: {
+    const request = () => new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { signal: cancellation.signal, headers: {
       host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}`,
     } });
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
     attachTrustedHost(transport, approved.config, undefined, capsule);
-    await transport.start();
+    await timed('start', () => transport!.start());
     expect(start).toHaveBeenCalledTimes(1);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('authorized');
     scheduler = new SchedulerService();
@@ -108,15 +118,15 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     const admitted = await resolveBundledFlujoWorkloadRequest(admittedRequest);
     expect(admitted.kind).toBe('authorized');
     if (admitted.kind !== 'authorized') throw new Error('Genuine capability not admitted');
-    await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+    await timed('create', () => withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       expect(() => new SchedulerService()).toThrow();
       const created = await admittedScheduler.create({ name: 'fixture', enabled: true, flowId: 'fixture-flow',
         prompt: '', trigger: { type: 'schedule', cron: '0 0 1 1 *' } });
       expect(created.error).toBeUndefined();
       expect(created.execution).toBeDefined();
       executionId = created.execution!.id;
-    });
-    await mockTimerObserved;
+    }));
+    await Promise.race([mockTimerObserved, mockTimerCompleted!.then(() => { throw new Error('Schedule completed before timer observation.'); })]);
     if (mode === 'disabled') await scheduler.update(executionId, { enabled: false });
     if (mode === 'state-publication-disabled') {
       const previous = await loadExecutionState(executionId);
@@ -140,7 +150,7 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
       // Observe both outcomes immediately; a refused write never escapes as an unhandled rejection.
       const completedPublication = publication.then(() => undefined, () => undefined);
       try {
-        await observedOpen;
+        await Promise.race([observedOpen, publication.then(() => { throw new Error('State publication completed before open observation.'); })]);
         await admittedScheduler.update(executionId, { enabled: false });
       } finally {
         releaseOpen();
@@ -170,7 +180,7 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
         }));
       const completedPublication = publication.then(() => undefined, () => undefined);
       try {
-        await observedGuard;
+        await Promise.race([observedGuard, publication.then(() => { throw new Error('State publication completed before guard observation.'); })]);
         await transport.close();
         transport = undefined;
       } finally {
@@ -196,6 +206,8 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     primaryError = error;
     throw error;
   } finally {
+    clearTimeout(deadline);
+    cancellation.abort(new Error('Workload scheduler fixture cleanup.'));
     const cleanupErrors: unknown[] = [];
     const attempt = async (cleanup: () => void | Promise<unknown>) => {
       try { await cleanup(); } catch (error) { cleanupErrors.push(error); }
@@ -224,5 +236,6 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     });
     if (cleanupErrors.length) throw new AggregateError(failed ? [primaryError, ...cleanupErrors] : cleanupErrors,
       'Workload scheduler fixture cleanup failed');
+    console.info('[workload-scheduler]', mode, 'cleanup', 'settled', Math.round(performance.now() - startedAt));
   }
 }, 60_000);
