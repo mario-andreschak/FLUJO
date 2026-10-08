@@ -187,6 +187,25 @@ async function command(message) {
   const snapshot = await restore.restoreConfiguredWorkerSnapshot();
   if (!snapshot) throw new Error('Snapshot restore returned no worker');
   await restore.unlockWorkerSnapshot(snapshot);
+  // Bundled MCP checkouts are deliberately omitted from snapshots. Materialize
+  // the actual local distribution before asking the owner to review its files.
+  const workspaceRoot = source('utils/workspace.ts').getWorkspaceDataDir();
+  await source('backend/services/mcp/shippedWorkspacePackages.ts').ensureShippedWorkspacePackages(
+    workspaceRoot, undefined, ['bash']);
+  const shipped = source('backend/services/mcp/shippedServers.ts');
+  const configs = await source('backend/services/mcp/config.ts').loadServerConfigs();
+  const bash = configs.find(config => config.name === 'bash');
+  const descriptor = bash && shipped.shippedDescriptorForConfig(bash);
+  if (!descriptor || descriptor.packageDirectory !== 'bash' || bash.transport !== 'stdio' || bash.disabled) {
+    throw new Error('Restored snapshot does not contain the expected enabled bundled Bash');
+  }
+  const effectRoot = path.join(workspaceRoot, 'userdata', 'worker-bootstrap');
+  const runtime = { ...shipped.createShippedServerConfig(descriptor, {}), name: 'bash', disabled: false,
+    roots: [effectRoot], env: { FLUJO_BASH_ROOTS: effectRoot, FLUJO_FS_ROOTS: effectRoot } };
+  if (!(await source('backend/services/mcp/config.ts').saveConfig(new Map(
+    configs.map(config => [config.name, config.name === 'bash' ? runtime : config])))).success) {
+    throw new Error('Owned restored Bash equipment configuration failed');
+  }
   owner = require(path.join(root, '__tests__/mcp/fixtures/bundledFixtureOwner.ts')).installBundledFixtureOwner();
   const consent = source('backend/services/security/bundledMcpConsent.ts');
   const reviewed = await consent.previewBundledHostConsent('bash', { runtimeHome: 'host' });
