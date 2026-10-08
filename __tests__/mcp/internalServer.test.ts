@@ -266,6 +266,8 @@ describe('normal stdio delivery', () => {
     const env = shippedServerEnv(descriptor, {
       FLUJO_DATA_DIR: '/data',
       FLUJO_FS_ROOTS: '/workspace',
+      NODE_OPTIONS: '--use-system-ca',
+      NODE_EXTRA_CA_CERTS: '/owned/ca.pem',
       SECRET_THAT_MUST_NOT_LEAK: 'secret',
     });
     expect(env).toMatchObject({
@@ -273,8 +275,15 @@ describe('normal stdio delivery', () => {
       FLUJO_DATA_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace'),
       FLUJO_WORKSPACE: 'default-workspace',
       FLUJO_FS_ROOTS: '/workspace',
+      NODE_EXTRA_CA_CERTS: '/owned/ca.pem',
     });
     expect(env).not.toHaveProperty('SECRET_THAT_MUST_NOT_LEAK');
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+  });
+
+  it.each(SHIPPED_MCP_SERVERS)('keeps application loader options out of the $defaultName proposal', descriptor => {
+    expect(shippedServerEnv(descriptor, { NODE_OPTIONS: '--require /host-only/loader.cjs' }))
+      .not.toHaveProperty('NODE_OPTIONS');
   });
 
   it('uses the parent marker instead of nesting a workspace-scoped child root again', () => {

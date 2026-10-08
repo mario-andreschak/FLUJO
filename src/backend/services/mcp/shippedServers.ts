@@ -121,7 +121,9 @@ export function shippedServerEnv(
     'FLUJO_BASE_URL',
     'FLUJO_EXTRA_CA_CERTS',
     'NODE_EXTRA_CA_CERTS',
-    'NODE_OPTIONS',
+    // Launcher options belong to the application process. Host consent rejects
+    // loader options, including the launcher's automatic --use-system-ca flag.
+    // Explicit CA file settings below remain part of the reviewable proposal.
     'NODE_TLS_REJECT_UNAUTHORIZED',
     'SSL_CERT_FILE',
   ]);
