@@ -552,8 +552,9 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
 export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: AbortSignal) {
   const captured = structuredClone(config);
   const before = await trustedHostMcpApprovalAsync(captured, signal);
-  let phase: 'inspection' | 'executable-read' | 'source-read' | 'provenance-read' | 'provenance-result'
-    | 'signal' | 'asset-digest' | 'namespace' | 'graph-digest' | 'links' | 'directories' | 'executable-digest' | 'source-digest' = 'inspection';
+  type VerificationPhase = 'inspection' | 'executable-read' | 'source-read' | 'provenance-read' | 'provenance-result'
+    | 'signal' | 'asset-digest' | 'namespace' | 'graph-digest' | 'links' | 'directories' | 'executable-digest' | 'source-digest';
+  let phase: VerificationPhase = 'inspection';
   try {
     // Every independent inspection obtains fresh evidence and retains its own
     // witnesses. Drain all three before refusing or rereading final authority.
@@ -571,7 +572,7 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
     if (byteChecks[0].status === 'rejected') { phase = 'executable-read'; throw byteChecks[0].reason; }
     if (byteChecks[1].status === 'rejected') { phase = 'source-read'; throw byteChecks[1].reason; }
     if (byteChecks[2].status === 'rejected') { phase = 'provenance-read'; throw byteChecks[2].reason; }
-    const check = (allowed: boolean, at: typeof phase) => { phase = at; if (!allowed) throw new Error(); };
+    const check = (allowed: boolean, at: VerificationPhase) => { phase = at; if (!allowed) throw new Error(); };
     const executable = byteChecks[0].value;
     const source = byteChecks[1].value;
     if (before.policy.bundledInstallation) {
