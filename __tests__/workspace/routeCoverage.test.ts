@@ -5,6 +5,7 @@ const APP_ROOT = path.join(process.cwd(), 'src', 'app');
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'] as const;
 const INSTALLATION_WIDE = new Set([
   '/api/cloud/instance',
+  '/api/mcp/servers/[name]/host-consent',
   '/api/network-exposure',
   '/api/runtime-environment',
   '/api/telemetry/daily-active',
@@ -13,6 +14,11 @@ const INSTALLATION_WIDE = new Set([
   '/api/workspaces',
 ]);
 const MARKER = 'FLUJO_INSTALLATION_WIDE_ROUTE:';
+// The remote wrapper resolves owner authority before the ordinary workspace
+// wrapper can select storage. Keep this exception exact and audit its delegate.
+const AUTHENTICATED_AVATAR = new Set([
+  '/api/avatar/remote/[voiceAction]', '/api/avatar/remote/availability',
+]);
 
 function collectRouteFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -37,6 +43,8 @@ describe('workspace route coverage', () => {
 
   it('classifies every application route and keeps the installation-wide allowlist exact', () => {
     const marked: string[] = [];
+    const ownerSessionRoutes: string[] = [];
+    const ownerBootstrapRoutes: string[] = [];
     for (const file of routes) {
       const source = fs.readFileSync(file, 'utf8');
       const pathname = pathnameOf(file);
@@ -46,10 +54,55 @@ describe('workspace route coverage', () => {
       if (source.includes(MARKER)) {
         marked.push(pathname);
         expect(INSTALLATION_WIDE.has(pathname)).toBe(true);
+        if (pathname === '/api/mcp/servers/[name]/host-consent') {
+          expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
+          expect(source).toContain('operatorWorkspace(');
+          expect(source).toContain('resolveOwnerRequest(request, scopes, { requireBearer: true })');
+          expect(source).toContain("const scopes = ['control:admin', 'mcp:access', 'secrets:read'] as const");
+          expect(source).toContain('authorizeExecutionTransport(request)');
+          expect(source).toContain('runWithWorkspace(workspace,');
+        }
         continue;
       }
 
       expect(INSTALLATION_WIDE.has(pathname)).toBe(false);
+      if (pathname === '/api/owner/bootstrap') {
+        ownerBootstrapRoutes.push(pathname);
+        expect(methods.sort()).toEqual(['GET', 'POST']);
+        expect(source).toContain("from '@/backend/services/security/ownerBootstrap'");
+        expect(source.match(/\bisOwnerBootstrapRequest\(request\)/g)).toHaveLength(2);
+        expect(source).toContain('readBoundedBody(request, 256)');
+        expect(source).toContain('input.confirmOwnerEnrollment !== true');
+        expect(source).toContain('pairFirstOwner(request, true)');
+        const admission = fs.readFileSync(path.join(process.cwd(), 'src/backend/services/security/ownerBootstrap.ts'), 'utf8');
+        expect(admission).toContain('ownerBrowserRequestAllowed(request, true)');
+        expect(admission).toContain('authenticateOwnerBearer(request, configured.grant, now)');
+        expect(admission).toContain('isOwnerBootstrapAvailable(Math.max(now, Date.now()))');
+        continue;
+      }
+      if (pathname === '/api/owner/session') {
+        ownerSessionRoutes.push(pathname);
+        expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
+        expect(source).toContain("from '@/backend/services/security/ownerAccess'");
+        expect(source).toContain("from '@/backend/services/security/ownerSession'");
+        expect(source).toContain('resolveOwnerRequest(request,');
+        expect(source).toContain('requireBearer: true');
+        expect(source).toContain('admitted.authorization.recheck()');
+        expect(source).toContain('createOwnerSession(request,');
+        expect(source).toContain('revokeOwnerSession(request)');
+        expect(source).toContain('ownerBrowserRequestAllowed(request, true)');
+        continue;
+      }
+      if (AUTHENTICATED_AVATAR.has(pathname)) {
+        expect(source).toContain("from '@/backend/services/avatar/remoteVoice'");
+        for (const method of methods) {
+          expect(source).toMatch(new RegExp(`withRemoteAvatarRoute\\(\\s*${method}_handler\\s*\\)`));
+        }
+        const wrapper = fs.readFileSync(path.join(process.cwd(), 'src/backend/services/avatar/remoteVoice.ts'), 'utf8');
+        expect(wrapper).toContain("from '@/app/api/_workspace'");
+        expect(wrapper).toContain('withWorkspaceRoute(');
+        continue;
+      }
       expect(source).toContain("from '@/app/api/_workspace'");
       for (const method of methods) {
         expect(source).toMatch(
@@ -59,5 +112,7 @@ describe('workspace route coverage', () => {
     }
 
     expect(marked.sort()).toEqual([...INSTALLATION_WIDE].sort());
+    expect(ownerSessionRoutes).toEqual(['/api/owner/session']);
+    expect(ownerBootstrapRoutes).toEqual(['/api/owner/bootstrap']);
   });
 });

@@ -661,6 +661,24 @@ async function withSyntheticEvidence(assertion) {
 }
 
 test('independently rejects incomplete or mismatched endurance evidence', async t => {
+  await t.test('v2 terminal outcomes require a separately bound source hash', async () => withSyntheticEvidence(
+    async ({ root, report, keys, options }) => {
+      const filename = path.join(root, 'runtime-model-turns.json');
+      const turns = JSON.parse(await readFile(filename, 'utf8'));
+      for (const turn of turns.records) turn.archiveVersion = 2;
+      await writeFile(filename, JSON.stringify(turns) + '\n');
+      await writeReport(root, report, keys);
+      await assert.rejects(validatePersonaGoalEndurance(options), /Runtime-owned model dispatch archives are invalid/);
+      for (const turn of turns.records) turn.sourceOutcomeSha256 = 'a'.repeat(64);
+      await writeFile(filename, JSON.stringify(turns) + '\n');
+      await writeReport(root, report, keys);
+      await validatePersonaGoalEndurance(options);
+      turns.records[0].archiveVersion = 3;
+      await writeFile(filename, JSON.stringify(turns) + '\n');
+      await writeReport(root, report, keys);
+      await assert.rejects(validatePersonaGoalEndurance(options), /Runtime-owned model dispatch archives are invalid/);
+    },
+  ));
   for (const [name, mutate] of [
     ['generic test Role version', value => { value.setup.roleVersion.record.name = 'Test general Role v1'; }],
     ['custom test Core', value => { value.setup.roleVersion.record.coreFlowTemplate = { id: 'test_core' }; }],

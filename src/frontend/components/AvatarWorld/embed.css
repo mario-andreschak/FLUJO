@@ -1,0 +1,5 @@
+.avatar-world-shell,
+.avatar-panel-shell { --app-bar-height: 0px; }
+.avatar-world-shell .app-main,
+.avatar-panel-shell .app-main { padding-top: 0; margin-top: 0; }
+.avatar-panel-shell .app-main { height: 100vh; }

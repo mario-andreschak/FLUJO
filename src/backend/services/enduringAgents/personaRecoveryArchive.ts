@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { z } from 'zod';
 import type { Flow } from '@/shared/types/flow';
+import { parseModelTurnOutcomeRecord } from '@/shared/types/modelTurn';
 import {
   EnduringAgentIdSchema, FlowSnapshotSchema, PersonaAttributionSchema, PersonaInstructionContextSchema,
 } from '@/shared/types/enduringAgent';
@@ -30,9 +31,9 @@ const sharded = new Set<string>(PERSONA_SHARDED_COLLECTIONS);
 const countsSchema = z.record(z.string(), z.number().int().nonnegative());
 const CountSchema = z.number().int().nonnegative();
 const ModelArchiveSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   entry: z.object({
-    archiveVersion: z.literal(1), id: EnduringAgentIdSchema, conversationId: EnduringAgentIdSchema,
+    archiveVersion: z.union([z.literal(1), z.literal(2)]), id: EnduringAgentIdSchema, conversationId: EnduringAgentIdSchema,
     runId: z.string().optional(), node: z.object({ nodeId: z.string().min(1), nodeName: z.string().optional() }).strict(),
     modelId: z.string().min(1).max(256), modelName: z.string(), adapter: z.string().min(1), operation: z.string().min(1),
     timestamp: CountSchema, outcome: z.enum(['running', 'completed', 'error', 'cancelled']), attempt: z.number().int().positive(),
@@ -308,8 +309,23 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
         if (!third || !/^[a-f0-9]{64}$/.test(third) || digest(bytes) !== third) throw new PersonaRecoveryError('Recovery model media digest mismatch.');
         continue;
       }
-      if (third || !second.endsWith('.json.gz')) throw new PersonaRecoveryError('Invalid recovery model-turn path.');
-      const dispatchId = id(second.slice(0, -8));
+      if (third) throw new PersonaRecoveryError('Invalid recovery model-turn path.');
+      if (second.endsWith('.outcome.json')) {
+        const dispatchId = id(second.slice(0, -13));
+        try {
+          parseModelTurnOutcomeRecord(parsePersonaRecoveryJson(bytes, name), first, dispatchId);
+        } catch {
+          throw new PersonaRecoveryError('Invalid recovery model-turn outcome record.');
+        }
+        requirePath(`model-turns/${first}/${dispatchId}.v2.json.gz`);
+        continue;
+      }
+      if (!second.endsWith('.json.gz')) throw new PersonaRecoveryError('Invalid recovery model-turn path.');
+      const version = second.endsWith('.v2.json.gz') ? 2 : 1;
+      const dispatchId = id(second.slice(0, version === 2 ? -11 : -8));
+      if (version === 1 && byPath.has(`model-turns/${first}/${dispatchId}.v2.json.gz`)) {
+        throw new PersonaRecoveryError('Duplicate recovery model dispatch.');
+      }
       let expanded: Buffer;
       try { expanded = gunzipSync(bytes, { maxOutputLength: PERSONA_RECOVERY_ZIP_LIMITS.fileBytes }); }
       catch { throw new PersonaRecoveryError('Recovery model archive is invalid or exceeds its expanded byte limit.'); }
@@ -317,7 +333,8 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
       if (expandedModelBytes + totalBytes > PERSONA_RECOVERY_ZIP_LIMITS.totalBytes) throw new PersonaRecoveryError('Recovery model archives exceed expanded byte limits.');
       const value = ModelArchiveSchema.parse(parsePersonaRecoveryJson(expanded, name));
       const { entry } = value;
-      if (entry.id !== dispatchId || entry.conversationId !== first || entry.mediaCount !== value.media.length
+      if (value.version !== version || entry.archiveVersion !== version || (version === 2 && entry.outcome !== 'running')
+        || entry.id !== dispatchId || entry.conversationId !== first || entry.mediaCount !== value.media.length
         || entry.canonicalMessageCount !== value.canonicalMessages.length || entry.wireMessageCount !== value.genericWire.length
         || new Set(value.media.map((media) => media.id)).size !== value.media.length) {
         throw new PersonaRecoveryError('Invalid recovery model-turn snapshot.');

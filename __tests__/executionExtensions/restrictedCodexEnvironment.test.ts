@@ -57,6 +57,38 @@ describe('restricted Codex credential/runtime isolation', () => {
       verifiedCliSha256: createHash('sha256').update(contents).digest('hex') };
   }
 
+  test('rejects an aliased db parent before reading credentials or creating a private home', async () => {
+    const external = path.join(directory, 'external');
+    await fs.mkdir(external);
+    await fs.writeFile(path.join(external, 'sentinel'), 'unchanged');
+    await fs.symlink(external, path.join(directory, 'db'), 'junction');
+    await expect(prepareRestrictedCodexRuntimeEnvironment()).rejects.toThrow('unsafe');
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+    expect(await fs.readdir(external)).toEqual(['sentinel']);
+  });
+
+  test('catalog descriptor drift fails before CLI verification or credential access', async () => {
+    const profile = await executableProfile();
+    const open = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (path.basename(String(args[0])) === path.basename(profile.verifiedModelCatalogPath)) {
+        const stat = handle.stat.bind(handle);
+        let reads = 0;
+        jest.spyOn(handle, 'stat').mockImplementation(async (...statArgs: Parameters<typeof handle.stat>) => {
+          const value = await stat(...statArgs);
+          if (++reads === 2) value.ino = typeof value.ino === 'bigint' ? BigInt(0) : 0;
+          return value;
+        });
+      }
+      return handle;
+    });
+    await expect(assertRestrictedCodexProfile(profile, 'gpt-6-sol')).rejects.toThrow('model catalog is invalid');
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockReadStream).not.toHaveBeenCalled();
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  });
+
   // Keep --version pending until every concurrent caller has completed its own
   // two lstat reads. Tests exercise real streaming hashes and filesystem drift.
   function pendingVerification(callers: number, executable: string) {

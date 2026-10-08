@@ -1,3 +1,4 @@
+import { BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { FlowSnapshotSchema } from '@/shared/types/enduringAgent';
@@ -141,6 +142,7 @@ async function ensureFlowsMigrated(): Promise<void> {
       try {
         await migrateArrayFileToCollection<Flow>(StorageKey.FLOWS, FLOWS_COLLECTION, (f) => f.id);
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
         log.error('Flow storage migration failed', error);
         if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = undefined;
         else migrations.delete(workspace);
@@ -214,6 +216,7 @@ export class FlowService { // Add export keyword here
       log.info('Loaded flows from storage', { count: flows.length });
       return this.refreshOwnedFlows(flows);
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.error('Failed to load flows', error);
       return [];
     }
@@ -268,6 +271,7 @@ export class FlowService { // Add export keyword here
         await saveCollectionItem(FLOWS_COLLECTION, canonical.id, canonical);
         result.migrated += 1;
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
         result.failed += 1;
         result.failedFlowIds.push(flowId);
         log.warn('Flow Behavior-rule migration skipped one record', { flowId });
@@ -305,6 +309,7 @@ export class FlowService { // Add export keyword here
         const stored = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
         flow = stored ? canonicalizeFlow(stored) : null;
       } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
         // Unsafe id or an unreadable file: treat as not found rather than throw.
         log.debug(`getFlow: could not load flow ${flowId}`, error);
         flow = null;
@@ -324,6 +329,7 @@ export class FlowService { // Add export keyword here
       log.debug(`Flow ${flowId} ${flow ? 'found' : 'not found'}`);
       return flow;
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.error(`Failed to get flow ${flowId}`, error);
       return null;
     }
@@ -343,6 +349,7 @@ export class FlowService { // Add export keyword here
       if (!flow || flow.id !== flowId || !await this.ownerExists(flow)) return null;
       return createFlowExecutionSnapshot(getCurrentWorkspace(), flow);
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.debug(`readFlowExecutionSnapshot: could not capture flow ${flowId}`, error);
       return null;
     }
@@ -359,6 +366,7 @@ export class FlowService { // Add export keyword here
       FlowExecutor.clearFlowCache(flowId);
       log.debug(`Invalidated execution flow cache`, { flowId: flowId ?? 'all' });
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.warn('Failed to invalidate execution flow cache', error);
     }
   }
@@ -366,15 +374,19 @@ export class FlowService { // Add export keyword here
   /**
    * Save a flow (create new or update existing)
    */
-  async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
+  async saveFlow(flow: Flow, options: { expectedUpdatedAt?: number } = {}): Promise<FlowServiceResponse> {
     try {
-      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow)));
+      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow, options)));
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       return { success: false, error: error instanceof Error ? error.message : 'Failed to save flow' };
     }
   }
 
-  private async saveFlowWithinMutation(flow: Flow): Promise<FlowServiceResponse> {
+  private async saveFlowWithinMutation(
+    flow: Flow,
+    options: { expectedUpdatedAt?: number } = {},
+  ): Promise<FlowServiceResponse> {
     try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
       const nameError = validateFlowDisplayName(flow.name);
@@ -398,6 +410,9 @@ export class FlowService { // Add export keyword here
       // the definition being replaced (skipping no-op saves). Best-effort —
       // a save must never fail because history could not be written.
       const previous = await readStoredFlow(flow.id);
+      if (options.expectedUpdatedAt !== undefined && previous?.updatedAt !== options.expectedUpdatedAt) {
+        throw new Error('Flow changed since inspection.');
+      }
       if (previous && previous.personaOwnership?.personaId !== flow.personaOwnership?.personaId) {
         throw new Error('An existing Flow cannot change or remove its Persona owner. Create a distinct copy instead.');
       }
@@ -422,7 +437,9 @@ export class FlowService { // Add export keyword here
       // to the caller/cache.
       const now = Date.now();
       flow.createdAt = previous?.createdAt ?? flow.createdAt ?? now;
-      flow.updatedAt = now;
+      flow.updatedAt = options.expectedUpdatedAt === undefined
+        ? now
+        : Math.max(now, (previous?.updatedAt ?? 0) + 1);
 
       // Write only this flow's file (no whole-collection rewrite).
       await saveCollectionItem(FLOWS_COLLECTION, flow.id, flow);
@@ -447,6 +464,7 @@ export class FlowService { // Add export keyword here
       log.info(`Flow ${flow.id} saved successfully`);
       return { success: true };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.error('Failed to save flow', error);
       return { 
         success: false, 
@@ -660,6 +678,7 @@ export class FlowService { // Add export keyword here
     try {
       return await withWorkspaceMutation(() => withFlowMutationLock(() => this.deleteFlowWithinMutation(flowId)));
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete flow' };
     }
   }
@@ -705,6 +724,7 @@ export class FlowService { // Add export keyword here
       log.info(`Flow ${flowId} deleted successfully`);
       return { success: true };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.error(`Failed to delete flow: ${flowId}`, error);
       return {
         success: false,
@@ -903,6 +923,7 @@ export class FlowService { // Add export keyword here
       const flows = await this.loadFlows();
       return { success: true, flows };
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       log.warn('listFlows: Failed to list flows:', error);
       return {
         success: false,

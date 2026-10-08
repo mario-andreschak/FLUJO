@@ -1,6 +1,10 @@
 jest.mock("@/backend/utils/resolveGlobalVars", () => ({
   resolveGlobalVars: jest.fn(async (value: unknown) => value),
 }));
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerConfigs: jest.fn(async () => [{ name: 'revoked-server', transport: 'streamable',
+    serverUrl: 'https://authorization.example.test/mcp', disabled: false }]),
+}));
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";

@@ -7,7 +7,7 @@ import {
   ToggleButtonGroup, ToggleButton, Alert,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import type { ModelInputSnapshot, WirePreviewWarning } from '@/backend/execution/flow/types';
+import type { ModelInputSnapshot, WirePreviewWarning } from '@/shared/types/execution/modelInput';
 import type { ChatMessage } from './index';
 import ChatMessages from './ChatMessages';
 import { AnnotatedHistory, ContextCompactionPanel, wireSummary } from './DebuggerModelInput';

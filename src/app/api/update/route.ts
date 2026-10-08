@@ -1,7 +1,7 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import simpleGit, { type SimpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit } from 'simple-git';
 import path from 'path';
 import fs from 'fs/promises';
 import { execSync, ExecSyncOptionsWithStringEncoding, spawn } from 'child_process';
@@ -267,13 +267,19 @@ export async function POST(request: NextRequest) {
       // process that survives this server being killed. `start ""` provides an
       // explicit (empty) window title so a quoted script path with spaces is
       // never mistaken for the title.
+      // Checkout paths are PowerShell single-quoted literals inside an encoded
+      // command. Only base64 reaches cmd/start, so legal path characters such
+      // as &, %, !, parentheses and apostrophes cannot become shell syntax.
+      const quotePowerShell = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      const updateCommand = `& ${quotePowerShell(updateScript)} -Dir ${quotePowerShell(cwd)}`;
+      const encodedUpdateCommand = Buffer.from(updateCommand, 'utf16le').toString('base64');
       const child = spawn(
         'cmd.exe',
         [
           '/c', 'start', '""',
           'powershell.exe',
           '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
-          '-File', updateScript, '-Dir', cwd,
+          '-EncodedCommand', encodedUpdateCommand,
         ],
         { detached: true, stdio: 'ignore', windowsHide: true }
       );

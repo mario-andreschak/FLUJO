@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { listRunResources } from '@/backend/services/runResources';
+import { isRunResourceIndexPressureError } from '@/backend/services/runResources/indexCache';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -38,6 +39,10 @@ async function GET_handler(
     const resources = await listRunResources(conversationId);
     return NextResponse.json({ resources });
   } catch (error) {
+    if (isRunResourceIndexPressureError(error)) {
+      return NextResponse.json({ error: error.message, code: error.code, retryable: true },
+        { status: 503, headers: { 'Retry-After': '1' } });
+    }
     // An unsafe id is a client error, not a server one.
     if (error instanceof Error && error.message.startsWith('Unsafe run-resource')) {
       return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 });

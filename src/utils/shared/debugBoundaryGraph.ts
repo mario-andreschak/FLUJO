@@ -1,4 +1,4 @@
-import type { DebugBoundary } from '@/backend/execution/flow/types';
+import type { DebuggerBoundaryView } from '@/shared/types/execution/debuggerState';
 
 export interface DebugBoundaryGraphEdge {
   id: string;
@@ -14,7 +14,7 @@ export interface DebugBoundaryGraphEdge {
  * the active Process node and each of those nodes.
  */
 export function debugBoundaryEdgeIds(
-  boundary: DebugBoundary | undefined,
+  boundary: DebuggerBoundaryView | undefined,
   edges: readonly DebugBoundaryGraphEdge[],
 ): Set<string> {
   if (!boundary) return new Set();

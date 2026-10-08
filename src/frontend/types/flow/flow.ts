@@ -1,14 +1,7 @@
-import { Node, Edge } from '@xyflow/react';
+import type { Edge } from '@xyflow/react';
+import type { FlowNode, NodeType } from '@/shared/types/flow/flow';
 
-export interface FlowNode extends Node {
-  data: {
-    label: string;
-    type: string;
-    description?: string;
-    properties?: Record<string, unknown>;
-  };
-  selected?: boolean;
-}
+export type { FlowNode, NodeType } from '@/shared/types/flow/flow';
 
 export interface Flow {
   id: string;
@@ -37,8 +30,6 @@ export interface Flow {
   edges: Edge[];
   input?: NodeType;
 }
-
-export type NodeType = 'start' | 'process' | 'finish' | 'mcp' | 'subflow' | 'resource' | 'signal' | 'trigger' | 'static';
 
 export interface FlowContextType {
   flows: Flow[];

@@ -33,7 +33,13 @@ import {
   PERSONA_AUTONOMY_LEVELS,
   PERSONA_INTERRUPTION_POLICIES,
 } from '../enduringAgent/enduringAgent';
-import { collectSecretPlaceholdersDeep } from './secrets';
+import { collectSecretPlaceholdersDeep, listSecretPlaceholders } from './secrets';
+
+const PUBLIC_IDENTITY_MESSAGE = 'Package identities and public labels cannot contain secret placeholders';
+const publicPackageString = z.string().refine(
+  value => listSecretPlaceholders(value).length === 0,
+  PUBLIC_IDENTITY_MESSAGE,
+);
 
 /** Deep-scan a value for any string beginning with the `encrypted:` prefix. */
 export function hasEncryptedBlob(value: unknown): boolean {
@@ -71,9 +77,9 @@ export const packageApiKeyRefSchema = z.discriminatedUnion('kind', [
 
 export const packagedModelSchema = z
   .object({
-    id: z.string().min(1),
-    name: z.string().min(1),
-    displayName: z.string().optional(),
+    id: publicPackageString.min(1),
+    name: publicPackageString.min(1),
+    displayName: publicPackageString.optional(),
     description: z.string().optional(),
     baseUrl: z.string().optional(),
     provider: z.string().optional(),
@@ -111,7 +117,7 @@ export const mcpInstallOriginSchema = z
     installCommand: z.string().min(1).max(4096).optional(),
     buildCommand: z.string().min(1).max(4096).optional(),
     url: z.string().optional(),
-    name: z.string().optional(),
+    name: publicPackageString.optional(),
   })
   .strict()
   .superRefine((origin, ctx) => {
@@ -131,7 +137,7 @@ export const mcpInstallOriginSchema = z
 
 export const envDeclarationSchema = z
   .object({
-    name: z.string().min(1),
+    name: publicPackageString.min(1),
     isSecret: z.boolean(),
     secretRef: z.string().optional(),
     globalVar: z.string().optional(),
@@ -169,7 +175,7 @@ export const mcpArgTemplateSchema = z
 
 export const packagedMcpServerSchema = z
   .object({
-    name: z.string().min(1),
+    name: publicPackageString.min(1),
     transport: z.enum(['stdio', 'sse', 'streamable', 'websocket']),
     disabled: z.boolean().optional(),
     folder: z.string().optional(),
@@ -184,17 +190,48 @@ export const packagedMcpServerSchema = z
 export const packagedFlowSchema = z.object({
   flow: z
     .object({
-      id: z.string().min(1),
-      name: z.string().min(1),
+      id: publicPackageString.min(1),
+      name: publicPackageString.min(1),
       nodes: z.array(z.any()),
       edges: z.array(z.any()),
     })
-    .catchall(z.unknown()),
+    .catchall(z.unknown())
+    .superRefine((flow, ctx) => {
+      const record = (value: unknown): Record<string, unknown> | undefined =>
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? value as Record<string, unknown> : undefined;
+      const check = (value: unknown, path: Array<string | number>) => {
+        if (listSecretPlaceholders(value).length > 0) {
+          ctx.addIssue({ code: 'custom', path, message: PUBLIC_IDENTITY_MESSAGE });
+        }
+      };
+      flow.nodes.forEach((value, index) => {
+        const node = record(value);
+        check(node?.id, ['nodes', index, 'id']);
+        const data = record(node?.data);
+        check(data?.label, ['nodes', index, 'data', 'label']);
+        const props = record(data?.properties);
+        for (const field of ['flowId', 'subflowId', 'subFlowId', 'boundModel', 'modelId', 'model',
+          'boundServer', 'mcpServer', 'serverName', 'server', 'modelName']) {
+          check(props?.[field], ['nodes', index, 'data', 'properties', field]);
+        }
+        if (Array.isArray(props?.parallelSubflowIds)) {
+          props.parallelSubflowIds.forEach((id, item) =>
+            check(id, ['nodes', index, 'data', 'properties', 'parallelSubflowIds', item]));
+        }
+      });
+      flow.edges.forEach((value, index) => {
+        const edge = record(value);
+        for (const field of ['id', 'source', 'target', 'sourceHandle', 'targetHandle']) {
+          check(edge?.[field], ['edges', index, field]);
+        }
+      });
+    }),
   references: z
     .object({
-      flowIds: z.array(z.string()).optional(),
-      modelIds: z.array(z.string()).optional(),
-      mcpServerNames: z.array(z.string()).optional(),
+      flowIds: z.array(publicPackageString).optional(),
+      modelIds: z.array(publicPackageString).optional(),
+      mcpServerNames: z.array(publicPackageString).optional(),
     })
     .optional(),
 });
@@ -219,11 +256,11 @@ export const packagedPersonaTemplateSchema = z.object({
 
 export const packagedPlannedExecutionSchema = z
   .object({
-    id: z.string().min(1),
-    name: z.string().min(1),
+    id: publicPackageString.min(1),
+    name: publicPackageString.min(1),
     enabled: z.boolean(),
     /** Package-internal flow reference, remapped at install. */
-    flowId: z.string().min(1),
+    flowId: publicPackageString.min(1),
     prompt: z.string(),
     trigger: z.any(),
   })
@@ -252,8 +289,8 @@ export const packagedPlannedExecutionSchema = z
 export const flujoPackageSchema = z
   .object({
     schemaVersion: z.literal(PACKAGE_SCHEMA_VERSION),
-    id: z.string().min(1),
-    name: z.string().min(1),
+    id: publicPackageString.min(1),
+    name: publicPackageString.min(1),
     description: z.string().optional(),
     version: z.string().regex(SEMVER_REGEX, 'version must be valid semver'),
     author: z.string().optional(),

@@ -12,6 +12,7 @@
  * `--candidate-dir <directory>` installs the exact validated release tarballs.
  */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -24,6 +25,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { validateCandidate } from './npm-release.mjs';
+import { cleanupSmokeSandbox, observeSmokeChild, stopSmokeChild, withSmokeCleanup, withTimeout } from './mcp-smoke-cleanup.mjs';
+import { approveSmokeServer, createSmokeOperator } from './smoke-bundled-operator.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -61,19 +64,32 @@ function run(command, args, options = {}) {
   });
 }
 
-async function waitFor(operation, accept, description, limit = timeoutMs) {
+export async function createPrivateSmokeEnv(sandbox, dataDir, extra = {}) {
+  const secretFile = path.join(sandbox, 'operator-secret');
+  await fs.writeFile(secretFile, randomBytes(48).toString('base64url'), { flag: 'wx', mode: 0o600 });
+  const env = cleanEnv({ ...extra, FLUJO_DATA_DIR: dataDir,
+    FLUJO_ENCRYPTION_SECRET_FILE: secretFile, FLUJO_EXPOSURE_MODE: 'localhost' });
+  delete env.FLUJO_OWNER_AUTH_FILE;
+  delete env.FLUJO_PARENT_DATA_DIR;
+  return env;
+}
+
+export async function waitFor(operation, accept, description, limit = timeoutMs) {
   const deadline = Date.now() + limit;
   let lastError;
+  let lastStatus;
   while (Date.now() < deadline) {
     try {
       const value = await operation();
       if (accept(value)) return value;
+      lastError = undefined;
+      if (Number.isInteger(value) && value >= 100 && value <= 599) lastStatus = value;
     } catch (error) {
       lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for ${description}.${lastError instanceof Error ? ` Last error: ${lastError.message}` : ''}`);
+  throw new Error(`Timed out waiting for ${description}.${lastStatus === undefined ? '' : ` Last HTTP status: ${lastStatus}.`}${lastError instanceof Error ? ` Last error: ${lastError.message}` : ''}`);
 }
 
 async function reservePort() {
@@ -93,34 +109,6 @@ function waitForExit(child) {
     return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
   }
   return new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
-}
-
-async function withTimeout(promise, limit, description) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${description}.`)), limit);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function stopChild(child, description) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = waitForExit(child);
-  child.kill('SIGTERM');
-  try {
-    await withTimeout(exited, 10_000, `${description} to honor SIGTERM`);
-  } catch (error) {
-    child.kill('SIGKILL');
-    await withTimeout(exited, 5_000, `${description} to be killed`);
-    throw error;
-  }
 }
 
 async function connectStdio(entrypoint, env = {}, roots = []) {
@@ -170,36 +158,40 @@ async function withStdio(entrypoint, env, roots, operation) {
   }
 }
 
-async function connectProxy(baseUrl, serverName) {
+async function connectProxy(baseUrl, serverName, ownerToken) {
   const client = new Client(
     { name: 'flujo-packed-proxy-smoke', version: '1.0.0' },
     { capabilities: {} },
   );
-  await client.connect(new StreamableHTTPClientTransport(new URL(`/mcp-proxy/${serverName}`, baseUrl)));
+  if (ownerToken) await approveSmokeServer(baseUrl, serverName, ownerToken, timeoutMs);
+  await client.connect(new StreamableHTTPClientTransport(new URL(`/mcp-proxy/${serverName}`, baseUrl), {
+    requestInit: { headers: ownerToken ? { authorization: `Bearer ${ownerToken}` } : {} },
+  }));
   return client;
 }
 
-async function updateBuiltIn(baseUrl, serverName, patch) {
+async function updateBuiltIn(baseUrl, serverName, patch, ownerToken) {
   const response = await fetch(new URL(`/api/mcp/servers/${serverName}`, baseUrl), {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(ownerToken ? { authorization: `Bearer ${ownerToken}` } : {}) },
     body: JSON.stringify(patch),
   });
   if (!response.ok) throw new Error(`Could not update ${serverName}: ${response.status} ${await response.text()}`);
 }
 
-export async function probeProxy(baseUrl, expectedRoot) {
-  const readiness = await fetch(new URL('/api/cwd', baseUrl));
+export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
+  const headers = ownerToken ? { authorization: `Bearer ${ownerToken}` } : {};
+  const readiness = await fetch(new URL('/api/cwd', baseUrl), { headers });
   if (!readiness.ok) throw new Error(`FLUJO readiness returned ${readiness.status}.`);
   // Next.js can accept requests before the fire-and-forget backend startup has
   // provisioned and connected the shipped MCP servers. Join that same memoized
   // initialization explicitly so the proxy probe tests artifacts, not timing.
-  const initialized = await fetch(new URL('/api/init', baseUrl));
+  const initialized = await fetch(new URL('/api/init', baseUrl), { headers });
   if (!initialized.ok) {
     throw new Error(`FLUJO initialization returned ${initialized.status}: ${await initialized.text()}`);
   }
 
-  const filesystem = await connectProxy(baseUrl, 'filesystem');
+  const filesystem = await connectProxy(baseUrl, 'filesystem', ownerToken);
   try {
     const listed = await filesystem.listTools();
     const names = listed.tools.map((tool) => tool.name);
@@ -207,6 +199,13 @@ export async function probeProxy(baseUrl, expectedRoot) {
       throw new Error(`Installed filesystem proxy returned unexpected tools: ${names.join(', ')}`);
     }
     const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} });
+    if (roots.isError === true) {
+      const refusalCodes = ['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'MCP_RUNTIME_AUTHORITY_RETIRED'];
+      const code = refusalCodes.find((candidate) => Array.isArray(roots.content) && roots.content.some((item) =>
+        item.type === 'text' && typeof item.text === 'string' && item.text.slice(0, 8192).includes(candidate)
+      )) ?? 'UNCLASSIFIED_TOOL_ERROR';
+      throw new Error(`Filesystem proxy get_allowed_directories returned an error result (${code}).`);
+    }
     const directories = roots.structuredContent?.directories;
     const resolvedExpectedRoot = expectedRoot ? path.resolve(expectedRoot) : undefined;
     if (
@@ -224,7 +223,7 @@ export async function probeProxy(baseUrl, expectedRoot) {
     await filesystem.close();
   }
 
-  const bash = await connectProxy(baseUrl, 'bash');
+  const bash = await connectProxy(baseUrl, 'bash', ownerToken);
   try {
     const names = (await bash.listTools()).tools.map((tool) => tool.name);
     if (!names.includes('run') || !names.includes('list_sessions')) {
@@ -234,7 +233,7 @@ export async function probeProxy(baseUrl, expectedRoot) {
     await bash.close();
   }
 
-  const flujo = await connectProxy(baseUrl, 'flujo');
+  const flujo = await connectProxy(baseUrl, 'flujo', ownerToken);
   try {
     const names = (await flujo.listTools()).tools.map((tool) => tool.name);
     if (!names.includes('list_flows') || !names.includes('list_mcp_servers')) {
@@ -250,10 +249,11 @@ export async function probeProxy(baseUrl, expectedRoot) {
     await flujo.close();
   }
 
-  await updateBuiltIn(baseUrl, 'bash', { disabled: true });
+  await updateBuiltIn(baseUrl, 'bash', { disabled: true }, ownerToken);
   const rejected = await fetch(new URL('/mcp-proxy/bash', baseUrl), {
     method: 'POST',
     headers: {
+      ...headers,
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
     },
@@ -271,8 +271,8 @@ export async function probeProxy(baseUrl, expectedRoot) {
   if (rejected.status !== 404) {
     throw new Error(`Disabled proxy should return 404, received ${rejected.status}: ${await rejected.text()}`);
   }
-  await updateBuiltIn(baseUrl, 'bash', { disabled: false });
-  const restarted = await connectProxy(baseUrl, 'bash');
+  await updateBuiltIn(baseUrl, 'bash', { disabled: false }, ownerToken);
+  const restarted = await connectProxy(baseUrl, 'bash', ownerToken);
   try {
     if (!(await restarted.listTools()).tools.some((tool) => tool.name === 'run')) {
       throw new Error('Re-enabled bash proxy did not establish a fresh connection.');
@@ -351,8 +351,10 @@ async function smokePackedArtifacts(candidateDirectory) {
   ]);
 
   let appChild;
+  let appObservation;
+  let operator;
   const appLogs = [];
-  try {
+  await withSmokeCleanup(async () => {
     let tarballs;
     if (candidateDirectory) {
       const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -449,37 +451,42 @@ async function smokePackedArtifacts(candidateDirectory) {
     let sandboxPort = await reservePort();
     while (sandboxPort === port) sandboxPort = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
+    operator = await createSmokeOperator();
     appChild = spawn(process.execPath, [appEntrypoint, '--no-open', '--port', String(port)], {
       cwd: appRoot,
-      env: cleanEnv({
-        FLUJO_DATA_DIR: dataDir,
+      env: { ...await createPrivateSmokeEnv(sandbox, dataDir, {
+        FLUJO_LOCAL_INSTANCE_DIR: path.join(sandbox, 'instances'),
         FLUJO_FS_ROOTS: rootsDir,
         FLUJO_BASH_ROOTS: rootsDir,
         FLUJO_PORT: String(port),
         FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
-      }),
+        FLUJO_MCP_WORKLOAD_TRACE: '1',
+      }), ...operator.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    appObservation = observeSmokeChild(appChild);
     appChild.stdout.on('data', (chunk) => appLogs.push(String(chunk)));
     appChild.stderr.on('data', (chunk) => appLogs.push(String(chunk)));
     appChild.once('error', (error) => appLogs.push(`Installed FLUJO spawn error: ${error.stack ?? error.message}\n`));
     await waitFor(
-      async () => (await fetch(new URL('/api/cwd', baseUrl))).status,
+      async () => (await fetch(new URL('/api/cwd', baseUrl), { headers: { authorization: `Bearer ${operator.token}` } })).status,
       (status) => status === 200,
       `installed FLUJO readiness at ${baseUrl}`,
     );
-    await probeProxy(baseUrl, rootsDir);
-    await stopChild(appChild, 'installed flujo CLI');
-    appChild = undefined;
-  } catch (error) {
+    await probeProxy(baseUrl, rootsDir, operator.token);
+  }, () => withSmokeCleanup(() => cleanupSmokeSandbox({
+    stop: async () => {
+      if (appObservation) await stopSmokeChild(appObservation, 'installed flujo CLI');
+    },
+    remove: fs.rm,
+    sandbox,
+  }), async () => { if (operator) await operator.restore(); })).catch((error) => {
     const logs = appLogs.join('');
-    throw new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${logs ? `\nInstalled FLUJO logs:\n${logs}` : ''}`);
-  } finally {
-    if (appChild) await stopChild(appChild, 'installed flujo CLI cleanup').catch(() => undefined);
-    await fs.rm(sandbox, { recursive: true, force: true });
-  }
+    throw new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${logs ? `\nInstalled FLUJO logs:\n${logs}` : ''}`, { cause: error });
+  });
 }
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const proxyOnlyIndex = process.argv.indexOf('--proxy-only');
 if (proxyOnlyIndex !== -1) {
   const baseUrl = process.argv[proxyOnlyIndex + 1];
@@ -497,4 +504,5 @@ if (proxyOnlyIndex !== -1) {
   if (candidateIndex !== -1 && (!candidateDirectory || !path.isAbsolute(candidateDirectory))) throw new Error('--candidate-dir requires an absolute artifact directory.');
   await smokePackedArtifacts(candidateDirectory);
   console.log('Validated isolated packed MCP binaries and the installed FLUJO proxy.');
+}
 }

@@ -1,0 +1,21 @@
+SYNTHETIC PRACTICE MATERIAL — no real users or private workspace data.
+
+Project: Pocket Garden
+Owner: Example Team
+Review date: 2026-01-05
+
+Decisions:
+- Keep the first version local and single-owner.
+- Use one MCP connection for inspection, an agent, and an external client.
+- Require approval before a tool call during the practice run.
+
+Open questions:
+- Can a novice tell a saved connection from a tested connection?
+- Can a failed tool call be retried without losing its edited arguments?
+- Can a user locate the node and tool result in the debugger?
+
+Receipt phrase: pocket-garden-042
+
+Practice success: a real model returns the receipt phrase after an actual
+read-only MCP tool retrieves this file. Answering from the prompt alone fails.
+Repeating this practice exercise is not evidence of a useful recurring workflow.

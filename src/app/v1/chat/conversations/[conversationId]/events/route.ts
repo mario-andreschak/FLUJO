@@ -3,11 +3,15 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { readConversationLogForReplay } from '@/backend/execution/flow/conversationLog';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+
+import {
+  createExecutionStream, executionStreamAdmission, executionStreamCapacityResponse, EXECUTION_SSE_HEADERS,
+} from '@/backend/execution/flow/engine/executionStream';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/events/route');
 
@@ -23,7 +27,8 @@ export const dynamic = 'force-dynamic';
  * events carry an authoritative, durable, monotonic per-conversation `seq`
  * (issue #261). Recent positions are served from the in-memory ring buffer;
  * positions older than the buffer (evicted, channel GC'd, or after a process
- * restart) are replayed from the durable JSONL log.
+ * restart) use bounded durable replay. A gap or exhausted projection budget
+ * emits a named snapshot-recovery frame rather than reading all history.
  */
 async function GET_handler(
   request: NextRequest,
@@ -45,173 +50,95 @@ async function GET_handler(
     if (notLocal) return notLocal;
   }
 
-  // Replay position: the browser's Last-Event-ID wins on auto-reconnect so an
-  // EventSource originally opened with ?fromSeq=0 does not replay the entire
-  // run after every transient network drop.
-  const fromSeqParam = request.nextUrl.searchParams.get('fromSeq');
-  const lastEventId = request.headers.get('last-event-id');
-  const activityOnlyReplay = (
-    request.nextUrl.searchParams.get('replay') === 'activity'
-    && lastEventId === null
-  );
-  let fromSeq: number | null = null;
-  if (lastEventId !== null) {
-    const parsed = parseInt(lastEventId, 10);
-    if (!Number.isNaN(parsed)) fromSeq = parsed + 1;
-  } else if (fromSeqParam !== null) {
-    fromSeq = parseInt(fromSeqParam, 10);
+  const release = executionStreamAdmission.reserve(conversationId);
+  if (!release) return executionStreamCapacityResponse();
+  if (!executionEventBus.ensureConversationProjection(conversationId)) {
+    release();
+    return executionStreamCapacityResponse();
   }
 
-  log.info('Opening SSE event stream', { conversationId, fromSeq, activityOnlyReplay });
+  // Browser reconnect IDs take precedence over the initial URL cursor.
+  const lastEventId = request.headers.get('last-event-id');
+  const cursor = lastEventId ?? request.nextUrl.searchParams.get('fromSeq');
+  const activityOnlyReplay = request.nextUrl.searchParams.get('replay') === 'activity' && lastEventId === null;
+  const parsed = cursor === null ? null : /^\d+$/.test(cursor) ? Number(cursor) : NaN;
+  const fromSeq = parsed === null ? null : parsed + (lastEventId === null ? 0 : 1);
+  log.info('Opening SSE event stream', { conversationId, activityOnlyReplay });
 
-  const encoder = new TextEncoder();
-  let unsubscribe: (() => void) | null = null;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  let maxSentSeq = -1;
-
-  let closed = false;
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        if (heartbeat) {
-          clearInterval(heartbeat);
-          heartbeat = null;
-        }
-        if (unsubscribe) {
-          unsubscribe();
-          unsubscribe = null;
-        }
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
-
+  const stream = createExecutionStream(request.signal, release,
+    () => ({ nextSeq: executionEventBus.currentSeq(conversationId) }),
+    async session => {
+      if (fromSeq !== null && (!Number.isSafeInteger(fromSeq) || fromSeq < 0)) {
+        session.reset('cursor-reset');
+        return;
+      }
+      let maxSentSeq = -1;
       const send = (event: ExecutionEvent) => {
-        // Guard ordering/duplication: only forward strictly-newer events.
-        if (event.seq <= maxSentSeq) return;
+        if (event.seq <= maxSentSeq || session.closed) return;
+        if (!session.send(event, event.seq)) return;
         maxSentSeq = event.seq;
-        try {
-          // `id:` lets the browser resume via Last-Event-ID after a drop.
-          controller.enqueue(encoder.encode(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          cleanup();
-          return;
-        }
-        // A run can pause (awaiting approval / debug) and resume on the same
-        // conversation, so only a terminal run:done closes the stream — and
-        // only the CHANNEL'S LATEST one. The buffer spans runs: a replay from
-        // an early position on a continued conversation includes the previous
-        // run's run:done, and closing on it would cut the stream off before
-        // the live run's events are ever delivered.
-        if (event.type === 'run:done' && event.seq + 1 >= executionEventBus.currentSeq(conversationId)) {
-          cleanup();
-        }
+        // An earlier run's terminal event cannot close a resumed live run.
+        if (event.type === 'run:done' && event.seq + 1 >= executionEventBus.currentSeq(conversationId)) session.close();
       };
 
-      // Initial frame: reconnection hint + comment so proxies flush headers.
-      controller.enqueue(encoder.encode(`retry: 3000\n\n: connected ${conversationId}\n\n`));
-
-      // Replay from the cursor (ascending seq), then go live. Recent positions
-      // are served from the in-memory ring buffer; when the requested position
-      // is older than the buffer holds (evicted, channel GC'd, or after a
-      // process restart) normal reconnects fall back to durable JSONL.
-      //
-      // Chat re-attachment uses `replay=activity` after its authoritative GET
-      // snapshot. That mode deliberately NEVER reads the durable conversation
-      // log: a live process already has the current run's bounded ring buffer,
-      // while a restarted process cannot still be executing the old run. This
-      // keeps opening Chat independent of total conversation length.
-      // seq is authoritative and monotonic (issue #261), so the two sources
-      // share one sequence space and `send`'s strictly-newer guard dedups any
-      // overlap. readConversationLog is awaited BEFORE the buffer snapshot so
-      // events emitted during the read land in the buffer and are still caught;
-      // there is no await between the buffer snapshot and subscribe, so no live
-      // event can slip through the gap.
-      if (fromSeq !== null && !Number.isNaN(fromSeq)) {
-        const logged = activityOnlyReplay
-          ? undefined
-          : await readConversationLog(conversationId);
-        const buffered = executionEventBus.getBufferedSince(conversationId, fromSeq);
-        const earliestBuffered = buffered.length ? buffered[0].seq : Number.POSITIVE_INFINITY;
-
-        const replay: ExecutionEvent[] = [];
-        // JSONL fills only the [fromSeq, earliestBuffered) gap the buffer can't
-        // cover. Only persisted event types live in the log; transient liveness
-        // events (model deltas, tool progress) are intentionally not replayed.
-        if (logged && (buffered.length === 0 || earliestBuffered > fromSeq)) {
-          for (const event of logged) {
-            if (event.seq >= fromSeq && event.seq < earliestBuffered) replay.push(event);
+      if (fromSeq !== null) {
+        let logged: ExecutionEvent[] | undefined;
+        const initialWindow = executionEventBus.replayWindow(conversationId);
+        if (!activityOnlyReplay && (initialWindow.nextSeq === 0 || fromSeq < initialWindow.firstSeq)) {
+          const releaseReplay = executionStreamAdmission.reserveReplay();
+          if (!releaseReplay) { session.reset('replay-gap'); return; }
+          try {
+            const result = await readConversationLogForReplay(conversationId, fromSeq, session.signal);
+            if (session.closed) return;
+            if (result.limited) { session.reset('replay-gap'); return; }
+            logged = result.events;
+          } finally {
+            // Keep the native-read permit until the descriptor has actually closed.
+            releaseReplay();
           }
         }
-        for (const event of buffered) replay.push(event);
-
-        // Clamp to the latest run boundary. Replaying a FINISHED earlier run
-        // would feed the client stale start/terminal transitions: its run:done
-        // tears down the live view of the CURRENT run and (pre-guard) closed
-        // this stream before the current run's events were delivered. Older
-        // history is served by the conversation GET, not the live stream.
+        if (session.closed) return;
+        const window = executionEventBus.replayWindow(conversationId);
+        const buffered = executionEventBus.getBufferedSince(conversationId, fromSeq);
+        const earliestBuffered = buffered[0]?.seq ?? Infinity;
+        const bySeq = new Map<number, ExecutionEvent>();
+        for (const event of logged ?? []) if (event.seq < earliestBuffered) bySeq.set(event.seq, event);
+        for (const event of buffered) bySeq.set(event.seq, event);
+        const replay = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+        // History belongs to GET; activity replay starts at the newest available run.
         let replayFrom = fromSeq;
-        for (const event of replay) {
-          if (event.type === 'run:start') replayFrom = Math.max(replayFrom, event.seq);
+        for (const event of replay) if (event.type === 'run:start') replayFrom = Math.max(replayFrom, event.seq);
+        if (fromSeq > window.nextSeq && !logged?.some(event => event.seq >= fromSeq)) {
+          session.reset('cursor-reset');
+          return;
+        }
+        if (activityOnlyReplay && replayFrom < window.firstSeq) {
+          session.reset('replay-gap');
+          return;
+        }
+        if (!activityOnlyReplay && fromSeq < window.firstSeq && !logged?.length) {
+          session.reset('replay-gap');
+          return;
         }
         for (const event of replay) {
           if (event.seq < replayFrom) continue;
           if (activityOnlyReplay && (
-            event.type === 'model:start'
-            || event.type === 'model:dispatch'
-            || event.type === 'model:dispatch-result'
-            || event.type === 'model:delta'
-            || event.type === 'model:end'
-            || event.type === 'message'
-            || event.type === 'message:removed'
-            || event.type === 'node:snapshot'
-            || event.type === 'node:changed-files'
-            || event.type === 'tool:result'
+            event.type === 'model:start' || event.type === 'model:dispatch'
+            || event.type === 'model:dispatch-result' || event.type === 'model:delta'
+            || event.type === 'model:end' || event.type === 'message'
+            || event.type === 'message:removed' || event.type === 'node:snapshot'
+            || event.type === 'node:changed-files' || event.type === 'tool:result'
             || (event.type === 'resource:write' && Boolean(event.snapshot))
           )) continue;
           send(event);
-          if (closed) break;
+          if (session.closed) return;
         }
       }
-
-      // A buffered run:done may have already closed the stream during replay.
-      if (closed) return;
-
-      unsubscribe = executionEventBus.subscribe(conversationId, send);
-
-      heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(`: ping\n\n`));
-        } catch {
-          cleanup();
-        }
-      }, 15000);
-
-      // Client disconnected.
-      request.signal.addEventListener('abort', () => {
-        log.debug('SSE client disconnected', { conversationId });
-        cleanup();
-      });
-    },
-    cancel() {
-      if (heartbeat) clearInterval(heartbeat);
-      if (unsubscribe) unsubscribe();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+      if (session.closed) return;
+      // No await separates the final buffer snapshot from live subscription.
+      session.onCleanup(executionEventBus.subscribe(conversationId, send));
+    });
+  return new Response(stream, { headers: EXECUTION_SSE_HEADERS });
 }
 
 export const GET = withWorkspaceRoute(GET_handler);

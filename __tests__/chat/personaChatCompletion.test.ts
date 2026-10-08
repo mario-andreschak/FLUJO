@@ -44,7 +44,9 @@ import {
 } from '@/app/v1/chat/completions/requestParser';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { runFlow } from '@/backend/execution/flow/runFlow';
-import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { executionEventBus, CONVERSATION_REPLAY_LIMITS } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
   getPersonaFlowDispatch,
   PersonaFlowDispatchTimeoutError,
@@ -101,6 +103,8 @@ beforeEach(() => {
   runFlowMock.mockReset();
   modelCompletionMock.mockReset();
 });
+
+afterEach(() => { FlowExecutor.conversationStates.clear(); });
 
 describe('Persona chat metadata parsing', () => {
   it('extracts and validates trusted Persona routing metadata', async () => {
@@ -459,5 +463,160 @@ describe('Persona chat completion dispatch', () => {
     expect(response.status).toBe(400);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     expect(submitDispatchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Persona streaming reader ownership', () => {
+  const request = { model: 'flow-support', messages: [{ role: 'user', content: 'Current request' }], stream: true };
+  const target = { personaId: 'persona_support', idempotencyKey: 'reader-admission-test' };
+
+  it('rejects repeated reader-capacity requests without submitting or waiting for a Persona dispatch', async () => {
+    const id = 'persona-reader-full';
+    const before = executionStreamAdmission.diagnostics();
+    const held = Array.from({ length: 4 }, () => executionStreamAdmission.reserve(id)!);
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await processChatCompletion(request as any, false, false, false, id, false, true, target);
+        expect(response.status).toBe(503);
+        expect(response.headers.get('Retry-After')).toBe('3');
+      }
+      expect(submitDispatchMock).not.toHaveBeenCalled();
+      expect(waitDispatchMock).not.toHaveBeenCalled();
+      expect(runFlowMock).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 4);
+    } finally { held.forEach(release => release()); }
+    expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+  });
+
+  it('returns projection rejection before durable submission and releases the partial reader admission', async () => {
+    const before = executionStreamAdmission.diagnostics();
+    const projection = jest.spyOn(executionEventBus, 'ensureConversationProjection').mockReturnValue(false);
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe');
+    try {
+      const response = await processChatCompletion(request as any, false, false, false, 'persona-projection-full', false, true, target);
+      expect(response.status).toBe(503);
+      expect(response.headers.get('Retry-After')).toBe('3');
+      expect(submitDispatchMock).not.toHaveBeenCalled();
+      expect(waitDispatchMock).not.toHaveBeenCalled();
+      expect(runFlowMock).not.toHaveBeenCalled();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { subscribe.mockRestore(); projection.mockRestore(); }
+  });
+
+  it('pins through delayed submission and metadata churn, then attaches the reader before releasing the pin', async () => {
+    const id = 'persona-delayed-admission';
+    const before = executionStreamAdmission.diagnostics();
+    let resolveSubmission!: (value: unknown) => void;
+    const pending = new Promise(resolve => { resolveSubmission = resolve; });
+    const phases: string[] = [];
+    const originalSubscribe = executionEventBus.subscribe.bind(executionEventBus);
+    let subscriptions = 0;
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementation((conversation, listener) => {
+      const phase = subscriptions++ === 0 ? 'pin' : 'reader';
+      const release = originalSubscribe(conversation, listener);
+      phases.push(phase + ' attached');
+      return () => { phases.push(phase + ' released'); release(); };
+    });
+    const reserve = jest.spyOn(executionStreamAdmission, 'reserve');
+    submitDispatchMock.mockImplementationOnce(() => { phases.push('submitted'); return pending; });
+    let response: Response | undefined;
+    try {
+      const responsePromise = processChatCompletion(request as any, false, false, false, id, false, true, target);
+      expect(phases).toEqual(['pin attached', 'submitted']);
+      expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 1);
+      executionEventBus.emit(id, { type: 'run:start', flowId: 'previous' });
+      executionEventBus.emit(id, { type: 'message', message: { id: 'previous', role: 'assistant', content: 'Previous output', timestamp: 1 } });
+      executionEventBus.emit(id, { type: 'run:done', status: 'completed' });
+      for (let index = 0; index < CONVERSATION_REPLAY_LIMITS.maxChannels + 10; index++) {
+        executionEventBus.emit('persona-admission-churn-' + index, { type: 'model:delta', messageId: 'draft', delta: 'small' });
+      }
+      expect(executionEventBus.getBufferedSince(id, 0).some(event => event.type === 'message' && event.message.id === 'previous')).toBe(true);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      executionEventBus.emit(id, { type: 'run:start', flowId: 'current' });
+      resolveSubmission({ dispatch: dispatchRecord('queued'), decision: 'queued' });
+      response = await responsePromise;
+      expect(phases).toEqual(['pin attached', 'submitted', 'reader attached', 'pin released']);
+      expect(reserve).toHaveBeenCalledTimes(1);
+      expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 1);
+      executionEventBus.emit(id, { type: 'message', message: { id: 'current', role: 'assistant', content: 'Current output', timestamp: 2 } });
+      executionEventBus.emit(id, { type: 'run:done', status: 'completed' });
+      const body = await readAll(response);
+      expect(body).toContain('Current output');
+      expect(body).not.toContain('Previous output');
+      expect(body).toContain('data: [DONE]');
+      expect(phases).toEqual(['pin attached', 'submitted', 'reader attached', 'pin released', 'reader released']);
+      expect(runFlowMock).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally {
+      resolveSubmission({ dispatch: dispatchRecord('waiting'), decision: 'steered' });
+      if (response?.body && !response.body.locked) await response.body.cancel();
+      reserve.mockRestore(); subscribe.mockRestore();
+    }
+  });
+
+  it('releases the pin and reader exactly once when durable submission rejects', async () => {
+    const before = executionStreamAdmission.diagnostics();
+    const reserve = executionStreamAdmission.reserve.bind(executionStreamAdmission);
+    const releaseReader = jest.fn();
+    const permits = jest.spyOn(executionStreamAdmission, 'reserve').mockImplementation(conversation => {
+      const release = reserve(conversation)!;
+      return () => { releaseReader(); release(); };
+    });
+    const releasePin = jest.fn();
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce(() => releasePin);
+    const problem = new Error('durable submission failed');
+    submitDispatchMock.mockRejectedValueOnce(problem);
+    try {
+      await expect(processChatCompletion(request as any, false, false, false, 'persona-submit-failure', false, true, target)).rejects.toBe(problem);
+      expect(releasePin).toHaveBeenCalledTimes(1);
+      expect(releaseReader).toHaveBeenCalledTimes(1);
+      expect(runFlowMock).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { subscribe.mockRestore(); permits.mockRestore(); }
+  });
+
+  it('keeps non-streaming Persona completion outside reader admission', async () => {
+    const permits = jest.spyOn(executionStreamAdmission, 'reserve').mockImplementation(() => { throw new Error('must not reserve'); });
+    submitDispatchMock.mockResolvedValueOnce({ dispatch: dispatchRecord('completed', { outcome: { status: 'completed', outputText: 'Existing result' } }), decision: 'duplicate' });
+    try {
+      const response = await processChatCompletion({ ...request, stream: false } as any, false, false, false, 'persona-nonstream-admission', false, true, target);
+      expect(response.status).toBe(200);
+      expect(permits).not.toHaveBeenCalled();
+      expect(submitDispatchMock).toHaveBeenCalledTimes(1);
+      expect(runFlowMock).not.toHaveBeenCalled();
+    } finally { permits.mockRestore(); }
+  });
+
+  it.each([
+    { label: 'waiting', state: 'waiting', extra: {} },
+    { label: 'completed without outcome', state: 'completed', extra: {} },
+    { label: 'completed steer', state: 'completed', extra: { outcome: { status: 'steered' } } },
+    { label: 'completed coalesce', state: 'completed', extra: { outcome: { status: 'coalesced' } } },
+    { label: 'completed result', state: 'completed', extra: { outcome: { status: 'completed', outputText: 'Durable result' } } },
+    { label: 'error', state: 'error', extra: {} },
+    { label: 'cancelled', state: 'cancelled', extra: {} },
+  ])('releases pre-dispatch reader ownership for a $label response', async fixture => {
+    const before = executionStreamAdmission.diagnostics();
+    const reserve = executionStreamAdmission.reserve.bind(executionStreamAdmission);
+    const releaseReader = jest.fn();
+    const permits = jest.spyOn(executionStreamAdmission, 'reserve').mockImplementation(conversation => {
+      const release = reserve(conversation)!;
+      return () => { releaseReader(); release(); };
+    });
+    const releasePin = jest.fn();
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce(() => releasePin);
+    submitDispatchMock.mockResolvedValueOnce({ dispatch: dispatchRecord(fixture.state, fixture.extra), decision: 'duplicate' });
+    try {
+      const response = await processChatCompletion(request as any, false, false, false, 'persona-early-' + fixture.label, false, true, target);
+      expect(response.status).not.toBe(503);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      expect(releasePin).toHaveBeenCalledTimes(1);
+      expect(releaseReader).toHaveBeenCalledTimes(1);
+      expect(runFlowMock).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+      await response.body?.cancel();
+      expect(releaseReader).toHaveBeenCalledTimes(1);
+    } finally { subscribe.mockRestore(); permits.mockRestore(); }
   });
 });

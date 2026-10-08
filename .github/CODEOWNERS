@@ -1,0 +1,27 @@
+# Current human maintainer. Backup reviewer consent/readiness belongs to #576.
+# These routes require an active repository rule to enforce owner approval.
+/.github/ @mario-andreschak
+/scripts/*release* @mario-andreschak
+/scripts/verification-* @mario-andreschak
+/scripts/workflow-contract* @mario-andreschak
+/scripts/verify-repository-rules* @mario-andreschak
+/scripts/smoke-* @mario-andreschak
+/scripts/install* @mario-andreschak
+/scripts/update* @mario-andreschak
+/scripts/uninstall* @mario-andreschak
+/installer/ @mario-andreschak
+/bin/ @mario-andreschak
+/Dockerfile @mario-andreschak
+/next.config.mjs @mario-andreschak
+/package.json @mario-andreschak
+/package-lock.json @mario-andreschak
+/SECURITY.md @mario-andreschak
+/src/backend/execution/ @mario-andreschak
+/src/backend/services/mcp/ @mario-andreschak
+/src/backend/services/snapshot/ @mario-andreschak
+/src/backend/services/model/encryption.ts @mario-andreschak
+/src/backend/services/security/ @mario-andreschak
+/src/utils/http/ @mario-andreschak
+/src/app/api/oauth/ @mario-andreschak
+/src/app/mcp-proxy/ @mario-andreschak
+/mcp-servers/ @mario-andreschak

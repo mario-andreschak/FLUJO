@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createReadStream, promises as fs } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { createRequire } from 'node:module';
+import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readCodexAuthForTransfer } from './codexAuth';
+import { admitCodexDirectory, writeCodexRuntimeFile } from './codexRuntimeFiles';
+import { readStableFile } from '@/utils/readStableFile';
 
 /** Evidence supplied by the trusted integration after exercising this exact binary. */
 export interface RestrictedCodexProfile {
@@ -30,7 +32,10 @@ export const RESTRICTED_CODEX_CONFIG = Object.freeze({
   web_search: 'disabled',
   project_doc_max_bytes: 0,
   history: Object.freeze({ persistence: 'none' }),
-  tools: Object.freeze({ view_image: false }),
+  // The pinned 0.153.3 CLI advertises request_user_input unless this nested
+  // tool setting is disabled, even with default_mode_request_user_input=false.
+  tools: Object.freeze({ view_image: false,
+    experimental_request_user_input: Object.freeze({ enabled: false }) }),
   features: Object.freeze({
     shell_tool: false,
     unified_exec: false,
@@ -79,7 +84,7 @@ function baseEnvironment(): Record<string, string> {
 }
 
 /** Match the SDK's native-package resolver, then invoke only the checked path. */
-function bundledExecutable(): string {
+export function bundledCodexExecutable(): string {
   const triples: Record<string, string> = {
     'linux:x64': 'x86_64-unknown-linux-musl', 'linux:arm64': 'aarch64-unknown-linux-musl',
     'darwin:x64': 'x86_64-apple-darwin', 'darwin:arm64': 'aarch64-apple-darwin',
@@ -87,8 +92,9 @@ function bundledExecutable(): string {
   };
   const triple = triples[`${process.platform}:${process.arch}`];
   if (!triple) throw new Error('Restricted Codex profile does not support this platform.');
-  const localRequire = createRequire(path.join(process.cwd(), 'package.json'));
-  const codexRequire = createRequire(localRequire.resolve('@openai/codex/package.json'));
+  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
+  const localRequire = nativeCreateRequire(path.join(process.cwd(), 'package.json'));
+  const codexRequire = nativeCreateRequire(localRequire.resolve('@openai/codex/package.json'));
   const platformPackage = `@openai/codex-${process.platform}-${process.arch}`;
   const root = path.dirname(codexRequire.resolve(`${platformPackage}/package.json`));
   return path.join(root, 'vendor', triple, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
@@ -99,15 +105,13 @@ async function readVerifiedModelCatalog(profile: RestrictedCodexProfile): Promis
     || !/^[a-f0-9]{64}$/.test(profile.verifiedModelCatalogSha256 ?? '')) {
     throw new Error('Restricted Codex requires a verified model catalog.');
   }
-  const before = await fs.lstat(profile.verifiedModelCatalogPath);
-  if (!before.isFile() || before.isSymbolicLink() || before.size > 16 * 1024 * 1024) {
+  let bytes: Buffer;
+  try {
+    bytes = await readStableFile(profile.verifiedModelCatalogPath, 16 * 1024 * 1024);
+  } catch {
     throw new Error('Restricted Codex model catalog is invalid.');
   }
-  const bytes = await fs.readFile(profile.verifiedModelCatalogPath);
-  const after = await fs.lstat(profile.verifiedModelCatalogPath);
-  if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-    || bytes.length !== before.size
-    || createHash('sha256').update(bytes).digest('hex') !== profile.verifiedModelCatalogSha256) {
+  if (createHash('sha256').update(bytes).digest('hex') !== profile.verifiedModelCatalogSha256) {
     throw new Error('Restricted Codex model catalog differs from its verified profile.');
   }
   return bytes;
@@ -188,7 +192,7 @@ export async function assertRestrictedCodexProfile(
   if (profile.verifiedCliPath !== undefined && !path.isAbsolute(profile.verifiedCliPath)) {
     throw new Error('Restricted Codex binary path must be absolute.');
   }
-  const requestedPath = profile.verifiedCliPath ?? bundledExecutable();
+  const requestedPath = profile.verifiedCliPath ?? bundledCodexExecutable();
   const before = await executableIdentity(requestedPath);
   const key = JSON.stringify([requestedPath, before.executable, profile.verifiedCliSha256,
     profile.verifiedCliVersion, before.identity]);
@@ -230,15 +234,20 @@ export async function prepareRestrictedCodexRuntimeEnvironment(
   // receives this immutable per-invocation file, preventing remote refresh drift.
   const catalog = profile ? await readVerifiedModelCatalog(profile) : undefined;
   const parent = path.resolve(getWorkspaceDataDir(), 'db');
-  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  const parentGuard = await admitCodexDirectory(parent, true);
+  await parentGuard();
   const home = await fs.mkdtemp(path.join(parent, 'codex-private-'));
-  const cleanup = async () => {
+  const guard = await admitCodexDirectory(home, true);
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => cleanupPromise ??= (async () => {
+    await parentGuard();
+    await guard();
     const target = path.resolve(home);
     if (path.dirname(target) !== parent || !path.basename(target).startsWith('codex-private-')) {
       throw new Error('Restricted Codex cleanup target is outside its runtime directory.');
     }
     await fs.rm(target, { recursive: true, force: true });
-  };
+  })();
   try {
     const workingDirectory = path.join(home, 'workspace');
     const paths = { APPDATA: path.join(home, 'AppData', 'Roaming'),
@@ -247,13 +256,12 @@ export async function prepareRestrictedCodexRuntimeEnvironment(
       XDG_STATE_HOME: path.join(home, '.local', 'state'), XDG_RUNTIME_DIR: path.join(home, '.runtime'),
       TMPDIR: path.join(home, 'tmp'), TMP: path.join(home, 'tmp'), TEMP: path.join(home, 'tmp') };
     await Promise.all([workingDirectory, ...new Set(Object.values(paths))]
-      .map(directory => fs.mkdir(directory, { recursive: true, mode: 0o700 })));
+      .map(directory => admitCodexDirectory(directory, true)));
     const modelCatalogPath = catalog ? path.join(home, 'model-catalog.json') : undefined;
-    if (modelCatalogPath) await fs.writeFile(modelCatalogPath, catalog!, { flag: 'wx', mode: 0o600 });
+    if (modelCatalogPath) await writeCodexRuntimeFile(home, modelCatalogPath, catalog!, guard);
     const auth = await readCodexAuthForTransfer();
-    await fs.writeFile(path.join(home, 'auth.json'), auth, { flag: 'wx', mode: 0o600 });
-    await fs.writeFile(path.join(home, 'config.toml'), 'cli_auth_credentials_store = "file"\n',
-      { flag: 'wx', mode: 0o600 });
+    await writeCodexRuntimeFile(home, path.join(home, 'auth.json'), auth, guard);
+    await writeCodexRuntimeFile(home, path.join(home, 'config.toml'), 'cli_auth_credentials_store = "file"\n', guard);
     const env = { ...baseEnvironment(), ...paths, HOME: home, USERPROFILE: home, CODEX_HOME: home };
     if (process.platform === 'win32') {
       const root = path.parse(home).root;

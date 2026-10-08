@@ -151,9 +151,10 @@ async function resolveRecursive(value: unknown, context: ToolReferenceContext): 
   if (typeof value === 'string') return resolveString(value, context);
   if (Array.isArray(value)) return Promise.all(value.map((item) => resolveRecursive(item, context)));
   if (value && typeof value === 'object') {
-    const output: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) output[key] = await resolveRecursive(item, context);
-    return output;
+    const output = new Map<string, unknown>();
+    for (const [key, item] of Object.entries(value)) output.set(key, await resolveRecursive(item, context));
+    // JSON keys are data, including __proto__; do not invoke inherited setters.
+    return Object.fromEntries(output);
   }
   return value;
 }

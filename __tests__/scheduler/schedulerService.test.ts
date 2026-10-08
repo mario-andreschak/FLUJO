@@ -1,3 +1,12 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => {
+  // fire() queues statistics independently of its result. Finish those writes
+  // while the private profile and data root still belong to this test.
+  const { flushStatisticsEvents } = await import('@/backend/services/statistics');
+  await flushStatisticsEvents();
+  await privateFixture?.restore();
+});
 /**
  * Tests for the SchedulerService (Planned Executions #10).
  *
@@ -64,12 +73,13 @@ const readState = (id: string) => store.get(`planned-execution-state/${id}`) as 
 describe('SchedulerService', () => {
   let scheduler: SchedulerService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store.clear();
     runFlowMock.mockReset();
     runFlowMock.mockResolvedValue(completedResult);
     scheduler = new SchedulerService();
-  });
+    privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
+});
 
   it('creates an execution, persists the envelope, and arms the schedule', async () => {
     const { execution, error } = await scheduler.create(scheduleInput());
@@ -324,21 +334,35 @@ describe('SchedulerService', () => {
     expect(scheduler.getStatus(execution!).running).toBe(false);
     expect(scheduler.getStatus(execution!).runningSince).toBeUndefined();
 
+    let signalEntered!: () => void;
+    const entered = new Promise<void>(resolve => { signalEntered = resolve; });
     let release!: () => void;
-    runFlowMock.mockImplementationOnce(
-      () => new Promise(resolve => { release = () => resolve(completedResult); })
-    );
+    const heldResult = new Promise<typeof completedResult>(resolve => {
+      release = () => resolve(completedResult);
+    });
+    runFlowMock.mockImplementationOnce(() => {
+      signalEntered();
+      return heldResult;
+    });
 
     const inFlight = scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
-    // Let the fire take the running lock.
-    await new Promise(r => setTimeout(r, 10));
+    try {
+      // Admission can await filesystem work. Observe actual flow entry instead
+      // of assuming a fixed timer delay means the running lock was acquired.
+      await Promise.race([
+        entered,
+        inFlight.then(() => { throw new Error('Fire settled before entering the held flow fixture.'); }),
+      ]);
 
-    const during = scheduler.getStatus(execution!);
-    expect(during.running).toBe(true);
-    expect(during.runningSince).toMatch(/^\d{4}-/); // ISO start time for the elapsed timer
-
-    release();
-    await inFlight;
+      const during = scheduler.getStatus(execution!);
+      expect(during.running).toBe(true);
+      expect(during.runningSince).toMatch(/^\d{4}-/); // ISO start time for the elapsed timer
+    } finally {
+      // Settle this exact fire even if an assertion fails, before the next
+      // beforeEach clears storage and resets the shared flow mock.
+      release();
+      await inFlight;
+    }
 
     // Cleared once the run resolves (finally deletes the entry).
     const after = scheduler.getStatus(execution!);

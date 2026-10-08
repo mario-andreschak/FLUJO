@@ -114,6 +114,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     } catch (error) {
       log.warn('setKey: Failed to set encryption key:', error);
+      throw new Error('Private encryption setup failed');
     }
   }, []);
 

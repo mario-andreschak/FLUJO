@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import syncFs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +13,8 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
+import { fingerprintTrustedHostSource, trustedHostEnvironment } from '@/backend/services/security/trustedHostMcp';
+import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
@@ -63,14 +66,41 @@ const config: MCPStdioConfig = {
 const resolveIsolatedLaunch = (server: MCPStdioConfig) =>
   resolveStdioLaunch(server, { isolateRuntimeHome: true });
 
+// These existing Node positives use a fixed real source and a private grant.
+// This helper does not authorize the distinct dynamic package-runner contract.
+function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
+  const sourceRoot = path.join(getWorkspaceDataDir(), server.rootPath || 'mcp-servers/runtime-home-fixture');
+  const entryPoint = path.join(sourceRoot, 'runtime-home-fixture.cjs');
+  syncFs.mkdirSync(sourceRoot, { recursive: true });
+  syncFs.writeFileSync(entryPoint, 'process.exitCode = 0;\n');
+  const fixture = installTrustedHostProfile({ name: server.name, nodeSource: 'process.exitCode = 0;\n',
+    environment: Object.fromEntries(trustedHostEnvironment(server)), runtimeHome: isolated ? 'isolated' : 'host' });
+  try {
+    process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
+    process.env.FLUJO_DATA_DIR = dataRoot;
+    const approved: MCPStdioConfig = { ...server, ...fixture.config, rootPath: server.rootPath,
+      cwd: sourceRoot, args: [entryPoint], trustedHost: { ...fixture.config.trustedHost!,
+        entryPoint, sourceRoot, sourceDigest: fingerprintTrustedHostSource(sourceRoot) } };
+    fixture.approve(approved);
+    return resolveStdioLaunch(approved, { isolateRuntimeHome: isolated });
+  } finally {
+    fixture.restore();
+  }
+}
+
 describe('stdio MCP runtime homes', () => {
   it('does not isolate runtime homes unless the resolved policy opts in', () => {
-    const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
+    const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config));
 
     expect(launch.env.HOME).toBe(config.env.HOME);
     expect(launch.env.USERPROFILE).toBe(config.env.USERPROFILE);
     expect(launch.env.NPM_CONFIG_CACHE).toBe(config.env.NPM_CONFIG_CACHE);
     expect(launch.cwd).not.toContain(`${path.sep}userdata${path.sep}mcp-runtime${path.sep}`);
+  });
+
+  it('requires private consent before applying runtime-home launch policy', () => {
+    expect(() => runWithWorkspace('runtime-a', () => resolveStdioLaunch(config)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
   it('keeps bundled Bash attached to the live host account and removes stale config redirects', () => {
@@ -117,8 +147,8 @@ describe('stdio MCP runtime homes', () => {
   });
 
   it('forces conventional home, config, cache, temp and FLUJO roots per workspace', () => {
-    const launchA = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(config));
-    const launchB = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(config));
+    const launchA = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config, true));
+    const launchB = runWithWorkspace('runtime-b', () => resolveApprovedFixedNode(config, true));
     const rootA = getWorkspaceDataDir('runtime-a');
     const rootB = getWorkspaceDataDir('runtime-b');
 
@@ -207,7 +237,7 @@ describe('stdio MCP runtime homes', () => {
       name: 'local-node-server',
       rootPath: 'mcp-servers/local-node-server',
     };
-    const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(ordinary));
+    const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(ordinary, true));
     expect(launch.cwd).toBe(
       path.join(getWorkspaceDataDir('runtime-a'), 'mcp-servers', 'local-node-server'),
     );

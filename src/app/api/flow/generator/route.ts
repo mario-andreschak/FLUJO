@@ -2,6 +2,7 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { json } from '../_helpers';
+import { FlowAuthoringValidationError } from '@/backend/services/flow/authoringErrors';
 import {
   buildFlowGeneratorSnapshot,
   restoreVendoredFlowGenerator,
@@ -33,7 +34,8 @@ async function POST_handler(request: NextRequest) {
     });
     return json({ conversationId, flow });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 422);
+    if (error instanceof FlowAuthoringValidationError) return json({ error: error.message }, 422);
+    return json({ error: 'Failed to prepare flow generator.' }, 500);
   }
 }
 
@@ -44,7 +46,7 @@ async function PUT_handler(_request: Request) {
   try {
     return json({ flow: await restoreVendoredFlowGenerator() });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    return json({ error: 'Failed to restore flow generator.' }, 500);
   }
 }
 

@@ -621,17 +621,17 @@ if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
 # 1. Validate Node.js version BEFORE any side effects (execution policy, etc.)
 # ---------------------------------------------------------------------------
 Write-InstallerStage -Name 'prerequisites'
-Write-Step "Validating Node.js version (requires >= 22.0.0)"
-$nodeResult = Test-NodeVersion -MinMajor 22 -MinMinor 0
+Write-Step "Validating Node.js version (requires 22.17+ within 22.x, or 24.2+ within 24.x)"
+$nodeResult = Test-FlujoNodeVersion
 switch ($nodeResult.Status) {
     'Supported' {
-        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (>= 22.0.0)"
+        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (22.17+ within 22.x, or 24.2+ within 24.x)"
     }
     'Missing' {
         Write-Warn2 "Node.js not found; will install via winget."
     }
     'Outdated' {
-        Write-Warn2 "Node.js $($nodeResult.Version) is below minimum requirement (>= 22.0.0); will upgrade via winget."
+        throw "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Install a current patched Node.js 22.x (at least 22.17) or 24.x (at least 24.2), activate it on PATH, then re-run. The installer will not switch an existing Node installation automatically."
     }
     'Malformed' {
         throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
@@ -657,7 +657,7 @@ $policyChanged = Set-PersistentExecutionPolicy
 # that is folded into the uninstall manifest below.
 $prereqResults = @(
     Install-Prereq -CommandName 'git'    -WingetId 'Git.Git'            -DisplayName 'Git'
-    Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS'      -DisplayName 'Node.js (includes npm)'
+    Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS.LTS'      -DisplayName 'Node.js (includes npm)'
     Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
     Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
     Install-Prereq -CommandName 'rg'     -WingetId 'BurntSushi.ripgrep.MSVC' -DisplayName 'ripgrep'
@@ -665,11 +665,11 @@ $prereqResults = @(
 
 # Re-validate Node.js after prerequisite installation
 Write-Step "Re-validating Node.js version after prerequisite installation"
-$nodeResult = Test-NodeVersion -MinMajor 22 -MinMinor 0
+$nodeResult = Test-FlujoNodeVersion
 if ($nodeResult.Status -ne 'Supported') {
-    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (>= 22.0.0). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
+    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (22.17+ within 22.x, or 24.2+ within 24.x). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
 }
-Write-Ok "Node.js $($nodeResult.Version) validated successfully (>= 22.0.0)"
+Write-Ok "Node.js $($nodeResult.Version) validated successfully (22.17+ within 22.x, or 24.2+ within 24.x)"
 
 Update-SessionEnvironment
 

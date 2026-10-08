@@ -42,3 +42,14 @@ it('labels an unavailable tool test as skipped and explains why', () => {
   expect(screen.getByText('Skipped')).toBeInTheDocument();
   expect(screen.getByText('Dedicated media model; tool test unavailable.')).toBeInTheDocument();
 });
+
+it('identifies the Antigravity CLI transport used by saved connections', () => {
+  showResult({
+    ...baseResult, provider: 'antigravity-cli',
+    adapterRoute: { adapterId: 'antigravity-cli', endpoint: 'local CLI', reason: 'Official Antigravity CLI' },
+    axios: { ok: false, skipped: true, durationMs: 0, content: 'CLI transport.' },
+  });
+  expect(screen.getByText('Antigravity CLI (used by flows)')).toBeInTheDocument();
+  expect(screen.getByText('Endpoint: local CLI')).toBeInTheDocument();
+  expect(screen.queryByText('OpenAI SDK')).not.toBeInTheDocument();
+});

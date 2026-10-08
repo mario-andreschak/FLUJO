@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { archiveModelDispatch } from '@/backend/execution/flow/modelTurnArchive';
+import { archiveModelDispatch, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { capturePersonaRecovery } from '@/backend/services/enduringAgents/personaRecoveryCapture';
 import { PERSONA_RECOVERY_MANIFEST, inspectPersonaRecoveryFiles, validatePersonaRecoveryArchive } from '@/backend/services/enduringAgents/personaRecoveryArchive';
 import { decodePersonaRecoveryZip } from '@/backend/services/enduringAgents/personaRecoveryZip';
@@ -35,11 +35,12 @@ async function fixture() {
   const home = path.join(root, 'userdata', 'personas', persona.id);
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(path.join(home, 'notes.txt'), 'Private home file');
-  await archiveModelDispatch({
+  const entry = await archiveModelDispatch({
     conversationId: 'conversation_recovery', nodeId: 'model_node', modelId: 'model-test', modelName: 'Test model',
     adapter: 'test', operation: 'create', attempt: 1, canonicalMessages: [], genericWire: [],
     sdkRequest: { image: `data:image/png;base64,${Buffer.from('model-image').toString('base64')}` },
   });
+  await updateModelDispatchOutcome('conversation_recovery', entry.id, 'completed');
   return { persona, root, home, flowId };
 }
 
@@ -157,6 +158,38 @@ describe('Persona recovery capture and complete manifest preflight', () => {
     }
     expect(() => inspectPersonaRecoveryFiles(payload.map((file) => file === model
       ? { ...file, bytes: Buffer.from('invalid gzip') } : file), getCurrentWorkspace())).toThrow('model archive is invalid');
+  }));
+
+  it('binds bounded v2 outcomes to immutable snapshots and retains v1 recovery compatibility', async () => fresh(async () => {
+    await fixture();
+    const files = decodePersonaRecoveryZip((await capturePersonaRecovery()).bytes);
+    expect(() => validatePersonaRecoveryArchive(files)).not.toThrow();
+    const payload = files.filter(file => file.path !== PERSONA_RECOVERY_MANIFEST);
+    const model = payload.find(file => file.path.endsWith('.v2.json.gz'))!;
+    const outcome = payload.find(file => file.path.endsWith('.outcome.json'))!;
+    const record = JSON.parse(outcome.bytes.toString());
+    expect(record.outcome).toBe('completed');
+    for (const invalid of [
+      { ...record, conversationId: 'foreign' }, { ...record, dispatchId: 'foreign' },
+      { ...record, outcome: 'running' }, { ...record, version: 2 },
+    ]) {
+      expect(() => inspectPersonaRecoveryFiles(payload.map(file => file === outcome
+        ? { ...file, bytes: Buffer.from(JSON.stringify(invalid)) } : file), getCurrentWorkspace())).toThrow();
+    }
+    expect(() => inspectPersonaRecoveryFiles(payload.filter(file => file !== model), getCurrentWorkspace()))
+      .toThrow('missing model-turns');
+    expect(() => inspectPersonaRecoveryFiles(payload.map(file => file === outcome
+      ? { ...file, bytes: Buffer.alloc(1025, 32) } : file), getCurrentWorkspace())).toThrow('limits');
+    // No terminal record means the dispatch is still interrupted/running. Never
+    // manufacture completion from the enclosing conversation's terminal status.
+    expect(() => inspectPersonaRecoveryFiles(payload.filter(file => file !== outcome), getCurrentWorkspace())).not.toThrow();
+    const snapshot = JSON.parse(gunzipSync(model.bytes).toString());
+    snapshot.version = 1;
+    snapshot.entry.archiveVersion = 1;
+    snapshot.entry.outcome = 'completed';
+    const legacy = { path: model.path.replace('.v2.json.gz', '.json.gz'), bytes: gzipSync(JSON.stringify(snapshot)) };
+    expect(() => inspectPersonaRecoveryFiles(payload.filter(file => file !== outcome && file !== model).concat(legacy), getCurrentWorkspace())).not.toThrow();
+    expect(() => inspectPersonaRecoveryFiles(payload.concat(legacy), getCurrentWorkspace())).toThrow('Duplicate recovery model dispatch');
   }));
 
   it('byte-preserves supported historical log ordering and reports anomalies without accepting malformed sequences', async () => fresh(async () => {

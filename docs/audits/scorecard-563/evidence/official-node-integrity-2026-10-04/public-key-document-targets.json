@@ -1,0 +1,252 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-10-04T06:48:44.188Z",
+  "finishedAt": "2026-10-04T06:48:46.519Z",
+  "upstream": {
+    "repository": "https://github.com/nodejs/release-keys",
+    "commit": "481637f813e912c4aa3622d7964ab426c97b8e8d",
+    "tree": "ff100f7e33b8131f81544f555fd51c57b1a33de7"
+  },
+  "retainedReadme": {
+    "file": "release-keys-README.md",
+    "upstreamGitBlob": "5a37aafa77aa739e07b8400f451e3df2d7d11d3b",
+    "sha256": "caee8c460eee4240f17e11290032b71ee1a5ba06fdbc106db4b77d097b5cca49",
+    "byteLength": 6069,
+    "bytesUnchanged": true
+  },
+  "inventory": [
+    {
+      "file": "keys/5BE8A3F6C8A5C01D106C0AD820B1A390B168D356.asc",
+      "fingerprintFilename": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "upstreamGitBlob": "d7d9090d3b37bbaee829a490609543b9e096c3dc",
+      "byteLength": 924,
+      "sha256": "5115095e2f8010c75da052ecb1cfb3af630e084f0f8daa93a863557b01b0f90a",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/5BE8A3F6C8A5C01D106C0AD820B1A390B168D356.asc"
+    },
+    {
+      "file": "keys/DD792F5973C6DE52C432CBDAC77ABFA00DDBF2B7.asc",
+      "fingerprintFilename": "DD792F5973C6DE52C432CBDAC77ABFA00DDBF2B7",
+      "upstreamGitBlob": "1e3f56f74b40602abc54c1655a9c65bd878a253a",
+      "byteLength": 660,
+      "sha256": "acf8c1f1d1df8b68c87bde1ccff9754cd29a0671ec92fd2b190f38b3305938f1",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/DD792F5973C6DE52C432CBDAC77ABFA00DDBF2B7.asc"
+    },
+    {
+      "file": "keys/CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc",
+      "fingerprintFilename": "CC68F5A3106FF448322E48ED27F5E38D5B0A215F",
+      "upstreamGitBlob": "0ea9c21cf2e933c8fc75659c30c74c70d8d92c0f",
+      "byteLength": 3163,
+      "sha256": "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc"
+    },
+    {
+      "file": "keys/890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4.asc",
+      "fingerprintFilename": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+      "upstreamGitBlob": "e4137937416a695bd78c933ee2bc261c99180bcd",
+      "byteLength": 2456,
+      "sha256": "34fb01c735f875ec1a1efc44619b0a45ed1ce81341171ad24fc5a6282dfeaaa5",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4.asc"
+    },
+    {
+      "file": "keys/C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C.asc",
+      "fingerprintFilename": "C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C",
+      "upstreamGitBlob": "dfeea1499c4097c1a14b75037584dd24705824fb",
+      "byteLength": 5613,
+      "sha256": "84b1ca614406f341cb86e72920f5a64687a13ab67ab84038bcf2abba97898a84",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C.asc"
+    },
+    {
+      "file": "keys/108F52B48DB57BB0CC439B2997B01419BD92F80A.asc",
+      "fingerprintFilename": "108F52B48DB57BB0CC439B2997B01419BD92F80A",
+      "upstreamGitBlob": "195596d5ff1246dfc4f8807bdc11ca8b8491cbfc",
+      "byteLength": 3074,
+      "sha256": "3e9f8034fe87785bc987817f00c687df936d372ab14d04d904e7655bac9ac154",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/108F52B48DB57BB0CC439B2997B01419BD92F80A.asc"
+    },
+    {
+      "file": "keys/655F3B5C1FB3FA8D1A0CA6BDE4A7D232B936D2FD.asc",
+      "fingerprintFilename": "655F3B5C1FB3FA8D1A0CA6BDE4A7D232B936D2FD",
+      "upstreamGitBlob": "3aaa459ac6669aa8a1c80055bb6ee6595d3b5a02",
+      "byteLength": 660,
+      "sha256": "9eb52ca2b3e991c32654ddf9b5f99938f8217f975cd2358013299b7857e4c360",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/655F3B5C1FB3FA8D1A0CA6BDE4A7D232B936D2FD.asc"
+    },
+    {
+      "file": "keys/A363A499291CBBC940DD62E41F10027AF002F8B0.asc",
+      "fingerprintFilename": "A363A499291CBBC940DD62E41F10027AF002F8B0",
+      "upstreamGitBlob": "3fa037f68d93c9f716590d98228750235aa17f4a",
+      "byteLength": 11781,
+      "sha256": "823a379e79867300348f6d67c13f9a44b2fdc2e11c26d9b66f2a8e7636768ed2",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/A363A499291CBBC940DD62E41F10027AF002F8B0.asc"
+    },
+    {
+      "file": "keys/C0D6248439F1D5604AAFFB4021D900FFDB233756.asc",
+      "fingerprintFilename": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "upstreamGitBlob": "67211b7b862f2fef24b79be1a88f56d6d7c81333",
+      "byteLength": 3159,
+      "sha256": "4e615a57f63967ec40481be2fe6d57b39698257f31843ffe79af82d12a1806a2",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/C0D6248439F1D5604AAFFB4021D900FFDB233756.asc"
+    },
+    {
+      "file": "keys/4ED778F539E3634C779C87C6D7062848A1AB005C.asc",
+      "fingerprintFilename": "4ED778F539E3634C779C87C6D7062848A1AB005C",
+      "upstreamGitBlob": "42c0d827780bc2fb64baaddaf914c1a3296455d9",
+      "byteLength": 5544,
+      "sha256": "2156936f1e02787b25fe194161edebbf36c4ff4565c75ea57d9b3b75e9fd69ae",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/4ED778F539E3634C779C87C6D7062848A1AB005C.asc"
+    },
+    {
+      "file": "keys/141F07595B7B3FFE74309A937405533BE57C7D57.asc",
+      "fingerprintFilename": "141F07595B7B3FFE74309A937405533BE57C7D57",
+      "upstreamGitBlob": "b6a6dad9e0cafdbfe06f31255ad671b227ba9091",
+      "byteLength": 5389,
+      "sha256": "791dac7310c665472caa17d3d53d6de6a565794fa52cdb3e586e83e26e0f04b2",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/141F07595B7B3FFE74309A937405533BE57C7D57.asc"
+    },
+    {
+      "file": "keys/9554F04D7259F04124DE6B476D5A82AC7E37093B.asc",
+      "fingerprintFilename": "9554F04D7259F04124DE6B476D5A82AC7E37093B",
+      "upstreamGitBlob": "928a08f7ca12a2e34c63da4bd51e9c7507486088",
+      "byteLength": 1717,
+      "sha256": "ab7b70aa8ac90e264c0c3fcae6062f098a687e391199e2d0393e63c7d32bb737",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/9554F04D7259F04124DE6B476D5A82AC7E37093B.asc"
+    },
+    {
+      "file": "keys/94AE36675C464D64BAFA68DD7434390BDBE9B9C5.asc",
+      "fingerprintFilename": "94AE36675C464D64BAFA68DD7434390BDBE9B9C5",
+      "upstreamGitBlob": "806041d9f2a099a9a903959973e31a90a7065651",
+      "byteLength": 3082,
+      "sha256": "60ec4366e1ec1a3b769f1a0e5b5a418268212d02047071b3785476e6cafb777c",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/94AE36675C464D64BAFA68DD7434390BDBE9B9C5.asc"
+    },
+    {
+      "file": "keys/1C050899334244A8AF75E53792EF661D867B9DFA.asc",
+      "fingerprintFilename": "1C050899334244A8AF75E53792EF661D867B9DFA",
+      "upstreamGitBlob": "16281839cae2c590a894593c52738b8a440acb7f",
+      "byteLength": 2285,
+      "sha256": "2b55d3b77523d463d898cf340c704965026cfb8e31e00be4536ffa6dcb09dc9c",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/1C050899334244A8AF75E53792EF661D867B9DFA.asc"
+    },
+    {
+      "file": "keys/74F12602B6F1C4E913FAA37AD3A89613643B6201.asc",
+      "fingerprintFilename": "74F12602B6F1C4E913FAA37AD3A89613643B6201",
+      "upstreamGitBlob": "3579b90f3d330f4790aac080f8fbd2804bc1ef5f",
+      "byteLength": 8156,
+      "sha256": "f27721b16f9390b642a1b444d50de3ece7fe4659d8210c9cbff6d2580b9dcd8c",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/74F12602B6F1C4E913FAA37AD3A89613643B6201.asc"
+    },
+    {
+      "file": "keys/B9AE9905FFD7803F25714661B63B535A4C206CA9.asc",
+      "fingerprintFilename": "B9AE9905FFD7803F25714661B63B535A4C206CA9",
+      "upstreamGitBlob": "c2b6d063430f1e18f669abe071f560f79247f9a6",
+      "byteLength": 4690,
+      "sha256": "c946442c910b56c70338e2124354600f5c5a0b0e625abdcdd96e0dc833424a42",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/B9AE9905FFD7803F25714661B63B535A4C206CA9.asc"
+    },
+    {
+      "file": "keys/77984A986EBC2AA786BC0F66B01FBB92821C587A.asc",
+      "fingerprintFilename": "77984A986EBC2AA786BC0F66B01FBB92821C587A",
+      "upstreamGitBlob": "b899fae67b77a439717d844034a7c25e920b908a",
+      "byteLength": 3078,
+      "sha256": "a4ff01bad5868322f86ba1ba9acc1a0ea23e22987e6733321197da69dd527fda",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/77984A986EBC2AA786BC0F66B01FBB92821C587A.asc"
+    },
+    {
+      "file": "keys/93C7E9E91B49E432C2F75674B0A78B0A6C481CF6.asc",
+      "fingerprintFilename": "93C7E9E91B49E432C2F75674B0A78B0A6C481CF6",
+      "upstreamGitBlob": "089b9d6202fb474b391c72210f30632b99bc8dd6",
+      "byteLength": 1692,
+      "sha256": "88b26f591257f55665d19ef66fcbbf5582bb6cbe2d8c6a429f92840f2cac768e",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/93C7E9E91B49E432C2F75674B0A78B0A6C481CF6.asc"
+    },
+    {
+      "file": "keys/56730D5401028683275BD23C23EFEFE93C4CFFFE.asc",
+      "fingerprintFilename": "56730D5401028683275BD23C23EFEFE93C4CFFFE",
+      "upstreamGitBlob": "a4349eb842efe9f7fc2fbae1d48a38c30136afc9",
+      "byteLength": 3102,
+      "sha256": "9cf7afce2f301d0cfe20bef900409534b74d71dd0349fd1f4bf1e86de280ae53",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/56730D5401028683275BD23C23EFEFE93C4CFFFE.asc"
+    },
+    {
+      "file": "keys/71DCFD284A79C3B38668286BC97EC7A07EDE3FC1.asc",
+      "fingerprintFilename": "71DCFD284A79C3B38668286BC97EC7A07EDE3FC1",
+      "upstreamGitBlob": "9c9037c07a830c7b3e5dd190648a71d2441439ed",
+      "byteLength": 9204,
+      "sha256": "d3c9806b5e43846d61a684dd898efa362e23a56176ffea0aebf6fcf6a351d869",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/71DCFD284A79C3B38668286BC97EC7A07EDE3FC1.asc"
+    },
+    {
+      "file": "keys/FD3A5288F042B6850C66B31F09FE44734EB7990E.asc",
+      "fingerprintFilename": "FD3A5288F042B6850C66B31F09FE44734EB7990E",
+      "upstreamGitBlob": "c8d0bd579a3edf9dc980bc4f9e319829360065ed",
+      "byteLength": 7026,
+      "sha256": "1852fef37ee9321767489bb8b77814f6b06a690651ac1feacf5aedd1ec07bdf6",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/FD3A5288F042B6850C66B31F09FE44734EB7990E.asc"
+    },
+    {
+      "file": "keys/61FC681DFB92A079F1685E77973F295594EC4689.asc",
+      "fingerprintFilename": "61FC681DFB92A079F1685E77973F295594EC4689",
+      "upstreamGitBlob": "3fb6b4aac60ea789ffb51b0f19f3686f7236c47d",
+      "byteLength": 3147,
+      "sha256": "3d71052bdcdd9c4cdfdc29c3094181f312d5893ddc888194486af22288e82492",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/61FC681DFB92A079F1685E77973F295594EC4689.asc"
+    },
+    {
+      "file": "keys/114F43EE0176B71C7BC219DD50A3051F888C628D.asc",
+      "fingerprintFilename": "114F43EE0176B71C7BC219DD50A3051F888C628D",
+      "upstreamGitBlob": "9c8d081bec8ea23cb43c58e10f53e3aa395724ae",
+      "byteLength": 3086,
+      "sha256": "54e3e707ec85d8eb79dcd9bc155231f9dafbe472ed29e6cc0b586d9460844b09",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/114F43EE0176B71C7BC219DD50A3051F888C628D.asc"
+    },
+    {
+      "file": "keys/8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600.asc",
+      "fingerprintFilename": "8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600",
+      "upstreamGitBlob": "9c34e46783fcb9d7a36b452279fd743a26ed69af",
+      "byteLength": 4179,
+      "sha256": "f40a1b545fca8f8a30e7205275521bbc4221463b91aadb84e67da8a807d3927f",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600.asc"
+    },
+    {
+      "file": "keys/C4F0DFFF4E8C1A8236409D08E73BC641CC11F4C8.asc",
+      "fingerprintFilename": "C4F0DFFF4E8C1A8236409D08E73BC641CC11F4C8",
+      "upstreamGitBlob": "2baa8ea5ef1b5e6d875f7533e6047254224ba5eb",
+      "byteLength": 14583,
+      "sha256": "79ace90ed56212529fdcbc7166861809db7a065dd9b8a39994df0a29ece505ed",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/C4F0DFFF4E8C1A8236409D08E73BC641CC11F4C8.asc"
+    },
+    {
+      "file": "keys/DD8F2338BAE7501E3DD5AC78C273792F7D83545D.asc",
+      "fingerprintFilename": "DD8F2338BAE7501E3DD5AC78C273792F7D83545D",
+      "upstreamGitBlob": "50e3ec9657106dfa0c864ad5b8719a5d10b38799",
+      "byteLength": 2123,
+      "sha256": "7d10eba0eeaaa41ce9a83f6aa1cf5e448092e90acca82c95c489d55809448844",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/DD8F2338BAE7501E3DD5AC78C273792F7D83545D.asc"
+    },
+    {
+      "file": "keys/A48C2BEE680E841632CD4E44F07496B3EB3C1762.asc",
+      "fingerprintFilename": "A48C2BEE680E841632CD4E44F07496B3EB3C1762",
+      "upstreamGitBlob": "2c711558fc99a7e6ee6cf47059e75697c6d59082",
+      "byteLength": 3094,
+      "sha256": "e78dee3a3a150d59110cf24c2be634bf9fb55e78ac3bed6e4f65f8a514d7a3d9",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/A48C2BEE680E841632CD4E44F07496B3EB3C1762.asc"
+    },
+    {
+      "file": "keys/B9E2F5981AA6E0CD28160D9FF13993A75599653C.asc",
+      "fingerprintFilename": "B9E2F5981AA6E0CD28160D9FF13993A75599653C",
+      "upstreamGitBlob": "8ece24d18fb91ed11f9cfe5a412066f962a24a15",
+      "byteLength": 3106,
+      "sha256": "ffddda90a98bf2adb73f98ecd45245a1ba6aee0d50a09dee216f26aed0fc2ac2",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/B9E2F5981AA6E0CD28160D9FF13993A75599653C.asc"
+    },
+    {
+      "file": "keys/7937DFD2AB06298B2293C3187D33FF9D0246406D.asc",
+      "fingerprintFilename": "7937DFD2AB06298B2293C3187D33FF9D0246406D",
+      "upstreamGitBlob": "c269e5a9a48fb640b7ecb8b0556c76fd70d979d7",
+      "byteLength": 4585,
+      "sha256": "677c6d2ecf3f54a2b4305be227af4b817309df5986435ff7baf4c1b4e77250dc",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/keys/7937DFD2AB06298B2293C3187D33FF9D0246406D.asc"
+    }
+  ],
+  "scope": "Restores every local public-key file target in the retained unchanged upstream README from its exact declared immutable commit. Raw downloaded bytes match upstream Git blob identities and sizes. No key was imported or executed; no new signature verification, trusted issuer, binary qualification, installed behavior or grade acceptance is claimed."
+}

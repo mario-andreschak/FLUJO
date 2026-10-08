@@ -40,7 +40,7 @@ async function POST_handler(request: NextRequest) {
         });
         await emit({ type: 'complete', result });
       },
-      (error) => ({ type: 'error', error }),
+      () => ({ type: 'error', error: 'MCP server research failed. Please try again.' }),
       { signal: request.signal },
     );
   }
@@ -57,8 +57,8 @@ async function POST_handler(request: NextRequest) {
       return json(await troubleshootMcpInstall(context));
     }
     return json({ error: 'Unknown MCP assistant action.' }, 400);
-  } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  } catch {
+    return json({ error: 'MCP assistant request failed. Please try again.' }, 500);
   }
 }
 

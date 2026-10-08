@@ -5,7 +5,6 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
-import { formatErrorResponse } from '@/utils/mcp/utils';
 import { json } from '../_helpers';
 
 const log = createLogger('app/api/mcp/test-connection/route');
@@ -42,7 +41,7 @@ async function POST_handler(request: NextRequest) {
     return json(result, 200);
   } catch (error) {
     log.error('Error handling POST request', error);
-    return json({ success: false, ...formatErrorResponse(error) }, 500);
+    return json({ success: false, error: 'Failed to test MCP connection.' }, 500);
   }
 }
 
