@@ -15,6 +15,7 @@ jest.mock('@/utils/logger', () => {
 });
 
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { mcpService } from '@/backend/services/mcp';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import {
@@ -188,20 +189,36 @@ describe('normal stdio delivery', () => {
     let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
     const approved = new Map<string, MCPStdioConfig>();
     beforeAll(async () => {
+      const preparationStarted = performance.now();
+      const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'workspace-enter' | 'workspace-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready') => {
+        console.info(JSON.stringify({ shippedFixture: 'internal-server', stage, elapsedMs: performance.now() - preparationStarted }));
+      };
+      phase('private-profile-enter');
       profile = installTrustedHostProfile({ nodeSource: '// Owned setup profile; never executed.' });
       owner = installBundledFixtureOwner();
+      phase('private-profile-ready');
+      phase('workspace-enter');
       await ensureWorkspaceDirs();
+      phase('workspace-ready');
+      phase('provisioning-enter');
       await ensureShippedWorkspacePackages(getWorkspaceDataDir());
+      phase('provisioning-ready');
       storage = new Map();
       loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) => storage.has(key) ? copy(storage.get(key)) : fallback);
       saveItemMock.mockImplementation(async (key: StorageKey, value: unknown) => { storage.set(key, copy(value)); });
+      phase('config-enter');
       await saveConfig(new Map(SHIPPED_MCP_SERVERS.map(descriptor => [descriptor.defaultName,
         { ...createShippedServerConfig(descriptor), disabled: false }])));
+      phase('config-ready');
       for (const descriptor of SHIPPED_MCP_SERVERS) {
+        phase('preview-enter');
         const preview = await previewBundledHostConsent(descriptor.defaultName, { runtimeHome: 'host' });
+        phase('preview-ready');
+        phase('grant-enter');
         const result = await approveBundledHostConsent(owner.request(descriptor.defaultName), descriptor.defaultName, {
           runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
         });
+        phase('grant-ready');
         approved.set(descriptor.defaultName, result.config);
       }
     }, 120_000);
