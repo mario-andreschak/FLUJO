@@ -16,6 +16,7 @@ import { prepareRegistryServerRuntime } from '@/backend/services/mcp/registryIns
 import { createShippedServerConfig, shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
 import { ensureShippedWorkspacePackages, shippedWorkspacePackageRuntimeDigest } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { assertLinkFreeFileParent, atomicWriteWithoutLinks } from '@/backend/services/workspace/backupRestoreFs';
+import { observeInitializationAwait } from '@/backend/initializationDiagnostics';
 
 export interface WorkspaceMcpTransferServer {
   name: string;
@@ -370,7 +371,7 @@ async function existingRuntime(
   if (entry.kind === 'bundled' && config.transport === 'stdio' && config.trustedHost !== undefined) {
     const captured = structuredClone(config);
     const descriptor = shippedDescriptorForConfig(captured);
-    const verified = await verifyTrustedHostMcp(captured);
+    const verified = await observeInitializationAwait('bundled-authority', () => verifyTrustedHostMcp(captured));
     const installation = verified.policy.bundledInstallation;
     const canonical = (value: string) => process.platform === 'win32'
       ? path.resolve(value).toLowerCase() : path.resolve(value);
@@ -380,12 +381,12 @@ async function existingRuntime(
       throw new Error('The approved bundled runtime does not belong to this worker package.');
     }
     if (entry.bundledRuntimeSha256
-      && await shippedWorkspacePackageRuntimeDigest(targetRoot) !== entry.bundledRuntimeSha256) {
+      && await observeInitializationAwait('bundled-digest', () => shippedWorkspacePackageRuntimeDigest(targetRoot)) !== entry.bundledRuntimeSha256) {
       throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
     }
     // Read authoritative storage after the awaited provenance checks. A snapshot
     // marker cannot confer consent, and a concurrent edit must not be overwritten.
-    const current = await loadServerConfigs();
+    const current = await observeInitializationAwait('bundled-config', () => loadServerConfigs());
     const stored = Array.isArray(current) ? current.find(value => value.name === captured.name) : undefined;
     if (!stored || stored.transport !== 'stdio' || !sameTrustedHostConsent(captured, stored)
       || !isDeepStrictEqual(structuredClone(stored), captured)) {
@@ -451,10 +452,10 @@ async function prepareConfig(
     if (!descriptor) throw new Error('The bundled MCP package is unavailable on this worker.');
     // Snapshots omit MCP checkouts: materialize the target distribution, not
     // the source machine's edited package or its dependency junction.
-    await ensureShippedWorkspacePackages(targetWorkspaceRoot, undefined, [descriptor.packageDirectory]);
+    await observeInitializationAwait('bundled-provision', () => ensureShippedWorkspacePackages(targetWorkspaceRoot, undefined, [descriptor.packageDirectory]));
     if (entry.bundledRuntimeSha256) {
       const restoredRoot = path.join(targetWorkspaceRoot, 'mcp-servers', descriptor.packageDirectory);
-      if (await shippedWorkspacePackageRuntimeDigest(restoredRoot) !== entry.bundledRuntimeSha256) {
+      if (await observeInitializationAwait('bundled-digest', () => shippedWorkspacePackageRuntimeDigest(restoredRoot)) !== entry.bundledRuntimeSha256) {
         throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
       }
     }
@@ -529,7 +530,7 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
     || new Set(plan.servers.map(entry => entry.name)).size !== plan.servers.length) {
     throw new Error('Unsupported MCP workspace transfer plan.');
   }
-  const loaded = await mcpService.loadServerConfigs();
+  const loaded = await observeInitializationAwait('transfer-config', () => mcpService.loadServerConfigs());
   if (!Array.isArray(loaded)) throw new Error('Could not load restored MCP server configurations.');
   const byName = new Map(loaded.map(config => [config.name, config]));
   // The snapshot's servers must still exist, but the worker can gain additional
@@ -547,15 +548,16 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
         results.push({ name: entry.name, status: 'disabled' });
         continue;
       }
-      const prepared = await existingRuntime(entry, original, plan) ?? await prepareConfig(entry, original, plan);
+      const prepared = await observeInitializationAwait('transfer-existing', () => existingRuntime(entry, original, plan))
+        ?? await observeInitializationAwait('transfer-prepare', () => prepareConfig(entry, original, plan));
       const { config } = prepared;
-      const saved = await mcpService.updateServerConfig(entry.name, config);
+      const saved = await observeInitializationAwait('transfer-save', () => mcpService.updateServerConfig(entry.name, config));
       if ('success' in saved && !saved.success) throw new Error('Could not save the restored MCP configuration.');
       // A completed build is durable even if its first handshake fails. Retry
       // connection independently so a transient server failure cannot replay installs.
-      await recordPreparedRuntime(entry, prepared, plan);
+      await observeInitializationAwait('transfer-marker', () => recordPreparedRuntime(entry, prepared, plan));
       if (!config.disabled) {
-        const connected = await mcpService.connectServer(entry.name);
+        const connected = await observeInitializationAwait('transfer-connect', () => mcpService.connectServer(entry.name));
         if (!connected.success) throw new Error('MCP connection failed; inspect this server in the worker.');
       }
       results.push({ name: entry.name, status: config.disabled ? 'disabled' : 'ready' });

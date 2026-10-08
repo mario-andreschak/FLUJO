@@ -3,7 +3,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export type InitializationStep = 'layout' | 'snapshot-import' | 'snapshot-restore' | 'snapshot-unlock'
   | 'storage' | 'encryption' | 'secret-services' | 'runtime-snapshot-import' | 'runtime-package-import'
   | 'runtime-snapshot' | 'codex-auth' | 'mcp-reinstall' | 'mcp-start' | 'mcp-config' | 'mcp-status'
-  | 'scheduler-import' | 'scheduler-start';
+  | 'scheduler-import' | 'scheduler-start' | 'transfer-config' | 'transfer-existing'
+  | 'bundled-authority' | 'bundled-digest' | 'bundled-config' | 'transfer-prepare'
+  | 'bundled-provision' | 'transfer-save' | 'transfer-marker' | 'transfer-connect';
 type Diagnostic = Readonly<{ step: InitializationStep; state: 'enter' | 'ready' | 'failed'; elapsedMs: number }>;
 type Scope = { observer: (event: Diagnostic) => unknown; started: number; count: number };
 const scopes = new AsyncLocalStorage<Scope>();

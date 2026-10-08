@@ -57,6 +57,13 @@ diagnostic failures, supplies no readiness or effect authority, and changes no
 timeout or operation. These subphases remain unrun and do not establish the
 cause of an earlier bootstrap timeout.
 
+MCP reinstall subphases distinguish actual transfer-config loading, existing
+runtime lookup, bundled authority verification, runtime digest/config rebind,
+optional preparation/provisioning, config save, preparation marker and actual
+connection. The existing plan validation, provenance checks, preparation branches
+and real handshake remain intact. Categories carry no server names or paths;
+this Source instrumentation supplies neither installation nor execution authority.
+
 The unchanged 75-second effect wait requests at most three actual scheduler
 list/lastRun observations, with each diagnostic wait capped at 500 milliseconds
 inside the original deadline. Output contains only fixed categories: arming,
