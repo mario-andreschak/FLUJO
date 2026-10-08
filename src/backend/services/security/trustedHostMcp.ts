@@ -217,6 +217,42 @@ export async function readPrivateApprovalPairAsync(first: string | undefined, se
   return [values[0], values[1]];
 }
 
+/** One bounded fresh native witness set; never stored or reused by a request. */
+export async function readPrivateApprovalSetAsync(input: readonly string[], signal?: AbortSignal): Promise<unknown[]> {
+  if (!input.length || input.length > 4 || new Set(input).size !== input.length
+      || input.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename) || filename.length > 2048 || filename.includes('\0'))
+      || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const filenames = [...input];
+  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
+  const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
+  const values = filenames.map(filename => readPrivateApprovalContents(filename));
+  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  for (const [index, filename] of filenames.entries()) {
+    assertLinkFree(filename);
+    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  }
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  return values;
+}
+
+/** Final synchronous witness set after every yielding verification phase. */
+export function readPrivateApprovalSet(input: readonly string[], signal?: AbortSignal): unknown[] {
+  if (!input.length || input.length > 4 || new Set(input).size !== input.length
+      || input.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename) || filename.length > 2048 || filename.includes('\0'))
+      || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const filenames = [...input];
+  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
+  const before = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filenames) : undefined;
+  const values = filenames.map(filename => readPrivateApprovalContents(filename));
+  if (before !== undefined && windowsPrivateAuthorityStamp(filenames) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  for (const [index, filename] of filenames.entries()) {
+    assertLinkFree(filename);
+    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  }
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  return values;
+}
+
 async function readPrivateApprovalEvidenceAsync(filename: string | undefined, signal?: AbortSignal) {
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const before = process.platform === 'win32' && filename ? await windowsPrivateAuthorityStampAsync(filename, signal) : undefined;

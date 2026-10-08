@@ -178,13 +178,13 @@ test('real private consent activates only at guarded start, owner drift denies, 
     const originalOwner = fs.readFileSync(ownerFilename);
     const changed = JSON.parse(originalOwner.toString()); changed.credentials = [];
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
-      const actualRead = readerB.readPrivateApprovalAsync;
+      const actualRead = readerB.readPrivateApprovalSetAsync;
       let enter!: () => void, release!: () => void, paused = false;
       const entered = new Promise<void>(resolve => { enter = resolve; });
       const continuation = new Promise<void>(resolve => { release = resolve; });
-      const read = jest.spyOn(readerB, 'readPrivateApprovalAsync').mockImplementation(async (filename, signal) => {
-        const value = await actualRead(filename, signal);
-        if (filename === ownerFilename && !paused) { paused = true; stamp('owner-read:entered'); enter(); await continuation; }
+      const read = jest.spyOn(readerB, 'readPrivateApprovalSetAsync').mockImplementation(async (filenames, signal) => {
+        const value = await actualRead(filenames, signal);
+        if (filenames.includes(ownerFilename) && !paused) { paused = true; stamp('owner-read:entered'); enter(); await continuation; }
         return value;
       });
       const checking = timed('graph-b-drift', () => capturedService.assertEffect());

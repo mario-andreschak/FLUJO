@@ -5,7 +5,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { resolveTrustedHostLaunch } from '@/backend/services/mcp/trustedHost';
 import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import {
-  assertTrustedHostMcpAllowed, fingerprintTrustedHostExecutable,
+  assertTrustedHostMcpAllowed, fingerprintTrustedHostExecutable, readPrivateApprovalSet, readPrivateApprovalSetAsync,
   fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp,
 } from '@/backend/services/security/trustedHostMcp';
 
@@ -60,6 +60,43 @@ it('requires a separate grant and accepts the matching explicit package revision
   delete process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
   expect(() => assertTrustedHostMcpAllowed({ ...config, trustedHost: undefined })).toThrow('explicit owner consent');
+});
+
+it.each(['sync', 'async'] as const)('fresh %s private sets reject mutation of another member during a genuine held read', async mode => {
+  const first = path.join(root, 'set-first.json'), second = path.join(root, 'set-second.json');
+  fs.writeFileSync(first, '{"value":"first"}', { mode: 0o600 });
+  fs.writeFileSync(second, '{"value":"second"}', { mode: 0o600 });
+  const members = [process.env.FLUJO_OWNER_AUTH_FILE!, process.env.FLUJO_MCP_TRUSTED_HOST_FILE!, first, second];
+  expect(mode === 'sync' ? readPrivateApprovalSet(members) : await readPrivateApprovalSetAsync(members)).toHaveLength(4);
+  const expected = fs.lstatSync(first, { bigint: true });
+  const actual = fs.readSync;
+  let changed = false;
+  const read = jest.spyOn(fs, 'readSync').mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+    const count = Reflect.apply(actual, fs, args) as number;
+    if (!changed) {
+      const current = fs.fstatSync(args[0], { bigint: true });
+      if (current.dev === expected.dev && current.ino === expected.ino) {
+        changed = true; fs.writeFileSync(second, '{"value":"changed-during-other-held-read"}');
+      }
+    }
+    return count;
+  });
+  try {
+    if (mode === 'sync') expect(() => readPrivateApprovalSet(members)).toThrow();
+    else await expect(readPrivateApprovalSetAsync(members)).rejects.toThrow();
+    expect(changed).toBe(true);
+  } finally { read.mockRestore(); }
+});
+
+it('bounded private sets refuse duplicate, relative and pre-aborted inputs', async () => {
+  const file = process.env.FLUJO_OWNER_AUTH_FILE!;
+  const abort = new AbortController(); abort.abort();
+  for (const members of [[], [file, file], ['relative.json'], [file, file, file, file, file]]) {
+    expect(() => readPrivateApprovalSet(members)).toThrow();
+    await expect(readPrivateApprovalSetAsync(members)).rejects.toThrow();
+  }
+  expect(() => readPrivateApprovalSet([file], abort.signal)).toThrow();
+  await expect(readPrivateApprovalSetAsync([file], abort.signal)).rejects.toThrow();
 });
 
 it.each(['inherited', 'field-accessor', 'map-accessor'])('refuses %s environment values without invoking getters', kind => {
