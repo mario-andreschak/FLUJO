@@ -171,6 +171,7 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   const data = path.join(sandbox, 'worker');
   let worker = launch(data, workerEnv);
   const boot = await worker.wait(message => message.phase === 'bootstrapped');
+  snapshot.journal = boot.journal;
   expect(boot.status.state).toBe('ready');
   expect(boot.plans.find((row: Reply) => row.execution.id === 'copied-plan').status.workerRecovery.eligible).toBe(false);
   const planId = randomUUID();
@@ -214,6 +215,9 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
     .toBe('no-local-provenance');
   await crossMinute();
   expect(await effects(snapshot.journal)).toHaveLength(2);
+  // The exported sibling journal includes the one completed effect at export;
+  // no locally enrolled copied row may append another effect in its own tree.
+  expect(await effects(siblingBoot.journal)).toHaveLength(1);
   await sibling.request('stop'); await sibling.exit();
 });
 
@@ -231,6 +235,7 @@ it.each(['invalid-provenance', 'generation-changed', 'retired', 'not-opted-in'] 
       FLUJO_SNAPSHOT_CONTROL_TOKEN: randomUUID() };
     let worker = launch(data, env);
     const boot = await worker.wait(message => message.phase === 'bootstrapped');
+    snapshot.journal = boot.journal;
     // Pause before creation/enrollment so setup cannot itself schedule an effect.
     await worker.request('pause', { paused: true });
     const planId = randomUUID();

@@ -128,29 +128,28 @@ async function command(message) {
     if (!await secure.initializeEncryption(password) || !await secure.authenticate(password)) {
       throw new Error('Owned seed encryption failed');
     }
-    const scratch = path.resolve(process.env.FLUJO_BOOTSTRAP_EFFECT_ROOT || '');
-    if (!process.env.FLUJO_BOOTSTRAP_EFFECT_ROOT || !fs.statSync(scratch).isDirectory()) {
-      throw new Error('Missing owned effect directory');
-    }
+    // Effect equipment must travel with userdata, not reference parent Temp.
+    const scratch = path.join(source('utils/workspace.ts').getWorkspaceDataDir(), 'userdata', 'worker-bootstrap');
+    fs.mkdirSync(scratch, { recursive: true });
     const program = path.join(scratch, 'effect.cjs');
     const journal = path.join(scratch, 'effects.ndjson');
-    fs.writeFileSync(program, `require('node:fs').appendFileSync(${JSON.stringify(journal)},JSON.stringify({pid:process.pid,at:Date.now()})+'\\n');console.log('owned effect completed');`);
+    fs.writeFileSync(program, "require('node:fs').appendFileSync(require('node:path').join(__dirname,'effects.ndjson'),JSON.stringify({pid:process.pid,at:Date.now()})+'\\n');console.log('owned effect completed');");
     await source('backend/services/mcp/shippedWorkspacePackages.ts').ensureShippedWorkspacePackages(
       source('utils/workspace.ts').getWorkspaceDataDir(), undefined, ['bash']);
     const shipped = source('backend/services/mcp/shippedServers.ts');
     const descriptor = shipped.SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'bash');
-    const config = { ...shipped.createShippedServerConfig(descriptor), name: 'bash', disabled: false,
+    const config = { ...shipped.createShippedServerConfig(descriptor, {}), name: 'bash', disabled: false,
       roots: [scratch], env: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch } };
     if (!(await source('backend/services/mcp/config.ts').saveConfig(new Map([['bash', config]]))).success) {
       throw new Error('Seed MCP config failed');
     }
     const quote = value => process.platform === 'win32' ? "'" + value.replace(/'/g, "''") + "'"
       : "'" + value.replace(/'/g, "'\\''") + "'";
-    const command = (process.platform === 'win32' ? '& ' : '') + quote(process.execPath) + ' ' + quote(program);
+    const command = (process.platform === 'win32' ? '& ' : '') + quote(process.execPath) + ' ' + quote('effect.cjs');
     const compiled = source('utils/shared/flowSpecCompiler.ts').compileFlowSpec({
       name: 'Owned real bootstrap effect', nodes: [{ key: 'start', type: 'start' },
         { key: 'effect', type: 'static', entries: [{ kind: 'toolCall', executionMode: 'real',
-          serverName: 'bash', toolName: 'run', argumentsJson: JSON.stringify({ command, cwd: scratch, timeout: 10 }),
+          serverName: 'bash', toolName: 'run', argumentsJson: JSON.stringify({ command, cwd: 'userdata/worker-bootstrap', timeout: 10 }),
           result: '', captureVariable: 'effect', resultFormat: 'text', onError: 'fail' }] },
         { key: 'finish', type: 'finish' }],
       edges: [{ from: 'start', to: 'effect' }, { from: 'effect', to: 'finish' }],
@@ -205,7 +204,8 @@ async function command(message) {
     });
   });
   send({ phase: 'bootstrapped', status, plans: await scheduler.list(),
-    workspaceDataDir: source('utils/workspace.ts').getWorkspaceDataDir() });
+    workspaceDataDir: source('utils/workspace.ts').getWorkspaceDataDir(),
+    journal: path.join(source('utils/workspace.ts').getWorkspaceDataDir(), 'userdata', 'worker-bootstrap', 'effects.ndjson') });
 })().catch(async error => {
   await sendFlushed({ phase: 'failed', error: String(error.stack || error) });
   let cleaned = false;
