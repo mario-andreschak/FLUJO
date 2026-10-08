@@ -23,7 +23,8 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
-import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createPersonaNativeOriginalHost,
+  createWorkerNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
@@ -1176,16 +1177,21 @@ export class ModelHandler {
       input = { ...input, nativeOriginalHost: await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
         conversationId, runId, nodeId, modelId, personaAttribution: input.personaAttribution }) };
     }
+    if (!input.nativeOriginalHost && input.executionExtensionContext) {
+      input = { ...input, nativeOriginalHost: await createWorkerNativeOriginalHost({ context: input.executionExtensionContext,
+        conversationId, runId, nodeId, modelId }) };
+    }
     if (input.nativeOriginalHost) {
       assertNativeOriginalProcessHost(input.nativeOriginalHost.process);
+      assertNativeOriginalExecutionContext(input.nativeOriginalHost.process, input.executionExtensionContext);
       input = { ...input, nativeBrokerAuthority: input.nativeOriginalHost.broker,
         nativeInvocationSessionHook: input.nativeOriginalHost.session };
     }
     if (input.nativeBrokerAuthority) {
       assertNativeBrokerAuthority(input.nativeBrokerAuthority);
-      if (!conversationId || !runId || !nodeId || input.executionExtensionContext
+      if (!conversationId || !runId || !nodeId || input.executionExtensionContext && !input.nativeOriginalHost
         || modelIsFallbackPolicy || (modelAdapter !== 'codex-cli' && modelAdapter !== 'claude-cli')) {
-        throw new Error('Native broker requires an owned native model run and cannot use a private extension or fallback route.');
+        throw new Error('Native broker requires an owned native model run and a matching private host, without fallback.');
       }
     }
     if (input.nativeInvocationSessionHook) {
@@ -2007,12 +2013,15 @@ export class ModelHandler {
       if (opts?.executionExtensionContext) {
         await assertExecutionExtensionCurrent(opts.executionExtensionContext);
       }
+      if (opts?.nativeOriginalProcessHost) {
+        assertNativeOriginalExecutionContext(opts.nativeOriginalProcessHost, opts.executionExtensionContext);
+      }
       // Get the model
       const model = await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
       // Native adapters require a trusted, verified restriction profile. Claude
       // remains excluded until its native capabilities can be equivalently gated.
-      if (opts?.executionExtensionContext) {
+      if (opts?.executionExtensionContext && !opts.nativeOriginalProcessHost) {
         if (model?.adapter === 'claude-cli' || (model?.adapter === 'codex-cli'
           && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
           throw new ExecutionExtensionError('execution_model_adapter_forbidden');
@@ -2030,7 +2039,7 @@ export class ModelHandler {
       }
       if (opts?.nativeBrokerAuthority) {
         assertNativeBrokerAuthority(opts.nativeBrokerAuthority);
-        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext
+        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext && !opts.nativeOriginalProcessHost
           || model.fallbackPolicy || (model.adapter !== 'codex-cli' && model.adapter !== 'claude-cli')) {
           throw new Error('Native broker requires a fully owned native model attempt.');
         }

@@ -21,10 +21,14 @@ import { qualifyNativeCodex, assertNativeCodexQualification } from '@/backend/se
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
 import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
 import { readNativeHeldFile } from './nativeHeldFile';
+import { commitExecutionExtensionMutation, executionExtensionNativeWorkerRoot, executionExtensionSupportsNativeWorkerRoot, executionExtensionSignal,
+  type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
-type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
+type Binding = { workspace: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
-  conversationId: string; runId: string; flow: Flow; planDigest: string; authority: FlowExecutionAuthority };
+  conversationId: string; runId: string; flow: Flow; planDigest: string; authority: FlowExecutionAuthority } & (
+  { kind: 'persona'; personaId: string; activityId: string }
+  | { kind: 'worker'; workerId: string; targetDigest: string; context: ExecutionExtensionContext });
 const registryRoot = globalThis as typeof globalThis & { __flujoNativeOriginalAuthorities?: WeakMap<object, Binding> };
 const bindings = registryRoot.__flujoNativeOriginalAuthorities ??= new WeakMap<object, Binding>();
 /** Causal wrappers keep the root's hold. A child is not thereby accepted as a
@@ -33,6 +37,9 @@ export { inheritNativeOriginalAuthority } from '../nativeOriginalAuthorityInheri
 const held = (): never => { throw new Error('Native Original authority or reservation is held.'); };
 const positive = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, adapter: value?.adapter,
+  provider: value?.provider, maxTurns: value?.maxTurns, temperature: value?.temperature,
+  reasoningEffort: value?.reasoningEffort, fallbackPolicy: value?.fallbackPolicy });
 type Reservation = { invocationId: string; descriptorDigest: string; owner: NativeInvocationSession['descriptor']['receipt']['owner'];
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
@@ -40,7 +47,8 @@ type Reservation = { invocationId: string; descriptorDigest: string; owner: Nati
   sdkUsage?: { source: 'claude-sdk-result'|'codex-app-server-usage'; numTurns?: number; appServerTurns?:number; inputTokens?: number;
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
   identity?: ClaudeOwnedProcessRegistration['identity']; sdkOutcome?: string; exit?: { code: number | null; signal: NodeJS.Signals | null } };
-type Ledger = { version: 1; goalId: string; personaId: string; reservations: Reservation[] };
+type Ledger = ({ version: 1; goalId: string; personaId: string }
+  | { version: 2; kind: 'worker'; goalId: string; workerId: string }) & { reservations: Reservation[] };
 type FacadeOwner = Readonly<Record<string, unknown>>;
 type TerminalExpectation = {
   expectedOwner: NativeInvocationSession['descriptor']['receipt']['owner'];
@@ -63,9 +71,16 @@ export interface NativeOriginalSourceReader {
 const hostRoot = globalThis as typeof globalThis & {
   __flujoNativeOriginalHosts?: WeakSet<object>;
   __flujoNativeOriginalReaders?: WeakMap<object, NativeOriginalSourceReader>;
+  __flujoNativeOriginalHostContexts?: WeakMap<object, ExecutionExtensionContext>;
 };
 const hosts = hostRoot.__flujoNativeOriginalHosts ??= new WeakSet<object>();
 const sourceReaders = hostRoot.__flujoNativeOriginalReaders ??= new WeakMap<object, NativeOriginalSourceReader>();
+const hostContexts = hostRoot.__flujoNativeOriginalHostContexts ??= new WeakMap<object, ExecutionExtensionContext>();
+/** A Persona host cannot be combined with a private Worker context. */
+export function assertNativeOriginalExecutionContext(host: unknown, context?: ExecutionExtensionContext): void {
+  assertNativeOriginalProcessHost(host);
+  if (hostContexts.get(host) !== context) return held();
+}
 /** In-process access only. JSON, a PID, or caller-supplied lifecycle callbacks
  * cannot recover a reader for an existing Original. No transport is exposed. */
 export function nativeOriginalSourceReader(host: unknown): NativeOriginalSourceReader {
@@ -75,8 +90,13 @@ export function nativeOriginalSourceReader(host: unknown): NativeOriginalSourceR
 export function assertNativeOriginalProcessHost(value: unknown): asserts value is NativeOriginalProcessHost {
   if (!value || typeof value !== 'object' || !hosts.has(value)) return held();
 }
+const ledgerOwner = (binding: Binding) => binding.kind === 'persona'
+  ? [binding.personaId, binding.goalId] : ['worker', binding.workerId, binding.goalId];
+const ledgerHeader = (binding: Binding) => binding.kind === 'persona'
+  ? { version: 1 as const, goalId: binding.goalId, personaId: binding.personaId }
+  : { version: 2 as const, kind: 'worker' as const, goalId: binding.goalId, workerId: binding.workerId };
 const ledgerFile = (binding: Binding) => path.join(getWorkspaceDataDir(binding.workspace), 'db',
-  'native-session-origins', 'host-ledger', `${nativeDigest([binding.personaId, binding.goalId])}.json`);
+  'native-session-origins', binding.kind === 'persona' ? 'host-ledger' : 'worker-host-ledger', `${nativeDigest(ledgerOwner(binding))}.json`);
 const privateOwner = (stat: { mode: bigint; uid: bigint }): boolean => process.platform === 'win32'
   || ((stat.mode & BigInt(0o077)) === BigInt(0) && stat.uid === BigInt(process.getuid!()));
 async function assertDirectories(binding: Binding): Promise<void> {
@@ -97,13 +117,12 @@ async function readLedger(binding: Binding): Promise<Ledger> {
   let bytes;
   try { bytes = await readNativeHeldFile(file, 256 * 1024, { privateOwner: true }); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1,
-      goalId: binding.goalId, personaId: binding.personaId, reservations: [] };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ...ledgerHeader(binding), reservations: [] };
     throw error;
   }
     await assertDirectories(binding);
     const value = JSON.parse(bytes.toString('utf8')) as Ledger;
-    if (value.version !== 1 || value.goalId !== binding.goalId || value.personaId !== binding.personaId
+    if (Object.entries(ledgerHeader(binding)).some(([key, expected]) => (value as unknown as Record<string, unknown>)[key] !== expected)
       || !Array.isArray(value.reservations) || value.reservations.length > 256
       || value.reservations.some(item => !item.invocationId || !item.acceptanceDigest
         || !['accepted', 'registered', 'exited', 'released'].includes(item.state))) return held();
@@ -137,7 +156,7 @@ function cleanupOwnedTemporary(binding: Binding, temporary: string, fd: number,
 }
 
 async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>, cap: CommitCapability): Promise<T> {
-  return withWorkspaceMutation(() => withWorkspaceRuntimeLock(`native-original-${nativeDigest([binding.personaId, binding.goalId]).slice(0, 32)}`, async lock => {
+  return withWorkspaceMutation(() => withWorkspaceRuntimeLock(`native-original-${nativeDigest(ledgerOwner(binding)).slice(0, 32)}`, async lock => {
     const directory = path.dirname(ledgerFile(binding));
     // Admit each private directory separately before following the next segment.
     for (const part of [path.dirname(directory), directory]) {
@@ -221,7 +240,7 @@ export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutio
     if (!goal?.goal || goal.goal.state !== 'active' || goal.goal.pendingDispatchId !== input.dispatchId
       || goal.goal.pendingTaskId !== task.id || task.revokedGoalDispatchId === input.dispatchId) return held();
     const flow = structuredClone(input.flow);
-    const binding: Binding = { ...input, workspace: getCurrentWorkspace(), goalId: goal.id,
+    const binding: Binding = { ...input, kind: 'persona', workspace: getCurrentWorkspace(), goalId: goal.id,
       round: goal.goal.rounds, flow, planDigest: nativeDigest([input.revisionId, flow]), authority };
     // A later lease, model or Activity cannot evade an unresolved original.
     const prior = await readLedger(binding);
@@ -244,12 +263,75 @@ export interface NativeOriginalProcessHost {
   confirmHandoffTermination(invocationId: string, toolInvocationIds: readonly string[]): Promise<void>;
 }
 
-/** Only a live branded Persona root run can produce the runtime capabilities. */
-export async function createPersonaNativeOriginalHost(input: {
+type NativeOriginalHostInput = {
   authority?: FlowExecutionAuthority; conversationId?: string; runId?: string; nodeId?: string;
   modelId: string;
   personaAttribution?: PersonaAttribution;
-}): Promise<{ broker: ReturnType<typeof createNativeBrokerAuthority>;
+};
+
+/** Only a live branded Persona root run can use the Persona mint. */
+export async function createPersonaNativeOriginalHost(input: NativeOriginalHostInput) {
+  const binding = input.authority && bindings.get(input.authority);
+  if (binding && binding.kind !== 'persona') return held();
+  return createBoundNativeOriginalHost(input);
+}
+
+/** Worker roots use their real protected execution context and live Source
+ * conversation. Flow metadata cannot choose the owner or manufacture a lease.
+ * This root-only mint does not qualify any Controller transport or image. */
+export async function createWorkerNativeOriginalHost(input: Omit<NativeOriginalHostInput, 'authority' | 'personaAttribution'> & {
+  context: ExecutionExtensionContext;
+}) {
+  if (!executionExtensionSupportsNativeWorkerRoot(input.context)) return undefined;
+  const { modelService } = await import('@/backend/services/model');
+  const model = await modelService.getModel(input.modelId);
+  if (model?.adapter !== 'codex-cli') return undefined;
+  if (!input.conversationId || !input.runId || !input.nodeId) return held();
+  const { FlowExecutor } = await import('../FlowExecutor');
+  const state = FlowExecutor.conversationStates.get(input.conversationId);
+  if (!state?.flowSnapshot) return held();
+  if (state.executionExtensionContext !== input.context || state.logicalRunId !== input.runId
+    || state.personaAttribution || state.runDepth !== 0) return held();
+  const flow = structuredClone(state.flowSnapshot);
+  if (Buffer.byteLength(JSON.stringify(flow)) > 1024 * 1024) return held();
+  const node = flow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
+  if (!node || node.data.properties?.boundModel !== input.modelId) return held();
+  const expected = { conversationId: input.conversationId, runId: input.runId, workspace: getCurrentWorkspace(),
+    flowId: flow.id, flowDigest: nativeDigest(flow), modelId: input.modelId, modelDigest: nativeDigest(modelPlan(model)) };
+  const selected = await executionExtensionNativeWorkerRoot(input.context, expected);
+  if (!selected) return held();
+  if (model?.adapter !== 'codex-cli' || model.ApiKey?.trim() || model.fallbackPolicy) return held();
+  const signal = executionExtensionSignal(input.context);
+  if (!signal) return held();
+  const ownerDigest = nativeDigest(selected);
+  const assertCurrent = async () => {
+    signal.throwIfAborted();
+    if (getCurrentWorkspace() !== expected.workspace || FlowExecutor.conversationStates.get(expected.conversationId) !== state
+      || state.executionExtensionContext !== input.context || state.logicalRunId !== expected.runId
+      || nativeDigest(state.flowSnapshot) !== expected.flowDigest
+      || nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== expected.modelDigest) return held();
+    const current = await executionExtensionNativeWorkerRoot(input.context, expected);
+    if (!current || nativeDigest(current) !== ownerDigest) return held();
+    signal.throwIfAborted();
+  };
+  const authority: FlowExecutionAuthority = Object.freeze({ signal, assertCurrent,
+    commitWhileCurrent: <T>(task: () => Promise<T>) => commitExecutionExtensionMutation(input.context, async () => {
+      await assertCurrent(); return task();
+    }) });
+  const binding: Binding = { kind: 'worker', workerId: selected.workerId, targetDigest: selected.targetDigest,
+    context: input.context, workspace: selected.workspace, dispatchId: selected.fleetRunId, goalId: selected.goalId,
+    round: 1, revisionId: selected.flowDigest, leaseEpoch: selected.leaseEpoch, conversationId: selected.rootConversationId,
+    runId: selected.logicalRunId, flow, planDigest: nativeDigest([selected.flowDigest, flow]), authority };
+  await authority.commitWhileCurrent!(async () => {
+    const prior = await readLedger(binding);
+    if (prior.reservations.some(item => item.state !== 'released')) return held();
+    bindings.set(authority, binding);
+  });
+  return createBoundNativeOriginalHost({ ...input, authority });
+}
+
+async function createBoundNativeOriginalHost(input: NativeOriginalHostInput): Promise<{
+  broker: ReturnType<typeof createNativeBrokerAuthority>;
   session: ReturnType<typeof createNativeInvocationSessionHook>; process: NativeOriginalProcessHost } | undefined> {
   const binding = input.authority && bindings.get(input.authority);
   if (!binding && !input.personaAttribution) return undefined;
@@ -277,12 +359,10 @@ export async function createPersonaNativeOriginalHost(input: {
   if (model.id !== input.modelId || model.fallbackPolicy) return held();
   if(model.adapter==='codex-cli' && model.ApiKey?.trim())return held();
   const maxTurns = positive(node.data.properties?.maxTurns) ?? positive(model.maxTurns) ?? DEFAULT_AGENTIC_MAX_TURNS;
-  const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, adapter: value?.adapter,
-    provider: value?.provider, maxTurns: value?.maxTurns, temperature: value?.temperature,
-    reasoningEffort: value?.reasoningEffort, fallbackPolicy: value?.fallbackPolicy });
   const modelPlanDigest = nativeDigest(modelPlan(model));
   const assertGoalCurrent = async () => {
     authority.signal.throwIfAborted();
+    if (binding.kind === 'worker') return authority.assertCurrent();
     const goal = await getPersonaWorkItem(binding.personaId, binding.goalId);
     if (!goal?.goal || goal.goal.state !== 'active' || goal.goal.rounds !== binding.round
       || goal.goal.pendingDispatchId !== binding.dispatchId) return held();
@@ -305,7 +385,7 @@ export async function createPersonaNativeOriginalHost(input: {
   const terminationProtocol=model.adapter==='codex-cli'?CODEX_HANDOFF_PROTOCOL:NATIVE_HANDOFF_PROTOCOL;
   const broker = createNativeBrokerAuthority(binding.leaseEpoch, assertCurrent);
   const root = createNativeLineageRootBinding({ workspace: binding.workspace, fleetRunId: binding.dispatchId,
-    workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
+    workerId: binding.kind === 'persona' ? binding.activityId : binding.workerId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
   let original: NativeInvocationSession | undefined;
   let child: ClaudeOwnedProcessRegistration | CodexOwnedProcessRegistration | undefined;
@@ -559,5 +639,6 @@ export async function createPersonaNativeOriginalHost(input: {
   });
   hosts.add(processHost);
   sourceReaders.set(processHost, sourceReader);
+  if (binding.kind === 'worker') hostContexts.set(processHost, binding.context);
   return { broker, session, process: Object.freeze(processHost) };
 }

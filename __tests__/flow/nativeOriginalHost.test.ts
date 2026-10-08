@@ -90,7 +90,10 @@ import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend'
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { createPersonaNativeOriginalHost, nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext,
+  nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createExecutionExtensionContext, registerExecutionExtension, runWithExecutionInput,
+  type ExecutionExtensionAdapter, type ExecutionNativeWorkerRoot } from '@/backend/execution/extensions';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
 import { nativeDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
@@ -263,6 +266,132 @@ async function ledger() {
   const files = await fs.readdir(folder);
   return JSON.parse(await fs.readFile(path.join(folder, files.find(file => file.endsWith('.json'))!), 'utf8'));
 }
+
+/** Deterministic trusted-adapter enrollment records; no cloud Worker, account
+ * or live provider is present. Source context, journals and child are real. */
+async function withWorkerClaim(task: (input: {
+  host: NonNullable<Awaited<ReturnType<typeof createWorkerNativeOriginalHost>>>;
+  invoke: () => Promise<{ success: boolean }>;
+  autoInvoke: () => Promise<{ success: boolean }>;
+  enrollment: { active: boolean; root: ExecutionNativeWorkerRoot };
+  context: ReturnType<typeof createExecutionExtensionContext>;
+  state: SharedState;
+  workerLedger: () => Promise<{ version: number; kind: string; workerId: string; reservations: Record<string, unknown>[] }>;
+}) => Promise<void>) {
+  await runWithWorkspace(`native-worker-${process.pid}-${++sequence}`, async () => {
+    selectedModel = { ...modelFixture, name: 'gpt-6-luna', provider: 'codex', adapter: 'codex-cli', ApiKey: '', reasoningEffort: 'medium' };
+    const flow = { id: 'flow-worker-owned', name: 'Owned Worker fixture', nodes: [{ id: 'node-worker-owned',
+      position: { x: 0, y: 0 }, data: { type: 'process', name: 'Worker', properties: { boundModel: 'model-test', maxTurns: 3 } } }], edges: [] } as unknown as NonNullable<SharedState['flowSnapshot']>;
+    const state = { conversationId: 'worker-root-conversation', logicalRunId: 'worker-logical-run', flowId: flow.id,
+      flowSnapshot: flow, currentNodeId: 'node-worker-owned', source: 'api', status: 'running', runDepth: 0,
+      createdAt: Date.now(), updatedAt: Date.now(), messages: [] } as unknown as SharedState;
+    const enrollment = { active: true, root: { version: 1, workerId: 'worker-enrolled-fixture', goalId: 'goal-worker-fixture',
+      fleetRunId: 'fleet-root-fixture', rootConversationId: state.conversationId!, logicalRunId: state.logicalRunId!,
+      workspace: `native-worker-${process.pid}-${sequence}`, targetDigest: 'a'.repeat(64), flowDigest: nativeDigest(flow),
+      leaseEpoch: 'source-worker-lease-fixture', modelId: 'model-test', modelDigest: nativeDigest({
+        id: selectedModel.id, name: selectedModel.name, adapter: selectedModel.adapter, provider: selectedModel.provider,
+        maxTurns: selectedModel.maxTurns, temperature: selectedModel.temperature, reasoningEffort: selectedModel.reasoningEffort,
+        fallbackPolicy: selectedModel.fallbackPolicy,
+      }) } satisfies ExecutionNativeWorkerRoot };
+    const assertCurrent = async () => { if (!enrollment.active) throw new Error('Fixture Worker admission revoked'); };
+    const adapter: ExecutionExtensionAdapter = {
+      isProtectedServer: () => false, assertServerConfig: () => {}, assertRun: assertCurrent,
+      bindRun: async () => {}, signal: () => controller.signal,
+      commit: async (_context, mutation) => { await assertCurrent(); return mutation(); },
+      protectedServer: () => 'fixture-worker', authorizeHandoffs: () => {}, assertModelTool: assertCurrent,
+      assertDispatch: assertCurrent, normalizeArguments: (_context, _tool, args) => args,
+      requestMeta: async () => ({}), validateResult: (_context, _tool, result) => result,
+      nativeWorkerRoot: async () => { await assertCurrent(); return structuredClone(enrollment.root); },
+    };
+    const controller = new AbortController();
+    const restore = registerExecutionExtension(adapter);
+    const context = createExecutionExtensionContext(adapter, enrollment);
+    Object.defineProperty(state, 'executionExtensionContext', { value: context, enumerable: false, configurable: true });
+    state.executionExtensionOwned = true;
+    await saveCollectionItem('conversations', state.conversationId!, state);
+    FlowExecutor.conversationStates.set(state.conversationId!, state);
+    try {
+      const host = (await createWorkerNativeOriginalHost({ context, conversationId: state.conversationId,
+        runId: state.logicalRunId, nodeId: 'node-worker-owned', modelId: 'model-test' }))!;
+      expect(host).toBeDefined();
+      const invoke = () => runWithExecutionInput({ executionExtensionContext: context, conversationId: state.conversationId,
+        runId: state.logicalRunId }, () => (ModelHandler as unknown as { generateCompletion: (...args: unknown[]) => Promise<{ success: boolean }> })
+        .generateCompletion('model-test', '', [{ id: 'worker-user-fixture', role: 'user', content: 'offline', timestamp: 1 }], [], {
+          conversationId: state.conversationId, runId: state.logicalRunId, nodeId: 'node-worker-owned', archiveModelTurns: true, maxTurns: 3,
+          nativeBrokerAuthority: host.broker, nativeInvocationSessionHook: host.session, nativeOriginalProcessHost: host.process,
+          executionExtensionContext: context, durableContext: { executionExtensionContext: context }, signal: controller.signal,
+        }));
+      const workerLedger = async () => {
+        const folder = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'worker-host-ledger');
+        const files = await fs.readdir(folder);
+        return JSON.parse(await fs.readFile(path.join(folder, files.find(file => file.endsWith('.json'))!), 'utf8'));
+      };
+      const autoInvoke = () => runWithExecutionInput({ executionExtensionContext: context, conversationId: state.conversationId,
+        runId: state.logicalRunId }, () => ModelHandler.callModel({ modelId: 'model-test', prompt: '',
+          messages: [{ id: 'worker-auto-fixture', role: 'user', content: 'automatic offline Source host', timestamp: 1 }], tools: [],
+          conversationId: state.conversationId, runId: state.logicalRunId, nodeId: 'node-worker-owned',
+          executionExtensionContext: context, archiveModelTurns: true, maxTurns: 3, unattended: true,
+          iteration: 1, maxIterations: 3, nodeName: 'Worker',
+        }));
+      await task({ host, invoke, autoInvoke, enrollment, context, state, workerLedger });
+    } finally { restore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
+  });
+}
+
+describe('Worker roots from trusted Source execution contexts / offline model edge', () => {
+  it('acquires the Worker host through production callModel instead of caller-supplied native capabilities', async () => {
+    await withWorkerClaim(async ({ autoInvoke, workerLedger }) => {
+      expect(await autoInvoke()).toMatchObject({ success: true });
+      expect(promptCount).toBe(1);
+      expect((await workerLedger()).reservations[0]).toMatchObject({ state: 'released', sdkOutcome: 'completed', exit: { code: 0, signal: null } });
+    });
+  }, 30000);
+  it('uses actual Worker lineage and its separate journal with no Persona attribution', async () => {
+    await withWorkerClaim(async ({ host, invoke, context, workerLedger }) => {
+      assertNativeOriginalExecutionContext(host.process, context);
+      expect(() => assertNativeOriginalExecutionContext(host.process)).toThrow('held');
+      expect(() => assertNativeOriginalExecutionContext(host.process, {} as never)).toThrow('held');
+      const result = await invoke();
+      if (!result.success) throw new Error(JSON.stringify(result));
+      expect(result).toMatchObject({ success: true });
+      expect(promptCount).toBe(1);
+      const saved = await workerLedger();
+      expect(saved).toMatchObject({ version: 2, kind: 'worker', workerId: 'worker-enrolled-fixture',
+        reservations: [{ state: 'released', sdkOutcome: 'completed', exit: { code: 0, signal: null } }] });
+      const reservation = saved.reservations[0];
+      const origin = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'native-session-origins',
+        `${reservation.invocationId}.json`), 'utf8'));
+      expect(origin.descriptor.lineage).toMatchObject({ workerId: 'worker-enrolled-fixture', goalId: 'goal-worker-fixture',
+        fleetRunId: 'fleet-root-fixture', rootConversationId: 'worker-root-conversation' });
+      await expect(fs.access(path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger')))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  }, 30000);
+  it.each(['revoked', 'target-drift'] as const)('refuses first prompt after %s and retains the Original hold', async condition => {
+    await withWorkerClaim(async ({ invoke, enrollment, workerLedger }) => {
+      beforePrompt = async () => {
+        if (condition === 'revoked') enrollment.active = false;
+        else enrollment.root.targetDigest = 'b'.repeat(64);
+      };
+      expect((await invoke()).success).toBe(false);
+      expect(promptCount).toBe(0);
+      expect((await workerLedger()).reservations[0].state).not.toBe('released');
+    });
+  }, 30000);
+  it('refuses caller contexts, child root relabeling and changed model attestations before an SDK child', async () => {
+    await withWorkerClaim(async ({ enrollment, context, state }) => {
+      const input = { context, conversationId: state.conversationId, runId: state.logicalRunId,
+        nodeId: 'node-worker-owned', modelId: 'model-test' };
+      await expect(createWorkerNativeOriginalHost({ ...input, context: {} as never })).rejects.toThrow('trusted_execution_context_required');
+      state.runDepth = 1;
+      await expect(createWorkerNativeOriginalHost(input)).rejects.toThrow('held');
+      state.runDepth = 0;
+      enrollment.root.modelDigest = '0'.repeat(64);
+      await expect(createWorkerNativeOriginalHost(input)).rejects.toThrow('execution_native_worker_root_invalid');
+      expect(promptCount).toBe(0);
+    });
+  }, 30000);
+});
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
   function selectCodex(){selectedModel={...modelFixture,name:'gpt-6-luna',provider:'codex',adapter:'codex-cli',ApiKey:'',reasoningEffort:'medium'};}

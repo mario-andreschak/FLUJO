@@ -23,7 +23,7 @@ import { steeringSource, watchSteering } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
-import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { CODEX_HANDOFF_PROTOCOL } from '@/backend/execution/flow/handlers/nativeHandoffProtocol';
 import { assertNativeCodexQualification } from './codexNativeQualification';
 import { createOwnedCodexThread } from './codexOwnedThread';
@@ -224,20 +224,21 @@ export class CodexAdapter implements CompletionAdapter {
     } = input;
     if(nativeOriginalProcessHost) {
       assertNativeOriginalProcessHost(nativeOriginalProcessHost);
+      assertNativeOriginalExecutionContext(nativeOriginalProcessHost, executionExtensionContext);
       if(!nativeToolPort || apiKey || nativeOriginalProcessHost.terminationProtocol!==CODEX_HANDOFF_PROTOCOL)throw new Error('Native Codex Original requires its keyless owned broker and process protocol.');
       assertNativeCodexQualification(nativeOriginalProcessHost.codexProfile);
     }
     if (nativeToolPort) {
       assertNativeToolPort(nativeToolPort);
       if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Codex broker requires a durable SDK dispatch receipt.');
-      if (executionExtensionContext || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
+      if (executionExtensionContext && !nativeOriginalProcessHost || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
         || input.steering || input.consumeSteeringMessages || codexSession || onCodexSessionChange) {
         throw new Error('Native Codex broker cannot use host tool facilities or session resume.');
       }
     }
     let privateCodexPath: string | undefined;
     let privateCodexProfile: RestrictedCodexProfile | undefined;
-    if (executionExtensionContext) {
+    if (executionExtensionContext && !nativeOriginalProcessHost) {
       await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
       if (localToolExecutors !== undefined) {
         throw new ExecutionExtensionError('execution_local_tools_forbidden');

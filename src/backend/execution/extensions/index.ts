@@ -11,6 +11,17 @@ export interface ExecutionExtensionContext { readonly [contextBrand]: true }
 /** Retry restriction only; never a grant of inference, spend or replay authority. */
 export interface ExecutionModelAttemptPolicy { version: 1; maxPhysicalAttempts: 1 }
 export type ExecutionModelIdentity = Pick<Model, 'id' | 'name' | 'adapter' | 'provider' | 'baseUrl'>;
+/** Returned only by the trusted server adapter after rereading its enrolled
+ * Worker, current goal/root run and immutable target/graph records. This DTO
+ * alone is not a capability and must never be accepted from Flow/HTTP input. */
+export interface ExecutionNativeWorkerRoot {
+  version: 1; workerId: string; goalId: string; fleetRunId: string;
+  rootConversationId: string; logicalRunId: string; workspace: string;
+  targetDigest: string; flowDigest: string; leaseEpoch: string; modelId: string; modelDigest: string;
+}
+export interface ExecutionNativeWorkerRootRequest {
+  conversationId: string; runId: string; workspace: string; flowId: string; flowDigest: string; modelId: string; modelDigest: string;
+}
 const errorRoot = globalThis as typeof globalThis & { __flujoExecutionExtensionErrors?: WeakSet<object> };
 const trustedErrors = errorRoot.__flujoExecutionExtensionErrors ??= new WeakSet<object>();
 export class ExecutionExtensionError extends Error {
@@ -53,6 +64,10 @@ export interface ExecutionExtensionAdapter {
    * Verify model/endpoint, request, lease, OFF and budget in the owning adapter;
    * public Model records and caller options cannot supply this attestation. */
   modelAttemptPolicy?(context: object, model: ExecutionModelIdentity): ExecutionModelAttemptPolicy | undefined | Promise<ExecutionModelAttemptPolicy | undefined>;
+  /** Root-only native admission. The adapter must independently authenticate
+   * the executing Worker and reread goal, budget, enrollment and OFF gates.
+   * commit() must fence these same records throughout a Source mutation. */
+  nativeWorkerRoot?(context: object, expected: ExecutionNativeWorkerRootRequest): Promise<ExecutionNativeWorkerRoot | undefined>;
 }
 type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object };
 type Access = { conversationId: string; assertCurrent: () => Promise<void> };
@@ -166,6 +181,36 @@ export async function executionExtensionCodexProfile(context: ExecutionExtension
   const item = record(context);
   await item.adapter.assertRun(item.value);
   return item.adapter.codexProfile?.(item.value);
+}
+
+/** No caller callbacks or DTO can select the reader: it comes exclusively from
+ * the currently registered adapter behind the existing opaque context. */
+export function executionExtensionSupportsNativeWorkerRoot(context: ExecutionExtensionContext): boolean {
+  const item = record(context);
+  return typeof item.adapter.nativeWorkerRoot === 'function';
+}
+
+export async function executionExtensionNativeWorkerRoot(context: ExecutionExtensionContext,
+  expected: ExecutionNativeWorkerRootRequest): Promise<ExecutionNativeWorkerRoot | undefined> {
+  const item = record(context);
+  await item.adapter.assertRun(item.value, { conversationId: expected.conversationId, runId: expected.runId });
+  const selected = await item.adapter.nativeWorkerRoot?.(item.value, Object.freeze({ ...expected }));
+  await assertExecutionExtensionCurrent(context, { conversationId: expected.conversationId, runId: expected.runId });
+  if (selected === undefined) return undefined;
+  const fields = ['version', 'workerId', 'goalId', 'fleetRunId', 'rootConversationId', 'logicalRunId',
+    'workspace', 'targetDigest', 'flowDigest', 'leaseEpoch', 'modelId', 'modelDigest'];
+  if (!selected || typeof selected !== 'object' || Array.isArray(selected)
+    || Object.keys(selected).length !== fields.length || Object.keys(selected).some(key => !fields.includes(key))
+    || selected.version !== 1 || fields.slice(1).some(key => typeof selected[key as keyof typeof selected] !== 'string'
+      || !(selected[key as keyof typeof selected] as string).length
+      || (selected[key as keyof typeof selected] as string).length > 160)
+    || selected.rootConversationId !== expected.conversationId || selected.logicalRunId !== expected.runId
+    || selected.workspace !== expected.workspace || selected.flowDigest !== expected.flowDigest
+    || selected.modelId !== expected.modelId || selected.modelDigest !== expected.modelDigest
+    || !/^[a-f0-9]{64}$/.test(selected.targetDigest) || !/^[a-f0-9]{64}$/.test(selected.flowDigest)) {
+    throw new ExecutionExtensionError('execution_native_worker_root_invalid');
+  }
+  return Object.freeze(structuredClone(selected));
 }
 
 /** Resolve a restriction exclusively through the current branded server capability. */
