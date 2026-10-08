@@ -12,7 +12,7 @@ const id = (value: unknown): string => typeof value === 'string' && value.length
 const count = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : unavailable();
 
 /** Only system execution paths and the managed runtime home cross Native's boundary. */
-export function nativeCodexEnvironment(runtime: NodeJS.ProcessEnv, apiKey?: string): NodeJS.ProcessEnv {
+export function nativeCodexEnvironment(runtime: Record<string, string | undefined>, apiKey?: string): NodeJS.ProcessEnv {
   const names = ['PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
     'LANG', 'LC_ALL', 'TZ', 'TERM', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
     'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
@@ -20,7 +20,7 @@ export function nativeCodexEnvironment(runtime: NodeJS.ProcessEnv, apiKey?: stri
     'TMPDIR', 'TMP', 'TEMP', 'CODEX_HOME'];
   const env = Object.fromEntries(names.flatMap(name => runtime[name] === undefined ? [] : [[name, runtime[name]]]));
   if (apiKey) env.CODEX_API_KEY = apiKey;
-  return env;
+  return { ...env, NODE_ENV: 'production' };
 }
 
 /** One adapter-owned public app-server, one new thread, one Original turn.
@@ -74,7 +74,7 @@ export function createOwnedCodexThread(input: {
           const response = record(await child.request('turn/start', { threadId, model: input.options.model,
             effort: input.options.modelReasoningEffort, input: entries }));
           const turnId = id(record(response.turn).id);
-          let usage: { input_tokens: number; output_tokens: number; cached_input_tokens: number } | undefined;
+          let usage: Extract<ThreadEvent, { type: 'turn.completed' }>['usage'] | undefined;
           let terminal = false;
           while (!terminal) {
             options.signal?.throwIfAborted();
@@ -103,7 +103,8 @@ export function createOwnedCodexThread(input: {
             else if (method === 'thread/tokenUsage/updated') {
               const total = record(record(params.tokenUsage).total);
               usage = { input_tokens: count(total.inputTokens), output_tokens: count(total.outputTokens),
-                cached_input_tokens: count(total.cachedInputTokens) };
+                cached_input_tokens: count(total.cachedInputTokens), cache_write_input_tokens: count(total.cacheWriteInputTokens),
+                reasoning_output_tokens: count(total.reasoningOutputTokens) };
             } else if (method === 'item/started' || method === 'item/completed') {
               const item = record(params.item);
               const itemId = id(item.id);

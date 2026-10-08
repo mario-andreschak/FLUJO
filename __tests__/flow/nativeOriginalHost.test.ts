@@ -105,7 +105,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
    if(process.argv[2]==='thread')threadId='foreign_thread';
    if(process.argv[2]==='turn')turnId='foreign_turn';
    send({method:'item/completed',params:{threadId,turnId,item:{id:'native_codex_item',type:'agentMessage',text:'offline codex done'}}});
-   send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0}}}});
+   send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0}}}});
    send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
   },5);
  }
@@ -299,7 +299,7 @@ async function ledger() {
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
   it('runs a genuine Codex Original through its owned public app-server and releases only after exit and pipe close', async () => {
-    selectedModel = { ...modelFixture, provider: 'codex-subscription', adapter: 'codex-cli' } as Model;
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
     const canaries = ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_PRIVATE_OWNER_GRANT', 'MCP_SECRET',
       'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NODE_OPTIONS', 'NODE_PATH'];
     const previous = canaries.map(name => process.env[name]);
@@ -332,7 +332,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
   }, 30000);
   it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
     'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
-      selectedModel = { ...modelFixture, provider: 'codex-subscription', adapter: 'codex-cli' } as Model;
+      selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
       codexForeignScope = mode === 'foreign-thread' ? 'thread' : mode === 'foreign-turn' ? 'turn' : '';
       const events: string[] = [];
       const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));

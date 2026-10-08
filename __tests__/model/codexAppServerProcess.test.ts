@@ -79,7 +79,7 @@ it.each(['throw','stop','abort'])('stops coalesced incoming callbacks immediatel
 function options(mode='normal') {
   const owner={};
   // Explicit minimal environment: fixture tests never inherit account state.
-  const env: NodeJS.ProcessEnv={};
+  const env: NodeJS.ProcessEnv={NODE_ENV:'production'};
   for(const key of ['SystemRoot','SYSTEMROOT','WINDIR','PATH','Path'])if(process.env[key])env[key]=process.env[key];
   return {executable:process.execPath,args:['-e',fixture,path.join(root,'wire.jsonl'),mode],env,cwd:root,owner,
     onNotification:()=>{},register:async(registration: CodexOwnedProcessRegistration)=>{registrations.push(registration);}};
