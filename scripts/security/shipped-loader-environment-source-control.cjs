@@ -20,7 +20,15 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
 }).outputText, filename);
 (async () => {
-  const { buildLaunchEnv } = await import(pathToFileURL(path.join(sourceRoot, 'scripts/launch-next.mjs')).href);
+  // A Source-only checkout may use existing dependencies without installing or
+  // changing its graph. Load the real ESM launcher and the real @next/env module.
+  const launcherResolution = Module.registerHooks({ resolve(name, context, nextResolve) {
+    if (name === '@next/env') return { url: pathToFileURL(require.resolve(name, { paths: [dependencyRoot] })).href, shortCircuit: true };
+    return nextResolve(name, context);
+  } });
+  let buildLaunchEnv;
+  try { ({ buildLaunchEnv } = await import(pathToFileURL(path.join(sourceRoot, 'scripts/launch-next.mjs')).href)); }
+  finally { launcherResolution.deregister(); }
   const { createShippedServerConfig, SHIPPED_MCP_SERVERS } = require(path.join(sourceRoot, 'src/backend/services/mcp/shippedServers.ts'));
   const { trustedHostMcpPolicySchema } = require(path.join(sourceRoot, 'src/backend/services/security/trustedHostMcp.ts'));
   const launch = buildLaunchEnv({});
