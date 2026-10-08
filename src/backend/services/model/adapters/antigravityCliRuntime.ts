@@ -2,6 +2,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { readStableFile } from '@/utils/readStableFile';
 
 export const ANTIGRAVITY_CLI_VERSION = '1.2.13';
 export const ANTIGRAVITY_CLI_TIMEOUT_MS = 5 * 60 * 1000;
@@ -51,11 +52,7 @@ async function seedAccountCache(destination: string): Promise<void> {
   const sourceHome = process.env.ANTIGRAVITY_CLI_HOME?.trim() || os.homedir();
   const source = path.join(sourceHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
   try {
-    const before = await fs.lstat(source);
-    if (!before.isFile() || before.isSymbolicLink() || before.size > 64 * 1024) throw new Error();
-    const bytes = await fs.readFile(source);
-    const after = await fs.lstat(source);
-    if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error();
+    const bytes = await readStableFile(source, 64 * 1024);
     const parsed: unknown = JSON.parse(bytes.toString('utf8'));
     const token = parsed && typeof parsed === 'object' ? (parsed as { token?: unknown }).token : undefined;
     if (!token || typeof token !== 'object'
