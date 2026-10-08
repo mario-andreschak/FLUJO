@@ -11,6 +11,7 @@ import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 // Supply the framework context normally supplied by Next. Chat, its children,
 // providers, services, state, effects, and fetch transport are actual Source.
 const router = {
+  bfcacheId: crypto.randomUUID(),
   back: () => history.back(), forward: () => history.forward(), refresh: () => location.reload(),
   push: (url: string) => history.pushState(null, '', url),
   replace: (url: string) => history.replaceState(null, '', url), prefetch: async () => undefined,

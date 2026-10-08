@@ -34,8 +34,8 @@ test('the source-absent packaged consumer uses the built production issuer and r
   await promisify(execFile)(process.execPath, [path.join(scripts, 'build-smoke-owner-issuer.mjs')]);
   const root = await fs.mkdtemp(path.join(scripts, '.owner-issuer-consumer-'));
   const equipment = path.join(root, 'scripts');
-  await fs.mkdir(equipment);
   try {
+    await fs.mkdir(equipment);
     for (const name of ['smoke-bundled-operator.mjs', 'generated-smoke-owner-issuer.cjs', 'generated-smoke-owner-issuer.json']) {
       await fs.copyFile(path.join(scripts, name), path.join(equipment, name));
     }
