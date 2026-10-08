@@ -155,7 +155,7 @@ const capture: NonNullable<CompletionInput['onSdkRequest']> = async snapshot => 
   adapter: snapshot.adapter, operation: snapshot.operation, attempt: 1,
   canonicalMessages: canonical, genericWire: [{ role: 'user', content: canonical[0].content }], sdkRequest: snapshot.request,
   });
-  return entry.dispatchId;
+  return entry.id;
 };
 
 it('rejects actual archive pressure before Claude query/SDK/HTTP and removes the external abort listener', async () => {
@@ -197,4 +197,3 @@ it('preserves best-effort ordinary diagnostic failures while the actual SDK and 
   expect(queryMock).toHaveBeenCalledTimes(1);
   expect(requests).toHaveLength(1);
 });
-
