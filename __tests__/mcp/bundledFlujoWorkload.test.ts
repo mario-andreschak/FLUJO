@@ -14,6 +14,7 @@ import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/
 import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
+import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 test.each(['FLUJO_MCP_WORKLOAD_TOKEN', 'flujo_mcp_workload_token', 'Flujo_Mcp_Workload_Token',
@@ -93,7 +94,7 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
 });
 
 test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
-  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent'] as const)
+  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry'] as const)
 ('real private consent and fresh guarded workload contract: %s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
@@ -242,6 +243,31 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
     let expectedCloseCount = 1;
+    if (mode === 'retire-quarantine-retry') {
+      const retireOwned = () => retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), capsule, undefined);
+      const actualUnlink = fs.unlinkSync;
+      let injected = 0;
+      const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+        if (path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
+          injected += 1; throw Object.assign(new Error('Owned quarantine unlink fault.'), { code: 'EIO' });
+        }
+        return actualUnlink(filename);
+      });
+      try {
+        expect(retireOwned).toThrow(McpRuntimeAuthorityRetirementError);
+        expect(injected).toBe(1);
+        expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
+        expect(() => createStdioTransport(approved.config)).toThrow(McpRuntimeAuthorityRetirementError);
+        const unrelated = prepareBundledFlujoWorkload(approved.config);
+        if (!unrelated) throw new Error('Genuine unrelated pending authority unavailable.');
+        retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);
+        expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
+      } finally { fault.mockRestore(); }
+      retireOwned();
+      expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).not.toThrow();
+      expect(() => getPendingWorkloadEnvironment(approved.config, capsule)).toThrow();
+      expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+    }
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
       const actualUnlink = fs.unlinkSync;
       let injected = false;
