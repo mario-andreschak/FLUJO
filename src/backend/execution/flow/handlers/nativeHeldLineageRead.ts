@@ -97,13 +97,8 @@ export async function withNativeHeldLineageRead<T>(
     const scope = createHeldReadScope();
     const assertCurrent = (additionalCheck?: () => Promise<void>) => scope.run(async () => {
       if (getCurrentWorkspace() !== workspace) throw new Error('Native held read workspace changed.');
-      await assertDispatcherCurrent();
+      await assertDispatcherCurrent(additionalCheck);
       scope.assertActive();
-      if (additionalCheck) {
-        await additionalCheck();
-        scope.assertActive();
-        await assertDispatcherCurrent();
-      }
       if (registry?.get(root) !== binding) throw new Error('Native held read binding changed.');
     });
     const reader: NativeHeldLineageRead = Object.freeze({

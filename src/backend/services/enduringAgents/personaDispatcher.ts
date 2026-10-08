@@ -4,7 +4,8 @@ import { createHeldReadScope } from '@/backend/execution/flow/heldReadScope';
 
 const authorityRegistryRoot = globalThis as typeof globalThis & { __flujoPersonaFlowAuthorities?: WeakSet<object> };
 const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthorities ??= new WeakSet<object>();
-type HeldFlowReadRunner = <T>(task: (assertCurrent: () => Promise<void>) => Promise<T>) => Promise<T>;
+export type HeldFlowReadAssertion = (additionalCheck?: () => Promise<void>) => Promise<void>;
+type HeldFlowReadRunner = <T>(task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>) => Promise<T>;
 const heldFlowReadRunners = new WeakMap<object, HeldFlowReadRunner>();
 
 /** Pure membership only: no authority callbacks, state reads or private guards. */
@@ -21,7 +22,7 @@ export function assertPersonaHeldReadIssuer(authority: FlowExecutionAuthority): 
 /** Dispatcher-only issuer lookup; lookalike and inherited authorities cannot mint a scope. */
 export async function readWithPersonaFlowAuthority<T>(
   authority: FlowExecutionAuthority,
-  task: (assertCurrent: () => Promise<void>) => Promise<T>,
+  task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>,
 ): Promise<T> {
   assertPersonaHeldReadIssuer(authority);
   const runner = heldFlowReadRunners.get(authority);
@@ -2901,17 +2902,26 @@ export class PersonaFlowDispatcher {
 
     Object.freeze(authority);
     personaFlowAuthorities.add(authority);
-    heldFlowReadRunners.set(authority, <T>(task: (assertCurrent: () => Promise<void>) => Promise<T>) => (
+    heldFlowReadRunners.set(authority, <T>(task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>) => (
       this.inWorkspace(async () => {
         const { readWithPersonaActivityLease } = await import('./activityRuntime');
         return readWithPersonaActivityLease(fence, async (reader) => {
           const scope = createHeldReadScope();
-          const assertCurrent = () => scope.run(async () => {
+          const assertCurrent: HeldFlowReadAssertion = additionalCheck => scope.run(async () => {
             abortController.signal.throwIfAborted();
             if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
             await reader.assertCurrent();
+            scope.assertActive();
             await this.assertGoalDispatchCurrent(record, false);
+            scope.assertActive();
             await reader.assertCurrent();
+            scope.assertActive();
+            if (additionalCheck) {
+              await additionalCheck();
+              scope.assertActive();
+              await reader.assertCurrent();
+              scope.assertActive();
+            }
             abortController.signal.throwIfAborted();
             if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
           });
