@@ -284,8 +284,11 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
       const actualUnlink = fs.unlinkSync;
       const actualClose = fs.closeSync;
+      let closeObserved = false;
       const observedClose = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
-        const before = fd === recordDescriptor ? fs.fstatSync(fd, { bigint: true }) : undefined;
+        const observe = !closeObserved && fd === recordDescriptor;
+        if (observe) closeObserved = true;
+        const before = observe ? fs.fstatSync(fd, { bigint: true }) : undefined;
         actualClose(fd);
         if (before) try {
           const after = fs.lstatSync(path.join(workloadDirectory, `${key}.json`), { bigint: true });
