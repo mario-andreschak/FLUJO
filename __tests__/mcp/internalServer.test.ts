@@ -27,6 +27,7 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
@@ -133,17 +134,21 @@ describe('persisted shipped server configs', () => {
 describe('normal stdio delivery', () => {
   it.each([undefined, '1'])('never logs configured or resolved env values in worker mode %s', (workerMode) => {
     const priorMode = process.env.FLUJO_WORKER_MODE;
+    let approved: ReturnType<typeof installTrustedHostProfile> | undefined;
     try {
+      approved = installTrustedHostProfile({ name: 'secret-env-test', nodeSource: '// Fixed owned logging fixture; not executed.',
+        environmentNames: ['TOKEN', 'LEGACY_TOKEN'] });
       if (workerMode === undefined) delete process.env.FLUJO_WORKER_MODE;
       else process.env.FLUJO_WORKER_MODE = workerMode;
-      const config = {
-        name: 'secret-env-test', transport: 'stdio', command: 'node', args: ['server.js'],
-        rootPath: '.', disabled: false, _installCommand: '', _buildCommand: '',
+      const config: MCPStdioConfig = {
+        ...approved.config,
         env: {
+          ...approved.config.env,
           TOKEN: { value: 'synthetic-wrapped-secret', metadata: { isSecret: true } },
           LEGACY_TOKEN: 'synthetic-legacy-secret',
         },
-      } as MCPStdioConfig;
+      };
+      approved.approve(config);
       const launch = resolveStdioLaunch(config);
       expect(launch.env.TOKEN).toBe('synthetic-wrapped-secret');
       expect(launch.env.LEGACY_TOKEN).toBe('synthetic-legacy-secret');
@@ -152,8 +157,10 @@ describe('normal stdio delivery', () => {
       expect(logs).not.toContain('synthetic-wrapped-secret');
       expect(logs).not.toContain('synthetic-legacy-secret');
     } finally {
-      if (priorMode === undefined) delete process.env.FLUJO_WORKER_MODE;
-      else process.env.FLUJO_WORKER_MODE = priorMode;
+      try { approved?.restore(); } finally {
+        if (priorMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+        else process.env.FLUJO_WORKER_MODE = priorMode;
+      }
     }
   });
 
