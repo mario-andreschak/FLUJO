@@ -46,7 +46,7 @@ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   fs.writeFileSync(path.join(base,'admission-result.json'),JSON.stringify({saturated,fifthStatus:fifth.status,quarantined,recovered},null,2));
 
   browser=await chromium.launch({headless:true,executablePath:process.env.FLUJO_PROFILE_CHROMIUM||'C:/Users/Moe/AppData/Local/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe',args:['--js-flags=--max-old-space-size=128','--enable-precise-memory-info','--disable-gpu']});
-  const context=await browser.newContext(),page=await context.newPage();const equal=cookie.indexOf('=');
+  const context=await browser.newContext({locale:'en-US'}),page=await context.newPage();const equal=cookie.indexOf('=');
   await context.addCookies([{name:cookie.slice(0,equal),value:cookie.slice(equal+1),url:origin,httpOnly:true,sameSite:'Strict'}]);
   await page.route('**/*',route=>route.request().url().startsWith(origin+'/')?route.continue():route.abort());page.on('pageerror',error=>{errors.push(error.message);console.error(error.stack);});
   const system=await browser.newBrowserCDPSession(),metrics=await context.newCDPSession(page);await metrics.send('Performance.enable');
