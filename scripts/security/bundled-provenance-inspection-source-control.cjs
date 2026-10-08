@@ -54,6 +54,15 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const foreign=path.join(owned,'foreign-package');fs.mkdirSync(foreign);fs.writeFileSync(path.join(foreign,'package.json'),'{}');
   await assert.rejects(graph.inspectBundledMcpDependencyGraph(app,[foreign]));
   const hardlink=path.join(a,'hardlink.js');fs.linkSync(path.join(a,'index.js'),hardlink);await assert.rejects(graph.inspectBundledMcpDependencyGraph(app,[a]));fs.unlinkSync(hardlink);
+  const large=path.join(a,'large-hash-only.bin');fs.writeFileSync(large,Buffer.alloc(8*1024*1024));
+  const rssBefore=process.memoryUsage().rss;await graph.inspectBundledMcpDependencyGraph(app,[a]);const rssAfter=process.memoryUsage().rss;
+  for(const operation of['rewrite','grow']){
+   let changed=false;
+   fs.promises.open=async function(...args){const handle=await Reflect.apply(originalOpen,fs.promises,args);if(path.resolve(String(args[0]))===large){const heldRead=handle.read.bind(handle);handle.read=async function(...readArgs){const result=await heldRead(...readArgs);if(result.bytesRead&&!changed){changed=true;if(operation==='grow')fs.appendFileSync(large,'growth');else{const fd=fs.openSync(large,'r+');try{fs.writeSync(fd,Buffer.from('changed'),0,7,0);}finally{fs.closeSync(fd);}}}return result;};}return handle;};
+   try{await assert.rejects(graph.inspectBundledMcpDependencyGraph(app,[a]));assert.equal(changed,true);}finally{fs.promises.open=originalOpen;fs.unlinkSync(large);fs.writeFileSync(large,Buffer.alloc(8*1024*1024));}
+  }
+  fs.truncateSync(large,257*1024*1024);await assert.rejects(graph.inspectBundledMcpDependencyGraph(app,[a]),/byte bound/);fs.unlinkSync(large);
+  console.log(JSON.stringify({sourceControl:'bounded-streaming-dependency-inspection',actualEightMiBFileInspected:true,actualHeldReadRewriteRefused:true,actualHeldReadSizeGrowthRefused:true,actualSparseFileOverGlobalByteBoundRefused:true,rssBefore,rssAfter,scope:'Actual Source inspection mechanics; observed RSS only, no general peak-memory or installed acceptance claim'}));
   const flatNamespace=path.join(owned,'installed/node_modules'),flatApp=path.join(flatNamespace,'flujo-ai'),flatWorkspace=path.join(owned,'flat-workspace');
   fs.mkdirSync(flatApp,{recursive:true});fs.mkdirSync(flatWorkspace);fs.writeFileSync(path.join(flatApp,'package.json'),JSON.stringify({name:'flujo-ai'}));
   fs.cpSync(path.join(app,'mcp-servers'),path.join(flatApp,'mcp-servers'),{recursive:true});
