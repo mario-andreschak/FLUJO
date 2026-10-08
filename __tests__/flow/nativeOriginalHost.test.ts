@@ -32,7 +32,15 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
     const wire = path.join(directory, 'codex-wire.jsonl');
     return actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
       args: ['-e', codexChildFixture, wire, codexForeignScope],
-      register: async registration => { codexRegistrations.push(registration); await input.register(registration); await beforePrompt?.(); },
+      register: async registration => { codexRegistrations.push(registration);
+        let closeObserved = false;
+        void registration.close.then(() => { closeObserved = true; });
+        codexExitWitnesses.push(registration.exit.then(async () => {
+          const pipeCloseObservedAtExit = closeObserved;
+          const reservation = (await ledger()).reservations[0];
+          return { pipeCloseObservedAtExit, stateAtExit: reservation.state };
+        }));
+        await input.register(registration); await beforePrompt?.(); },
       onNotification: message => {
         codexFrames.push(message);
         input.onNotification(message);
@@ -77,6 +85,7 @@ let offeredLateUsage: unknown;
 let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
 let codexFrames: unknown[] = [];
 let codexForeignScope = '';
+let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
 const codexChildFixture = `
 const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
 process.stdin.on('end',()=>{
@@ -117,7 +126,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexRegistrations = []; codexFrames = []; codexForeignScope = "";
+  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = [];
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -301,6 +310,8 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 },
         exit: { code: 0, signal: null } });
       expect(saved.reservations[0].identity.processBirthMarkerV2).toBeTruthy();
+      expect(await codexExitWitnesses[0]).toMatchObject({ pipeCloseObservedAtExit: false });
+      expect((await codexExitWitnesses[0]).stateAtExit).not.toBe('released');
       const wire = (await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
       expect(wire.map(message => message.method)).toEqual(['initialize', 'initialized', 'thread/start', 'turn/start']);
     }, 'no-handoff');
