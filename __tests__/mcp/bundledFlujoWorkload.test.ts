@@ -256,6 +256,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
     let expectedCloseCount = 1;
+    let unknownSiblingCreated = false;
     if (mode === 'retire-acquisition-ambiguous') {
       const actualOpen = fs.openSync, actualStat = fs.fstatSync, actualClose = fs.closeSync, actualUnlink = fs.unlinkSync;
       const recordName = path.join(workloadDirectory, `${key}.json`);
@@ -349,6 +350,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
           // The real held Windows witness prevents the replacement itself.
           // Still prove retirement preserves an unrelated namespace object.
           fs.writeFileSync(path.join(workloadDirectory, 'unknown.json'), '{"unknown":"preserve"}', { mode: 0o600 });
+          unknownSiblingCreated = true;
         }
         if (moved) {
         fs.mkdirSync(workloadDirectory, { mode: 0o700 });
@@ -395,7 +397,8 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     expect(producer).not.toHaveBeenCalled();
     } else { await retire(); }
     expect(close).toHaveBeenCalledTimes(expectedCloseCount);
-    if (mode === 'retire-unknown-parent' && fs.existsSync(path.join(workloadDirectory, 'unknown.json'))) {
+    if (unknownSiblingCreated) {
+      expect(fs.existsSync(path.join(workloadDirectory, 'unknown.json'))).toBe(true);
       expect(fs.readFileSync(path.join(workloadDirectory, 'unknown.json'), 'utf8')).toBe('{"unknown":"preserve"}');
       // Only the fixture owner removes its own unrelated evidence after proving
       // the actual production retirement preserved it.
