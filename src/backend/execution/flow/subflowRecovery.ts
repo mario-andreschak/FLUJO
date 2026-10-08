@@ -183,39 +183,41 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
   const leaseKey = workspaceCacheKey(invocation.id);
   if (leases.has(leaseKey)) return;
   leases.add(leaseKey);
-  invocation.status = 'ready';
-  invocation.resumeRequestedAt = Date.now();
-  invocation.updatedAt = Date.now();
-  await persistSubflowParent(parent);
-
   try {
-    const { runFlow } = await import('./runFlow');
-    log.info('Resuming parent after recovered subflow join became ready', {
-      parentConversationId: parentId,
-      invocationId: invocation.id,
-      nodeId: invocation.parentNodeId,
-    });
-    const result = await runFlow({
-      conversationId: parentId,
-      mode: 'conversation',
-      source,
-      flujo: true,
-      requireApproval: parent.requireApproval ?? false,
-      debug: parent.debugMode ?? false,
-      userTurn: false,
-      depth: parent.runDepth,
-      chainDepth: parent.chainDepth,
-      onApprovalRequired: parent.onApprovalRequired,
-    });
-    // Awaiting this propagation makes nested recovery deterministic. runFlow's
-    // background notification is intentionally redundant and idempotent.
-    await reportSubflowRunOutcome(result);
-  } catch (error) {
-    log.error('Automatic parent continuation after subflow recovery failed', {
-      parentConversationId: parentId,
-      invocationId: invocation.id,
-      error,
-    });
+    invocation.status = 'ready';
+    invocation.resumeRequestedAt = Date.now();
+    invocation.updatedAt = Date.now();
+    await persistSubflowParent(parent);
+
+    try {
+      const { runFlow } = await import('./runFlow');
+      log.info('Resuming parent after recovered subflow join became ready', {
+        parentConversationId: parentId,
+        invocationId: invocation.id,
+        nodeId: invocation.parentNodeId,
+      });
+      const result = await runFlow({
+        conversationId: parentId,
+        mode: 'conversation',
+        source,
+        flujo: true,
+        requireApproval: parent.requireApproval ?? false,
+        debug: parent.debugMode ?? false,
+        userTurn: false,
+        depth: parent.runDepth,
+        chainDepth: parent.chainDepth,
+        onApprovalRequired: parent.onApprovalRequired,
+      });
+      // Awaiting this propagation makes nested recovery deterministic. runFlow's
+      // background notification is intentionally redundant and idempotent.
+      await reportSubflowRunOutcome(result);
+    } catch (error) {
+      log.error('Automatic parent continuation after subflow recovery failed', {
+        parentConversationId: parentId,
+        invocationId: invocation.id,
+        error,
+      });
+    }
   } finally {
     leases.delete(leaseKey);
   }
