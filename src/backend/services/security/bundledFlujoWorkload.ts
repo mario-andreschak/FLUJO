@@ -9,7 +9,7 @@ import { readPlainFile } from '@/utils/readPlainFile';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { ownerPolicySchema } from './ownerCredentials';
 import { ownerPolicyRevision } from './ownerPolicy';
-import { readPrivateApproval, readPrivateApprovalAsync, sameTrustedHostConsent, trustedHostEnvironment,
+import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalPairAsync, sameTrustedHostConsent, trustedHostEnvironment,
   trustedHostMcpApproval, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
 import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeBundledFlujoWorkloadInventory,
   type WorkloadAction } from '../mcp/bundledFlujoWorkloadInventory';
@@ -17,7 +17,7 @@ import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeB
 export const BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV = 'FLUJO_MCP_WORKLOAD_TOKEN';
 export const BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV = 'FLUJO_MCP_WORKLOAD_AUDIENCE';
 const tokenPattern = /^flo_mcp1_[A-Za-z0-9_-]{43}$/;
-type GuardStage = 'record-private' | 'marker-private' | 'owner-private' | 'config-first' | 'package-verification'
+type GuardStage = 'record-marker-private' | 'owner-private' | 'config-first' | 'package-verification'
   | 'inventory' | 'config-latest' | 'owner-latest' | 'config-final' | 'grant-final' | 'owner-final'
   | 'activation-owner' | 'activation-grant' | 'activation-marker' | 'activation-record' | 'activation-owner-final' | 'activation-grant-final';
 function traceAsync<T>(stage: GuardStage, operation: () => Promise<T>): Promise<T> {
@@ -314,9 +314,9 @@ async function evidence(request: Request) {
   if (!ledger || !ownerFile) throw new BundledFlujoWorkloadError();
   const key = hash(match[1]), filename = path.join(directory(ledger), `${key}.json`), markerFilename = path.join(directory(ledger), `${key}.lease`);
   const recordBefore = fs.lstatSync(filename, { bigint: true });
-  const record = recordSchema.parse(await traceAsync('record-private', () => readPrivateApprovalAsync(filename, request.signal)));
   const markerBefore = fs.lstatSync(markerFilename, { bigint: true });
-  const marker = markerSchema.parse(await traceAsync('marker-private', () => readPrivateApprovalAsync(markerFilename, request.signal)));
+  const [recordValue, markerValue] = await traceAsync('record-marker-private', () => readPrivateApprovalPairAsync(filename, markerFilename, request.signal));
+  const record = recordSchema.parse(recordValue), marker = markerSchema.parse(markerValue);
   if (record.tokenHash !== key || record.issuedAt > Date.now() || record.expiresAt <= Date.now()
       || !identityFields.every(name => String(markerBefore[name]) === record.markerIdentity[name])
       || marker.version !== 1 || marker.generation !== record.generation || marker.state !== 'active'
