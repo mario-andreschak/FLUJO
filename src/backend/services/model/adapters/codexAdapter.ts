@@ -23,6 +23,8 @@ import { steeringSource, watchSteering } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createOwnedCodexThread } from './codexOwnedThread';
 import { paceToolCallArguments } from './toolArgumentPacing';
 import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
@@ -215,7 +217,9 @@ export class CodexAdapter implements CompletionAdapter {
       onNativeSdkLive,
       onNativeSdkFinished,
       nativeToolPort,
+      nativeOriginalProcessHost,
     } = input;
+    if (nativeOriginalProcessHost) assertNativeOriginalProcessHost(nativeOriginalProcessHost);
     if (nativeToolPort) {
       assertNativeToolPort(nativeToolPort);
       if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Codex broker requires a durable SDK dispatch receipt.');
@@ -856,7 +860,7 @@ export class CodexAdapter implements CompletionAdapter {
           : {}),
       };
       if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
-      const codex = new Codex({
+      const codex = nativeOriginalProcessHost ? undefined : new Codex({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
         ...(privateCodexPath ? { codexPathOverride: privateCodexPath } : {}),
         ...(restrictedRuntime ? { configOverrides: restrictedRuntime.configOverrides } : {}),
@@ -876,9 +880,13 @@ export class CodexAdapter implements CompletionAdapter {
         approvalPolicy: 'never',
         ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
       } as const;
-      const thread = resumeThreadId
-        ? codex.resumeThread(resumeThreadId, threadOptions)
-        : codex.startThread(threadOptions);
+      const ownedThread = nativeOriginalProcessHost ? createOwnedCodexThread({
+        host: nativeOriginalProcessHost, env: runtime.env as NodeJS.ProcessEnv,
+        config, options: threadOptions, maxTurns: input.maxTurns!, executable: privateCodexPath,
+      }) : undefined;
+      const thread = ownedThread ?? (resumeThreadId
+        ? codex!.resumeThread(resumeThreadId, threadOptions)
+        : codex!.startThread(threadOptions));
 
       log.debug('createCompletion via Codex SDK', {
         model: model.name,
@@ -940,7 +948,7 @@ export class CodexAdapter implements CompletionAdapter {
           try {
             dispatchId = await onSdkRequest?.({
               adapter: 'codex-cli',
-              operation: 'thread.runStreamed',
+              operation: ownedThread ? 'app-server.turn/start' : 'thread.runStreamed',
               request: {
                 input: nextTurnInput,
                 options: { signal: '[AbortSignal]' },
@@ -971,6 +979,7 @@ export class CodexAdapter implements CompletionAdapter {
           });
 
           for await (const event of events) {
+            await nativeOriginalProcessHost?.assertOutputCurrent();
             if (signal?.aborted) break;
             if (turnSteering || steeringFailure) break;
             const liveProgress = event.type === 'turn.started'
@@ -1089,6 +1098,7 @@ export class CodexAdapter implements CompletionAdapter {
               // handlers already record each call/result pair (with approval and
               // bounding applied), so mirroring the item would duplicate them.
             } else if (event.type === 'turn.completed') {
+              await nativeOriginalProcessHost?.observeSdkUsage(event);
               usage = event.usage as CodexUsageLike;
               completedTurn = true;
             } else if (event.type === 'turn.failed') {
@@ -1110,6 +1120,7 @@ export class CodexAdapter implements CompletionAdapter {
           // model requiring a newer CLI) instead of replacing it with stderr.
           attemptFailure ??= err instanceof Error ? err : new Error(String(err));
         } finally {
+          if (ownedThread?.closureConfirmed()) await nativeOriginalProcessHost!.waitForExit();
           if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
           await watcher.stop();
           abortController.signal.removeEventListener('abort', abortTurn);
@@ -1210,7 +1221,7 @@ export class CodexAdapter implements CompletionAdapter {
       signal?.removeEventListener('abort', onExternalAbort);
       await bridge?.close().catch(() => undefined);
       try {
-        if (runtimeHome && capturedThreadId) {
+        if (runtimeHome && capturedThreadId && !nativeOriginalProcessHost) {
           const snapshot = await readCodexTokenSnapshot(runtimeHome, capturedThreadId);
           if (snapshot && snapshot.timestamp >= invocationStartedAt) {
             contextUsage = snapshot.contextUsage;

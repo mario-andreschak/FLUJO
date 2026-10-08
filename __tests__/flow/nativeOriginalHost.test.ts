@@ -17,8 +17,32 @@ jest.mock('@/backend/services/model', () => ({ modelService: {
   loadModels: async () => [selectedModel],
 } }));
 jest.mock('@/backend/services/model/adapters', () => ({ getCompletionAdapter: () =>
-  new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
-    '@/backend/services/model/adapters/claudeSubscriptionAdapter').ClaudeSubscriptionAdapter)() }));
+  selectedModel.adapter === 'codex-cli'
+    ? new (jest.requireActual<typeof import('@/backend/services/model/adapters/codexAdapter')>(
+      '@/backend/services/model/adapters/codexAdapter').CodexAdapter)()
+    : new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
+      '@/backend/services/model/adapters/claudeSubscriptionAdapter').ClaudeSubscriptionAdapter)() }));
+jest.mock('@openai/codex-sdk', () => ({ Codex: class {
+  constructor() { throw new Error('Native ownership must not use the unowned SDK constructor'); }
+} }), { virtual: true });
+jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/model/adapters/codexAppServerProcess')>(
+    '@/backend/services/model/adapters/codexAppServerProcess');
+  return { ...actual, startOwnedCodexAppServer: async (input: Parameters<typeof actual.startOwnedCodexAppServer>[0]) => {
+    const wire = path.join(directory, 'codex-wire.jsonl');
+    return actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
+      args: ['-e', codexChildFixture, wire],
+      register: async registration => { codexRegistrations.push(registration); await input.register(registration); },
+      onNotification: message => {
+        codexFrames.push(message);
+        input.onNotification(message);
+        if (message.method === 'turn/started') {
+          void (async () => { await afterPrompt?.(); await fs.writeFile(`${wire}.events`, 'ready'); })();
+        }
+      },
+    });
+  } };
+});
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: (...args: unknown[]) => queryMock(...args),
   createSdkMcpServer: (value: unknown) => value,
   tool: (name: string, _description: unknown, _schema: unknown, handler: unknown) => ({ name, handler }) }));
@@ -50,6 +74,29 @@ let afterPrompt: (() => Promise<void>) | undefined;
 let transcriptText = 'done';
 let lateResultFirst = false;
 let offeredLateUsage: unknown;
+let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
+let codexFrames: unknown[] = [];
+const codexChildFixture = `
+const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
+process.stdin.on('end',()=>{
+ require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+ process.exit(0);
+});
+const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ fs.appendFileSync(wire,line+'\\n');const m=JSON.parse(line);if(!m.id)return;
+ if(m.method==='initialize')send({id:m.id,result:{userAgent:'offline'}});
+ else if(m.method==='thread/start')send({id:m.id,result:{model:m.params.model,thread:{id:'native_codex_thread'}}});
+ else if(m.method==='turn/start'){
+  const threadId=m.params.threadId,turnId='native_codex_turn';
+  send({id:m.id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId,turn:{id:turnId}}});
+  const tick=setInterval(()=>{if(!fs.existsSync(wire+'.events'))return;clearInterval(tick);
+   send({method:'item/completed',params:{threadId,turnId,item:{id:'native_codex_item',type:'agentMessage',text:'offline codex done'}}});
+   send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0}}}});
+   send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
+  },5);
+ }
+});`;
 let observedPrompt: unknown;
 
 beforeEach(async () => {
@@ -61,6 +108,7 @@ beforeEach(async () => {
   afterPrompt = undefined; transcriptText = 'done';
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
+  codexRegistrations = []; codexFrames = [];
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -118,6 +166,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   for (const child of children) child.kill('SIGKILL');
+  for (const registration of codexRegistrations) { registration.requestStop(); await registration.close; }
   stopPersonaGoalRuntime();
   if (previousData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = previousData;
   await fs.rm(directory, { recursive: true, force: true });
@@ -218,6 +267,23 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  it('runs a genuine Codex Original through its owned public app-server and releases only after exit and pipe close', async () => {
+    selectedModel = { ...modelFixture, provider: 'codex-subscription', adapter: 'codex-cli' } as Model;
+    await withClaim(async () => {}, async (_personaId, goalId) => {
+      expect(queryMock).not.toHaveBeenCalled();
+      expect(codexRegistrations).toHaveLength(1);
+      expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'turn/completed' })]));
+      const saved = await ledger();
+      expect(saved.goalId).toBe(goalId);
+      expect(saved.reservations).toHaveLength(1);
+      expect(saved.reservations[0]).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+        sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 },
+        exit: { code: 0, signal: null } });
+      expect(saved.reservations[0].identity.processBirthMarkerV2).toBeTruthy();
+      const wire = (await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(wire.map(message => message.method)).toEqual(['initialize', 'initialized', 'thread/start', 'turn/start']);
+    }, 'no-handoff');
+  }, 30000);
   it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
     let rootConversation: string | undefined;
     let rootRun: string | undefined;
