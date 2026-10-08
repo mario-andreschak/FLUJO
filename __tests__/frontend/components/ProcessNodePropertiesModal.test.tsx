@@ -301,6 +301,7 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
       'Review saved goals and tasks',
       'Create ongoing tasks',
       'Create ongoing goals',
+      'Read goal execution status',
       'Update ongoing tasks',
       'Finish ongoing tasks',
       'Keep checklist items for later',
@@ -312,9 +313,12 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
     }
     expect(screen.getByRole('checkbox', { name: 'Use existing memories' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Create ongoing tasks' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Read goal execution status' })).not.toBeChecked();
     expect(screen.queryByText('work_item_create')).not.toBeInTheDocument();
     expect(screen.queryByText('recall')).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Learn & organize' }));
+    expect(screen.getByRole('checkbox', { name: 'Read goal execution status' })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: 'All abilities' }));
     expect(screen.getByRole('checkbox', { name: 'Forget memories' })).toBeChecked();
     expect(screen.getByText('Forgetting takes effect immediately.')).toBeInTheDocument();
@@ -333,6 +337,7 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
           'work_item_list',
           'work_item_create',
           'work_item_goal_create',
+          'work_item_runtime_read',
           'work_item_update',
           'work_item_complete',
           'work_item_promote_todo',

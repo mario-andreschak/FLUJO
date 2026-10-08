@@ -71,6 +71,15 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
       required: ['idempotency_key', 'title', 'success_criteria'],
     },
   },
+  work_item_runtime_read: {
+    name: 'work_item_runtime_read',
+    description: 'Read verified execution status for one Goal owned by this Persona. Returns saved round, dispatch, mailbox, Activity and current lease IDs only when their lineage joins; incomplete evidence is unverified. Explicitly enable this ability in the Persona Flow.',
+    inputSchema: {
+      type: 'object',
+      properties: { goal_id: { type: 'string', minLength: 1, maxLength: 256 } },
+      required: ['goal_id'],
+    },
+  },
   work_item_update: {
     name: 'work_item_update',
     description: 'Update a durable Persona WorkItem, including status, priority, dependencies, deadline, and next action.',
@@ -295,6 +304,14 @@ export async function executePersonaTool(
           sourceRefs: activitySource,
         }, options);
         return { success: true, data: result };
+      }
+      case 'work_item_runtime_read': {
+        const { readPersonaGoalRuntime } = await import('@/backend/services/enduringAgents/goalRuntimeRead');
+        const goalId = z.string().trim().min(1).max(256).parse(args.goal_id);
+        await trusted.executionAuthority.assertCurrent();
+        const data = await readPersonaGoalRuntime(trusted.personaId, goalId);
+        await trusted.executionAuthority.assertCurrent();
+        return { success: true, data };
       }
       case 'work_item_update': {
         const { updatePersonaWorkItem } = await import(
