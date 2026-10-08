@@ -46,6 +46,7 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
     return json({ approved: true, serverName: name, policyDigest: result.policyDigest, expiresAt });
   } catch (error) {
     if (error instanceof BundledConsentError) return error.response;
+    if (!owner.authorization.recheck()) console.warn(`[bundled-consent-approval] ${consentDiagnosticCode(error)}`);
     return json({ error: 'The proposal or private owner approval changed. Review it again.' }, 409);
   }
 }
