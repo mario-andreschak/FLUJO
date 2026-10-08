@@ -6,7 +6,7 @@ import { gzip, gunzip } from 'zlib';
 import { z } from 'zod';
 import { types as utilTypes } from 'node:util';
 import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
-  settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema } from './modelTurnArchiveWriteBudget';
+  settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema, isArchivePlainObject } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -282,8 +282,7 @@ async function sanitizeValue(
     }
     return out;
   }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return '[object omitted]';
+  if (!isArchivePlainObject(value as object)) return '[object omitted]';
   const source = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const childKey in source) {
