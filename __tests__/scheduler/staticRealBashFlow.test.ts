@@ -86,6 +86,7 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   let reviewedBashDigest: string;
 
   async function approveBash() {
+    const approvalStarted = performance.now();
     owner = installBundledFixtureOwner();
     // The same reviewed proposal may be approved again; the protected writer
     // still rechecks the full current proposal and its final publication fence.
@@ -93,6 +94,7 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     bashConfig = (await approveBundledHostConsent(owner.request('bash'), 'bash', {
       runtimeHome: 'host', reviewedDigest: reviewedBashDigest, expiresAt: owner.expiresAt,
     })).config;
+    console.info(JSON.stringify({ bashFixturePhase: 'protected-approval', elapsedMs: performance.now() - approvalStarted }));
   }
 
   beforeAll(async () => {
@@ -112,13 +114,17 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     process.env.FLUJO_DATA_DIR = privateFixture.root;
     delete process.env.FLUJO_PARENT_DATA_DIR;
     if (!firstCase) {
+      const disconnectStarted = performance.now();
       expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true });
       expect(mcpService.getClient('bash')).toBeUndefined();
       owner!.restore();
       owner = undefined;
+      console.info(JSON.stringify({ bashFixturePhase: 'disconnect-and-owner-cleanup', elapsedMs: performance.now() - disconnectStarted }));
     }
     store.clear();
+    const unlockStarted = performance.now();
     await unlockPrivateFixtureInCurrentWorkspace(metadata => { store.set('encryption_key', metadata); });
+    console.info(JSON.stringify({ bashFixturePhase: 'unlock', elapsedMs: performance.now() - unlockStarted }));
     store.set('mcp_servers', { bash: bashConfig });
     if (!firstCase) await approveBash();
     firstCase = false;
