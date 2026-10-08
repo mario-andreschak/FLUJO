@@ -5,6 +5,7 @@ const APP_ROOT = path.join(process.cwd(), 'src', 'app');
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'] as const;
 const INSTALLATION_WIDE = new Set([
   '/api/cloud/instance',
+  '/api/mcp/servers/[name]/host-consent',
   '/api/network-exposure',
   '/api/runtime-environment',
   '/api/telemetry/daily-active',
@@ -53,6 +54,14 @@ describe('workspace route coverage', () => {
       if (source.includes(MARKER)) {
         marked.push(pathname);
         expect(INSTALLATION_WIDE.has(pathname)).toBe(true);
+        if (pathname === '/api/mcp/servers/[name]/host-consent') {
+          expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
+          expect(source).toContain('operatorWorkspace(');
+          expect(source).toContain('resolveOwnerRequest(request, scopes, { requireBearer: true })');
+          expect(source).toContain("const scopes = ['control:admin', 'mcp:access', 'secrets:read'] as const");
+          expect(source).toContain('authorizeExecutionTransport(request)');
+          expect(source).toContain('runWithWorkspace(workspace,');
+        }
         continue;
       }
 
