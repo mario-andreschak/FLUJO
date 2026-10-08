@@ -37,16 +37,15 @@ async function initializePrivateLedger(filename: string, request: Request, autho
   const canonical = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
   if (canonical(await fs.promises.realpath(parent)) !== canonical(parent)) throw new Error('Approval parent must be canonical.');
   let ownerPhase: 'read' | 'schema' = 'read';
-  const owner = await (async () => {
-    try {
+  let owner: ReturnType<typeof ownerPolicySchema.parse>;
+  try {
       const value = await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal);
       ownerPhase = 'schema';
-      return ownerPolicySchema.parse(value);
+      owner = ownerPolicySchema.parse(value);
     } catch (error) {
       try { if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[approval-seed-owner]', 'refused', ownerPhase); } catch { /* Preserve the original failure. */ }
       throw error;
     }
-  })();
   const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
   if (owner.ownerId !== authorization.principal.ownerId || request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
   let handle: fs.promises.FileHandle;
