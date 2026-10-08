@@ -688,7 +688,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   };
 
     Object.defineProperty(prepResult, 'nativeFlowSnapshot', {
-      value: sharedState.flowSnapshot ? structuredClone(sharedState.flowSnapshot) : undefined,
+      value: sharedState.personaAttribution ? sharedState.flowSnapshot : undefined,
       enumerable: false,
     });
     // runFlow's owner/cancellation-registration signal must reach the provider
