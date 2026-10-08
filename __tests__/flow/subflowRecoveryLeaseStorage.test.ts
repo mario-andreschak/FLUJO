@@ -2,12 +2,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs, type BigIntStats } from 'node:fs';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import * as persistence from '@/backend/execution/flow/persistConversationState';
 import { reportSubflowRunOutcome, type SubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import { getCurrentWorkspace, getWorkspaceDbDir, runWithWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
 
 const runFlowMock = jest.fn<Promise<SubflowRunOutcome>, [unknown]>();
+type Persistence = typeof import('@/backend/execution/flow/persistConversationState');
+const persistConversationStateMock = jest.fn<
+  ReturnType<Persistence['persistConversationState']>, Parameters<Persistence['persistConversationState']>
+>();
+jest.mock('@/backend/execution/flow/persistConversationState', () => {
+  const actual = jest.requireActual<Persistence>('@/backend/execution/flow/persistConversationState');
+  return {
+    ...actual,
+    persistConversationState: (...args: Parameters<Persistence['persistConversationState']>) => persistConversationStateMock(...args),
+  };
+});
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (input: unknown) => runFlowMock(input),
 }));
@@ -115,7 +125,7 @@ function family(): { parent: SharedState; outcome: SubflowRunOutcome } {
 
 describe('parent resume lease with real storage', () => {
   const workspaces = ['lease-storage-a', 'lease-storage-b'];
-  const persist = persistence.persistConversationState;
+  const persist = jest.requireActual<Persistence>('@/backend/execution/flow/persistConversationState').persistConversationState;
   let root: string;
   let identity: FixtureIdentity;
   const pendingReports = new Set<Promise<void>>();
@@ -178,6 +188,8 @@ describe('parent resume lease with real storage', () => {
     process.env.FLUJO_DATA_DIR = root;
     delete process.env.FLUJO_PARENT_DATA_DIR;
     runFlowMock.mockReset();
+    persistConversationStateMock.mockReset();
+    persistConversationStateMock.mockImplementation(persist);
     for (const workspace of workspaces) runWithWorkspace(workspace, () => FlowExecutor.conversationStates.clear());
     runFlowMock.mockImplementation(async () => ({ status: 'completed', conversationId: 'lease-parent',
       outputText: 'parent output', sharedState: FlowExecutor.conversationStates.get('lease-parent')! }));
@@ -196,6 +208,7 @@ describe('parent resume lease with real storage', () => {
       fixtureCleanupFailures.delete(root);
     }, [
       () => { jest.restoreAllMocks(); },
+      () => { persistConversationStateMock.mockReset(); persistConversationStateMock.mockImplementation(persist); },
       ...workspaces.map(workspace => () => runWithWorkspace(workspace, () => FlowExecutor.conversationStates.clear())),
       () => {
         if (priorData === undefined) delete process.env.FLUJO_DATA_DIR;
@@ -326,7 +339,7 @@ describe('parent resume lease with real storage', () => {
           if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Snapshot restoration escapes fixture');
         }
       };
-      jest.spyOn(persistence, 'persistConversationState').mockImplementation(async (key, state) => {
+      persistConversationStateMock.mockImplementation(async (key, state) => {
         if (++writes === 2) {
           // The child-result write has succeeded. Block only the subsequent
           // leased resume snapshot, using the real atomic storage writer.
@@ -384,7 +397,7 @@ describe('parent resume lease with real storage', () => {
       const continuing = deferred();
       const allowContinuation = deferred();
       let writes = 0;
-      jest.spyOn(persistence, 'persistConversationState').mockImplementation(async (key, state) => {
+      persistConversationStateMock.mockImplementation(async (key, state) => {
         if (++writes === 2) { persisting.resolve(); await allowPersist.promise; }
         await persist(key, state);
       });
