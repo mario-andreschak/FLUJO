@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
 import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
@@ -148,6 +149,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
     await assertCredentialStoreReady(filePath);
     await assertWorkspaceMutationOwned();
     const dirPath = path.dirname(filePath);
+    await assertBundledFlujoWorkloadEffectCurrent();
     await fs.mkdir(dirPath, { recursive: true });
     const directory = await fs.lstat(dirPath, { bigint: true });
     const canonicalDirectory = await fs.realpath(dirPath);
@@ -158,11 +160,13 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
     let owned: BigIntStats | undefined;
     try {
       await assertWorkspaceMutationOwned();
+      await assertBundledFlujoWorkloadEffectCurrent();
       const handle = await fs.open(tmpPath, 'wx', 0o600);
       created = true;
       try {
         owned = await handle.stat({ bigint: true });
         await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
         await handle.writeFile(data);
         await assertWorkspaceMutationOwned();
         await handle.sync();
@@ -170,7 +174,18 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
         owned = await handle.stat({ bigint: true });
       } finally { await handle.close(); }
       await renameWithRetry(tmpPath, filePath, async () => {
-        const [current, parent, canonicalParent] = await Promise.all([fs.lstat(tmpPath, { bigint: true }), fs.lstat(dirPath, { bigint: true }), fs.realpath(dirPath)]);
+        const witnesses = await Promise.allSettled([
+          fs.lstat(tmpPath, { bigint: true }),
+          fs.lstat(dirPath, { bigint: true }),
+          fs.realpath(dirPath),
+        ]);
+        const [fileWitness, parentWitness, canonicalWitness] = witnesses;
+        if (fileWitness.status === 'rejected') throw fileWitness.reason;
+        if (parentWitness.status === 'rejected') throw parentWitness.reason;
+        if (canonicalWitness.status === 'rejected') throw canonicalWitness.reason;
+        const current = fileWitness.value;
+        const parent = parentWitness.value;
+        const canonicalParent = canonicalWitness.value;
         if (!owned || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
             || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size
             || current.mtimeNs !== owned.mtimeNs || current.ctimeNs !== owned.ctimeNs
@@ -181,6 +196,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
           throw new Error('Atomic write file or parent changed');
         }
         await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
       });
       created = false;
       await assertWorkspaceMutationOwned();
@@ -558,6 +574,7 @@ export async function saveShardedCollectionItem<T extends { id: string; personaI
     }
     await writeFileAtomic(shardedPath, JSON.stringify(value, null, 2));
     try {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(legacyPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -722,6 +739,7 @@ export async function migrateLegacyCollectionItem(
           throw new Error(`Could not verify migrated Persona record ${JSON.stringify(recordId)}.`);
         }
       }
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(legacyPath);
       return 'migrated';
     },
@@ -838,6 +856,7 @@ export async function deleteCollectionItem(collection: string, id: string): Prom
   // the same item.
   await runInWriteChain(`${collection}/${id}`, async () => {
     try {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(filePath);
       log.verbose(`Successfully deleted collection item: ${filePath}`);
     } catch (error) {
@@ -1003,6 +1022,7 @@ export async function migrateArrayFileToCollection<T>(
 
   if (content.trim().length === 0) {
     // Empty legacy file: just archive it out of the way.
+    await assertBundledFlujoWorkloadEffectCurrent();
     await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
     return 0;
   }
@@ -1042,6 +1062,7 @@ export async function migrateArrayFileToCollection<T>(
   }
 
   // Archive the legacy file only after every item has been (re)written.
+  await assertBundledFlujoWorkloadEffectCurrent();
   await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
   log.info(`Migration: moved ${items.length} ${collection} item(s) from ${key}.json to per-item storage.`);
   return items.length;

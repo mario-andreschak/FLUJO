@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 
 import { writeFileAtomic } from '@/utils/storage/backend';
+import * as workloadEffects from '@/backend/services/security/bundledFlujoWorkload';
 
 // Windows opens files without FILE_SHARE_DELETE, so any concurrent reader of the
 // target — including FLUJO's own polling loads — makes the atomic write's
@@ -128,4 +129,63 @@ describe('writeFileAtomic rename retries', () => {
     await expect(writeFileAtomic(target, 'intended')).rejects.toThrow('file or parent changed');
     expect(await fs.readdir(dir)).toEqual([]);
   });
+  it('refuses a rename retry after the effect authorization is retired and drains owned cleanup', async () => {
+    const target = path.join(dir, 'item.json');
+    await fs.writeFile(target, 'original');
+    let retired = false;
+    const refusal = new Error('retired effect authorization');
+    // A sink control, not a substitute for genuine capability issuance tests.
+    jest.spyOn(workloadEffects, 'assertBundledFlujoWorkloadEffectCurrent').mockImplementation(async () => {
+      if (retired) throw refusal;
+    });
+    const rename = jest.spyOn(fs, 'rename').mockImplementation(async () => {
+      retired = true;
+      throw errno('EPERM');
+    });
+    await expect(writeFileAtomic(target, 'replacement')).rejects.toBe(refusal);
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(target, 'utf8')).toBe('original');
+    expect(await fs.readdir(dir)).toEqual(['item.json']);
+  });
+
+  it('drains pending parent metadata before cleaning up a failed final rename witness', async () => {
+    const target = path.join(dir, 'item.json');
+    const lstat = fs.lstat.bind(fs);
+    const realpath = fs.realpath.bind(fs);
+    const refusal = new Error('final file witness refused');
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const observed = new Promise<void>(resolve => { entered = resolve; });
+    let finalWitness = false;
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      if (!finalWitness && String(args[0]).startsWith(`${target}.tmp.`)) {
+        finalWitness = true;
+        throw refusal;
+      }
+      return lstat(...args);
+    });
+    jest.spyOn(fs, 'realpath').mockImplementation(async (...args) => {
+      if (finalWitness && String(args[0]) === dir) {
+        entered();
+        await pending;
+      }
+      return realpath(...args);
+    });
+    let settled = false;
+    const operation = writeFileAtomic(target, 'replacement');
+    const outcome = operation.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await observed;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect((await fs.readdir(dir)).filter(name => name.startsWith('item.json.tmp.'))).toHaveLength(1);
+    } finally {
+      release();
+      await outcome;
+    }
+    await expect(operation).rejects.toBe(refusal);
+    expect(await fs.readdir(dir)).toEqual([]);
+  });
+
 });

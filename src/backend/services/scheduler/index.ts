@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -642,6 +643,7 @@ export class SchedulerService {
             // naturally prevents an overlapping poll of the same trigger.
             onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
+              await assertBundledFlujoWorkloadEffectCurrent();
               const record = await this.fire(execution, {
                 kind: 'mcp-poll',
                 summary,
@@ -674,6 +676,7 @@ export class SchedulerService {
             // successful run (commit-after-success, issue #75).
             onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
+              await assertBundledFlujoWorkloadEffectCurrent();
               const record = await this.fire(execution, {
                 kind: 'url-watch',
                 summary,
@@ -1945,6 +1948,7 @@ export class SchedulerService {
       return { error: 'A retired Persona planned execution cannot be run' };
     }
     const runId = uuidv4();
+    await assertBundledFlujoWorkloadEffectCurrent();
     const record = await this.fire(execution, {
       kind: 'manual',
       summary: 'Manual run',
@@ -2959,6 +2963,7 @@ export class SchedulerService {
           }
           await assertWorkerOccurrenceCurrent(current, runId);
         }
+        await assertBundledFlujoWorkloadEffectCurrent();
         const result = await runFlow({
           flowId: execution.flowId,
           ...flowInput,
@@ -2971,6 +2976,7 @@ export class SchedulerService {
         });
       }
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       record = {
         runId,
         conversationId,

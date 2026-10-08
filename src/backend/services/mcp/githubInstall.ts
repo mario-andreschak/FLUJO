@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 import path from 'path';
 import fs from 'fs/promises';
 import { createHash } from 'crypto';
@@ -128,11 +129,12 @@ function redact(message: string, secretValues: string[]): string {
   );
 }
 
-function run(
+async function run(
   command: string,
   cwd: string,
   secretValues: string[],
 ): Promise<void> {
+  await assertBundledFlujoWorkloadEffectCurrent();
   return new Promise((resolve, reject) => {
     let settled = false;
     let output = '';
@@ -149,6 +151,7 @@ function run(
         env: withNpmDevDependencies(),
       });
     } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
       reject(error);
       return;
     }
@@ -298,11 +301,13 @@ async function prepareRepository(
     try {
       contents = await fs.readdir(repoPath);
     } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     if (contents.length > 0) {
       throw new Error(`Refusing to clone into non-empty directory: ${repoPath}`);
     }
+    await assertBundledFlujoWorkloadEffectCurrent();
     await simpleGit().clone(repositoryUrl, repoPath, { '--depth': 1 });
   }
 
@@ -318,7 +323,9 @@ async function prepareRepository(
   }
 
   if (alreadyCloned || ref) {
+    await assertBundledFlujoWorkloadEffectCurrent();
     await git.raw(['fetch', '--depth=1', 'origin', ref ?? 'HEAD']);
+    await assertBundledFlujoWorkloadEffectCurrent();
     await git.raw(['checkout', '--detach', 'FETCH_HEAD']);
   }
 }
@@ -334,6 +341,7 @@ export async function prepareGithubServerRuntime(input: GithubInstallInput): Pro
   try {
     parsed = parseGithubRepositoryReference(input.repositoryUrl, input.ref);
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     return { installed: false, error: error instanceof Error ? error.message : String(error) };
   }
 
@@ -403,6 +411,7 @@ export async function prepareGithubServerRuntime(input: GithubInstallInput): Pro
     } as unknown as Partial<MCPServerConfig>;
     return { installed: true, serverName: input.name, config };
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { installed: false, error: redact(message, secretValues) };
   }
@@ -421,6 +430,7 @@ export async function installGithubServer(input: GithubInstallInput): Promise<Gi
     }
     return { installed: true, serverName: input.name };
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     const secretValues = (input.secretEnvNames ?? []).map(name => input.env[name]).filter(Boolean);
     return { installed: false, error: redact(error instanceof Error ? error.message : String(error), secretValues) };
   }

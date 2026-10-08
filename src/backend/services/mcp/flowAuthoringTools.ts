@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 /**
  * Flow-authoring tools for FLUJO's control-plane MCP package (#14 follow-up:
  * FlowSpec as the public authoring contract).
@@ -587,6 +588,7 @@ export async function authoringCallTool(
             plan: resolved.plan,
           });
         }
+        await assertBundledFlujoWorkloadEffectCurrent();
         const result = await installResolvedDirectMcp(resolved, directInput);
         await appendInstallAudit(planToAuditEntry(
           result.plan ?? resolved.plan,
@@ -627,6 +629,8 @@ export async function authoringCallTool(
           ...(verificationWarning ? { verificationWarning } : {}),
         });
       }
+
+      await assertBundledFlujoWorkloadEffectCurrent();
 
       const result = await installRegistryServer(name, env, { expectedPlan: resolved.plan });
       await appendInstallAudit(
@@ -682,6 +686,7 @@ export async function authoringCallTool(
         // any package spawn, and can stop the walk for consent.
         let blocked: { plan: NonNullable<Awaited<ReturnType<typeof installRegistryServer>>['plan']>; message: string } | undefined;
         const decisions = new Map<string, ReturnType<typeof decideInstallConsent>>();
+        await assertBundledFlujoWorkloadEffectCurrent();
         const result = await installBestForCapability(capability, env, {
           beforeAttempt: async (plan) => {
             const decision = decideInstallConsent({ caller: 'authoring-tool', settings, registryName: plan.registryName });
@@ -831,6 +836,7 @@ export async function authoringCallTool(
         }
 
         const remote = transport !== 'stdio';
+        await assertBundledFlujoWorkloadEffectCurrent();
         const result = await installRegistryServer(
           candidate.registryName,
           remote ? undefined : supplied,
@@ -941,6 +947,7 @@ export async function authoringCallTool(
         }, true);
       }
       const keepPills = args.keepPills === true;
+      await assertBundledFlujoWorkloadEffectCurrent();
       const result = await compileSpec(spec, {
         save: toolName === 'create_flow',
         keepPills,
@@ -984,6 +991,7 @@ export async function authoringCallTool(
 
     return textResult({ error: `Unknown authoring tool: ${toolName}` }, true);
   } catch (err) {
+    if (err instanceof BundledFlujoWorkloadError) throw err;
     log.error('authoringCallTool failed', { toolName, err });
     return textResult(
       { error: `Authoring tool failed: ${err instanceof Error ? err.message : String(err)}` },

@@ -4,6 +4,7 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { authorizeExecutionTransport } from '@/backend/execution/extensions';
+import { resolveBundledFlujoWorkloadRequest } from '@/backend/services/security/bundledFlujoWorkload';
 import {
   assertOwnerRequest, resolveOwnerRequest, isRemoteAvatarVoiceRequest, assertRemoteAvatarVoiceOrigin,
 } from '@/backend/services/security/ownerAccess';
@@ -44,7 +45,19 @@ import {
  * confusing browser errors; the actual (non-OPTIONS) method is still blocked for
  * non-local callers, and CORS headers are tightened in `next.config.mjs`.
  */
-export function proxy(request: NextRequest): NextResponse {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
+  const workload = await resolveBundledFlujoWorkloadRequest(request);
+  if (workload.kind === 'denied') return new NextResponse(workload.response.body, {
+    status: workload.response.status, headers: workload.response.headers,
+  });
+  if (workload.kind === 'authorized') {
+    if (!isRequestHostAllowed(request.headers.get('host'))
+        || !isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
+      return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
+    }
+    const denied = await workload.authorization.recheck();
+    return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();
+  }
   // Let CORS preflight through; the real request is still guarded below.
   if (request.method === 'OPTIONS') {
     return NextResponse.next();
