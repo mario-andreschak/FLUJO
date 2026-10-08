@@ -22,7 +22,10 @@ $file = $true
 while ($null -ne $current) {
   $phase = 'native-acl'
   $acl = $current.GetAccessControl()
-  $raw = [Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+  # Serialize this freshly read native descriptor once. The authorization and
+  # evidence record must use the same snapshot, with no cross-request reuse.
+  $binary = $acl.GetSecurityDescriptorBinaryForm()
+  $raw = [Security.AccessControl.RawSecurityDescriptor]::new($binary, 0)
   $phase = 'owner-dacl'
   if ($null -eq $raw.DiscretionaryAcl -or $allowed -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { throw 'Unprotected authority' }
   $phase = 'outsider-access'
@@ -36,7 +39,7 @@ while ($null -ne $current) {
     if ($file -or $null -ne $current.Parent) { $dangerous = $dangerous -bor 0x00010000L }
     if ($file -or ($mask -band ($dangerous -bor 0x10000000L))) { throw 'Foreign authority access' }
   }
-  $record = $current.FullName + ':' + [Convert]::ToBase64String($acl.GetSecurityDescriptorBinaryForm())
+  $record = $current.FullName + ':' + [Convert]::ToBase64String($binary)
   $phase = 'evidence-bounds'
   if ($records.Count -ge 128 -or $record.Length -gt 8192) { throw 'Bounded authority evidence refused' }
   $records.Add($record)
