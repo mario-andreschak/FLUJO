@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
@@ -33,7 +33,7 @@ let fixture: ArchiveOwnedFixture;
 let server: Server;
 let endpoint: string;
 let requests: unknown[];
-let children: Array<{ process: ChildProcess; drained: Promise<void> }>;
+let children: Array<{ process: ChildProcessWithoutNullStreams; drained: Promise<void> }>;
 let priorArchive: string | undefined;
 let priorData: string | undefined;
 let priorParent: string | undefined;
@@ -68,29 +68,29 @@ beforeEach(async () => {
     const stream = (async function* () {
       const first = await prompt[Symbol.asyncIterator]().next();
       if (first.done) throw new Error('Claude adapter closed input before SDK forwarding');
-      const child = spawn(process.execPath, [path.join(__dirname, 'fixtures', 'claudeArchiveSdkBridge.mjs')], {
+      const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [path.join(__dirname, 'fixtures', 'claudeArchiveSdkBridge.mjs')], {
         cwd: fixture.root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP,
+        env: { NODE_ENV: 'test', PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP,
           HOME: fixture.root, USERPROFILE: fixture.root, CLAUDE_CONFIG_DIR: fixture.root,
           CLAUDE_SECURESTORAGE_CONFIG_DIR: fixture.root },
       });
       let stderrBytes = 0;
       const stderr: Buffer[] = [];
-      child.stderr!.on('data', chunk => {
+      child.stderr.on('data', (chunk: Buffer) => {
         stderrBytes += chunk.length;
         if (stderrBytes <= 64 * 1024) stderr.push(Buffer.from(chunk));
         else { uncertain = true; child.kill('SIGKILL'); }
       });
       const drained = new Promise<void>((resolve, reject) => {
         child.once('error', reject);
-        child.once('close', (code, signal) => code === 0 ? resolve()
+        child.once('close', (code: number | null, signal: NodeJS.Signals | null) => code === 0 ? resolve()
           : reject(new Error(`Actual SDK bridge exit ${code}/${signal}; stderrBytes=${stderrBytes}`)));
       });
       drained.catch(() => undefined);
       children.push({ process: child, drained });
       const timeout = setTimeout(() => { uncertain = true; child.kill('SIGKILL'); }, 15_000);
-      const output = createInterface({ input: child.stdout! });
-      child.stdin!.end(JSON.stringify({ root: fixture.root, url: endpoint, prompt: first.value.message.content }));
+      const output = createInterface({ input: child.stdout });
+      child.stdin.end(JSON.stringify({ root: fixture.root, url: endpoint, prompt: first.value.message.content }));
       try {
         let total = 0;
         for await (const line of output) {
@@ -149,11 +149,14 @@ const input = (extra: Partial<CompletionInput> = {}): CompletionInput => ({
   conversationId: 'claude-memory', nodeId: 'node', ...extra,
 } as CompletionInput);
 
-const capture: NonNullable<CompletionInput['onSdkRequest']> = snapshot => archiveModelDispatch({
+const capture: NonNullable<CompletionInput['onSdkRequest']> = async snapshot => {
+  const entry = await archiveModelDispatch({
   conversationId: 'claude-memory', nodeId: 'node', modelId: 'offline', modelName: 'offline-model',
   adapter: snapshot.adapter, operation: snapshot.operation, attempt: 1,
   canonicalMessages: canonical, genericWire: [{ role: 'user', content: canonical[0].content }], sdkRequest: snapshot.request,
-});
+  });
+  return entry.id;
+};
 
 it('rejects actual archive pressure before Claude query/SDK/HTTP and removes the external abort listener', async () => {
   let release!: () => void;
