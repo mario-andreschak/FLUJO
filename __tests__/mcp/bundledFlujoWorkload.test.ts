@@ -140,10 +140,11 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     await timed('package-copy', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
     const proposed = createShippedServerConfig(descriptor);
     expect((await timed('persist-config', () => saveConfig(new Map([[proposed.name, proposed]])))).success).toBe(true);
-    owner = installBundledFixtureOwner();
+    const fixtureOwner = installBundledFixtureOwner();
+    owner = fixtureOwner;
     const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
-    const approved = await timed('approve', () => approveBundledHostConsent(new Request(owner!.request(proposed.name), { signal: cancellation.signal }), proposed.name, {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner!.expiresAt,
+    const approved = await timed('approve', () => approveBundledHostConsent(new Request(fixtureOwner.request(proposed.name), { signal: cancellation.signal }), proposed.name, {
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
     }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
@@ -253,7 +254,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       try { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
       catch (error) { cleanupErrors.push(error); }
     }
-    try {
+    if (cleanupErrors.length === 0) try {
       if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
       fs.rmSync(fixture, { recursive: true, force: true });
     } catch (error) { cleanupErrors.push(error); }
