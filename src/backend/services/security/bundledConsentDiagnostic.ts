@@ -1,6 +1,9 @@
 const stages = ['CONFIG', 'ASSETS', 'DEP_LAYOUT', 'DEP_GRAPH', 'DEP_LINKS',
-  'SOURCE_FINGERPRINT', 'EXEC_FINGERPRINT', 'CONSENT_DIGEST'] as const;
-type Stage = typeof stages[number];
+  'SOURCE_FINGERPRINT', 'EXEC_FINGERPRINT', 'CONSENT_DIGEST', 'CONSENT_POLICY_SCHEMA',
+  'CONSENT_LAUNCH', 'CONSENT_BUNDLE', 'CONSENT_ENVIRONMENT', 'CONSENT_CAPABILITIES',
+  'CONSENT_SERIALIZE', 'CONSENT_SCRYPT'] as const;
+export type ConsentDiagnosticStage = typeof stages[number];
+type Stage = ConsentDiagnosticStage;
 
 /** Internal causes stay private; the only admitted diagnostic is a fixed code. */
 export class BundledConsentDiagnostic extends Error {
