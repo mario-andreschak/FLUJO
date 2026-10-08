@@ -130,7 +130,7 @@ async function startWorker(port, archivePath, archiveHash, harness, phase = 'rea
       FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort), FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1',
       FLUJO_EXPOSURE_MODE: 'localhost', SMOKE_PORT: String(port) },
   });
-  childClosed = new Promise(resolve => child.once('exit', resolve));
+  childClosed = new Promise(resolve => child.once('close', resolve));
   child.on('error', error => { childLog += `\n${error.message}`; });
   for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { childLog = (childLog + data.toString()).slice(-80_000); });
   const started = Date.now();
