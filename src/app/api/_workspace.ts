@@ -8,7 +8,7 @@ import {
 import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
 import { assertWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
-import { authorizeExecutionTransport, withExecutionExtensionRoute, executionExtensionAdapter } from '@/backend/execution/extensions';
+import { authorizeExecutionTransport, withExecutionExtensionRoute, executionExtensionAdapter, hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertOwnerRequest, isOwnerProtocolException, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
 import { bindOwnerStream } from '@/backend/services/security/ownerStream';
 import {
@@ -196,7 +196,7 @@ export function withWorkspaceRoute<
     if (workload.kind === 'denied') return workload.response;
     if (workload.kind === 'authorized') {
       // Workload credentials do not replace an execution adapter's authority.
-      if (executionExtensionAdapter()) {
+      if (executionExtensionAdapter() || hasExecutionExtensionContext()) {
         return new Response(JSON.stringify({ error: 'Forbidden.' }), { status: 403 });
       }
       if (!isRequestHostAllowed(transportRequest.headers.get('host'))

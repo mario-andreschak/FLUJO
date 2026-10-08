@@ -353,6 +353,7 @@ export async function prepareGithubServerRuntime(input: GithubInstallInput): Pro
   const repoPath = path.join(cloneRoot, repoSlug(parsed.repositoryUrl, parsed.ref));
 
   try {
+    await assertBundledFlujoWorkloadEffectCurrent();
     await fs.mkdir(cloneRoot, { recursive: true });
     await prepareRepository(parsed.repositoryUrl, parsed.ref, repoPath);
     const workingDirectory = await resolveWorkingDirectory(repoPath, input.subdirectory);
