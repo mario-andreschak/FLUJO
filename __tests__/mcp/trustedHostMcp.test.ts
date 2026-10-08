@@ -207,6 +207,38 @@ it('refuses a node entry point outside the fingerprinted package and dynamic run
   expect(() => trustedHostMcpPolicyDigest({ ...config, command: path.join(path.dirname(config.command), 'npx'), trustedHost: { ...(config.trustedHost as object), entryPoint: path.join(path.dirname(config.command), 'npx') } })).toThrow('policy is invalid');
 });
 
+it('fresh large-file verification accepts exact bytes and refuses mutation after an actual held read', async () => {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  fs.writeFileSync(config.command, Buffer.alloc(2 * 1024 * 1024 + 17, 0x61));
+  config.trustedHost = { ...policy, sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot),
+    executableDigest: fingerprintTrustedHostExecutable(config.command) };
+  approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(config); persist();
+  await expect(verifyTrustedHostMcp(config)).resolves.toMatchObject({ ownerId: approval.ownerId });
+  const open = fs.promises.open.bind(fs.promises);
+  let mutated = false, opened = 0, closed = 0;
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === config.command) {
+      opened++;
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        const result = await read(...readArgs);
+        if (result.bytesRead && !mutated) {
+          mutated = true;
+          fs.writeFileSync(config.command, Buffer.alloc(2 * 1024 * 1024 + 17, 0x62));
+        }
+        return result;
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); closed++; };
+    }
+    return handle;
+  });
+  try {
+    await expect(verifyTrustedHostMcp(config)).rejects.toThrow('package revision changed');
+    expect(mutated).toBe(true); expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened);
+  } finally { spy.mockRestore(); }
+});
+
 it('async verification yields and refuses an approval revoked while filesystem verification is pending', async () => {
   const open = fs.promises.open.bind(fs.promises);
   let entered!: () => void;
