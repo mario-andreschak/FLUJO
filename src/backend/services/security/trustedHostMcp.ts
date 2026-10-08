@@ -58,10 +58,17 @@ export const trustedHostMcpPolicySchema = z.object({
     dependencyGraphDigest: digestSchema,
     dependencyDirectories: z.array(absolutePath).max(256),
     dependencyLinks: z.array(z.object({ link: absolutePath, target: absolutePath }).strict()).max(64),
+    workload: z.object({ purpose: z.literal('bundled-flujo-control-v1'), inventory: z.array(z.object({
+      action: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,127}$/), method: z.enum(['GET', 'POST']),
+      path: z.enum(['/api/mcp/flujo/tools', '/api/mcp/flujo/resources', '/api/mcp/flujo/resources/read',
+        '/api/mcp/flujo/skills', '/api/mcp/flujo/authoring', '/api/mcp/flujo/flows', '/api/mcp/flujo/servers',
+        '/api/mcp/flujo/automation', '/api/mcp/flujo/state']), schemaDigest: digestSchema,
+    }).strict()).min(1).max(70).refine(items => new Set(items.map(item => item.action)).size === items.length) }).strict().optional(),
   }).strict().optional(),
   environmentNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)
     .refine(name => !['NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'].includes(name.toUpperCase()))).max(64),
-}).strict().refine(value => new Set(value.environmentNames.map(name => process.platform === 'win32' ? name.toUpperCase() : name)).size === value.environmentNames.length);
+}).strict().refine(value => new Set(value.environmentNames.map(name => process.platform === 'win32' ? name.toUpperCase() : name)).size === value.environmentNames.length)
+  .refine(value => !value.bundledInstallation?.workload || value.bundledInstallation.packageDirectory === 'flujo');
 
 export const trustedHostApprovalsSchema = z.object({
   schemaVersion: z.literal(1),

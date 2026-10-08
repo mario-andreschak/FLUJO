@@ -75,6 +75,12 @@ export function registerExecutionExtension(adapter: ExecutionExtensionAdapter): 
   registry.adapter = adapter;
   return () => { if (registry.adapter === adapter) registry.adapter = previous; };
 }
+/** Detect inherited private execution guards without exposing their authority. */
+export function hasExecutionExtensionContext(): boolean {
+  return registry.input.getStore()?.executionExtensionContext !== undefined
+    || registry.access.getStore() !== undefined
+    || registry.committing.getStore() !== undefined;
+}
 export function executionExtensionAdapter(): ExecutionExtensionAdapter | undefined {
   const adapter = registry.adapter ?? configuredAdapterInProcess();
   if (!adapter && process.env.FLUJO_EXECUTION_ADAPTER_MODULE) throw new ExecutionExtensionError('execution_adapter_not_loaded', 503);

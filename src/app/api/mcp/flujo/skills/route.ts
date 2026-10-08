@@ -8,6 +8,7 @@ import {
 } from '@/backend/services/mcp/standaloneSkills';
 import { json } from '@/app/api/mcp/_helpers';
 import { McpListSkillsResultSchema } from '@/shared/types/mcp';
+import { assertBundledFlujoWorkloadAction, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 
 const MAX_STANDALONE_SKILLS = 1024;
 const MAX_PAGES_PER_SERVER = 128;
@@ -16,6 +17,7 @@ async function GET_handler() {
   const lock = await assertUnlocked();
   if (lock) return lock;
 
+  await assertBundledFlujoWorkloadAction('listSkills', 'GET', '/api/mcp/flujo/skills');
   const configs = await mcpService.loadServerConfigs();
   if (!Array.isArray(configs)) {
     return json({ error: configs.error || 'Failed to load MCP server configurations.' }, 500);
@@ -28,7 +30,9 @@ async function GET_handler() {
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
     for (let page = 0; page < MAX_PAGES_PER_SERVER; page += 1) {
+      await assertBundledFlujoWorkloadAction('listSkills', 'GET', '/api/mcp/flujo/skills');
       const result = await mcpService.listServerSkills(config.name, cursor);
+      await assertBundledFlujoWorkloadAction('listSkills', 'GET', '/api/mcp/flujo/skills');
       if (result.availability === 'unsupported') break;
       if (result.error) return json({ error: result.error }, 502);
 
@@ -53,11 +57,13 @@ async function GET_handler() {
   }
 
   try {
+    await assertBundledFlujoWorkloadAction('listSkills', 'GET', '/api/mcp/flujo/skills');
     return json(
       McpListSkillsResultSchema.parse({ resultType: 'complete', skills }),
       200,
     );
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) return error.response;
     return json(
       {
         error: error instanceof Error
@@ -88,7 +94,9 @@ async function POST_handler(request: NextRequest) {
     if (decoded.resourceUri !== decoded.skillUri) {
       return json({ error: 'skills/get requires a top-level SKILL.md URI.' }, 400);
     }
+    await assertBundledFlujoWorkloadAction('getSkill', 'POST', '/api/mcp/flujo/skills', { uri });
     const result = await mcpService.getServerSkill(decoded.serverName, decoded.skillUri);
+    await assertBundledFlujoWorkloadAction('getSkill', 'POST', '/api/mcp/flujo/skills', { uri });
     if (!result.success || !result.data) {
       return json({ error: result.error || 'MCP Skill not found.' }, result.statusCode || 502);
     }
@@ -104,6 +112,7 @@ async function POST_handler(request: NextRequest) {
       skill,
     }, 200);
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) return error.response;
     return json(
       { error: error instanceof Error ? error.message : 'Invalid standalone Skill URI.' },
       400,

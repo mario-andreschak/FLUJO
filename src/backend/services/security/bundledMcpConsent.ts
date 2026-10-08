@@ -9,6 +9,7 @@ import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackag
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
 import { consentDiagnosticStage, consentDiagnosticStageSync } from './bundledConsentDiagnostic';
+import { BUNDLED_FLUJO_WORKLOAD_PURPOSE, computeBundledFlujoWorkloadInventory } from '../mcp/bundledFlujoWorkloadInventory';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
 import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
@@ -107,7 +108,8 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   if (!['node', process.execPath].includes(stored.command) || originalArgs.length < 1
       || path.resolve(revision.sourceRoot, originalArgs[0]) !== entryPoint) throw new Error('The stored command differs from the fixed installed entry.');
   const environment = Object.fromEntries(trustedHostEnvironment(stored));
-  if (Object.keys(environment).some(name => ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'PERSONA_GOAL_ENDURANCE_FIXTURE_TOKEN', 'FLUJO_WORKER_MODE'].includes(name.toUpperCase()))) throw new Error('Persisted runtime credentials are forbidden.');
+  if (Object.keys(environment).some(name => ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'PERSONA_GOAL_ENDURANCE_FIXTURE_TOKEN', 'FLUJO_WORKER_MODE',
+    'FLUJO_MCP_WORKLOAD_TOKEN', 'FLUJO_MCP_WORKLOAD_AUDIENCE'].includes(name.toUpperCase()))) throw new Error('Persisted runtime credentials are forbidden.');
   if (descriptor.packageDirectory === 'bash' && options.runtimeHome === 'host') {
     for (const key of HOST_BINDINGS) {
       for (const name of Object.keys(environment)) if (name.toUpperCase() === key) delete environment[name];
@@ -126,7 +128,10 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   const environmentNames = [...Object.keys(environment),
     ...(options.runtimeHome === 'isolated' ? TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES : []),
     ...(stored.enableMcpApps ? ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'] : []),
-    ...(descriptor.packageDirectory === 'flujo' ? ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN'] : [])];
+    ...(descriptor.packageDirectory === 'flujo' ? ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN',
+      'FLUJO_MCP_WORKLOAD_TOKEN', 'FLUJO_MCP_WORKLOAD_AUDIENCE'] : [])];
+  const workload = descriptor.packageDirectory === 'flujo'
+    ? { purpose: BUNDLED_FLUJO_WORKLOAD_PURPOSE, inventory: [...await computeBundledFlujoWorkloadInventory()] } : undefined;
   const config: MCPStdioConfig = { ...stored, command: process.execPath, args: [entryPoint, ...originalArgs.slice(1)],
     cwd: revision.sourceRoot, rootPath: revision.sourceRoot, env: environment, runtimeHomeMode: options.runtimeHome,
     trustedHost: { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'node', runtimeHome: options.runtimeHome,
@@ -135,7 +140,8 @@ export async function previewBundledHostConsent(serverName: string, options: { r
       bundledInstallation: { packageDirectory: descriptor.packageDirectory as 'flujo' | 'filesystem' | 'bash' | 'browser',
         installationRoot: revision.installation, dependencyNamespaceRoot: revision.dependencyNamespaceRoot,
         assetDigest: revision.assetDigest, dependencyGraphDigest: revision.dependencyGraph.digest,
-        dependencyDirectories: revision.dependencies.map(item => item.directory), dependencyLinks: revision.dependencyLinks } } };
+        dependencyDirectories: revision.dependencies.map(item => item.directory), dependencyLinks: revision.dependencyLinks,
+        ...(workload ? { workload } : {}) } } };
   return { config, policyDigest: await consentDiagnosticStage('CONSENT_DIGEST', () => trustedHostMcpPreviewDigestAsync(config)), revision, storedConfig: structuredClone(stored) };
   });
 }

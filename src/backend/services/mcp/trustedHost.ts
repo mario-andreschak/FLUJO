@@ -6,10 +6,19 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, trustedHostMcpPolicySchema, sameTrustedHostConsent, verifyTrustedHostMcp } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
+import { activatePendingWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
-const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_MODE'];
+const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_MODE', 'FLUJO_MCP_WORKLOAD_TOKEN', 'FLUJO_MCP_WORKLOAD_AUDIENCE'];
 const managedHosts = new WeakMap<object, ManagedTrustedHost>();
+interface VerifiedWorkloadStart { config: MCPStdioConfig; generation: string; ownerId: string; digest: string; assertLive(): void }
+const workloadStartProofs = new WeakMap<object, { capsule: PendingBundledFlujoWorkload; verified: VerifiedWorkloadStart }>();
+export function assertVerifiedBundledFlujoWorkloadStart(proof: unknown, capsule: PendingBundledFlujoWorkload): VerifiedWorkloadStart {
+  const selected = proof && typeof proof === 'object' ? workloadStartProofs.get(proof) : undefined;
+  if (!selected || selected.capsule !== capsule) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  selected.verified.assertLive();
+  return selected.verified;
+}
 
 function workerRuntimeCredentials(config: MCPStdioConfig): Record<string, string> {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
@@ -96,11 +105,13 @@ async function currentConfig(serverName: string): Promise<MCPStdioConfig> {
 }
 
 /** Capture the launched identity, not whatever later happens to be approved. */
-export function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void): void {
+export function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void, workload?: PendingBundledFlujoWorkload): void {
   const captured = structuredClone(config);
   const initial = trustedHostMcpApproval(captured);
   const fixtureToken = resolveGoalEnduranceFixtureToken(captured);
   const workerCredentials = workerRuntimeCredentials(captured);
+  if (process.env.FLUJO_WORKER_MODE !== '1' && initial.policy.bundledInstallation?.packageDirectory === 'flujo' && !workload) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const workloadEnvironment = getPendingWorkloadEnvironment(captured, workload);
   const cancellation = new AbortController();
   let retired = false;
   const start = transport.start.bind(transport);
@@ -109,10 +120,19 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
     if (retired || getCurrentWorkspace() !== initial.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (resolveGoalEnduranceFixtureToken(captured) !== fixtureToken) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (JSON.stringify(workerRuntimeCredentials(captured)) !== JSON.stringify(workerCredentials)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (JSON.stringify(getPendingWorkloadEnvironment(captured, workload)) !== JSON.stringify(workloadEnvironment)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   };
   const managed: ManagedTrustedHost = Object.freeze({
     workspace: initial.workspace, serverName: config.name, generation: randomUUID(),
-    retire: () => { if (!retired) { retired = true; cancellation.abort(); onRetire?.(); } },
+    retire: () => {
+      const errors: unknown[] = [];
+      try { revokePendingWorkload(workload); } catch (error) { errors.push(error); }
+      if (!retired) {
+        retired = true; cancellation.abort();
+        try { onRetire?.(); } catch (error) { errors.push(error); }
+      }
+      if (errors.length) throw new AggregateError(errors, 'Trusted host retirement failed.');
+    },
     assertCurrent: async (current: MCPStdioConfig) => {
       checkLive();
       if (current.name !== captured.name || current.disabled || !sameTrustedHostConsent(current, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -129,14 +149,24 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
     },
   });
   managedHosts.set(transport, managed);
-  const wrapClose = (callback: (() => void) | undefined) => () => { managed.retire(); callback?.(); };
+  const wrapClose = (callback: (() => void) | undefined) => () => {
+    const errors: unknown[] = [];
+    try { managed.retire(); } catch (error) { errors.push(error); }
+    try { callback?.(); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Trusted host close callback failed.');
+  };
   let onclose = wrapClose(transport.onclose);
   Object.defineProperty(transport, 'onclose', {
     configurable: true,
     get: () => onclose,
     set: (callback: (() => void) | undefined) => { onclose = wrapClose(callback); },
   });
-  transport.close = async () => { managed.retire(); await close(); };
+  transport.close = async () => {
+    const errors: unknown[] = [];
+    try { managed.retire(); } catch (error) { errors.push(error); }
+    try { await close(); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Trusted host close failed.');
+  };
   transport.start = async () => {
     try {
       // Runtime consent performs no package preparation or installer execution.
@@ -147,12 +177,22 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
       checkLive();
       if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
           || !sameTrustedHostConsent(final, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (workload) {
+        const proof = Object.freeze({});
+        workloadStartProofs.set(proof, { capsule: workload, verified: Object.freeze({ config: captured,
+          generation: managed.generation, ownerId: initial.ownerId, digest: initial.digest, assertLive: checkLive }) });
+        try { await activatePendingWorkload(workload, proof); } finally { workloadStartProofs.delete(proof); }
+        await managed.assertCurrent(await currentConfig(captured.name));
+        checkLive();
+      }
       await start();
       // A revocation while the SDK awaited process startup closes this generation.
       await managed.assertCurrent(await currentConfig(captured.name));
     } catch (error) {
-      managed.retire();
-      try { await close(); } catch { /* cleanup uncertainty is reported by lifecycle receipts */ }
+      const cleanupErrors: unknown[] = [];
+      try { managed.retire(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+      try { await close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+      if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'Trusted host start and cleanup failed.', { cause: error });
       if (error instanceof TrustedHostMcpError) throw error;
       throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     }

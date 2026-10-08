@@ -1,0 +1,139 @@
+import { resolveBundledFlujoWorkloadRequest, withBundledFlujoWorkloadAuthorization } from '@/backend/services/security/bundledFlujoWorkload';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { getCurrentWorkspace, getWorkspaceDir } from '@/utils/workspace';
+import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
+import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { saveConfig } from '@/backend/services/mcp/config';
+import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
+import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
+import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
+import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
+
+import { SchedulerService } from '@/backend/services/scheduler';
+import { getAuthorizedBundledFlujoWorkloadToolNames, assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
+import { loadItem, saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
+import type { PlannedExecutionsFile } from '@/shared/types/plannedExecution';
+import { randomUUID } from 'node:crypto';
+
+// Real issued capability and durable storage; only timer scheduling and the
+// final Flow producer are equipment. This does not claim compiled Flow execution.
+let mockReleaseTimer!: () => void;
+let mockTimerGate: Promise<void>;
+let mockTimerEntered!: () => void;
+let mockTimerObserved: Promise<void>;
+let mockTimerCompleted: Promise<void>;
+const mockRunFlow = jest.fn(async (..._args: unknown[]) => {
+  expect(getAuthorizedBundledFlujoWorkloadToolNames()).toBeUndefined();
+  await assertBundledFlujoWorkloadEffectCurrent();
+  return { status: 'completed', outputText: 'fixture', messages: [], sharedState: {}, conversationId: 'fixture' };
+});
+jest.mock('@/backend/execution/flow/runFlow', () => ({ runFlow: (...args: unknown[]) => mockRunFlow(...args) }));
+jest.mock('@/backend/services/scheduler/triggers/schedule', () => ({
+  ...jest.requireActual('@/backend/services/scheduler/triggers/schedule'),
+  armSchedule: (_config: unknown, onFire: (occurrence: Date) => Promise<void>) => {
+    let timer: ReturnType<typeof setTimeout>;
+    mockTimerCompleted = new Promise<void>((resolve, reject) => {
+      timer = setTimeout(() => {
+        mockTimerEntered();
+        void mockTimerGate.then(() => onFire(new Date())).then(resolve, reject);
+      }, 0);
+    });
+    return { dispose: () => clearTimeout(timer), nextRun: () => undefined };
+  },
+}));
+
+test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
+  mockRunFlow.mockClear();
+  mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
+  mockTimerObserved = new Promise(resolve => { mockTimerEntered = resolve; });
+  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE'];
+  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
+  const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
+  const application = path.join(fixture, 'application');
+  const write = (relative: string, content: string) => {
+    const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
+  };
+  let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
+  let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
+  try {
+    process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
+    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
+    const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'flujo')!;
+    write('package.json', '{"name":"flujo-ai","version":"1.0.0"}');
+    write('node_modules/fixture-dependency/package.json', '{"name":"fixture-dependency","version":"1.0.0","type":"module","exports":"./index.js"}');
+    write('node_modules/fixture-dependency/index.js', 'export const value = 1;');
+    write('mcp-servers/flujo/package.json', JSON.stringify({ name: descriptor.packageId, version: '1.0.0', type: 'module', dependencies: { 'fixture-dependency': '1.0.0' } }));
+    write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
+    write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
+    await ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']);
+    const proposed = createShippedServerConfig(descriptor);
+    expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
+    owner = installBundledFixtureOwner();
+    const preview = await previewBundledHostConsent(proposed.name, { runtimeHome: 'host' });
+    const approved = await approveBundledHostConsent(owner.request(proposed.name), proposed.name, {
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+    });
+    const capsule = prepareBundledFlujoWorkload(approved.config)!;
+    const environment = getPendingWorkloadEnvironment(approved.config, capsule);
+    const token = environment.FLUJO_MCP_WORKLOAD_TOKEN;
+    const request = () => new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { headers: {
+      host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}`,
+    } });
+    expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+    const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
+    transport = { start, close };
+    attachTrustedHost(transport, approved.config, undefined, capsule);
+    await transport.start();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('authorized');
+    const scheduler = new SchedulerService();
+    const admittedRequest = request();
+    const admitted = await resolveBundledFlujoWorkloadRequest(admittedRequest);
+    expect(admitted.kind).toBe('authorized');
+    if (admitted.kind !== 'authorized') throw new Error('Genuine capability not admitted');
+    let executionId = '';
+    await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+      expect(() => new SchedulerService()).toThrow();
+      const created = await scheduler.create({ name: 'fixture', enabled: true, flowId: 'fixture-flow',
+        prompt: '', trigger: { type: 'schedule', cron: '0 0 1 1 *' } });
+      expect(created.error).toBeUndefined();
+      expect(created.execution).toBeDefined();
+      executionId = created.execution!.id;
+    });
+    await mockTimerObserved;
+    if (mode === 'disabled') await scheduler.update(executionId, { enabled: false });
+    if (mode === 'replaced') {
+      const file = await loadItem<PlannedExecutionsFile>(StorageKey.PLANNED_EXECUTIONS, { version: 1, paused: false, executions: [] });
+      file.executions = file.executions.map(execution => execution.id === executionId
+        ? { ...execution, generationId: randomUUID() } : execution);
+      await saveItem(StorageKey.PLANNED_EXECUTIONS, file);
+    }
+    const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE!;
+    const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
+    const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
+    await transport.close(); transport = undefined;
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(workloadDirectory)).toEqual([]);
+    expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+    mockReleaseTimer();
+    await mockTimerCompleted;
+    expect(mockRunFlow).toHaveBeenCalledTimes(mode === 'unchanged' ? 1 : 0);
+    await scheduler.update(executionId, { enabled: false });
+  } finally {
+    mockReleaseTimer();
+    await mockTimerCompleted?.catch(() => undefined);
+    const { flushStatisticsEvents } = await import('@/backend/services/statistics');
+    await flushStatisticsEvents();
+    try { await transport?.close(); } finally {
+      owner?.restore();
+      for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+      if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }
+}, 60_000);

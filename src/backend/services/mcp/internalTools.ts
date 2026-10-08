@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 /**
  * Tool definitions + dispatcher for FLUJO's control-plane MCP package.
  *
@@ -657,6 +658,7 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
 
   return store.run(depth + 1, async () => {
     try {
+    await assertBundledFlujoWorkloadEffectCurrent();
     const result = await runFlow({
       flowId: flow.id,
       prompt: String(args?.input ?? ''),
@@ -689,6 +691,7 @@ async function deleteFlow(args: Record<string, unknown>): Promise<CallToolResult
   if (!flow) {
     return textResult({ error: `No flow named or with id "${ref}".` }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await flowService.deleteFlow(flow.id);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to delete flow "${flow.name}".` }, true);
@@ -833,6 +836,7 @@ async function revertFlowTool(args: Record<string, unknown>): Promise<CallToolRe
   if (!flow) {
     return textResult({ error: `No flow named or with id "${ref}".` }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await flowService.revertFlow(flow.id, versionId);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to revert flow "${flow.name}".` }, true);
@@ -872,6 +876,7 @@ async function updateFlow(args: Record<string, unknown>): Promise<CallToolResult
     return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
   }
 
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await compileSpec(spec, { save: true, updateFlowId: flow.id });
   if (!result.success) {
     return textResult({ error: result.error, issues: result.issues ?? [] }, true);
@@ -1084,6 +1089,7 @@ async function callMcpTool(
       : {};
   const timeout = typeof args?.timeout === 'number' ? args.timeout : undefined;
 
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await service.callTool(
     server,
     tool,
@@ -1114,6 +1120,7 @@ async function restartMcpServer(
   if (!server) {
     return textResult({ error: 'Provide "server": a FLUJO server name.' }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await service.forceReconnect(server);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to restart ${server}.` }, true);
@@ -1131,6 +1138,7 @@ async function setMcpServerEnabled(
   if (!server || typeof enabled !== 'boolean') {
     return textResult({ error: 'Provide "server" (string) and "enabled" (boolean).' }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await service.updateServerConfig(server, { disabled: !enabled });
   if ('error' in result) {
     return textResult({ error: result.error }, true);
@@ -1315,6 +1323,7 @@ async function runPlannedExecution(args: Record<string, unknown>): Promise<CallT
   if (target?.personaId) {
     return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const { record, error } = await getSchedulerService().runNow(id);
   if (error || !record) {
     return textResult({ error: error ?? 'Run failed.' }, true);
@@ -1457,6 +1466,7 @@ async function updatePlannedExecution(args: Record<string, unknown>): Promise<Ca
     return textResult({ error: 'Nothing to update. Provide at least one of: enabled, prompt, flowId, cron, trigger.' }, true);
   }
 
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await getSchedulerService().update(target.id, patch);
   if (result.error || !result.execution) {
     return textResult({ error: result.error ?? 'Update failed.' }, true);
@@ -1500,6 +1510,7 @@ async function createPlannedExecution(args: Record<string, unknown>): Promise<Ca
     prompt: typeof args?.prompt === 'string' ? args.prompt : '',
     trigger,
   };
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await getSchedulerService().create(input);
   if (result.error || !result.execution) {
     return textResult({ error: result.error ?? 'Create failed.' }, true);
@@ -1519,6 +1530,7 @@ async function deletePlannedExecution(args: Record<string, unknown>): Promise<Ca
   if (target.personaId) {
     return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await getSchedulerService().delete(target.id);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to delete "${target.name}".` }, true);
@@ -1674,6 +1686,7 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
   if (isPersonaOwnedConversationState(state)) {
     return textResult({ error: 'Persona conversations require the trusted local control plane.' }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   await flushConversationLog(id);
 
   const events = await readConversationLog(id);
@@ -1742,6 +1755,7 @@ async function kvSetTool(args: Record<string, unknown>): Promise<CallToolResult>
   if (!KV_SCOPE_RE.test(scope)) {
     return textResult({ error: `Invalid kv scope id: ${scope}` }, true);
   }
+  await assertBundledFlujoWorkloadEffectCurrent();
   const res = await kvSet(scope, name, value);
   if ('skipped' in res) {
     return textResult({ scope, name, saved: false, skipped: res.skipped }, true);
@@ -1762,6 +1776,7 @@ async function createTicketForHumanTool(args: Record<string, unknown>, source: T
   };
   const parsed = CreateTicketInputSchema.safeParse(input);
   if (!parsed.success) return textResult({ error: 'A non-empty ticket message and valid optional context are required.' }, true);
+  await assertBundledFlujoWorkloadEffectCurrent();
   const result = await ticketService.createTicket(parsed.data);
   return result.success && result.ticket
     ? textResult({ created: true, id: result.ticket.id, labels: result.ticket.labels })
@@ -1879,6 +1894,7 @@ export async function internalCallTool(
         return textResult({ error: `Unknown FLUJO control-plane tool: ${toolName}` }, true);
     }
   } catch (err) {
+    if (err instanceof BundledFlujoWorkloadError) throw err;
     log.error('internalCallTool failed', { toolName, err });
     return textResult(
       { error: `Tool failed: ${err instanceof Error ? err.message : String(err)}` },

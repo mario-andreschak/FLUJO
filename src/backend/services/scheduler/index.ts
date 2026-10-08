@@ -1,3 +1,6 @@
+import { AsyncResource } from 'node:async_hooks';
+import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -247,7 +250,16 @@ interface PersonaAdmissionObserver {
  * one serving API routes, and armed croner timers/watchers must live exactly
  * once).
  */
+function createSchedulerServiceResource(): AsyncResource {
+  // A request cannot manufacture a service context by clearing its authority.
+  if (getAuthorizedBundledFlujoWorkloadToolNames() !== undefined || hasExecutionExtensionContext()) {
+    throw new BundledFlujoWorkloadError();
+  }
+  return new AsyncResource('FLUJO:SchedulerService');
+}
+
 export class SchedulerService {
+  private readonly serviceResource = createSchedulerServiceResource();
   private workerRecoveryStatuses = new Map<string, WorkerRecoveryStatus>();
   private workerLocalClaims = new Set<string>();
   /** Armed trigger per enabled execution id. */
@@ -351,17 +363,35 @@ export class SchedulerService {
    * single write-path for arming state; all mutations funnel through here.
    */
   reconcile(): Promise<void> {
+    return this.queueReconcile();
+  }
+
+  private reconcileCommitted(execution: PlannedExecution): Promise<void> {
+    return this.queueReconcile(Object.freeze({ id: execution.id, configuration: runtimeConfiguration(execution) }));
+  }
+
+  private queueReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
     const run = this.reconcileChain
       .catch(() => { /* prior reconcile's error surfaced to its own caller */ })
-      .then(() => this.inWorkspace(() => this.doReconcile()));
+      .then(async () => {
+        await assertBundledFlujoWorkloadEffectCurrent();
+        // Only service-owned code enters this resource; no caller task is accepted.
+        return this.serviceResource.runInAsyncScope(() => this.inWorkspace(() => this.doReconcile(committed)));
+      });
     this.reconcileChain = run;
     return run;
   }
 
-  private async doReconcile(): Promise<void> {
+  private async doReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
     // Keep timers alive while reading storage. Disposing before this await can
     // lose a due occurrence and re-arm directly at the following cron boundary.
     const file = await this.loadFile();
+    if (committed) {
+      const current = file.executions.find(execution => execution.id === committed.id);
+      if (!current || runtimeConfiguration(current) !== committed.configuration) {
+        throw new Error('Committed schedule changed before service admission');
+      }
+    }
     this.pausedCache = file.paused;
     if (isWorkerMode()) {
       this.workerRecoveryStatuses.clear();
@@ -624,6 +654,7 @@ export class SchedulerService {
             callTool: this.bindToWorkspace(async (serverName, toolName, args) => {
               // Lazy import: don't pull the MCP stack into scheduler tests.
               const { mcpService } = await import('@/backend/services/mcp');
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before polling');
               const response = await mcpService.callTool(serverName, toolName, args);
               return {
                 success: response.success === true,
@@ -642,6 +673,7 @@ export class SchedulerService {
             // naturally prevents an overlapping poll of the same trigger.
             onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
+              await assertBundledFlujoWorkloadEffectCurrent();
               const record = await this.fire(execution, {
                 kind: 'mcp-poll',
                 summary,
@@ -655,6 +687,7 @@ export class SchedulerService {
             evaluateAiGate: this.bindToWorkspace(async (result, gateConfig, state) => {
               // Lazy import: the gate pulls in the model/flow stack.
               const { evaluateAiGate } = await import('./triggers/llmGate');
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before AI gate');
               return evaluateAiGate(result, gateConfig, state);
             }),
           })
@@ -674,6 +707,7 @@ export class SchedulerService {
             // successful run (commit-after-success, issue #75).
             onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
+              await assertBundledFlujoWorkloadEffectCurrent();
               const record = await this.fire(execution, {
                 kind: 'url-watch',
                 summary,
@@ -1083,7 +1117,7 @@ export class SchedulerService {
       };
     }
     if (mutation.error) return { error: mutation.error };
-    await this.reconcile();
+    await this.reconcileCommitted(execution);
     return { execution };
   }
 
@@ -1152,7 +1186,7 @@ export class SchedulerService {
     if (!runtimeConfigChanged) {
       return { execution: merged };
     }
-    await this.reconcile();
+    await this.reconcileCommitted(merged);
     // A queued fire captured the PRE-update snapshot (stale flowId/prompt/
     // overlapStrategy) at enqueue time (issue #122). Cancel those stale fires
     // rather than silently running the old config; storage still exists so the
@@ -1945,6 +1979,7 @@ export class SchedulerService {
       return { error: 'A retired Persona planned execution cannot be run' };
     }
     const runId = uuidv4();
+    await assertBundledFlujoWorkloadEffectCurrent();
     const record = await this.fire(execution, {
       kind: 'manual',
       summary: 'Manual run',
@@ -2959,6 +2994,10 @@ export class SchedulerService {
           }
           await assertWorkerOccurrenceCurrent(current, runId);
         }
+        if (payload.kind !== 'manual' && !await this.isCurrentSchedule(execution)) {
+          throw new Error('Schedule changed before execution');
+        }
+        await assertBundledFlujoWorkloadEffectCurrent();
         const result = await runFlow({
           flowId: execution.flowId,
           ...flowInput,
@@ -2971,6 +3010,7 @@ export class SchedulerService {
         });
       }
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       record = {
         runId,
         conversationId,
