@@ -271,7 +271,7 @@ function closeOwnedFile(file: OwnedFile) {
   }
   if (witness !== undefined) {
     file.fd = witness; file.readOnlyWitness = true;
-    if (file.uncertainDescriptor === undefined) {
+    try { if (file.uncertainDescriptor === undefined) {
       const after = fs.fstatSync(witness, { bigint: true });
       // Only this synchronous, witnessed, owned close transition may finalize
       // ctime. Every other field and exact bytes must remain unchanged; subsequent
@@ -280,6 +280,9 @@ function closeOwnedFile(file: OwnedFile) {
       const previous = file.identity; file.identity = after;
       try { readExact(file); assertOwnedParent(file); if (file.bytes.length) readPrivateApproval(file.filename); readExact(file); }
       catch (error) { file.identity = previous; throw error; }
+    } } catch (error) {
+      if (closeError !== undefined) throw new AggregateError([closeError, error], 'Workload close and witness verification failed.', { cause: closeError });
+      throw error;
     }
   }
   if (closeError !== undefined) throw closeError;
