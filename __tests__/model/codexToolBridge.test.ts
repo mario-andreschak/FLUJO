@@ -9,6 +9,28 @@ import { _setNativeToolJournalRootForTests, prepareNativeInvocation, submitNativ
 import { createNativeBrokerAuthority, createNativeToolPort, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 
 describe('Codex tool bridge', () => {
+  it('denies unbound and foreign owned threads before dispatch and refuses rebinding', async () => {
+    const dispatched = jest.fn();
+    const bridge = await startCodexToolBridge([{ name: 'owned_tool', description: '', inputSchema: {},
+      handler: async (_args, identity) => {
+        if (!identity) throw new Error('Owned thread identity required.');
+        dispatched(identity); return { content: [] };
+      } }], undefined, true, true);
+    const call = async (threadId: string) => {
+      const response = await fetch(bridge.url, { method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+          name: 'owned_tool', arguments: {}, _meta: { threadId, callId: 'same-model-call' } } }) });
+      await response.text();
+    };
+    try {
+      await call('foreign-first'); expect(dispatched).not.toHaveBeenCalled();
+      bridge.bindNativeThread('actual-owned-thread');
+      await call('foreign-first'); expect(dispatched).not.toHaveBeenCalled();
+      expect(() => bridge.bindNativeThread('foreign-first')).toThrow();
+      await call('actual-owned-thread'); expect(dispatched).toHaveBeenCalledTimes(1);
+    } finally { await bridge.close(); }
+  });
   it('advertises host instructions during MCP initialization', async () => {
     const bridge = await startCodexToolBridge([], 'Use FLUJO tools as the filesystem authority.');
     const client = new Client({ name: 'codex-bridge-test', version: '1.0.0' });

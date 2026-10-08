@@ -31,12 +31,16 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
   return { ...actual, startOwnedCodexAppServer: async (input: Parameters<typeof actual.startOwnedCodexAppServer>[0]) => {
     const wire = path.join(directory, 'codex-wire.jsonl');
     return actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
-      args: ['-e', codexChildFixture, wire, codexForeignScope],
-      register: async registration => { codexRegistrations.push(registration);
+      args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
+      register: async registration => { codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
         let closeObserved = false;
+        codexCloseDelays.push(registration.exit.then(async () => {
+          const atExit = performance.now(); await registration.close; return performance.now() - atExit;
+        }));
         void registration.close.then(() => { closeObserved = true; });
         codexExitWitnesses.push(registration.exit.then(async () => {
           const pipeCloseObservedAtExit = closeObserved;
+          if (emitHandoff) await afterHandoffStop?.();
           const reservation = (await ledger()).reservations[0];
           return { pipeCloseObservedAtExit, stateAtExit: reservation.state };
         }));
@@ -64,6 +68,7 @@ import { runWithWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
+import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexOwnedThread';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createPersonaNativeOriginalHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
@@ -85,9 +90,12 @@ let offeredLateUsage: unknown;
 let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
 let codexFrames: unknown[] = [];
 let codexForeignScope = '';
+let codexOwners: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost[] = [];
+let codexCloseDelays: Array<Promise<number>> = [];
 let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
 const codexChildFixture = `
 const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
+let bridgeURL;
 process.stdin.on('end',()=>{
  require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
  process.exit(0);
@@ -97,11 +105,23 @@ const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 readline.createInterface({input:process.stdin}).on('line',line=>{
  fs.appendFileSync(wire,line+'\\n');const m=JSON.parse(line);if(!m.id)return;
  if(m.method==='initialize')send({id:m.id,result:{userAgent:'offline'}});
- else if(m.method==='thread/start')send({id:m.id,result:{model:m.params.model,thread:{id:'native_codex_thread'}}});
+ else if(m.method==='thread/start'){bridgeURL=m.params.config.mcp_servers?.flujo?.url;send({id:m.id,result:{model:m.params.model,thread:{id:'native_codex_thread'}}});}
  else if(m.method==='turn/start'){
   let threadId=m.params.threadId,turnId='native_codex_turn';
   send({id:m.id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId,turn:{id:turnId}}});
-  const tick=setInterval(()=>{if(!fs.existsSync(wire+'.events'))return;clearInterval(tick);
+  const tick=setInterval(async()=>{if(!fs.existsSync(wire+'.events'))return;clearInterval(tick);
+   if(process.argv[3]==='handoff'){
+    const rpc=async(method,params)=>{
+     const response=await fetch(bridgeURL,{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+     const raw=await response.text();const data=raw.split('\\n').find(line=>line.startsWith('data: '));return JSON.parse(data?data.slice(6):raw);
+    };
+    const tools=await rpc('tools/list',{});const tool=tools.result.tools.find(t=>t.name.startsWith('handoff_to_'));
+    const keeperScript='const parent='+process.pid+';const tick=setInterval(()=>{try{process.kill(parent,0)}catch{clearInterval(tick);setTimeout(()=>process.exit(0),700)}},10);setTimeout(()=>process.exit(0),15000);';
+    const keeper=require('node:child_process').spawn(process.execPath,['-e',keeperScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true,detached:true});
+    await new Promise(resolve=>keeper.once('spawn',resolve));
+    fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
+    await rpc('tools/call',{name:tool.name,arguments:{},_meta:{callId:'codex-handoff-1',threadId}});return;
+   }
    if(process.argv[2]==='thread')threadId='foreign_thread';
    if(process.argv[2]==='turn')turnId='foreign_turn';
    send({method:'item/completed',params:{threadId,turnId,item:{id:'native_codex_item',type:'agentMessage',text:'offline codex done'}}});
@@ -127,7 +147,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = [];
+  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = [];
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -307,7 +327,17 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     // NODE_OPTIONS is deliberately syntactically valid: it must still be absent in the child.
     process.env.NODE_OPTIONS = '--no-warnings';
     try {
-    await withClaim(async () => {}, async (_personaId, goalId) => {
+    await withClaim(async () => {
+      afterPrompt = async () => {
+        const replay = createOwnedCodexThread({ host: codexOwners[0], env: { NODE_ENV: 'production' }, config: {},
+          options: { model: selectedModel.name, workingDirectory: directory }, maxTurns: 3 });
+        const attempt = await replay.runStreamed('unauthorized successor', {});
+        await expect(attempt.events.next()).rejects.toThrow('held');
+        expect(codexRegistrations).toHaveLength(1);
+        expect((await ledger()).reservations[0].codexBudget)
+          .toMatchObject({ scope: 'outer-turn', admittedTurns: 1, maxTurns: 3 });
+      };
+    }, async (_personaId, goalId) => {
       const environment = JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.environment'), 'utf8'));
       expect(environment).toMatchObject({ selectedKey: true, managedHome: true });
       for (const name of canaries) expect(environment.names).not.toContain(name);
@@ -320,6 +350,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(saved.reservations[0]).toMatchObject({ state: 'released', sdkOutcome: 'completed',
         sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 },
         exit: { code: 0, signal: null } });
+      expect(saved.reservations[0].codexBudget).toMatchObject({ scope: 'outer-turn', admittedTurns: 1, completedTurns: 1, maxTurns: 3 });
       expect(saved.reservations[0].identity.processBirthMarkerV2).toBeTruthy();
       expect(await codexExitWitnesses[0]).toMatchObject({ pipeCloseObservedAtExit: false });
       expect((await codexExitWitnesses[0]).stateAtExit).not.toBe('released');
@@ -365,6 +396,76 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         }, 'no-handoff-refusal');
       } finally { unsubscribe(); }
     }, 30000);
+  it.each([false, true])('confirms Codex handoff only after owned exit and pipe close (revoke=%s)', async revoked => {
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
+    emitHandoff = true;
+    await withClaim(async (input, goalId) => {
+      afterHandoffStop = async () => {
+        expect((await ledger()).reservations[0].handoff.state).toBe('requested');
+        if (revoked) {
+          const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+          await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+        }
+      };
+    }, async () => {
+      expect(codexRegistrations).toHaveLength(1);
+      const witness = await codexExitWitnesses[0];
+      expect(witness.pipeCloseObservedAtExit).toBe(false);
+      expect(await codexCloseDelays[0]).toBeGreaterThan(400);
+      expect(witness.stateAtExit).not.toBe('released');
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.handoff).toMatchObject({ protocol: 'owned-codex-app-server-exit-close-v1',
+        state: revoked ? 'requested' : 'confirmed', toolInvocationIds: ['codex-handoff-1'] });
+      expect(reservation.state).toBe(revoked ? 'exited' : 'released');
+      if (!revoked) expect(reservation.sdkOutcome).toBe('completed');
+      expect(reservation.sdkUsage).toBeUndefined();
+      const tools = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal', 'tools', reservation.invocationId);
+      const records = await fs.readdir(tools);
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(await fs.readFile(path.join(tools, records[0]), 'utf8')).state)
+        .toBe(revoked ? 'effect-unknown' : 'terminal');
+      expect(JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.mcp'), 'utf8')))
+        .toMatchObject({ callId: 'codex-handoff-1', threadId: 'native_codex_thread' });
+    }, revoked ? 'handoff-refusal' : 'handoff');
+  }, 30000);
+  it.each([false, true])('owns a Codex descendant under the root budget and fences parent drift (drift=%s)', async drift => {
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
+    let rootConversation: string | undefined, rootRun: string | undefined;
+    const events: string[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+    try {
+      await withClaim(async input => {
+        rootConversation = input.conversationId; rootRun = input.runId;
+        if (drift) afterPrompt = async () => {
+          const reservation = (await ledger()).reservations[0];
+          const child = (await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined))!;
+          expect(child.parentLogicalRunId).toBe(rootRun);
+          await saveCollectionItem('conversations', child.conversationId!, { ...child, parentLogicalRunId: 'foreign_codex_parent' });
+        };
+      }, async (_personaId, goalId) => {
+        expect(codexRegistrations).toHaveLength(1);
+        const saved = await ledger(); expect(saved.goalId).toBe(goalId);
+        expect(saved.reservations).toHaveLength(1);
+        const reservation = saved.reservations[0];
+        expect(reservation.owner.conversationId).not.toBe(rootConversation);
+        expect(reservation.owner.runId).not.toBe(rootRun);
+        expect(reservation.codexBudget).toMatchObject({ scope: 'outer-turn', admittedTurns: 1, maxTurns: 3 });
+        const child = (await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined))!;
+        expect(child).toMatchObject({ parentConversationId: rootConversation, rootConversationId: rootConversation,
+          flowId: 'native_pinned_child', runDepth: 1 });
+        if (drift) {
+          expect(reservation.state).not.toBe('released'); expect(reservation.sdkUsage).toBeUndefined();
+          expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'item/completed' })]));
+          expect(events.join('\n')).not.toContain('offline codex done');
+          expect(JSON.stringify(child.messages)).not.toContain('offline codex done');
+        } else {
+          expect(child.parentLogicalRunId).toBe(rootRun);
+          expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+            sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 } });
+        }
+      }, drift ? 'child-refusal' : 'child');
+    } finally { unsubscribe(); }
+  }, 30000);
   it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
     let rootConversation: string | undefined;
     let rootRun: string | undefined;
@@ -665,16 +766,15 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     });
   }, 30000);
 
-  it('holds Codex without inferring a public child hook and rejects changed model budget before launch', async () => {
+  it.each(['claude-cli', 'codex-cli'] as const)('rejects changed %s model budget before child launch', async adapter => {
+    selectedModel = { ...modelFixture, adapter, ...(adapter === 'codex-cli' ? { provider: 'codex' } : {}) };
     await withClaim(async input => {
-      const { invoke, node, state } = await prepare(input);
+      const { invoke, state } = await prepare(input);
       try {
-        selectedModel = { ...selectedModel, adapter: 'codex-cli' };
-        await expect(createPersonaNativeOriginalHost({ authority: input.executionAuthority, conversationId: input.conversationId,
-          runId: input.runId, nodeId: node.id, modelId: 'model-test' })).rejects.toThrow('held');
-        selectedModel = { ...modelFixture, maxTurns: 4 };
+        selectedModel = { ...selectedModel, maxTurns: 4 };
         expect((await invoke()).success).toBe(false);
         expect(queryMock).not.toHaveBeenCalled();
+        expect(codexRegistrations).toHaveLength(0);
         expect((await ledger()).reservations[0].state).toBe('accepted');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });

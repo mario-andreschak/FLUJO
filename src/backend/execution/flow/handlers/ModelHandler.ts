@@ -24,7 +24,7 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
 import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
-import { NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
+import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -2730,8 +2730,10 @@ export class ModelHandler {
                     const nativeExecutors = Object.freeze({ ...localToolExecutors });
                     const hasHandoff = nativeTools.some(tool => tool.type === 'function'
                       && (tool.function.name === 'handoff' || tool.function.name.startsWith('handoff_to_')));
-                    const terminationProtocol = hasHandoff && model.adapter === 'claude-cli'
-                      && opts.nativeOriginalProcessHost ? NATIVE_HANDOFF_PROTOCOL : undefined;
+                    const terminationProtocol = hasHandoff && opts.nativeOriginalProcessHost
+                      ? model.adapter === 'claude-cli' ? NATIVE_HANDOFF_PROTOCOL
+                        : model.adapter === 'codex-cli' ? CODEX_NATIVE_HANDOFF_PROTOCOL : undefined
+                      : undefined;
                     if (terminationProtocol) assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
                     const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
                     nativeInventory = { digest: inventoryDigest, tools: nativeTools,

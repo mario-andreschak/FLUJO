@@ -13,7 +13,7 @@ import { splitToolResultMedia } from '@/backend/services/runResources/toolResult
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { combineAbortSignals } from '../combineAbortSignals';
-import { NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
+import { isNativeHandoffProtocol, type NativeHandoffProtocol } from './nativeHandoffProtocol';
 import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 
 const ports = new WeakSet<object>();
@@ -69,7 +69,7 @@ export function nativeToolInventoryDigest(
   localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>,
   terminationProtocol?: NativeHandoffProtocol,
 ): string {
-  if (terminationProtocol !== undefined && terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) {
+  if (terminationProtocol !== undefined && !isNativeHandoffProtocol(terminationProtocol)) {
     throw new Error('Unknown native termination protocol.');
   }
   const names = new Set<string>();
@@ -83,7 +83,7 @@ export function nativeToolInventoryDigest(
     }
     const synthetic = Boolean(localToolExecutors?.[name]);
     const handoff = isHandoff(name);
-    if (handoff && terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) {
+    if (handoff && !isNativeHandoffProtocol(terminationProtocol)) {
       throw new Error('Native handoff requires a confirmed SDK termination protocol and is not admitted.');
     }
     if (Number(Boolean(decoded)) + Number(synthetic) + Number(handoff) !== 1) {
@@ -120,7 +120,7 @@ export interface NativeBrokerInput {
 export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
   assertNativeBrokerAuthority(input.authority);
   if (input.terminationProtocol !== undefined) {
-    if (input.terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) throw new Error('Unknown native termination protocol.');
+    if (!isNativeHandoffProtocol(input.terminationProtocol)) throw new Error('Unknown native termination protocol.');
     assertNativeOriginalProcessHost(input.originalProcessHost);
   }
   const advertised = structuredClone(input.tools.filter(tool => tool.type === 'function').map(tool => ({
@@ -219,7 +219,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
         result = { content: [{ type: 'text', text: 'tool denied' }], isError: true };
       } else if (kind === 'handoff') {
         assertNativeOriginalProcessHost(input.originalProcessHost);
-        if (input.terminationProtocol !== NATIVE_HANDOFF_PROTOCOL || pendingHandoffs.size >= 32) {
+        if (!isNativeHandoffProtocol(input.terminationProtocol) || pendingHandoffs.size >= 32) {
           throw new Error('Native handoff termination capability is unavailable.');
         }
         await assertCurrent();

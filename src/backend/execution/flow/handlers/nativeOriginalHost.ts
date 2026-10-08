@@ -20,6 +20,8 @@ import { readNativeHeldFile } from './nativeHeldFile';
 import { assertCodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { resolveBehaviorSubflowSnapshot, verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 
+import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
+
 type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
   conversationId: string; runId: string; flow: Flow; planDigest: string; authority: FlowExecutionAuthority };
@@ -34,7 +36,8 @@ const positive = (value: unknown): number | undefined =>
 type Reservation = { invocationId: string; descriptorDigest: string; owner: NativeInvocationSession['descriptor']['receipt']['owner'];
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
-  handoff?: { protocol: 'owned-claude-exit-close-v1'; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
+  codexBudget?: { scope: 'outer-turn'; admittedTurns: 1; maxTurns: number; completedTurns?: 1 };
+  handoff?: { protocol: NativeHandoffProtocol; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
   sdkUsage?: { source: 'claude-sdk-result' | 'codex-app-server-turn'; numTurns?: number; outerTurns?: number; inputTokens?: number;
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
   identity?: ClaudeOwnedProcessRegistration['identity']; sdkOutcome?: string; exit?: { code: number | null; signal: NodeJS.Signals | null } };
@@ -275,9 +278,7 @@ export async function createPersonaNativeOriginalHost(input: {
     || (input.flowSnapshot && graphDigest(input.flowSnapshot) !== selectedPlanDigest)) return held();
   const node = selectedFlow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
   if (!node || node.data.properties?.boundModel !== input.modelId) return held();
-  // Codex's owned one-turn protocol does not yet certify a handoff. A terminal
-  // Process or child can complete; synthetic Finish routing must remain held.
-  if (adapter === 'codex-cli' && selectedFlow.nodes.some(item => item.data.type === 'finish')) return held();
+  const handoffProtocol = adapter === 'claude-cli' ? NATIVE_HANDOFF_PROTOCOL : CODEX_NATIVE_HANDOFF_PROTOCOL;
   if (model.id !== input.modelId || model.fallbackPolicy) return held();
   const maxTurns = positive(node.data.properties?.maxTurns) ?? positive(model.maxTurns) ?? DEFAULT_AGENTIC_MAX_TURNS;
   const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, adapter: value?.adapter,
@@ -317,6 +318,7 @@ export async function createPersonaNativeOriginalHost(input: {
   let exited = false;
   let closed = false;
   let handoffStopRequested = false;
+  let codexTurnAdmitted = false;
   const handoffIds = new Set<string>();
   const update = async (task: (reservation: Reservation) => Promise<void>, cap = launchCap) => {
     if (!original) return held();
@@ -381,13 +383,13 @@ export async function createPersonaNativeOriginalHost(input: {
     },
     prepareHandoff: async (invocationId, toolInvocationId) => {
       if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
-        || original.descriptor.inventory.terminationProtocol !== 'owned-claude-exit-close-v1'
+        || original.descriptor.inventory.terminationProtocol !== handoffProtocol
         || handoffStopRequested || !toolInvocationId || toolInvocationId.length > 256
         || handoffIds.size >= 32 || handoffIds.has(toolInvocationId)) return held();
       await processHost.beforeFirstPrompt();
       await authority.commitWhileCurrent!(() => update(async reservation => {
         if (reservation.state !== 'registered') return held();
-        reservation.handoff = { protocol: 'owned-claude-exit-close-v1',
+        reservation.handoff = { protocol: handoffProtocol,
           toolInvocationIds: [...handoffIds, toolInvocationId], state: 'requested' };
       }));
       handoffIds.add(toolInvocationId);
@@ -427,6 +429,10 @@ export async function createPersonaNativeOriginalHost(input: {
         totalCostUsd: number(value.total_cost_usd), durationMs: number(value.duration_ms) };
       await authority.commitWhileCurrent!(() => update(async reservation => {
         if (reservation.sdkUsage && nativeDigest(reservation.sdkUsage) !== nativeDigest(receipt)) return held();
+        if (adapter === 'codex-cli') {
+          if (!codexTurnAdmitted || reservation.codexBudget?.admittedTurns !== 1) return held();
+          reservation.codexBudget.completedTurns = 1;
+        }
         reservation.sdkUsage = receipt;
       }));
       if (receipt.numTurns !== undefined && receipt.numTurns > maxTurns) return held();
@@ -435,10 +441,20 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!original || value !== maxTurns
         || nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
       await assertCurrent();
+      if (adapter === 'codex-cli') {
+        await authority.commitWhileCurrent!(() => update(async reservation => {
+          if (codexTurnAdmitted || child || reservation.state !== 'accepted' || reservation.codexBudget) return held();
+          reservation.codexBudget = { scope: 'outer-turn', admittedTurns: 1, maxTurns };
+          codexTurnAdmitted = true;
+        }));
+      }
     },
     register: async value => {
       if (adapter === 'claude-cli') assertClaudeOwnedProcessRegistration(value, processHost);
-      else assertCodexOwnedProcessRegistration(value, processHost);
+      else {
+        assertCodexOwnedProcessRegistration(value, processHost);
+        if (!codexTurnAdmitted) return held();
+      }
       if (!original || child || !value.identity.processBirthMarkerV2) return held();
       child = value;
       void value.exit.then(() => { exited = true; });
