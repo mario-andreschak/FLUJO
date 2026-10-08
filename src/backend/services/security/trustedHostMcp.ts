@@ -143,7 +143,12 @@ export function fingerprintTrustedHostExecutable(filename: string): string {
     const hash = createHash('sha256');
     readStableFile(filename, MAX_EXECUTABLE_BYTES, chunk => hash.update(chunk));
     return hash.digest('hex');
-  } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
+  } catch {
+    try {
+      if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read');
+    } catch { /* Preserve the original source-refusal disposition. */ }
+    throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+  }
 }
 
 /** Fingerprint every admitted package member; never run package or inspection code. */
