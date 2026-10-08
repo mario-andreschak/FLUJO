@@ -11,7 +11,7 @@ import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/servic
 import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
-import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
+import { attachTrustedHost, getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
@@ -106,7 +106,8 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
 });
 
 test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
-  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous', 'verification-threeway-drain'] as const)
+  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous', 'verification-threeway-drain',
+  'diagnostic-explicit', 'diagnostic-close', 'diagnostic-onclose', 'diagnostic-start-failed'] as const)
 ('real private consent and fresh guarded workload contract: %s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
@@ -139,6 +140,10 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
   const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
+  const fixtureIdentity = fs.lstatSync(fixture, { bigint: true });
+  const canonicalParent = fs.realpathSync.native(parent);
+  const parentIdentity = fs.lstatSync(canonicalParent, { bigint: true });
+  if (!parentIdentity.isDirectory() || parentIdentity.isSymbolicLink()) throw new Error('Unsafe workload fixture parent.');
   const application = path.join(fixture, 'application');
   const write = (relative: string, content: string) => {
     const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
@@ -231,6 +236,48 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}`,
     } });
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+    if (mode.startsWith('diagnostic-')) {
+      const reason = mode.slice('diagnostic-'.length);
+      const original = new Error('Controlled original lifecycle failure.');
+      const cleanup = new Error('Controlled original cleanup failure.');
+      const nativeStart = jest.fn(async () => { if (reason === 'start-failed') throw original; });
+      const nativeClose = jest.fn(async () => { if (reason === 'close' || reason === 'start-failed') throw cleanup; });
+      const callback = jest.fn(() => { throw original; });
+      const controlled = { start: nativeStart, close: nativeClose, onclose: reason === 'onclose' ? callback : undefined };
+      transport = controlled;
+      attachTrustedHost(controlled, approved.config, reason === 'explicit' ? callback : undefined, capsule);
+      if (reason !== 'start-failed') await timed('diagnostic-guarded-start', () => controlled.start());
+      const actualInfo = console.info;
+      const observations: unknown[][] = [];
+      const sink = jest.spyOn(console, 'info').mockImplementation((...args: unknown[]) => {
+        if (args[0] === '[trusted-host-retirement]') {
+          observations.push(args); throw new Error('Controlled diagnostic sink failure.');
+        }
+        Reflect.apply(actualInfo, console, args);
+      });
+      try {
+        const operation = () => reason === 'explicit' ? getManagedTrustedHost(controlled)!.retire()
+          : reason === 'onclose' ? controlled.onclose!() : reason === 'close' ? controlled.close() : controlled.start();
+        let failure: unknown;
+        try { await operation(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(AggregateError);
+        const errors = (failure as AggregateError).errors;
+        expect(errors).toEqual(reason === 'start-failed' ? [original, cleanup] : [reason === 'close' ? cleanup : original]);
+        expect(observations).toHaveLength(1);
+        expect(observations[0].slice(0, 3)).toEqual(['[trusted-host-retirement]', reason, reason === 'start-failed' ? 'transport-start' : 'ready']);
+        expect(Number.isSafeInteger(observations[0][3])).toBe(true);
+        expect(observations[0][3]).toBeGreaterThanOrEqual(0);
+        expect(() => getPendingWorkloadEnvironment(approved.config, capsule)).toThrow();
+        await expect(getManagedTrustedHost(controlled)!.assertCurrent(approved.config)).rejects.toThrow();
+        expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+        expect(nativeClose).toHaveBeenCalledTimes(reason === 'close' || reason === 'start-failed' ? 1 : 0);
+        expect(callback).toHaveBeenCalledTimes(reason === 'explicit' || reason === 'onclose' ? 1 : 0);
+      } finally { sink.mockRestore(); }
+      // The controlled native close owns no process or FD; its deliberate error
+      // was asserted above. Genuine capsule retirement has completed.
+      transport = undefined;
+      return;
+    }
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
     attachTrustedHost(transport, approved.config, undefined, capsule);
@@ -508,7 +555,13 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       catch (error) { cleanupErrors.push(error); }
     }
     if (cleanupErrors.length === 0) try {
-      if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
+      const current = fs.lstatSync(fixture, { bigint: true });
+      const currentParent = fs.lstatSync(canonicalParent, { bigint: true });
+      if (path.dirname(fixture) !== parent || fs.realpathSync.native(parent) !== canonicalParent
+          || !currentParent.isDirectory() || currentParent.isSymbolicLink()
+          || currentParent.dev !== parentIdentity.dev || currentParent.ino !== parentIdentity.ino || currentParent.birthtimeNs !== parentIdentity.birthtimeNs
+          || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || !current.isDirectory() || current.isSymbolicLink()
+          || current.dev !== fixtureIdentity.dev || current.ino !== fixtureIdentity.ino || current.birthtimeNs !== fixtureIdentity.birthtimeNs) throw new Error('Unsafe workload fixture cleanup.');
       fs.rmSync(fixture, { recursive: true, force: true });
     } catch (error) { cleanupErrors.push(error); }
     if (cleanupErrors.length) throw new AggregateError(primaryFailed ? [primaryError, ...cleanupErrors] : cleanupErrors,
