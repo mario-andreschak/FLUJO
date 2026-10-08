@@ -47,7 +47,7 @@ const recordSchema = z.object({ version: z.literal(1), purpose: z.literal('bundl
 const markerSchema = z.object({ version: z.literal(1), generation: z.string().uuid(), state: z.literal('active'),
   recordDev: z.string().regex(/^\d{1,40}$/), recordIno: z.string().regex(/^\d{1,40}$/) }).strict();
 interface OwnedFile { fd: number | undefined; filename: string; bytes: Buffer; identity: fs.BigIntStats;
-  parentIdentity: fs.BigIntStats; removed?: boolean; uncertainDescriptor?: number }
+  parentIdentity: fs.BigIntStats; removed?: boolean; uncertainDescriptor?: number; readOnlyWitness?: boolean }
 declare const capsuleBrand: unique symbol;
 export interface PendingBundledFlujoWorkload { readonly [capsuleBrand]: true }
 interface Pending { config: MCPStdioConfig; token: string; audience: string; workspace: string; ledger: string;
@@ -244,13 +244,45 @@ function settleDescriptor(file: OwnedFile) {
 function closeOwnedFile(file: OwnedFile) {
   settleDescriptor(file);
   if (file.fd === undefined) return;
+  // Keep a genuine original-file witness across our own writable close. Windows
+  // finalizes ctime on close; a later named reopen alone cannot prove that change.
+  let witness: number | undefined;
+  if (!file.removed) {
+    assertOwnedParent(file); readExact(file);
+    if (file.bytes.length) readPrivateApproval(file.filename);
+    witness = fs.openSync(file.filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      if (!same(file.identity, fs.fstatSync(witness, { bigint: true }))) throw new BundledFlujoWorkloadError();
+      readExact(file); assertOwnedParent(file);
+    } catch (error) {
+      // This freshly opened witness is owned independently of the writer.
+      try { fs.closeSync(witness); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Workload close witness failed.', { cause: error }); }
+      throw error;
+    }
+  }
+  const before = file.identity;
   const fd = file.fd; file.fd = undefined;
+  let closeError: unknown;
   try { fs.closeSync(fd); }
   catch (error) {
+    closeError = error;
     file.uncertainDescriptor = fd;
     try { settleDescriptor(file); } catch { /* Retain uncertainty without touching a possibly recycled descriptor. */ }
-    throw error;
   }
+  if (witness !== undefined) {
+    file.fd = witness; file.readOnlyWitness = true;
+    if (file.uncertainDescriptor === undefined) {
+      const after = fs.fstatSync(witness, { bigint: true });
+      // Only this synchronous, witnessed, owned close transition may finalize
+      // ctime. Every other field and exact bytes must remain unchanged; subsequent
+      // guards compare the entire refreshed identity, including ctime.
+      if (!identityFields.filter(field => field !== 'ctimeNs').every(field => before[field] === after[field])) throw new BundledFlujoWorkloadError();
+      const previous = file.identity; file.identity = after;
+      try { readExact(file); assertOwnedParent(file); if (file.bytes.length) readPrivateApproval(file.filename); readExact(file); }
+      catch (error) { file.identity = previous; throw error; }
+    }
+  }
+  if (closeError !== undefined) throw closeError;
 }
 function recoverOwnedFile(file: OwnedFile) {
   settleDescriptor(file); assertOwnedParent(file);
@@ -259,7 +291,22 @@ function recoverOwnedFile(file: OwnedFile) {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
     throw new BundledFlujoWorkloadError();
   }
-  if (file.fd !== undefined) { readExact(file); return; }
+  if (file.fd !== undefined) {
+    readExact(file);
+    if (file.readOnlyWitness) {
+      if (file.bytes.length) readPrivateApproval(file.filename);
+      const reader = file.fd;
+      const writer = fs.openSync(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      if (!same(file.identity, fs.fstatSync(writer, { bigint: true }))) {
+        fs.closeSync(writer); throw new BundledFlujoWorkloadError();
+      }
+      file.fd = writer; file.readOnlyWitness = false;
+      try { fs.closeSync(reader); }
+      catch (error) { file.uncertainDescriptor = reader; try { settleDescriptor(file); } catch { /* Preserve ambiguous reader ownership. */ } throw error; }
+      readExact(file); assertOwnedParent(file);
+    }
+    return;
+  }
   if (!same(file.identity, fs.lstatSync(file.filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
   if (file.bytes.length) readPrivateApproval(file.filename);
   file.fd = fs.openSync(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
