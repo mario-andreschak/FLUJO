@@ -75,6 +75,6 @@ export async function approveSmokeServer(baseUrl, name, token, timeoutMs, worksp
   const reviewed = await preview.json();
   if (reviewed.serverName !== name || !/^[a-f0-9]{64}$/.test(reviewed.policyDigest)) throw new Error('Invalid installed package consent preview.');
   const approval = await fetch(url, { method: 'POST', headers, signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify({ runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt: Date.now() + 120_000 }) });
+    body: JSON.stringify({ runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt: Date.now() + 10 * 60_000 }) });
   if (!approval.ok || (await approval.json()).approved !== true) throw new Error(`Installed ${name} consent approval returned ${approval.status}.`);
 }

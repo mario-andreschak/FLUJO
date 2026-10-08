@@ -36,7 +36,7 @@ test('the source-absent packaged consumer uses the built production issuer and r
   const equipment = path.join(root, 'scripts');
   try {
     await fs.mkdir(equipment);
-    for (const name of ['smoke-bundled-operator.mjs', 'generated-smoke-owner-issuer.cjs', 'generated-smoke-owner-issuer.json']) {
+    for (const name of ['smoke-bundled-operator.mjs', 'local-instance.mjs', 'generated-smoke-owner-issuer.cjs', 'generated-smoke-owner-issuer.json']) {
       await fs.copyFile(path.join(scripts, name), path.join(equipment, name));
     }
     await assert.rejects(fs.access(path.join(root, 'src/backend/services/security/ownerCredentials.ts')), { code: 'ENOENT' });
