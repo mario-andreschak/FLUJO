@@ -35,6 +35,7 @@ let owner;
 let scheduler;
 let stopping = false;
 let backendEntered = false;
+let pendingApprovedConfigs;
 let commands = Promise.resolve();
 
 async function shutdown() {
@@ -42,6 +43,15 @@ async function shutdown() {
   const failures = [];
   try { if (scheduler) await scheduler.stopWorker(); }
   catch (error) { failures.push(error); }
+  if (pendingApprovedConfigs) {
+    try {
+      if (!(await source('backend/services/mcp/config.ts').saveConfig(new Map(
+        pendingApprovedConfigs.map(config => [config.name, config])))).success) {
+        throw new Error('Exact approved equipment configuration remains unrestored');
+      }
+      pendingApprovedConfigs = undefined;
+    } catch (error) { failures.push(error); }
+  }
   // Do not import/start the backend graph to clean up a seed-only failure.
   try { if (backendEntered) await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); }
   catch (error) { failures.push(error); }
@@ -115,6 +125,7 @@ async function command(message) {
       const effectRoot = path.join(source('utils/workspace.ts').getWorkspaceDataDir(), 'userdata', 'worker-bootstrap');
       const portable = { ...shipped.createShippedServerConfig(descriptor, {}), name: 'bash', disabled: false,
         roots: [effectRoot], env: { FLUJO_BASH_ROOTS: effectRoot, FLUJO_FS_ROOTS: effectRoot } };
+      pendingApprovedConfigs = configs;
       if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name,
         config.name === 'bash' ? portable : config])))).success) throw new Error('Portable export projection failed');
       let primary;
@@ -134,6 +145,7 @@ async function command(message) {
           send({ phase: 'cleanup-failed', error: 'Exact approved configuration restoration failed' });
           throw new AggregateError(primary ? [primary] : [], 'Approved configuration restoration failed');
         }
+        pendingApprovedConfigs = undefined;
       }
       break;
     }
