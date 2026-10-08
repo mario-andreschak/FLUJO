@@ -15,6 +15,7 @@ import { createNativeBrokerAuthority, nativeDigest } from './nativeToolBroker';
 import { createNativeLineageRootBinding } from './nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from './nativeInvocationSession';
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
+import { isUnsupportedNativeHeldRead, withNativeHeldLineageRead } from './nativeHeldLineageRead';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
 import { readNativeHeldFile } from './nativeHeldFile';
 import { assertCodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
@@ -306,12 +307,37 @@ export async function createPersonaNativeOriginalHost(input: {
   const root = createNativeLineageRootBinding({ workspace: binding.workspace, fleetRunId: binding.dispatchId,
     workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
+  const readOriginal = async (invocationId: string) => {
+    try {
+      return await withNativeHeldLineageRead(authority, input.conversationId, binding.conversationId, async heldRead => {
+        const assertHeldCurrent = async () => {
+          authority.signal.throwIfAborted();
+          await heldRead.assertCurrent();
+          await assertGoalCurrent();
+          await heldRead.assertCurrent();
+        };
+        const heldBroker = createNativeBrokerAuthority(binding.leaseEpoch, assertHeldCurrent);
+        const heldRoot = createNativeLineageRootBinding({ workspace: binding.workspace,
+          fleetRunId: binding.dispatchId, workerId: binding.activityId, goalId: binding.goalId,
+          rootConversationId: binding.conversationId, rootLogicalRunId: binding.runId,
+          rootFlowId: binding.flow.id }, assertHeldCurrent);
+        const saved = await readSavedNativeOrigin({ invocationId, authority: heldBroker,
+          root: heldRoot, signal: authority.signal, heldRead });
+        await assertHeldCurrent();
+        return saved;
+      });
+    } catch (error) {
+      if (!isUnsupportedNativeHeldRead(error)) throw error;
+    }
+    // Eligibility alone can fall back, after the held lease has been released.
+    // Actual lease/goal/lineage failures retain their original refused outcome.
+    return readSavedNativeOrigin({ invocationId, authority: broker, root, signal: authority.signal });
+  };
   let original: NativeInvocationSession | undefined;
   const assertDescendantCurrent = async () => {
     if (isRoot) return;
     if (!original) return held();
-    const saved = await readSavedNativeOrigin({ invocationId: original.descriptor.receipt.invocationId,
-      authority: broker, root, signal: authority.signal });
+    const saved = await readOriginal(original.descriptor.receipt.invocationId);
     if (nativeDigest(saved) !== nativeDigest(original.descriptor)) return held();
   };
   let child: ClaudeOwnedProcessRegistration | undefined;
@@ -338,8 +364,7 @@ export async function createPersonaNativeOriginalHost(input: {
         || descriptor.archive.adapter !== adapter
         || (isRoot ? descriptor.lineage.edges.length !== 0 : descriptor.lineage.edges.length === 0)
         || descriptor.lineage.rootFlowId !== binding.flow.id) return held();
-      const saved = await readSavedNativeOrigin({ invocationId: descriptor.receipt.invocationId,
-        authority: broker, root, signal: authority.signal });
+      const saved = await readOriginal(descriptor.receipt.invocationId);
       if (nativeDigest(saved) !== nativeDigest(descriptor)) return held();
       let provedFlow = binding.flow;
       for (const edge of saved.lineage.edges) {

@@ -3,6 +3,19 @@ import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/han
 
 const authorityRegistryRoot = globalThis as typeof globalThis & { __flujoPersonaFlowAuthorities?: WeakSet<object> };
 const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthorities ??= new WeakSet<object>();
+type HeldFlowReadRunner = <T>(task: (assertCurrent: () => Promise<void>) => Promise<T>) => Promise<T>;
+const heldFlowReadRunners = new WeakMap<object, HeldFlowReadRunner>();
+
+/** Dispatcher-only issuer lookup; lookalike and inherited authorities cannot mint a scope. */
+export async function readWithPersonaFlowAuthority<T>(
+  authority: FlowExecutionAuthority,
+  task: (assertCurrent: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  assertPersonaFlowExecutionAuthority(authority);
+  const runner = heldFlowReadRunners.get(authority);
+  if (!runner) throw new Error('Persona authority does not support held reads.');
+  return runner(task);
+}
 /** Provenance only: the live lease and goal must still be checked on every use. */
 export function assertPersonaFlowExecutionAuthority(value: unknown): asserts value is FlowExecutionAuthority {
   if (!value || typeof value !== 'object' || !personaFlowAuthorities.has(value) || !Object.isFrozen(value)) {
@@ -2876,6 +2889,26 @@ export class PersonaFlowDispatcher {
 
     Object.freeze(authority);
     personaFlowAuthorities.add(authority);
+    heldFlowReadRunners.set(authority, <T>(task: (assertCurrent: () => Promise<void>) => Promise<T>) => (
+      this.inWorkspace(async () => {
+        const { readWithPersonaActivityLease } = await import('./activityRuntime');
+        return readWithPersonaActivityLease(fence, async (reader) => {
+          const assertCurrent = async () => {
+            abortController.signal.throwIfAborted();
+            if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
+            await reader.assertCurrent();
+            await this.assertGoalDispatchCurrent(record, false);
+            await reader.assertCurrent();
+            abortController.signal.throwIfAborted();
+            if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
+          };
+          await assertCurrent();
+          const result = await task(assertCurrent);
+          await assertCurrent();
+          return result;
+        });
+      })
+    ));
 
     // Approval/debug state mutation must happen under the same freshly claimed
     // authority as the continuation. The callback receives no raw fence. A
