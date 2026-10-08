@@ -1456,6 +1456,10 @@ export interface StartNodePrepResult extends BasePrepResult {
 // ProcessNode prep result
 export interface ProcessNodePrepResult extends BasePrepResult {
     nodeType: 'process';
+    /** Identity only; Native admission resolves the plan from the frozen root. */
+    flowId?: string;
+    /** Non-enumerable preparation field, checked against the immutable plan. */
+    nativeFlowSnapshot?: Flow;
     currentPrompt: string;
     boundModel: string;
     modelDisplayName?: string;

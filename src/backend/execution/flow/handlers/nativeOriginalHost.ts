@@ -17,14 +17,15 @@ import { createNativeInvocationSessionHook, type NativeInvocationSession } from 
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
 import { readNativeHeldFile } from './nativeHeldFile';
+import { resolveBehaviorSubflowSnapshot, verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 
 type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
   conversationId: string; runId: string; flow: Flow; planDigest: string; authority: FlowExecutionAuthority };
 const registryRoot = globalThis as typeof globalThis & { __flujoNativeOriginalAuthorities?: WeakMap<object, Binding> };
 const bindings = registryRoot.__flujoNativeOriginalAuthorities ??= new WeakMap<object, Binding>();
-/** Causal wrappers keep the root's hold. A child is not thereby accepted as a
- * root Original; createPersonaNativeOriginalHost rejects its different tuple. */
+/** Causal wrappers retain only the root binding. Saved lineage and the frozen
+ * dependency closure must separately prove a descendant's executable plan. */
 export { inheritNativeOriginalAuthority } from '../nativeOriginalAuthorityInheritance';
 const held = (): never => { throw new Error('Native Original authority or reservation is held.'); };
 const positive = (value: unknown): number | undefined =>
@@ -214,6 +215,7 @@ export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutio
 }
 
 export interface NativeOriginalProcessHost {
+  assertOutputCurrent(): Promise<void>;
   assertTurnBudget(maxTurns: number): Promise<void>;
   register(process: ClaudeOwnedProcessRegistration): Promise<void>;
   beforeFirstPrompt(): Promise<void>;
@@ -225,10 +227,11 @@ export interface NativeOriginalProcessHost {
   confirmHandoffTermination(invocationId: string, toolInvocationIds: readonly string[]): Promise<void>;
 }
 
-/** Only a live branded Persona root run can produce the runtime capabilities. */
+/** Only a live branded Persona root or its proven causal descendant can
+ * produce runtime capabilities. A child remains under the root goal's hold. */
 export async function createPersonaNativeOriginalHost(input: {
   authority?: FlowExecutionAuthority; conversationId?: string; runId?: string; nodeId?: string;
-  modelId: string;
+  modelId: string; flowId?: string; flowSnapshot?: Flow;
   personaAttribution?: PersonaAttribution;
 }): Promise<{ broker: ReturnType<typeof createNativeBrokerAuthority>;
   session: ReturnType<typeof createNativeInvocationSessionHook>; process: NativeOriginalProcessHost } | undefined> {
@@ -254,9 +257,24 @@ export async function createPersonaNativeOriginalHost(input: {
   // Always use the mint's captured real lease closures, including when a causal
   // wrapper carries the binding. Caller-owned wrapper methods are not authority.
   const authority = binding.authority;
-  if (binding.workspace !== getCurrentWorkspace() || input.conversationId !== binding.conversationId
-    || input.runId !== binding.runId || !authority.commitWhileCurrent) return held();
-  const node = binding.flow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
+  if (binding.workspace !== getCurrentWorkspace() || !input.conversationId || !input.runId
+    || !authority.commitWhileCurrent) return held();
+  const isRoot = input.conversationId === binding.conversationId && input.runId === binding.runId;
+  let selectedFlow = binding.flow;
+  if (isRoot) {
+    if (input.flowId && input.flowId !== binding.flow.id) return held();
+  } else {
+    if (!input.flowId || !binding.flow.executionDependencies) return held();
+    try { verifyBehaviorDependencies(binding.flow); } catch { return held(); }
+    const dependency = binding.flow.executionDependencies?.flows.find(item => item.flowId === input.flowId);
+    if (!dependency) return held();
+    selectedFlow = dependency.flowSnapshot;
+  }
+  const graphDigest = (flow: Flow) => nativeDigest({ ...flow, executionDependencies: undefined });
+  const selectedPlanDigest = graphDigest(selectedFlow);
+  if ((!isRoot && !input.flowSnapshot)
+    || (input.flowSnapshot && graphDigest(input.flowSnapshot) !== selectedPlanDigest)) return held();
+  const node = selectedFlow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
   if (!node || node.data.properties?.boundModel !== input.modelId) return held();
   if (model.id !== input.modelId || model.fallbackPolicy) return held();
   const maxTurns = positive(node.data.properties?.maxTurns) ?? positive(model.maxTurns) ?? DEFAULT_AGENTIC_MAX_TURNS;
@@ -286,6 +304,13 @@ export async function createPersonaNativeOriginalHost(input: {
     workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
   let original: NativeInvocationSession | undefined;
+  const assertDescendantCurrent = async () => {
+    if (isRoot) return;
+    if (!original) return held();
+    const saved = await readSavedNativeOrigin({ invocationId: original.descriptor.receipt.invocationId,
+      authority: broker, root, signal: authority.signal });
+    if (nativeDigest(saved) !== nativeDigest(original.descriptor)) return held();
+  };
   let child: ClaudeOwnedProcessRegistration | undefined;
   let exited = false;
   let closed = false;
@@ -304,13 +329,19 @@ export async function createPersonaNativeOriginalHost(input: {
       if (original) return held();
       const descriptor = value.descriptor;
       const owner = descriptor.receipt.owner;
-      if (owner.conversationId !== binding.conversationId || owner.runId !== binding.runId
+      if (owner.conversationId !== input.conversationId || owner.runId !== input.runId
         || owner.nodeId !== input.nodeId || owner.modelId !== input.modelId || owner.leaseEpoch !== binding.leaseEpoch
-        || descriptor.archive.adapter !== 'claude-cli' || descriptor.lineage.edges.length
+        || descriptor.archive.adapter !== 'claude-cli'
+        || (isRoot ? descriptor.lineage.edges.length !== 0 : descriptor.lineage.edges.length === 0)
         || descriptor.lineage.rootFlowId !== binding.flow.id) return held();
       const saved = await readSavedNativeOrigin({ invocationId: descriptor.receipt.invocationId,
         authority: broker, root, signal: authority.signal });
       if (nativeDigest(saved) !== nativeDigest(descriptor)) return held();
+      let provedFlow = binding.flow;
+      for (const edge of saved.lineage.edges) {
+        provedFlow = resolveBehaviorSubflowSnapshot(provedFlow, edge.parentNodeId, edge.childFlowId, binding.workspace);
+      }
+      if (provedFlow.id !== selectedFlow.id || graphDigest(provedFlow) !== selectedPlanDigest) return held();
       await authority.commitWhileCurrent!(async () => {
         await mutate(binding, async ledger => {
           const acceptanceDigest = nativeDigest([binding.dispatchId, binding.round, binding.planDigest,
@@ -319,7 +350,7 @@ export async function createPersonaNativeOriginalHost(input: {
             || item.invocationId === descriptor.receipt.invocationId || item.acceptanceDigest === acceptanceDigest)) return held();
           ledger.reservations.push({ invocationId: descriptor.receipt.invocationId,
             descriptorDigest: nativeDigest(descriptor), owner: structuredClone(owner), lineageDigest: descriptor.lineage.digest,
-            acceptanceDigest, planDigest: nativeDigest([binding.planDigest, modelPlanDigest]), modelId: input.modelId, maxTurns, state: 'accepted' });
+            acceptanceDigest, planDigest: nativeDigest([binding.planDigest, selectedPlanDigest, modelPlanDigest]), modelId: input.modelId, maxTurns, state: 'accepted' });
         }, launchCap);
       });
       original = value;
@@ -339,6 +370,13 @@ export async function createPersonaNativeOriginalHost(input: {
     },
   });
   const processHost: NativeOriginalProcessHost = {
+    assertOutputCurrent: async () => {
+      if (!original || !child) return held();
+      await assertCurrent();
+      await assertDescendantCurrent();
+      if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
+      await assertCurrent();
+    },
     prepareHandoff: async (invocationId, toolInvocationId) => {
       if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
         || original.descriptor.inventory.terminationProtocol !== 'owned-claude-exit-close-v1'
@@ -375,6 +413,7 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!result || typeof result !== 'object' || !child || !original) return held();
       const value = result as Record<string, unknown>;
       if (value.type !== 'result') return held();
+      await processHost.assertOutputCurrent();
       const usage = value.usage && typeof value.usage === 'object' ? value.usage as Record<string, unknown> : {};
       const number = (candidate: unknown): number | undefined => typeof candidate === 'number'
         && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
@@ -409,6 +448,7 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!child || exited || closed || !original) return held();
       if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
       await assertCurrent();
+      await assertDescendantCurrent();
       if (!await isRuntimeProcessIdentityAlive(child.identity) || exited || closed) return held();
       await assertCurrent();
     },
