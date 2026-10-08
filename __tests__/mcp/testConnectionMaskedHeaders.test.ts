@@ -45,6 +45,8 @@ jest.mock('@/backend/services/mcp/config', () => ({
 // resolveConfigHeaders is a pass-through spy so we can assert exactly what config
 // testConnection handed it AFTER hydration.
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: jest.fn(),
   createTransport: jest.fn(() => ({ onerror: undefined })),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
