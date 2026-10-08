@@ -242,7 +242,16 @@ function settleDescriptor(file: { uncertainDescriptor?: number }) {
   }
   throw new BundledFlujoWorkloadError();
 }
+function settleAcquisition(file: OwnedFile) {
+  if (!file.recoveryWriter) return;
+  settleDescriptor(file.recoveryWriter);
+  if (file.recoveryWriter.fd !== undefined) throw new BundledFlujoWorkloadError();
+  file.recoveryWriter = undefined;
+}
 function closeOwnedFile(file: OwnedFile) {
+  // Both retry and independent close refuse an unresolved acquisition before
+  // allocating any replacement witness or overwriting its private evidence.
+  settleAcquisition(file);
   settleDescriptor(file);
   if (file.fd === undefined) return;
   // Keep a genuine original-file witness across our own writable close. Windows
@@ -298,11 +307,7 @@ function closeOwnedFile(file: OwnedFile) {
   if (closeError !== undefined) throw closeError;
 }
 function recoverOwnedFile(file: OwnedFile) {
-  if (file.recoveryWriter) {
-    settleDescriptor(file.recoveryWriter);
-    if (file.recoveryWriter.fd !== undefined) throw new BundledFlujoWorkloadError();
-    file.recoveryWriter = undefined;
-  }
+  settleAcquisition(file);
   settleDescriptor(file); assertOwnedParent(file);
   if (file.removed) {
     try { fs.lstatSync(file.filename); }
