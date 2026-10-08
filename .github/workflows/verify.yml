@@ -40,6 +40,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           # Retain the original ordinary default-heap build; installed checks use supported runtimes below.
@@ -47,20 +48,65 @@ jobs:
           cache: npm
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.13.1 --historical-build --record
+      - name: Determine whether application qualification inputs changed
+        id: application-change
+        shell: bash
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          let changed = true;
+          if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+            const { BASE_REVISION: base, HEAD_REVISION: head } = process.env;
+            if (![base, head].every(value => /^[a-f0-9]{40}$/.test(value ?? ''))) throw new Error('Invalid comparison revision');
+            const files = execFileSync('git', ['diff', '--name-only', '-z', base, head], { encoding: 'utf8' }).split('\0').filter(Boolean);
+            const ciOnly = file => file.startsWith('.github/workflows/') || ['scripts/workflow-contract.mjs', 'scripts/workflow-contract.test.mjs'].includes(file);
+            changed = files.length === 0 || files.some(file => !ciOnly(file));
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'changed=' + changed + '\n');
+          console.log(changed ? 'Application inputs changed: run full production qualification.' : 'Only workflow files changed: reuse the base application qualification and validate workflow shell syntax.');
+          NODE
       - run: npm ci --include=dev
+      - name: Validate Worker publisher shell syntax
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import YAML from 'yaml';
+          const workflow = YAML.parse(fs.readFileSync('.github/workflows/publish-cloud-worker.yml', 'utf8'));
+          let count = 0;
+          for (const step of workflow.jobs.publish.steps) {
+            if (step.shell !== 'bash' || typeof step.run !== 'string') continue;
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'worker-publish-syntax-' + count++ + '.sh'), step.run);
+          }
+          if (count < 2) throw new Error('Expected validation and publication shell scripts');
+          NODE
+          for publish_script in "$RUNNER_TEMP"/worker-publish-syntax-*.sh; do
+            bash -n "$publish_script"
+          done
       - name: Verify the packaged Antigravity CLI on this operating system
+        if: steps.application-change.outputs.changed == 'true'
         run: node --test scripts/antigravity-cli-artifact.test.mjs
       - name: Verify tracing against a populated runtime directory
+        if: steps.application-change.outputs.changed == 'true'
         run: node --test scripts/exclude-workspaces-from-next-glob.test.mjs
       - name: Build with the ordinary command and default Node heap
+        if: steps.application-change.outputs.changed == 'true'
         run: npm run build
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.application-change.outputs.changed == 'true'
         with:
           node-version: '22.17.0'
           cache: npm
       - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 22.17.0 --record
       - name: Qualify installed app and packed MCP packages on Node 22.17.0
+        if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -70,12 +116,15 @@ jobs:
           npm run validate:mcp-release
           npm run smoke:mcp-artifacts
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.application-change.outputs.changed == 'true'
         with:
           node-version: '22.23.3'
           cache: npm
       - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - name: Qualify installed app and packed MCP packages on Node 22.23.3
+        if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -85,12 +134,15 @@ jobs:
           npm run validate:mcp-release
           npm run smoke:mcp-artifacts
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.application-change.outputs.changed == 'true'
         with:
           node-version: '24.2.0'
           cache: npm
       - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 24.2.0 --record
       - name: Qualify installed app and packed MCP packages on Node 24.2.0
+        if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -100,12 +152,15 @@ jobs:
           npm run validate:mcp-release
           npm run smoke:mcp-artifacts
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.application-change.outputs.changed == 'true'
         with:
           node-version: '24.21.0'
           cache: npm
       - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - name: Qualify installed app and packed MCP packages on Node 24.21.0
+        if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -123,6 +178,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Verify the packed Antigravity production consumer
+        if: steps.application-change.outputs.changed == 'true'
         run: node --test scripts/antigravity-cli-consumer.test.mjs
 
   persona-memory-profile:

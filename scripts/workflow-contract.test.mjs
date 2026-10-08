@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,6 +27,9 @@ for (const [label, change] of [
   ['YAML boolean-false required job', (files) => { files['verify.yml'].jobs.test.if = YAML.parse('if: false').if; }],
   ['omitted packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 22.17.0')).run = 'npm run build'; }],
   ['skipped packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 22.17.0')).if = 'false'; }],
+  ['unpaired production runtime guard', files => { delete files['verify.yml'].jobs['production-build'].steps.find(step => step.run === 'node scripts/verify-ci-node.mjs 22.17.0 --record').if; }],
+  ['untrusted production comparison revision', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.id === 'application-change').env.HEAD_REVISION = '${{ github.event.pull_request.title }}'; }],
+  ['omitted publisher syntax validation', files => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter(step => step.name !== 'Validate Worker publisher shell syntax'); }],
   ['disabled real container probes', files => { delete files['verify.yml'].jobs.test.steps.find(step => step.run === 'npm run test:ci').env.FLUJO_RUN_ISOLATION_SOURCE_PROBE; }],
   ['missing Linux Docker preparation', files => { files['verify.yml'].jobs.test.steps = files['verify.yml'].jobs.test.steps.filter(step => step.name !== 'Prepare real Linux MCP isolation image'); }],
   ['optional Linux Docker preparation', files => { files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image')['continue-on-error'] = true; }],
@@ -146,4 +149,71 @@ test('real selected-source guard refuses unmerged or mismatched source before de
     assert.notEqual(result.status, 0);
     assert.equal(f.git('rev-parse', 'HEAD'), f.workflowSha, 'rejected input cannot change the trusted checkout');
   }
+});
+
+test('production qualification reuses only CI-only changes and fails closed on application or invalid revisions', t => {
+  const f = journeyGitFixture(t);
+  const root = f.git('rev-parse', '--show-toplevel');
+  const scope = readWorkflows()['verify.yml'].jobs['production-build'].steps.find(step => step.id === 'application-change').run;
+  const bash = process.platform === 'win32' ? path.resolve(f.git('--exec-path'), '..', '..', '..', 'bin', 'bash.exe') : 'bash';
+  const commitFile = (file, content) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), content);
+    f.git('add', '--', file);
+    f.git('-c', 'user.name=FLUJO CI fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', content);
+    return f.git('rev-parse', 'HEAD');
+  };
+  const base = f.git('rev-parse', 'HEAD');
+  const workflowHead = commitFile('.github/workflows/publish-cloud-worker.yml', 'workflow repair');
+  const contractHead = commitFile('scripts/workflow-contract.mjs', 'CI contract repair');
+  const applicationHead = commitFile('src/runtime.ts', 'application change');
+  const output = path.join(root, 'scope-output.txt');
+  const execute = (head, event = 'pull_request') => {
+    writeFileSync(output, '');
+    const result = spawnSync(bash, ['-e', '-c', scope], {
+      cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10_000,
+      env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_EVENT_NAME: event, BASE_REVISION: base, HEAD_REVISION: head },
+    });
+    assert.ifError(result.error);
+    return { result, output: readFileSync(output, 'utf8') };
+  };
+  for (const [head, event, expected] of [[workflowHead, 'pull_request', false], [contractHead, 'pull_request', false], [applicationHead, 'pull_request', true], [workflowHead, 'push', true]]) {
+    const actual = execute(head, event);
+    assert.equal(actual.result.status, 0, actual.result.stderr);
+    assert.equal(actual.output.trim(), 'changed=' + expected);
+  }
+  const rejected = execute('invalid revision');
+  assert.notEqual(rejected.result.status, 0);
+  assert.equal(rejected.output, '');
+});
+
+test('Worker publisher scripts parse in Bash and reject the nested heredoc indentation regression', t => {
+  const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(git.status, 0, git.stderr);
+  const bash = process.platform === 'win32' ? path.resolve(git.stdout.trim(), '..', '..', '..', 'bin', 'bash.exe') : 'bash';
+  const steps = readWorkflows()['publish-cloud-worker.yml'].jobs.publish.steps.filter(step => step.shell === 'bash' && typeof step.run === 'string');
+  for (const step of steps) {
+    const result = spawnSync(bash, ['-n'], { input: step.run, encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, step.name + ': ' + result.stderr);
+  }
+  const publish = steps.find(step => step.name === 'Publish the tested image without rebuilding').run;
+  assert.ok(publish.includes('\nNODE\n'));
+  const broken = spawnSync(bash, ['-n'], { input: publish.replace('\nNODE\n', '\n  NODE\n'), encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  assert.ifError(broken.error);
+  assert.notEqual(broken.status, 0);
+  const tempRoot = realpathSync.native(os.tmpdir());
+  const checkerTemp = realpathSync.native(mkdtempSync(path.join(tempRoot, 'flujo-publisher-syntax-')));
+  t.after(() => {
+    const relative = path.relative(tempRoot, realpathSync.native(checkerTemp));
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    rmSync(checkerTemp, { recursive: true, force: true });
+  });
+  const checker = readWorkflows()['verify.yml'].jobs['production-build'].steps.find(step => step.name === 'Validate Worker publisher shell syntax').run;
+  const checked = spawnSync(bash, ['-e', '-c', checker], {
+    cwd: new URL('../', import.meta.url), encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    env: { ...process.env, RUNNER_TEMP: checkerTemp },
+  });
+  assert.ifError(checked.error);
+  assert.equal(checked.status, 0, checked.stderr);
 });
