@@ -493,6 +493,11 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
     const { getManagedTrustedHost } = await import('@/backend/services/mcp/trustedHost');
     phase('transport-import-ready'); live();
     const transport = createStdioTransport(approved.config);
+    // Installed SDK v1 preallocates this PassThrough before start. Preserve
+    // early drain and error observation as well as actual child-stream checks.
+    const initialStderr = transport.stderr;
+    initialStderr?.on('error', rememberChildFailure);
+    initialStderr?.resume();
     context.retire = () => { getManagedTrustedHost(transport)?.retire(); };
     const start = transport.start.bind(transport);
     transport.start = async () => {
@@ -516,7 +521,9 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
       }
       // Drain the actual created stderr stream after start/capture, without
       // consuming or changing stdout's SDK protocol framing.
-      transport.stderr?.on('error', rememberChildFailure);
+      if (transport.stderr !== initialStderr && transport.stderr !== child.stderr) {
+        transport.stderr?.on('error', rememberChildFailure);
+      }
       transport.stderr?.resume();
     };
     phase('handshake-enter');
