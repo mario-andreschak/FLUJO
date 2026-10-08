@@ -59,6 +59,12 @@ that completed jobs were not dispatched again, and checks ledger drainage. A
 children may be refused by the conservative budget; their refusal is evidence
 of bounded admission, not proof that the original workload is operationally
 supported. Any admitted retry lane must produce two physical requests.
+All three previously completed children must retain exactly one physical request.
+Every queued child must complete in the admission-off control. A guarded queued
+failure must carry the actual `runFlow` result's typed archive LIMIT/BUSY code
+and have zero physical HTTP requests; ordinary unrelated errors fail the suite.
+Every durable lane must settle completed/error, with no pending, running or
+cancelled lane silently accepted as drainage.
 
 Each child emits 100 ms samples with RSS, heap used/total, external memory,
 ArrayBuffers, GC count/duration and archive pressure. Phase markers expose the
@@ -79,7 +85,10 @@ node node_modules/jest/bin/jest.js --selectProjects node --runInBand --runTestsB
 Run only after Source review and the queue's resource grant, on an installed
 checkout whose own Jest resolves beneath its own `node_modules`. Do not select
 test names or combine this intensive suite with parallel workers. The parent
-waits for process exit and stdio closure, retains bounded raw logs, exit receipts,
+independently records the actual process exit event, stdout end and stderr end,
+then waits for close. Successful qualification requires all three independent
+observations and no stream error; close alone proves none of them. It retains
+bounded raw logs, exit receipts,
 samples, archives and proof beneath its identity-recorded owned temp root. Both
 success and failure evidence are preserved for review. No automatic recursive
 cleanup runs in this equipment. Qualification and any later cleanup remain

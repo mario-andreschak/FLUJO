@@ -199,11 +199,40 @@ async function workerScenario(root: string) {
     const prep: SubflowNodePrepResult = { nodeId: 'subflow', nodeType: 'subflow', depth: 1, parentRunId: 'parent',
       invocationId: invocation.id, showSteps: false, persistConversation: true, concurrencyLimit: 4,
       errorStrategy: 'collect-all', lanes: invocation.lanes };
-    const queue = await runSubflowLanes(prep, runFlow, { nodeId: 'subflow', nodeName: 'Offline queue', nodeType: 'subflow' },
+    const actualLaneReceipts: Record<string, { status: string; code?: string; httpBefore: number; httpAfter: number }> = {};
+    const observedRunFlow: typeof runFlow = async input => {
+      const id = input.flowId ?? 'missing-flow';
+      const httpBefore = physical[id] ?? 0;
+      const result = await runFlow(input);
+      actualLaneReceipts[id] = { status: result.status, code: result.error?.details?.code,
+        httpBefore, httpAfter: physical[id] ?? 0 };
+      return result;
+    };
+    const queue = await runSubflowLanes(prep, observedRunFlow, { nodeId: 'subflow', nodeName: 'Offline queue', nodeType: 'subflow' },
       { messages: originals[0] });
     expect(queue.lanes).toHaveLength(8);
     expect(queue.lanes!.slice(0, 3).every(lane => lane.success)).toBe(true);
-    expect(physical['child-0']).toBe(1); // Completed durable jobs were not executed twice.
+    for (let i = 0; i < 3; i++) {
+      expect(physical[`child-${i}`]).toBe(1); // Every completed durable job skipped dispatch.
+      expect(actualLaneReceipts[`child-${i}`]).toBeUndefined();
+    }
+    for (let i = 4; i < 8; i++) {
+      const receipt = actualLaneReceipts[`child-${i}`];
+      expect(receipt).toBeDefined();
+      if (control || queue.lanes![i].success) {
+        expect(queue.lanes![i].success).toBe(true);
+        expect(receipt.status).toBe('completed');
+        expect(receipt.httpAfter - receipt.httpBefore).toBe(i === 4 ? 2 : 1);
+      } else {
+        expect(receipt.status).toBe('error');
+        expect(['MODEL_TURN_ARCHIVE_MEMORY_LIMIT', 'MODEL_TURN_ARCHIVE_MEMORY_BUSY']).toContain(receipt.code);
+        expect(receipt.httpBefore).toBe(0);
+        expect(receipt.httpAfter).toBe(0);
+      }
+    }
+    for (const lane of invocation.lanes) {
+      expect(['completed', 'error']).toContain(lane.status);
+    }
     expect(physical['child-3']).toBeGreaterThanOrEqual(1);
     // When admitted, one SDK request observation includes a real SDK retry.
     if (physical['child-4']) expect(physical['child-4']).toBe(2);
@@ -263,7 +292,8 @@ async function workerScenario(root: string) {
     }
     phase = 'drained'; sample();
     await fs.writeFile(path.join(resolved, 'proof.json'), JSON.stringify({ control, physical, observations, observationsByModel, archiveCount,
-      hashes, setupHashes, parentAttempt, characters, parentCharacters: 2_000_000, initialTopology: [3, 1, 4], queue: queue.lanes!.map(lane => ({
+      hashes, setupHashes, parentAttempt, actualLaneReceipts, durableLaneStatuses: invocation.lanes.map(lane => lane.status),
+      characters, parentCharacters: 2_000_000, initialTopology: [3, 1, 4], queue: queue.lanes!.map(lane => ({
         success: lane.success, error: lane.error, conversationId: lane.conversationId })),
       node: process.version, platform: process.platform, arch: process.arch, execArgv: process.execArgv,
       nodeOptions: process.env.NODE_OPTIONS ?? null, heapSizeLimit: getHeapStatistics().heap_size_limit,
@@ -313,9 +343,17 @@ if (process.env.FLUJO_520_WORKER) {
     };
     child.stdout.on('data', collect(stdout)); child.stderr.on('data', collect(stderr));
     let spawnError: string | undefined;
+    let exitEvent: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let stdoutEnded = false, stderrEnded = false, closeObserved = false;
+    const streamErrors: string[] = [];
+    child.once('exit', (code, signal) => { exitEvent = { code, signal }; });
+    child.stdout.once('end', () => { stdoutEnded = true; });
+    child.stderr.once('end', () => { stderrEnded = true; });
+    child.stdout.once('error', error => { streamErrors.push(`stdout: ${String(error)}`); });
+    child.stderr.once('error', error => { streamErrors.push(`stderr: ${String(error)}`); });
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
       child.once('error', error => { spawnError = String(error); });
-      child.once('close', (code, signal) => resolve({ code, signal }));
+      child.once('close', (code, signal) => { closeObserved = true; resolve({ code, signal }); });
     });
     const timeout = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 610_000);
     try {
@@ -323,11 +361,16 @@ if (process.env.FLUJO_520_WORKER) {
       await fs.writeFile(path.join(owned.root, 'stdout.log'), Buffer.concat(stdout));
       await fs.writeFile(path.join(owned.root, 'stderr.log'), Buffer.concat(stderr));
       await fs.writeFile(path.join(owned.root, 'parent-exit.json'), JSON.stringify({ mode, exit, timedOut, outputBytes, spawnError,
-        processAndStdioClosed: true, root: owned.root, dev: String(owned.identity.dev), ino: String(owned.identity.ino),
+        exitEvent, stdoutEnded, stderrEnded, closeObserved, streamErrors,
+        processAndStdioClosed: exitEvent !== undefined && stdoutEnded && stderrEnded && closeObserved && streamErrors.length === 0,
+        root: owned.root, dev: String(owned.identity.dev), ino: String(owned.identity.ino),
         birthtimeNs: String(owned.identity.birthtimeNs), evidencePreserved: true }));
       process.stdout.write(`FLUJO_520_EVIDENCE ${owned.root}\n`);
       // Neither timeout nor arbitrary child failure is accepted as an OOM proof.
-      if (spawnError || timedOut || exit.code !== 0 || exit.signal !== null) throw new Error(`Workload failed; evidence preserved: ${owned.root}`);
+      if (spawnError || timedOut || !exitEvent || exitEvent.code !== 0 || exitEvent.signal !== null
+          || exit.code !== 0 || exit.signal !== null || !stdoutEnded || !stderrEnded || !closeObserved || streamErrors.length) {
+        throw new Error(`Workload failed or drainage unproven; evidence preserved: ${owned.root}`);
+      }
       const proof = JSON.parse(await fs.readFile(path.join(owned.root, 'proof.json'), 'utf8'));
       expect(proof.nodeOptions).toBeNull();
       expect(proof.execArgv.some((argument: string) => argument.includes('max-old-space-size'))).toBe(false);
