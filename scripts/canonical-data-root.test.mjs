@@ -6,9 +6,23 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { prepareCanonicalDataRoot } from './canonical-data-root.mjs';
 
+const sameDirectory = (expected, actual) => actual.isDirectory() && !actual.isSymbolicLink()
+  && ['dev', 'ino', 'birthtimeNs'].every(field => expected[field] === actual[field]);
+function removeOwnedFixture(fixture, parent, identity, parentIdentity) {
+  assert.equal(path.dirname(fixture), parent);
+  assert.match(path.basename(fixture), /^flujo-canonical-data-[A-Za-z0-9]+$/);
+  assert.equal(fs.realpathSync.native(parent), parent);
+  assert.equal(sameDirectory(parentIdentity, fs.lstatSync(parent, { bigint: true })), true, 'Fixture parent identity changed');
+  assert.equal(sameDirectory(identity, fs.lstatSync(fixture, { bigint: true })), true, 'Fixture root identity changed');
+  fs.rmSync(fixture, { recursive: true });
+}
+
 test('producer establishes genuine native spelling and refuses an actual linked parent', async () => {
   const parent = fs.realpathSync.native(os.tmpdir());
+  const parentIdentity = fs.lstatSync(parent, { bigint: true });
   const fixture = fs.mkdtempSync(path.join(parent, 'flujo-canonical-data-'));
+  const identity = fs.lstatSync(fixture, { bigint: true });
+  let primaryError;
   try {
     let input = fixture;
     if (process.platform === 'win32') {
@@ -41,10 +55,42 @@ test('producer establishes genuine native spelling and refuses an actual linked 
     fs.symlinkSync(target, linked, process.platform === 'win32' ? 'junction' : 'dir');
     assert.throws(() => prepareCanonicalDataRoot(path.join(linked, 'unexpected-data')), /Linked data root refused/);
     assert.equal(fs.existsSync(path.join(target, 'unexpected-data')), false);
-  } finally {
-    assert.equal(path.dirname(fixture), parent);
-    assert.match(path.basename(fixture), /^flujo-canonical-data-[A-Za-z0-9]+$/);
-    assert.equal(fs.lstatSync(fixture).isSymbolicLink(), false);
-    fs.rmSync(fixture, { recursive: true });
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    try { removeOwnedFixture(fixture, parent, identity, parentIdentity); }
+    catch (cleanup) { if (primaryError) throw new AggregateError([primaryError, cleanup], 'Fixture failed and owned cleanup was refused.', { cause: primaryError }); throw cleanup; }
+  }
+});
+
+test('owned cleanup refuses a genuine replacement directory and preserves its sentinel', () => {
+  const parent = fs.realpathSync.native(os.tmpdir());
+  const parentIdentity = fs.lstatSync(parent, { bigint: true });
+  const fixture = fs.mkdtempSync(path.join(parent, 'flujo-canonical-data-'));
+  const identity = fs.lstatSync(fixture, { bigint: true });
+  const held = `${fixture}.held`, preserved = `${fixture}.preserved`;
+  let primaryError;
+  try {
+    assert.equal(path.dirname(held), parent); assert.equal(path.dirname(preserved), parent);
+    assert.equal(fs.existsSync(held), false); assert.equal(fs.existsSync(preserved), false);
+    assert.equal(sameDirectory(identity, fs.lstatSync(fixture, { bigint: true })), true);
+    fs.renameSync(fixture, held);
+    fs.mkdirSync(fixture);
+    const replacement = fs.lstatSync(fixture, { bigint: true });
+    const sentinel = path.join(fixture, 'sentinel.txt');
+    fs.writeFileSync(sentinel, 'preserve replacement');
+    assert.throws(() => removeOwnedFixture(fixture, parent, identity, parentIdentity), /Fixture root identity changed/);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'preserve replacement');
+    fs.renameSync(fixture, preserved);
+    fs.renameSync(held, fixture);
+    // Only after proving preservation, dispose of the test's exact sentinel
+    // and empty replacement non-recursively under its separate captured proof.
+    assert.equal(sameDirectory(replacement, fs.lstatSync(preserved, { bigint: true })), true);
+    assert.equal(sameDirectory(parentIdentity, fs.lstatSync(parent, { bigint: true })), true);
+    assert.equal(fs.readFileSync(path.join(preserved, 'sentinel.txt'), 'utf8'), 'preserve replacement');
+    fs.unlinkSync(path.join(preserved, 'sentinel.txt')); fs.rmdirSync(preserved);
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    try { removeOwnedFixture(fixture, parent, identity, parentIdentity); }
+    catch (cleanup) { if (primaryError) throw new AggregateError([primaryError, cleanup], 'Replacement control failed and owned cleanup was refused.', { cause: primaryError }); throw cleanup; }
   }
 });
