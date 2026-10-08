@@ -92,7 +92,8 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
   });
 });
 
-test('real private consent activates only at guarded start, owner drift denies, and retirement removes its owned pair', async () => {
+test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context'] as const)
+('real private consent and fresh guarded workload contract: %s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
   const timed = async <T,>(name: string, operation: () => Promise<T>): Promise<T> => {
@@ -161,6 +162,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
     const admitted = await resolveBundledFlujoWorkloadRequest(admittedRequest);
     if (admitted.kind !== 'authorized') throw new Error('Genuine request not admitted.');
     const producer = jest.fn();
+    if (mode === 'crossgraph-positive') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       expect(() => graphB.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow(graphB.BundledFlujoWorkloadError);
       const service = Reflect.get(globalThis, serviceKey) as typeof capturedService;
@@ -169,14 +171,24 @@ test('real private consent activates only at guarded start, owner drift denies, 
       producer();
     });
     expect(producer).toHaveBeenCalledTimes(1);
+    }
+    if (mode === 'inventory-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '1';
       try { await expect(capturedService.assertEffect()).rejects.toThrow(); }
       finally { process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '0'; }
     });
+    expect(producer).not.toHaveBeenCalled();
+    }
     const ownerFilename = process.env.FLUJO_OWNER_AUTH_FILE!;
     const originalOwner = fs.readFileSync(ownerFilename);
     const changed = JSON.parse(originalOwner.toString()); changed.credentials = [];
+    if (mode === 'lifecycle') {
+      fs.writeFileSync(ownerFilename, JSON.stringify(changed));
+      try { expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied'); }
+      finally { fs.writeFileSync(ownerFilename, originalOwner); }
+    }
+    if (mode === 'deferred-owner-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       const actualRead = readerB.readPrivateApprovalSetAsync;
       let enter!: () => void, release!: () => void, paused = false;
@@ -205,15 +217,22 @@ test('real private consent activates only at guarded start, owner drift denies, 
         read.mockRestore(); fs.writeFileSync(ownerFilename, originalOwner);
       }
     });
-    expect(producer).toHaveBeenCalledTimes(1);
+    expect(producer).not.toHaveBeenCalled();
+    }
     const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE!;
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
-    await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+    const retire = async () => {
       await timed('durable-retire', () => transport!.close()); transport = undefined;
+    };
+    if (mode === 'retired-selected-context') {
+    await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+      await retire();
       await expect(capturedService.assertEffect()).rejects.toThrow();
       expect(() => graphB.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow();
     });
+    expect(producer).not.toHaveBeenCalled();
+    } else { await retire(); }
     expect(close).toHaveBeenCalledTimes(1);
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
