@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RuntimeDirectoryAdmission } from '@/backend/services/mcp/runtimeDirectoryAdmission';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
-import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
+import { ensureWorkspaceDirs, getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
@@ -324,8 +324,9 @@ describe('isolated MCP runtime directory admission', () => {
     // they are not inherited implicitly from the parent account.
     approved.config.env.FLUJO_DATA_DIR = getWorkspaceDataDir();
     approved.config.env.FLUJO_PARENT_DATA_DIR = process.env.FLUJO_PARENT_DATA_DIR!;
+    approved.config.env.FLUJO_WORKSPACE = getCurrentWorkspace();
     const policy = trustedHostMcpPolicySchema.parse(approved.config.trustedHost);
-    approved.config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames, 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR'] };
+    approved.config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames, 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKSPACE'] };
     approved.approve();
     return getWorkspaceDataDir();
   }
