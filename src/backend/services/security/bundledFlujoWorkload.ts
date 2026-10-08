@@ -47,7 +47,8 @@ const recordSchema = z.object({ version: z.literal(1), purpose: z.literal('bundl
 const markerSchema = z.object({ version: z.literal(1), generation: z.string().uuid(), state: z.literal('active'),
   recordDev: z.string().regex(/^\d{1,40}$/), recordIno: z.string().regex(/^\d{1,40}$/) }).strict();
 interface OwnedFile { fd: number | undefined; filename: string; bytes: Buffer; identity: fs.BigIntStats;
-  parentIdentity: fs.BigIntStats; removed?: boolean; uncertainDescriptor?: number; readOnlyWitness?: boolean }
+  parentIdentity: fs.BigIntStats; removed?: boolean; uncertainDescriptor?: number; readOnlyWitness?: boolean;
+  recoveryWriter?: { fd?: number; uncertainDescriptor?: number } }
 declare const capsuleBrand: unique symbol;
 export interface PendingBundledFlujoWorkload { readonly [capsuleBrand]: true }
 interface Pending { config: MCPStdioConfig; token: string; audience: string; workspace: string; ledger: string;
@@ -230,7 +231,7 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     throw cause;
   }
 }
-function settleDescriptor(file: OwnedFile) {
+function settleDescriptor(file: { uncertainDescriptor?: number }) {
   if (file.uncertainDescriptor === undefined) return;
   // Metadata probing cannot close or mutate a descriptor that may have been
   // recycled. Only authoritative EBADF settles the uncertainty.
@@ -288,6 +289,11 @@ function closeOwnedFile(file: OwnedFile) {
   if (closeError !== undefined) throw closeError;
 }
 function recoverOwnedFile(file: OwnedFile) {
+  if (file.recoveryWriter) {
+    settleDescriptor(file.recoveryWriter);
+    if (file.recoveryWriter.fd !== undefined) throw new BundledFlujoWorkloadError();
+    file.recoveryWriter = undefined;
+  }
   settleDescriptor(file); assertOwnedParent(file);
   if (file.removed) {
     try { fs.lstatSync(file.filename); }
@@ -300,10 +306,24 @@ function recoverOwnedFile(file: OwnedFile) {
       if (file.bytes.length) readPrivateApproval(file.filename);
       const reader = file.fd;
       const writer = fs.openSync(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-      if (!same(file.identity, fs.fstatSync(writer, { bigint: true }))) {
-        fs.closeSync(writer); throw new BundledFlujoWorkloadError();
+      const acquired = { fd: writer as number | undefined, uncertainDescriptor: undefined as number | undefined };
+      file.recoveryWriter = acquired;
+      try {
+        if (!same(file.identity, fs.fstatSync(writer, { bigint: true }))) throw new BundledFlujoWorkloadError();
+        readExact(file); assertOwnedParent(file);
+      } catch (error) {
+        acquired.fd = undefined;
+        try { fs.closeSync(writer); }
+        catch (cleanup) {
+          acquired.uncertainDescriptor = writer;
+          try { settleDescriptor(acquired); } catch { /* Retain ambiguous writer ownership. */ }
+          throw new AggregateError([error, cleanup], 'Workload retry writer verification and cleanup failed.', { cause: error });
+        }
+        file.recoveryWriter = undefined;
+        throw error;
       }
       file.fd = writer; file.readOnlyWitness = false;
+      file.recoveryWriter = undefined;
       try { fs.closeSync(reader); }
       catch (error) { file.uncertainDescriptor = reader; try { settleDescriptor(file); } catch { /* Preserve ambiguous reader ownership. */ } throw error; }
       readExact(file); assertOwnedParent(file);
