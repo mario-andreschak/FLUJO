@@ -3,33 +3,62 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 // New natural-clock acceptance fixture, independent of the existing 45s ledger
 // witness. This deadline includes real minute boundaries and real MCP startup.
 jest.setTimeout(420_000);
 type Reply = Record<string, any>;
-const children: ChildProcess[] = [];
+type CaseContext = {
+  readonly controller: AbortController; readonly children: ChildProcess[];
+  readonly ownedDirectories: Map<string, { path: string }>;
+  sandbox?: string; settled: boolean;
+};
+const caseStorage = new AsyncLocalStorage<CaseContext>();
+const retainedCases = new Set<CaseContext>();
+function currentCase() {
+  const context = caseStorage.getStore();
+  if (!context) throw new Error('Missing owned case context');
+  context.controller.signal.throwIfAborted();
+  return context;
+}
+function delay(milliseconds: number) {
+  const signal = currentCase().controller.signal;
+  return new Promise<void>((resolve, reject) => {
+    const aborted = () => { clearTimeout(timer); signal.removeEventListener('abort', aborted); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', aborted); resolve(); }, milliseconds);
+    signal.addEventListener('abort', aborted, { once: true });
+    if (signal.aborted) aborted();
+  });
+}
+async function runOwnedCase(body: () => Promise<void>) {
+  if (retainedCases.size) throw new Error('Prior owned case remains unresolved; refusing another case launch');
+  const context: CaseContext = { controller: new AbortController(), children: [], ownedDirectories: new Map(), settled: false };
+  retainedCases.add(context); // Registered before any asynchronous allocation.
+  return caseStorage.run(context, async () => {
+    try { await body(); } finally { context.settled = true; }
+  });
+}
 const lifecycle = new WeakMap<ChildProcess, {
   exited: boolean; closed: boolean; stdoutEnded: boolean; stderrEnded: boolean;
   cleanupConfirmed: boolean; cleanupUncertain: boolean; error?: Error;
 }>();
-let sandbox: string;
-let stagingDir: string | undefined;
-const additionalStaging: string[] = [];
 const directories = require('./fixtures/ownedDirectory.cjs');
-const ownedDirectories = new Map<string, { path: string }>();
 async function ownDirectory(directory: string, expected?: Record<string, unknown>) {
-  ownedDirectories.set(directory, await directories.captureOwnedDirectory(directory, expected));
+  const context = currentCase();
+  context.ownedDirectories.set(directory, await directories.captureOwnedDirectory(directory, expected));
+  context.controller.signal.throwIfAborted();
 }
 
 function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
+  const context = currentCase();
   const child = spawn(process.execPath, [path.resolve(__dirname, 'fixtures/workerBootstrapRecovery.cjs'),
     ...(phase ? [phase] : [])], { cwd: process.cwd(), windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot, LOCALAPPDATA: process.env.LOCALAPPDATA,
       TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: 'test',
       FLUJO_EXPOSURE_MODE: 'localhost', FLUJO_DATA_DIR: data, ...env } });
-  children.push(child);
+  context.children.push(child);
   const observed = { exited: false, closed: false, stdoutEnded: false, stderrEnded: false,
     cleanupConfirmed: false, cleanupUncertain: false,
     error: undefined as Error | undefined };
@@ -59,17 +88,19 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   async function wait(predicate: (reply: Reply) => boolean, timeout = 60_000): Promise<Reply> {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
+      context.controller.signal.throwIfAborted();
       if (observed.error) throw observed.error;
       const failed = messages.find(reply => reply.phase === 'failed' || reply.phase === 'cleanup-failed');
       if (failed) throw new Error(failed.error);
       const index = messages.findIndex(predicate);
       if (index >= 0) return messages.splice(index, 1)[0];
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Premature child exit: ${diagnostic}`);
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await delay(50);
     }
     throw new Error(`Worker witness timed out: ${diagnostic}`);
   }
   async function request(action: string, fields: Reply = {}) {
+    context.controller.signal.throwIfAborted();
     const id = randomUUID();
     child.send({ id, action, ...fields }, error => { if (error) observed.error = error; });
     const reply = await wait(message => message.id === id);
@@ -77,11 +108,12 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
     return reply.result;
   }
   async function exit(timeout = 15_000) {
+    context.controller.signal.throwIfAborted();
     const end = Date.now() + timeout;
     while ((!observed.exited || !observed.closed || !observed.stdoutEnded || !observed.stderrEnded)
         && Date.now() < end) {
       if (observed.error) throw observed.error;
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await delay(50);
     }
     if (!observed.exited || !observed.closed || !observed.stdoutEnded || !observed.stderrEnded) {
       throw new Error('Shutdown ACK did not produce observed OS exit, child close and drained stdio');
@@ -92,7 +124,8 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
 }
 
 async function effects(journal: string) {
-  try { return (await fs.readFile(journal, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); }
+  const signal = currentCase().controller.signal;
+  try { return (await fs.readFile(journal, { encoding: 'utf8', signal })).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
 }
 async function waitEffect(journal: string, count: number) {
@@ -100,13 +133,13 @@ async function waitEffect(journal: string, count: number) {
   while (Date.now() < deadline) {
     const observed = await effects(journal);
     if (observed.length >= count) { expect(observed).toHaveLength(count); return; }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await delay(100);
   }
   throw new Error('Actual scheduled Bash effect was not observed');
 }
 async function crossMinute() {
-  const delay = 60_000 - Date.now() % 60_000 + 2_000;
-  await new Promise(resolve => setTimeout(resolve, delay));
+  const milliseconds = 60_000 - Date.now() % 60_000 + 2_000;
+  await delay(milliseconds);
 }
 async function waitTerminal(worker: ReturnType<typeof launch>, planId: string, priorRunId?: string) {
   const deadline = Date.now() + 15_000;
@@ -118,16 +151,25 @@ async function waitTerminal(worker: ReturnType<typeof launch>, planId: string, p
       expect(row.lastRun.status).toBe('completed');
       return row.lastRun.runId as string;
     }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await delay(100);
   }
   throw new Error('Effect occurred without observed genuine terminal recovery publication');
 }
 
 afterEach(async () => {
+  const end = Date.now() + 15_000;
+  for (const context of retainedCases) context.controller.abort(new Error('Owned case retired by cleanup'));
+  while ([...retainedCases].some(context => !context.settled) && Date.now() < end) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if ([...retainedCases].some(context => !context.settled)) {
+    throw new Error('Owned case body remains unsettled; preserving contexts and refusing subsequent launches');
+  }
+  for (const context of retainedCases) {
+  const { children, ownedDirectories, sandbox } = context;
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null && child.connected) child.disconnect();
   }
-  const end = Date.now() + 15_000;
   const incomplete = (child: ChildProcess) => {
     const observed = lifecycle.get(child)!;
     // Failed spawn has no exit event; its error and close are still observed.
@@ -149,26 +191,24 @@ afterEach(async () => {
   })) {
     throw new Error(`Owned cleanup uncertain despite child close; preserving fixture/staging at ${sandbox}`);
   }
-  children.length = 0;
-  for (const [directory, prefix] of [[sandbox, 'flujo-worker-bootstrap-'], [stagingDir, 'flujo-hot-clone-'],
-    ...additionalStaging.map(directory => [directory, 'flujo-hot-clone-'] as const)] as const) {
-    if (!directory) continue;
-    const token = ownedDirectories.get(directory);
-    if (!token) throw new Error(`Owned directory identity unavailable; preserving ${directory}`);
+  if (!sandbox || !ownedDirectories.has(sandbox)) throw new Error('Original case root identity unavailable; preserving case');
+  for (const [directory, token] of ownedDirectories) {
+    const prefix = directory === sandbox ? 'flujo-worker-bootstrap-' : 'flujo-hot-clone-';
     await directories.removeOwnedDirectory(token, os.tmpdir(), prefix);
     ownedDirectories.delete(directory);
   }
-  stagingDir = undefined;
-  additionalStaging.length = 0;
+  retainedCases.delete(context); // Only after actual settlement/exit/drain/owned removal.
+  }
 });
 
-it('boots real snapshots, recovers a local schedule once, and keeps copied, sibling, paused and disabled schedules inert', async () => {
-  sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+it('boots real snapshots, recovers a local schedule once, and keeps copied, sibling, paused and disabled schedules inert', () => runOwnedCase(async () => {
+  const context = currentCase();
+  const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+  Object.defineProperty(context, 'sandbox', { value: sandbox, writable: false });
   await ownDirectory(sandbox);
   const scratch = path.join(sandbox, 'effects'); await fs.mkdir(scratch);
   const seed = launch(path.join(sandbox, 'seed'), { FLUJO_BOOTSTRAP_EFFECT_ROOT: scratch }, 'seed');
   const snapshot = await seed.wait(message => message.phase === 'seeded');
-  stagingDir = snapshot.stagingDir;
   await ownDirectory(snapshot.stagingDir, snapshot.stagingIdentity);
   await seed.exit();
   const workerEnv = { FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: snapshot.archivePath,
@@ -190,7 +230,6 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   // Export the genuinely locally enrolled row through the production exporter.
   // Its installation-private HMAC record must not travel to the sibling.
   const localSnapshot = await worker.request('export');
-  additionalStaging.push(localSnapshot.stagingDir);
   await ownDirectory(localSnapshot.stagingDir, localSnapshot.stagingIdentity);
   await worker.request('stop'); await worker.exit();
   // A naturally missed occurrence must be recovered by bootstrap, not runNow.
@@ -227,16 +266,17 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   // no locally enrolled copied row may append another effect in its own tree.
   expect(await effects(siblingBoot.journal)).toHaveLength(1);
   await sibling.request('stop'); await sibling.exit();
-});
+}));
 
 it.each(['invalid-provenance', 'generation-changed', 'retired', 'not-opted-in'] as const)(
-  'keeps a real enrolled worker schedule inert after %s on genuine bootstrap', async reason => {
-    sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+  'keeps a real enrolled worker schedule inert after %s on genuine bootstrap', reason => runOwnedCase(async () => {
+    const context = currentCase();
+    const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+    Object.defineProperty(context, 'sandbox', { value: sandbox, writable: false });
     await ownDirectory(sandbox);
     const scratch = path.join(sandbox, 'effects'); await fs.mkdir(scratch);
     const seed = launch(path.join(sandbox, 'seed'), { FLUJO_BOOTSTRAP_EFFECT_ROOT: scratch }, 'seed');
     const snapshot = await seed.wait(message => message.phase === 'seeded');
-    stagingDir = snapshot.stagingDir;
     await ownDirectory(snapshot.stagingDir, snapshot.stagingIdentity);
     await seed.exit();
     const data = path.join(sandbox, 'worker');
@@ -277,4 +317,4 @@ it.each(['invalid-provenance', 'generation-changed', 'retired', 'not-opted-in'] 
     await crossMinute();
     expect(await effects(snapshot.journal)).toHaveLength(0);
     await worker.request('stop'); await worker.exit();
-  });
+  }));

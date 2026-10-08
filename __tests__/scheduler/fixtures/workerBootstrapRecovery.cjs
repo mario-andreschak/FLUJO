@@ -167,7 +167,7 @@ async function command(message) {
   send({ id: message.id, result });
 }
 
-(async () => {
+const bootstrap = (async () => {
   if (process.argv[2] === 'seed') {
     await source('backend/services/workspace/migration.ts').migrateWorkspaceLayout();
     const secure = source('utils/encryption/secure.ts');
@@ -287,5 +287,12 @@ async function command(message) {
   if (process.connected) process.disconnect();
 });
 process.on('disconnect', () => {
-  if (!stopping) void shutdown().catch(error => { process.stderr.write(String(error)); process.exitCode = 1; });
+  if (!stopping) {
+    stopping = true;
+    // A disconnected parent cannot certify cleanup while the actual bootstrap
+    // or an owned command can still create captures or prepare backend effects.
+    void bootstrap.then(() => commands).then(shutdown).catch(error => {
+      process.stderr.write(String(error)); process.exitCode = 1;
+    });
+  }
 });
