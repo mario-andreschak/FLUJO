@@ -488,13 +488,17 @@ async function assertLinkFreeAsync(filename: string): Promise<void> {
 async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal): Promise<{ digest: string; size: number }> {
   if (signal?.aborted) throw new Error();
   const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  let buffer: Buffer | undefined;
   try {
     const opened = await handle.stat({ bigint: true });
     if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)) throw new Error();
     await assertLinkFreeAsync(filename);
     if (!sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new Error();
     const hash = createHash('sha256');
-    const buffer = Buffer.alloc(64 * 1024);
+    // Large executables otherwise require thousands of serial read round trips
+    // on every fresh guard. Keep small assets small and bound each held reader
+    // to 1 MiB; byte limits, cancellation and all identity fences stay intact.
+    buffer = Buffer.alloc(opened.size > BigInt(1024 * 1024) ? 1024 * 1024 : 64 * 1024);
     let length = 0;
     while (true) {
       if (signal?.aborted) throw new Error();
@@ -508,7 +512,7 @@ async function hashStableFileAsync(filename: string, maximum: number, signal?: A
     if (BigInt(length) !== opened.size || !sameIdentity(opened, await handle.stat({ bigint: true }))
         || !sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new Error();
     return { digest: hash.digest('hex'), size: length };
-  } finally { await handle.close(); }
+  } finally { buffer?.fill(0); await handle.close(); }
 }
 
 async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, dependencyLinks: readonly { link: string; target: string }[] = []): Promise<string> {
