@@ -31,6 +31,12 @@ const sendFlushed = message => new Promise((resolve, reject) => {
   if (!process.connected) { resolve(); return; }
   process.send(message, error => error ? reject(error) : resolve());
 });
+const startedAt = Date.now();
+let diagnosticCount = 0;
+function phase(code) {
+  if (++diagnosticCount > 128) throw new Error('Owned child diagnostic bound exceeded');
+  send({ phase: 'diagnostic', code, elapsedMs: Date.now() - startedAt });
+}
 let owner;
 let scheduler;
 let stopping = false;
@@ -43,7 +49,8 @@ let commands = Promise.resolve();
 async function shutdown() {
   stopping = true;
   const failures = [];
-  try { if (scheduler) await scheduler.stopWorker(); }
+  phase('scheduler-stop-enter');
+  try { if (scheduler) await scheduler.stopWorker(); phase('scheduler-stop-ready'); }
   catch (error) { failures.push(error); }
   try { await captures.drain(); } catch (error) { failures.push(error); }
   if (pendingApprovedConfigs) {
@@ -56,11 +63,13 @@ async function shutdown() {
     } catch (error) { failures.push(error); }
   }
   // Do not import/start the backend graph to clean up a seed-only failure.
-  try { if (backendEntered) await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); }
+  phase('backend-shutdown-enter');
+  try { if (backendEntered) await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); phase('backend-shutdown-ready'); }
   catch (error) { failures.push(error); }
   // Private owner cleanup is independent of backend shutdown success.
   if (owner) {
-    try { owner.restore(); owner = undefined; }
+    phase('owner-cleanup-enter');
+    try { owner.restore(); owner = undefined; phase('owner-cleanup-ready'); }
     catch (error) { failures.push(error); }
   }
   if (failures.length) {
@@ -116,6 +125,7 @@ async function command(message) {
       break;
     }
     case 'export': {
+      phase('portable-export-enter');
       // Export a portable operator configuration, not this machine's host-home
       // environment/attestation. Stop actual timers before temporary storage
       // projection; restore the exact approved configuration independently.
@@ -156,6 +166,7 @@ async function command(message) {
         }
       }
       if (failures.length) throw new AggregateError(failures, 'Export and independent owned cleanup failed');
+      phase('portable-export-ready');
       break;
     }
     case 'start-again': await scheduler.start(); result = await scheduler.list(); break;
@@ -236,12 +247,15 @@ const bootstrap = (async () => {
   // Restore/unlock first so the owner reviews the actual restored proposal.
   // ensureBackendInitialized subsequently traverses the real startup graph.
   const restore = source('backend/services/workspace/snapshotRestore.ts');
+  phase('restore-unlock-enter');
   const snapshot = await restore.restoreConfiguredWorkerSnapshot();
   if (!snapshot) throw new Error('Snapshot restore returned no worker');
   await restore.unlockWorkerSnapshot(snapshot);
+  phase('restore-unlock-ready');
   // Bundled MCP checkouts are deliberately omitted from snapshots. Materialize
   // the actual local distribution before asking the owner to review its files.
   const workspaceRoot = source('utils/workspace.ts').getWorkspaceDataDir();
+  phase('bundled-equipment-enter');
   await source('backend/services/mcp/shippedWorkspacePackages.ts').ensureShippedWorkspacePackages(
     workspaceRoot, undefined, ['bash']);
   const shipped = source('backend/services/mcp/shippedServers.ts');
@@ -259,14 +273,21 @@ const bootstrap = (async () => {
     configs.map(config => [config.name, config.name === 'bash' ? runtime : config])))).success) {
     throw new Error('Owned restored Bash equipment configuration failed');
   }
+  phase('bundled-equipment-ready');
   owner = require(path.join(root, '__tests__/mcp/fixtures/bundledFixtureOwner.ts')).installBundledFixtureOwner();
   const consent = source('backend/services/security/bundledMcpConsent.ts');
+  phase('owner-preview-enter');
   const reviewed = await consent.previewBundledHostConsent('bash', { runtimeHome: 'host' });
+  phase('owner-preview-ready');
+  phase('owner-approval-enter');
   await consent.approveBundledHostConsent(owner.request('bash'), 'bash', {
     runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt: owner.expiresAt,
   });
+  phase('owner-approval-ready');
   backendEntered = true;
+  phase('backend-bootstrap-enter');
   await source('backend/init.ts').ensureBackendInitialized();
+  phase('backend-bootstrap-ready');
   const status = source('backend/services/workspace/workerMode.ts').getWorkerBootstrapStatus();
   if (status.state !== 'ready') throw new Error(`Actual bootstrap failed: ${status.state}`);
   scheduler = source('backend/services/scheduler/index.ts').getSchedulerService();

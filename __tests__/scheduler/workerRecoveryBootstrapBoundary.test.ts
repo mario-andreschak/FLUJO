@@ -13,6 +13,7 @@ type CaseContext = {
   readonly controller: AbortController; readonly children: ChildProcess[];
   readonly ownedDirectories: Map<string, { path: string }>;
   sandbox?: string; settled: boolean;
+  readonly startedAt: number; diagnostics: number;
 };
 const caseStorage = new AsyncLocalStorage<CaseContext>();
 const retainedCases = new Set<CaseContext>();
@@ -21,6 +22,12 @@ function currentCase() {
   if (!context) throw new Error('Missing owned case context');
   context.controller.signal.throwIfAborted();
   return context;
+}
+function phase(name: string, childElapsedMs?: number) {
+  const context = currentCase();
+  if (++context.diagnostics > 512) throw new Error('Owned phase diagnostic bound exceeded');
+  console.info(JSON.stringify({ workerRecoveryPhase: name, elapsedMs: Date.now() - context.startedAt,
+    ...(childElapsedMs === undefined ? {} : { childElapsedMs }) }));
 }
 function delay(milliseconds: number) {
   const signal = currentCase().controller.signal;
@@ -33,7 +40,8 @@ function delay(milliseconds: number) {
 }
 async function runOwnedCase(body: () => Promise<void>) {
   if (retainedCases.size) throw new Error('Prior owned case remains unresolved; refusing another case launch');
-  const context: CaseContext = { controller: new AbortController(), children: [], ownedDirectories: new Map(), settled: false };
+  const context: CaseContext = { controller: new AbortController(), children: [], ownedDirectories: new Map(),
+    settled: false, startedAt: Date.now(), diagnostics: 0 };
   retainedCases.add(context); // Registered before any asynchronous allocation.
   return caseStorage.run(context, async () => {
     try { await body(); } finally { context.settled = true; }
@@ -78,6 +86,13 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   child.stdout!.resume();
   child.on('message', message => {
     const reply = message as Reply;
+    if (reply.phase === 'diagnostic') {
+      if (!context.controller.signal.aborted && typeof reply.code === 'string'
+          && /^[a-z-]{1,48}$/.test(reply.code) && Number.isFinite(reply.elapsedMs)) {
+        caseStorage.run(context, () => phaseDiagnostic(reply.code, reply.elapsedMs));
+      }
+      return;
+    }
     if (reply.phase === 'cleanup-failed') { observed.cleanupUncertain = true; observed.cleanupConfirmed = false; }
     if (reply.phase === 'cleanup-completed') {
       // Only a successful actual backend/owner cleanup attempt emits this.
@@ -102,14 +117,17 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   async function request(action: string, fields: Reply = {}) {
     context.controller.signal.throwIfAborted();
     const id = randomUUID();
+    if (action !== 'list') phaseDiagnostic(`request-${action}-enter`);
     child.send({ id, action, ...fields }, error => { if (error) observed.error = error; });
     const reply = await wait(message => message.id === id);
     if (reply.error) throw new Error(reply.error);
+    if (action !== 'list') phaseDiagnostic(`request-${action}-ready`);
     return reply.result;
   }
   async function exit(timeout = 15_000) {
     context.controller.signal.throwIfAborted();
     const end = Date.now() + timeout;
+    phaseDiagnostic('exit-close-drain-enter');
     while ((!observed.exited || !observed.closed || !observed.stdoutEnded || !observed.stderrEnded)
         && Date.now() < end) {
       if (observed.error) throw observed.error;
@@ -119,9 +137,11 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
       throw new Error('Shutdown ACK did not produce observed OS exit, child close and drained stdio');
     }
     expect(child.exitCode).toBe(0);
+    phaseDiagnostic('exit-close-drain-ready');
   }
   return { child, wait, request, exit };
 }
+const phaseDiagnostic = phase;
 
 async function effects(journal: string) {
   const signal = currentCase().controller.signal;
@@ -129,19 +149,23 @@ async function effects(journal: string) {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
 }
 async function waitEffect(journal: string, count: number) {
+  phase('effect-enter');
   const deadline = Date.now() + 75_000;
   while (Date.now() < deadline) {
     const observed = await effects(journal);
-    if (observed.length >= count) { expect(observed).toHaveLength(count); return; }
+    if (observed.length >= count) { expect(observed).toHaveLength(count); phase('effect-ready'); return; }
     await delay(100);
   }
   throw new Error('Actual scheduled Bash effect was not observed');
 }
 async function crossMinute() {
+  phase('natural-minute-enter');
   const milliseconds = 60_000 - Date.now() % 60_000 + 2_000;
   await delay(milliseconds);
+  phase('natural-minute-ready');
 }
 async function waitTerminal(worker: ReturnType<typeof launch>, planId: string, priorRunId?: string) {
+  phase('terminal-publication-enter');
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const rows = await worker.request('list');
@@ -149,6 +173,7 @@ async function waitTerminal(worker: ReturnType<typeof launch>, planId: string, p
     if (row?.lastRun?.runId !== priorRunId && row?.lastRun?.finishedAt
         && !row.status.workerRecovery.pending) {
       expect(row.lastRun.status).toBe('completed');
+      phase('terminal-publication-ready');
       return row.lastRun.runId as string;
     }
     await delay(100);
