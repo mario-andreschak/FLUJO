@@ -17,6 +17,17 @@ import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+function reportRetirementSites(error: unknown, seen = new Set<unknown>()) {
+  if (!(error instanceof Error) || seen.has(error)) return;
+  seen.add(error);
+  try {
+    const sites = error.stack?.match(/bundledFlujoWorkload\.ts:\d+:\d+/g) ?? [];
+    console.info('[workload-recovery-site]', sites);
+  } catch { /* Preserve the actual fixture failure. */ }
+  if (error instanceof AggregateError) for (const nested of error.errors) reportRetirementSites(nested, seen);
+  reportRetirementSites(error.cause, seen);
+}
+
 test.each(['FLUJO_MCP_WORKLOAD_TOKEN', 'flujo_mcp_workload_token', 'Flujo_Mcp_Workload_Token',
   'FLUJO_MCP_WORKLOAD_AUDIENCE', 'flujo_mcp_workload_audience', 'Flujo_Mcp_Workload_Audience'])
 ('reserved persisted %s denies unrelated and worker stdio before eligibility returns', name => {
@@ -169,7 +180,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const key = createHash('sha256').update(token).digest('hex');
     let recordDescriptor: number | undefined;
     const actualOpen = fs.openSync;
-    const opened = mode === 'retire-closed-descriptor-retry' ? jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+    const opened = mode.startsWith('retire-') ? jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
       const fd = Reflect.apply(actualOpen, fs, args) as number;
       if (String(args[0]).endsWith(`${key}.pending`) && typeof args[1] === 'number' && (args[1] & fs.constants.O_EXCL)) recordDescriptor = fd;
       return fd;
@@ -272,6 +283,16 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     }
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
       const actualUnlink = fs.unlinkSync;
+      const actualClose = fs.closeSync;
+      const observedClose = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
+        const before = fd === recordDescriptor ? fs.fstatSync(fd, { bigint: true }) : undefined;
+        actualClose(fd);
+        if (before) try {
+          const after = fs.lstatSync(path.join(workloadDirectory, `${key}.json`), { bigint: true });
+          const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
+          console.info('[workload-recovery-close-fields]', fields.filter(field => before[field] !== after[field]));
+        } catch { /* Observation cannot change the actual close result. */ }
+      });
       let injected = false;
       const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
         if (!injected && path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
@@ -279,7 +300,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
         }
         return actualUnlink(filename);
       });
-      try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); }
+      try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); observedClose.mockRestore(); }
       expect(injected).toBe(true);
       expect(() => getPendingWorkloadEnvironment(approved.config, capsule)).toThrow();
       expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
@@ -333,6 +354,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     for (const fd of foreignDescriptors) expect(fs.fstatSync(fd).isFile()).toBe(true);
   } catch (error) {
+    reportRetirementSites(error);
     primaryFailed = true; primaryError = error; throw error;
   } finally {
     const cleanupErrors: unknown[] = [];
