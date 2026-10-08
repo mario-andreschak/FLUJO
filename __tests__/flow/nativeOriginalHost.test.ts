@@ -244,7 +244,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
         sdkUsage: { source: 'claude-sdk-result', inputTokens: 7, outputTokens: 4 }, exit: { code: 0, signal: null } });
       expect(reservation.identity.processBirthMarkerV2).toBeTruthy();
-      const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
       expect(child).toMatchObject({ parentConversationId: rootConversation, parentLogicalRunId: rootRun,
         rootConversationId: rootConversation, flowId: 'native_pinned_child', runDepth: 1 });
     }, 'child');
@@ -269,7 +269,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
   it('holds an issued descendant when its saved lineage changes before the first prompt', async () => {
     beforePrompt = async () => {
       const reservation = (await ledger()).reservations[0];
-      const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
       expect(child!.parentLogicalRunId).toBeTruthy();
       await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
     };
@@ -289,7 +289,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     transcriptText = 'stale-descendant-private-output';
     afterPrompt = async () => {
       const reservation = (await ledger()).reservations[0];
-      const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
       await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
     };
     const observed: unknown[] = [];
@@ -301,7 +301,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         const reservation = (await ledger()).reservations[0];
         expect(reservation.state).not.toBe('released');
         expect(reservation.sdkUsage).toBeUndefined();
-        const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+        const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
         expect(JSON.stringify(child!.messages)).not.toContain(transcriptText);
         expect(JSON.stringify(observed)).not.toContain(transcriptText);
       }, 'child-refusal');
