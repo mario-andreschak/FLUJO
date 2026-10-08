@@ -16,14 +16,12 @@ async function GET_handler(request: NextRequest) {
     const { internalListResources, internalListResourceTemplates } = await import(
       '@/backend/services/mcp/internalResources'
     );
-    await assertBundledFlujoWorkloadAction('listResources', 'GET', '/api/mcp/flujo/resources');
-    await assertBundledFlujoWorkloadAction('listResourceTemplates', 'GET', '/api/mcp/flujo/resources');
+    await assertBundledFlujoWorkloadAction(['listResources', 'listResourceTemplates'], 'GET', '/api/mcp/flujo/resources');
     const [resources, templates] = await Promise.all([
       internalListResources(request.nextUrl.searchParams.get('cursor') ?? undefined),
       internalListResourceTemplates(),
     ]);
-    await assertBundledFlujoWorkloadAction('listResources', 'GET', '/api/mcp/flujo/resources');
-    await assertBundledFlujoWorkloadAction('listResourceTemplates', 'GET', '/api/mcp/flujo/resources');
+    await assertBundledFlujoWorkloadAction(['listResources', 'listResourceTemplates'], 'GET', '/api/mcp/flujo/resources');
     return json(
       {
         resources: resources.resources,

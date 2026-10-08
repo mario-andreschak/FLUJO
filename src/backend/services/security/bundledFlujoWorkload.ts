@@ -591,20 +591,60 @@ export async function assertBundledFlujoWorkloadEffectCurrent(): Promise<void> {
   const selected = await selectedWorkload();
   if (selected) await assertBundledFlujoWorkloadCurrent(selected.authorization, selected.request);
 }
-export async function assertBundledFlujoWorkloadAction(action: string, method: string, route: string, args: unknown = {}): Promise<void> {
+export async function assertBundledFlujoWorkloadAction(action: string | readonly string[], method: string, route: string, args: unknown = {}): Promise<void> {
   const selected = await selectedWorkload(); if (!selected) return;
   await assertBundledFlujoWorkloadCurrent(selected.authorization, selected.request);
   const definitions = await computeBundledFlujoWorkloadDefinitions();
-  const definition = definitions.find(item => item.action.action === action && item.action.method === method && item.action.path === route);
-  if (!definition || !selected.authorization.inventory.some(item => canonicalWorkloadJson(item) === canonicalWorkloadJson(definition.action))) throw new BundledFlujoWorkloadError();
+  const actions = typeof action === 'string' ? [action] : action;
+  if (actions.length === 0) throw new BundledFlujoWorkloadError();
   const { AjvJsonSchemaValidator } = await import('@modelcontextprotocol/sdk/validation/ajv');
   const validator = new AjvJsonSchemaValidator();
-  if (!validator.getValidator(definition.schema)(args).valid) throw new BundledFlujoWorkloadError();
+  // These inventory/schema reads are synchronous. A group of metadata actions
+  // shares the same fresh authority fences before and after validation.
+  for (const name of actions) {
+    const definition = definitions.find(item => item.action.action === name && item.action.method === method && item.action.path === route);
+    if (!definition || !selected.authorization.inventory.some(item => canonicalWorkloadJson(item) === canonicalWorkloadJson(definition.action))) throw new BundledFlujoWorkloadError();
+    if (!validator.getValidator(definition.schema)(args).valid) throw new BundledFlujoWorkloadError();
+  }
   await assertBundledFlujoWorkloadCurrent(selected.authorization, selected.request);
 }
+const fixedJsonBodies = new WeakMap<Response, ReadableStream<Uint8Array>>();
+
+/** Certify only the native, fixed body created here, never a caller-supplied stream. */
+export function bundledFlujoWorkloadJsonResponse(value: unknown, status = 200): Response {
+  const response = new Response(JSON.stringify(value), {
+    status, headers: { 'Content-Type': 'application/json' },
+  });
+  if (response.body) fixedJsonBodies.set(response, response.body);
+  return response;
+}
+
 export function bindBundledFlujoWorkloadStream(response: Response, authorization: BundledFlujoWorkloadAuthorization, signal: AbortSignal): Response {
   if (!response.body) return response;
-  const reader = response.body.getReader();
+  const body = response.body;
+  const reader = body.getReader();
+  if (fixedJsonBodies.get(response) === body) {
+    // Native Response(string) contains one already serialized, immutable chunk.
+    // Recheck immediately before publishing it; there is no producer effect or
+    // later chunk/EOF to authorize. Arbitrary streams keep all their fences below.
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          signal.throwIfAborted();
+          const next = await reader.read();
+          signal.throwIfAborted();
+          await assertBundledFlujoWorkloadCurrent(authorization, authorization.readRequest());
+          signal.throwIfAborted();
+          if (!next.done) controller.enqueue(next.value);
+          controller.close();
+          reader.releaseLock();
+        } catch (error) {
+          try { await reader.cancel(error); } finally { reader.releaseLock(); controller.error(error); }
+        }
+      },
+      async cancel(reason) { try { await reader.cancel(reason); } finally { reader.releaseLock(); } },
+    }), { status: response.status, statusText: response.statusText, headers: response.headers });
+  }
   return new Response(new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {

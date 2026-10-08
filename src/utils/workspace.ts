@@ -726,6 +726,17 @@ async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<vo
     );
   }
   const dir = await resolveManagedWorkspace(name);
+  const { stopAndDrainPersonaGoalRuntime } = await import('@/backend/services/enduringAgents/goalRuntime');
+  await runWithWorkspace(name, () => stopAndDrainPersonaGoalRuntime());
+  const { mcpService } = await import('@/backend/services/mcp');
+  const disconnected = await runWithWorkspace(name, () => mcpService.disconnectAll('workspace deletion'));
+  const unconfirmed = new Set(disconnected.failed);
+  for (const receipt of disconnected.shutdownReceipts) {
+    if (receipt.exitOutcome === 'unknown' || receipt.isolation?.cleanupOutcome === 'unknown') unconfirmed.add(receipt.serverName);
+  }
+  if (unconfirmed.size > 0) {
+    throw new Error(`Cannot delete workspace while ${unconfirmed.size} MCP server(s) remain open.`);
+  }
   
   // Force delete with retry logic for EBUSY (Windows file locking)
   const maxRetries = 5;

@@ -319,9 +319,28 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const originalOwner = fs.readFileSync(ownerFilename);
     const changed = JSON.parse(originalOwner.toString()); changed.credentials = [];
     if (mode === 'lifecycle') {
+      const { bundledFlujoWorkloadJsonResponse, bindBundledFlujoWorkloadStream, assertBundledFlujoWorkloadAction } =
+        jest.requireActual<typeof import('@/backend/services/security/bundledFlujoWorkload')>('@/backend/services/security/bundledFlujoWorkload');
+      const resourceRequest = new Request('http://127.0.0.1:4200/api/mcp/flujo/resources', {
+        signal: cancellation.signal, headers: { host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}` },
+      });
+      const resourceAuthorization = await resolveBundledFlujoWorkloadRequest(resourceRequest);
+      if (resourceAuthorization.kind !== 'authorized') throw new Error('Genuine resource request not admitted.');
+      await withBundledFlujoWorkloadAuthorization(resourceAuthorization.authorization, resourceRequest, async () => {
+        await expect(assertBundledFlujoWorkloadAction(['listResources', 'listResourceTemplates'], 'GET', '/api/mcp/flujo/resources')).resolves.toBeUndefined();
+        await expect(assertBundledFlujoWorkloadAction(['listResources', 'unapproved-action'], 'GET', '/api/mcp/flujo/resources')).rejects.toThrow();
+      });
+      const fixed = { tools: ['fixture-tool'] };
+      const accepted = bindBundledFlujoWorkloadStream(bundledFlujoWorkloadJsonResponse(fixed), admitted.authorization, admittedRequest.signal);
+      await expect(accepted.json()).resolves.toEqual(fixed);
+      // Serialization alone grants no publication authority: revoke the real
+      // private owner before the bound fixed body can publish its first byte.
+      const refused = bindBundledFlujoWorkloadStream(bundledFlujoWorkloadJsonResponse(fixed), admitted.authorization, admittedRequest.signal);
       fs.writeFileSync(ownerFilename, JSON.stringify(changed));
-      try { expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied'); }
-      finally { fs.writeFileSync(ownerFilename, originalOwner); }
+      try {
+        await expect(refused.text()).rejects.toThrow();
+        expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+      } finally { fs.writeFileSync(ownerFilename, originalOwner); }
     }
     if (mode === 'deferred-owner-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
