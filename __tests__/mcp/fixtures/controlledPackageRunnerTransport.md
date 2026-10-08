@@ -16,12 +16,19 @@ after the final synchronous fence. There is no runtime grant provisioner here.
 
 Stream listeners install synchronously at the actual spawn, before asynchronous
 authority disposal. Parsing is bounded to 256 KiB; writes are bounded to 256 KiB
-each and sixteen pending operations. Stderr drains without retained output.
+each and sixteen pending operations. The wire-size check occurs **after** SDK
+serialization; it does not bound serialization allocation of caller objects.
+Stderr drains without retained output.
 Failure/abort retires dispatch. Close waits for start settlement, then attempts
 parent termination within five seconds; actual exit, child close and both stream
-end events are required before releasing parent ownership. Timeout preserves
+end events and actual nonrejecting settlement witnesses for every admitted
+dispatch are required before releasing parent ownership or emitting onclose.
+Abort does not settle those witnesses. Start/dispatch failure retains ownership;
+close reports failure instead of claiming successful release. Timeout preserves
 ownership and permits another close attempt. Held authority handles remain
 strongly retained on close failure, with disposal available on the thrown error.
+Real held-file read/close barrier controls exercise the exact dispatch drain;
+they remain unrun and do not qualify a child launch or complete transport close.
 
 This is an explicitly **modified-npm** candidate, not an original stock-npx
 positive. No test, typecheck, runtime grant, registry/provider access, reify,

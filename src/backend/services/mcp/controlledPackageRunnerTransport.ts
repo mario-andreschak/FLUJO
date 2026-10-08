@@ -5,6 +5,7 @@ import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/s
 import { spawnGrantedPackageRunner, writeGrantedPackageRunner, releaseDrainedPackageRunner,
   PackageRunnerSpawnUncertain } from '@/backend/services/security/packageRunnerGrant';
 import type { PreparedPackageRunnerIntent } from '@/backend/services/security/packageRunnerIntent';
+import { AdmittedDispatchDrain } from './admittedDispatchDrain';
 
 const retained = new Set<ControlledPackageRunnerTransport>();
 const asError = (error: unknown) => error instanceof Error ? error : new Error('Controlled runner failure', { cause: error });
@@ -30,11 +31,13 @@ export class ControlledPackageRunnerTransport implements Transport {
   private stdoutEnded = false;
   private stderrEnded = false;
   private starting?: Promise<void>;
+  private startingSettled = false;
+  private startingFailure?: unknown;
   private closing?: Promise<void>;
   private settled?: () => void;
   private readonly terminal = new Promise<void>(resolve => { this.settled = resolve; });
   private writes: Promise<void> = Promise.resolve();
-  private pendingWrites = 0;
+  private readonly dispatches = new AdmittedDispatchDrain(() => this.finish());
   private readonly abort = () => { void this.close().catch(error => this.report(error)); };
 
   constructor(private readonly request: Request, private readonly intent: PreparedPackageRunnerIntent,
@@ -46,6 +49,10 @@ export class ControlledPackageRunnerTransport implements Transport {
 
   private finish(): void {
     if (this.closed || !this.child || !this.exited || !this.childClosed || !this.stdoutEnded || !this.stderrEnded) return;
+    this.retiring = true;
+    this.controller.abort();
+    void this.dispatches.seal();
+    if (!this.startingSettled || this.startingFailure || this.dispatches.pending || this.dispatches.failures.length) return;
     try { releaseDrainedPackageRunner(this.child); } catch (error) { this.report(error); return; }
     this.closed = true;
     this.retiring = true;
@@ -89,6 +96,7 @@ export class ControlledPackageRunnerTransport implements Transport {
   start(): Promise<void> {
     if (this.started || this.retiring) return Promise.reject(new Error('Controlled runner transport cannot restart'));
     this.started = true;
+    retained.add(this);
     this.request.signal.addEventListener('abort', this.abort, { once: true });
     this.starting = (async () => {
       try {
@@ -96,6 +104,7 @@ export class ControlledPackageRunnerTransport implements Transport {
         await spawnGrantedPackageRunner(this.request, this.intent, this.serverName, this.controller.signal, this.observe);
         if (this.retiring || this.closed) throw new Error('Runner retired during start');
       } catch (error) {
+        this.startingFailure = error;
         // The real child survives post-spawn cleanup failure in the exception;
         // it already has stream/exit listeners installed synchronously.
         if (error instanceof PackageRunnerSpawnUncertain && !this.child) this.observe(error.child);
@@ -103,6 +112,9 @@ export class ControlledPackageRunnerTransport implements Transport {
         this.controller.abort();
         this.report(error);
         throw error;
+      } finally {
+        this.startingSettled = true;
+        this.finish();
       }
     })();
     void this.starting.catch(() => { this.abort(); });
@@ -110,16 +122,18 @@ export class ControlledPackageRunnerTransport implements Transport {
   }
 
   send(message: JSONRPCMessage): Promise<void> {
-    if (!this.child || this.retiring || this.closed || this.pendingWrites >= 16) return Promise.reject(new Error('Controlled runner dispatch unavailable'));
+    if (!this.child || this.retiring || this.closed || this.dispatches.pending >= 16) return Promise.reject(new Error('Controlled runner dispatch unavailable'));
+    // Wire-size check follows serialization; this does not bound allocation
+    // while serializing a caller-supplied object.
     const bytes = serializeMessage(message);
     if (Buffer.byteLength(bytes) > 256 * 1024) return Promise.reject(new Error('Controlled runner message exceeds bound'));
-    this.pendingWrites++;
-    const operation = this.writes.then(async () => {
+    const preceding = this.writes;
+    const operation = this.dispatches.admit(() => preceding.then(async () => {
       if (this.retiring || !this.child) throw new Error('Controlled runner retired before queued dispatch');
       await writeGrantedPackageRunner(this.child, bytes, this.controller.signal);
-    });
+    }));
     this.writes = operation.catch(error => { this.report(error); this.abort(); });
-    return operation.finally(() => { this.pendingWrites--; });
+    return operation;
   }
 
   close(): Promise<void> {
@@ -127,6 +141,7 @@ export class ControlledPackageRunnerTransport implements Transport {
     if (this.closing) return this.closing;
     this.retiring = true;
     this.controller.abort();
+    const dispatchSettlement = this.dispatches.seal();
     this.closing = (async () => {
       const deadline = Date.now() + 5_000;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -135,24 +150,34 @@ export class ControlledPackageRunnerTransport implements Transport {
         timer = setTimeout(() => reject(new Error('Owned runner exit/close/drain unresolved; ownership retained')), 5_000);
       });
       try {
+        // Retire an already spawned parent even if start's held-file cleanup
+        // is still awaiting settlement. A late observed child sees retiring.
+        this.child?.stdin.end();
+        this.child?.kill('SIGTERM');
+        escalation = setTimeout(() => {
+          if (!this.closed) {
+            try { this.child?.kill('SIGKILL'); } catch (error) { this.report(error); }
+          }
+        }, Math.min(2_000, Math.max(0, deadline - Date.now())));
         // Start may be in asynchronous authority validation. It must settle
         // before absence of a child can be treated as an actual no-spawn result.
         await Promise.race([this.starting?.catch(() => {}), timeout]);
+        // Abort only retires admission. The real admitted operations must
+        // settle through their authority/FD cleanup before release succeeds.
+        await Promise.race([dispatchSettlement, timeout]);
+        if (this.dispatches.failures.length) throw new AggregateError(this.dispatches.failures,
+          'Admitted dispatch failed; parent and cleanup ownership retained');
+        if (this.startingFailure) throw new AggregateError([this.startingFailure],
+          'Runner start failed; actual cleanup ownership retained');
         if (!this.child) {
           this.closed = true;
+          retained.delete(this);
           this.request.signal.removeEventListener('abort', this.abort);
           this.settled?.();
           try { this.onclose?.(); } catch (error) { this.report(error); }
           return;
         }
         if (!this.closed) {
-          this.child.stdin.end();
-          this.child.kill('SIGTERM');
-          escalation = setTimeout(() => {
-            if (!this.closed) {
-              try { this.child?.kill('SIGKILL'); } catch (error) { this.report(error); }
-            }
-          }, Math.min(2_000, Math.max(0, deadline - Date.now())));
           await Promise.race([this.terminal, timeout]);
         }
       } finally {
