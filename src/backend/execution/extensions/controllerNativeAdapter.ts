@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { createExecutionExtensionContext, ExecutionExtensionError, runWithExecutionInput,
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { applyExecutionRunInput, createExecutionExtensionContext, ExecutionExtensionError, runWithExecutionInput,
   type ExecutionExtensionAdapter, type ExecutionExtensionContext, type ExecutionNativeWorkerRoot,
   type ExecutionNativeWorkerRootRequest } from './index';
 
@@ -27,23 +27,49 @@ function checkedPlan(value: Plan): Plan {
 }
 export interface ControllerNativeSourceAdapter {
   readonly adapter: ExecutionExtensionAdapter;
-  withWorkerRun<T>(workerAuthorization: string, claim: Claim, task: (context: ExecutionExtensionContext) => Promise<T>): Promise<T>;
+  withWorkerRun<T>(workerAuthorization: string, claim: Claim, task: (context: ExecutionExtensionContext) => Promise<T>, signal?: AbortSignal): Promise<T>;
   close(): Promise<void>;
 }
-const shared = globalThis as typeof globalThis & { __flujoControllerNativeAdapters?: Map<string, ControllerNativeSourceAdapter> };
-const adapters = shared.__flujoControllerNativeAdapters ??= new Map<string, ControllerNativeSourceAdapter>();
+export interface ControllerNativeRequester { origin: string; authorization: string }
+type Binding = { composed: ControllerNativeSourceAdapter; requesterDigest: string };
+const shared = globalThis as typeof globalThis & { __flujoControllerNativeAdapters?: Map<string, Binding> };
+const adapters = shared.__flujoControllerNativeAdapters ??= new Map<string, Binding>();
+
+async function boundedRequestBody(request: Request): Promise<unknown> {
+  const reader=request.body?.getReader(); if (!reader) throw denied();
+  const signal=AbortSignal.any([request.signal,AbortSignal.timeout(5000)]);
+  const chunks:Buffer[]=[]; let bytes=0;
+  const abort=()=>{void reader.cancel().catch(()=>{});}; signal.addEventListener('abort',abort,{once:true});
+  try {
+    signal.throwIfAborted();
+    while(true) {
+      const next=await reader.read(); signal.throwIfAborted(); if(next.done)break;
+      bytes+=next.value.byteLength; if(bytes>32*1024)throw denied(); chunks.push(Buffer.from(next.value));
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } finally {signal.removeEventListener('abort',abort);await reader.cancel();reader.releaseLock();for(const chunk of chunks)chunk.fill(0);}
+}
 
 /** Trusted build/launcher composition only. No Flow or HTTP DTO selects this
  * transport or gateway. The real Parent client authenticates Worker ownership,
  * rereads its immutable plan and holds its mutation fence. Next server graphs
  * reuse one adapter/weak-capability registry for the same private binding. */
-export function createControllerNativeSourceAdapter(transport: ControllerNativeTransport, gateway: Gateway): ControllerNativeSourceAdapter {
+export function createControllerNativeSourceAdapter(transport: ControllerNativeTransport, gateway: Gateway,
+  requester?: ControllerNativeRequester): ControllerNativeSourceAdapter {
   if (!/^[a-f0-9]{64}$/.test(transport?.bindingId ?? '')
       || ['admit','readPlan','assertRun','bindRun','readRoot','commit','observe'].some(key=>typeof transport[key as keyof ControllerNativeTransport]!=='function')
       || ['isProtectedServer','assertServerConfig','protectedServer','authorizeHandoffs','assertModelTool','assertDispatch',
         'normalizeArguments','requestMeta','validateResult'].some(key=>typeof gateway?.[key as keyof Gateway]!=='function')) throw denied();
+  let origin:URL|undefined, credential:Buffer|undefined;
+  if(requester) {
+    origin=new URL(requester.origin);
+    if(origin.protocol!=='http:' || origin.hostname!=='127.0.0.1' || !origin.port || origin.pathname!=='/'
+      || origin.search || origin.hash || origin.username || origin.password || !/^Bearer [A-Za-z0-9_-]{43}$/.test(requester.authorization))throw denied();
+    credential=Buffer.from(requester.authorization);
+  }
+  const requesterDigest=digest(requester??null);
   const existing = adapters.get(transport.bindingId);
-  if (existing) return existing;
+  if (existing) {if(existing.requesterDigest!==requesterDigest)throw denied();return existing.composed;}
   if (adapters.size >= 16) throw denied();
   const contexts = new WeakMap<object, Active>();
   const active = new Set<Active>();
@@ -97,27 +123,64 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       const result=await transport.readRoot(selected.remote,expected); await current(selected); return result;
     },
   };
+  if(origin && credential) {
+    const selectedOrigin=origin, selectedCredential=credential;
+    const target=(request:Request)=>new URL(request.url).pathname==='/v1/chat/completions';
+    const authorized=(request:Request)=>{
+      const address=new URL(request.url), supplied=Buffer.from(request.headers.get('authorization')??'');
+      return !closed && address.origin===selectedOrigin.origin && !address.search && !address.hash
+        && request.headers.get('host')===selectedOrigin.host && !request.headers.has('origin') && request.method==='POST'
+        && request.headers.get('content-type')?.split(';')[0].trim()==='application/json'
+        && supplied.length===selectedCredential.length && timingSafeEqual(supplied,selectedCredential);
+    };
+    const refusal=()=>Response.json({error:'controller_native_source_refused'},{status:403});
+    adapter.authorizeTransport=request=>target(request)?authorized(request)?null:refusal():undefined;
+    adapter.withRoute=async(request,task)=>{
+      if(!target(request))return task(request);
+      if(!authorized(request))return refusal();
+      const body=await boundedRequestBody(request) as {prompt?:unknown;claim?:Claim;workerAuthorization?:unknown};
+      if(!body || Object.keys(body).sort().join()!=='claim,prompt,workerAuthorization' || typeof body.prompt!=='string'
+        || !body.prompt.trim() || Buffer.byteLength(body.prompt)>16*1024 || typeof body.workerAuthorization!=='string'
+        || body.workerAuthorization.length>4096)throw denied();
+      return composed.withWorkerRun(body.workerAuthorization,body.claim!,async()=>{
+        request.signal.throwIfAborted();
+        const input=applyExecutionRunInput({source:'internal',prompt:body.prompt as string});
+        const headers=new Headers({'content-type':'application/json','host':selectedOrigin.host,
+          'x-flujo-workspace':body.claim!.workspace});
+        const admitted=new Request(request.url,{method:'POST',headers,signal:request.signal,body:JSON.stringify({
+          model:`flow-${input.flowId}`,stream:false,messages:[{role:'user',content:body.prompt}],
+          metadata:{flujo:'true',requireApproval:'false',conversationId:input.conversationId},
+        })});
+        return task(admitted);
+      },request.signal);
+    };
+  }
   const composed: ControllerNativeSourceAdapter = Object.freeze({ adapter,
-    async withWorkerRun<T>(workerAuthorization: string, claim: Claim, task: (context: ExecutionExtensionContext)=>Promise<T>) {
+    async withWorkerRun<T>(workerAuthorization: string, claim: Claim, task: (context: ExecutionExtensionContext)=>Promise<T>, signal?:AbortSignal) {
+      signal?.throwIfAborted();
       if (closed || typeof task!=='function' || active.size>=100 || conversations.size>=256) throw denied();
       const captured=Object.freeze(structuredClone(claim));
       const remote=await transport.admit(workerAuthorization,captured);
       const plan=checkedPlan(await transport.readPlan(remote));
-      const watch=await transport.observe(remote);
+      const observed=await transport.observe(remote);
+      const watch=signal?{...observed,signal:AbortSignal.any([observed.signal,signal])}:observed;
       if (closed || active.size>=100 || conversations.size>=256) { await watch.close(); throw denied(); }
       const selected:Active={remote,claim:captured,plan,watch};
       const value=Object.freeze({}); contexts.set(value,selected); active.add(selected); conversations.add(captured.rootConversationId);
       const context=createExecutionExtensionContext(adapter,value);
       try {
         await current(selected);
-        return await runWithExecutionInput({executionExtensionContext:context,conversationId:captured.rootConversationId,flowId:plan.flowId},()=>task(context));
+        const result=await runWithExecutionInput({source:'internal',executionExtensionContext:context,conversationId:captured.rootConversationId,flowId:plan.flowId},()=>task(context));
+        await current(selected);
+        return result;
       } finally {contexts.delete(value);active.delete(selected);await watch.close();}
     },
     async close() {
       if (closed) return; closed=true;
       await Promise.all([...active].map(selected=>selected.watch.close()));
-      if (adapters.get(transport.bindingId)===composed) adapters.delete(transport.bindingId);
+      credential?.fill(0);
+      if (adapters.get(transport.bindingId)?.composed===composed) adapters.delete(transport.bindingId);
     },
   });
-  adapters.set(transport.bindingId,composed); return composed;
+  adapters.set(transport.bindingId,{composed,requesterDigest}); return composed;
 }
