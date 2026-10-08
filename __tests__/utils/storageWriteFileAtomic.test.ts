@@ -4,6 +4,16 @@ import path from 'path';
 
 import { writeFileAtomic } from '@/utils/storage/backend';
 import * as workloadEffects from '@/backend/services/security/bundledFlujoWorkload';
+// A mutable delegate keeps all ordinary checks real while allowing one
+// explicitly scoped sink-retirement control to inject its refusal.
+jest.mock('@/backend/services/security/bundledFlujoWorkload', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/security/bundledFlujoWorkload')>(
+    '@/backend/services/security/bundledFlujoWorkload',
+  );
+  return { __esModule: true, ...actual,
+    assertBundledFlujoWorkloadEffectCurrent: () => actual.assertBundledFlujoWorkloadEffectCurrent() };
+});
+
 
 // Windows opens files without FILE_SHARE_DELETE, so any concurrent reader of the
 // target — including FLUJO's own polling loads — makes the atomic write's
