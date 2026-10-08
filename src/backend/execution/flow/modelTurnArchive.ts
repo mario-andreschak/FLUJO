@@ -259,7 +259,7 @@ async function sanitizeValue(
 
   // Preserve metered constructor-produced schema representation without
   // traversing Zod internals or invoking a projector/default/lazy closure.
-  if (isArchiveSchema(value as object)) {
+  if (isArchiveSchema(value)) {
     try {
       const projected = projectArchiveSchema(value, getArchiveSchemaProjectionPolicy());
       recheckArchiveWriteMemory(projected, true);

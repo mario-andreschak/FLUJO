@@ -187,7 +187,7 @@ function node(value: unknown, ctx: Context): Built {
   }
   if (Array.isArray(value.allOf) && value.allOf.length > 0) {
     ctx.meter.slots(value.allOf.length);
-    const members: Built[] = Array.prototype.map.call(value.allOf, (member: unknown) => node(member, child(ctx)));
+    const members: Built[] = (Array.prototype.map<Built>).call(value.allOf, (member: unknown) => node(member, child(ctx)));
     let built = members[0];
     for (const next of members.slice(1)) {
       ctx.meter.take();
@@ -203,7 +203,7 @@ function node(value: unknown, ctx: Context): Built {
   if (composition) {
     if (!composition.length) { ctx.fallback.hit = true; return any(ctx, description); }
     ctx.meter.slots(composition.length);
-    const members: Built[] = Array.prototype.map.call(composition, (member: unknown) => node(member, child(ctx)));
+    const members: Built[] = (Array.prototype.map<Built>).call(composition, (member: unknown) => node(member, child(ctx)));
     if (members.length === 1) return finish(members[0].schema, { ...members[0].json }, ctx, description, members[0].objectShape);
     return finish(z.union(members.map(member => member.schema)),
       { anyOf: Object.freeze(members.map(member => member.json)) }, ctx, description);
