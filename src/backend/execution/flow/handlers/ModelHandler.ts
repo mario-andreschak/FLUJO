@@ -1,3 +1,5 @@
+import { reserveArchiveSnapshot, estimateArchivePayload,
+  ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
 import { createHash } from 'node:crypto';
 import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
@@ -1051,6 +1053,11 @@ export class ModelHandler {
       };
     }
 
+    if (error instanceof ModelTurnArchiveMemoryError) {
+      return { success: false, error: createModelError(error.code, error.message, modelId,
+        undefined, { status: error.status }) };
+    }
+
     // Error diagnostics are deliberately metadata-only. Provider bodies,
     // messages, request URLs, headers, and stacks may contain credentials or
     // execution content and must never be passed to the logger.
@@ -2002,6 +2009,7 @@ export class ModelHandler {
     let attemptProducedOutput = false;
     let automaticRetriesUsed = 0;
     let singlePhysicalAttempt = false;
+    let archiveSnapshotReservation: ArchiveMemoryReservation | undefined;
 
     try {
       if (opts?.executionExtensionContext) {
@@ -2516,6 +2524,9 @@ export class ModelHandler {
       // completion. Track streamed transcript/steering messages so each later
       // dispatch archive captures the canonical conversation as it existed at
       // that exact request boundary, not the call's initial static array.
+      if (opts?.archiveModelTurns) {
+        archiveSnapshotReservation = reserveArchiveSnapshot(opts.canonicalMessages ?? messages);
+      }
       const archiveCanonicalMessages = opts?.archiveModelTurns
         ? structuredClone(opts.canonicalMessages ?? messages)
         : undefined;
@@ -2649,6 +2660,7 @@ export class ModelHandler {
           attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           if (archiveCanonicalMessages) {
+            archiveSnapshotReservation?.grow(estimateArchivePayload(message) * 2);
             upsertMessageById(archiveCanonicalMessages, structuredClone(message));
           }
           opts?.onTranscriptMessage?.(message);
@@ -2795,28 +2807,26 @@ export class ModelHandler {
                       throw new NativeInvocationHeldError(nativeReceipt.invocationId);
                     }
                     try {
-                      const entry = await archiveModelDispatch({
+                      const archiveInput = {
                         ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
                         durableContext: opts?.durableContext,
-                        conversationId: opts!.conversationId!,
-                        runId: opts?.runId,
-                        nodeId: opts!.nodeId!,
-                        nodeName: opts?.nodeName,
-                        modelId: routingModel.id,
-                        modelName: routingModel.displayName || routingModel.name,
-                        adapter: snapshot.adapter,
-                        operation: snapshot.operation,
+                        conversationId: opts!.conversationId!, runId: opts?.runId,
+                        nodeId: opts!.nodeId!, nodeName: opts?.nodeName,
+                        modelId: routingModel.id, modelName: routingModel.displayName || routingModel.name,
+                        adapter: snapshot.adapter, operation: snapshot.operation,
                         attempt: ++sdkDispatchOrdinal,
-                        canonicalMessages: archiveCanonicalMessages
-                          ? structuredClone(archiveCanonicalMessages)
-                          : opts?.canonicalMessages ?? messages,
-                        genericWire: snapshot.wireMessages !== undefined
-                          ? structuredClone(snapshot.wireMessages)
-                          : hydratedMessages,
-                        sdkRequest: snapshot.request,
-                        modelInput: modelInputForArchive,
+                        canonicalMessages: archiveCanonicalMessages ?? opts?.canonicalMessages ?? messages,
+                        genericWire: snapshot.wireMessages ?? hydratedMessages,
+                        sdkRequest: snapshot.request, modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,
-                      });
+                      };
+                      const entry = await archiveModelDispatch(archiveInput, () => ({
+                        ...archiveInput,
+                        canonicalMessages: archiveCanonicalMessages
+                          ? structuredClone(archiveCanonicalMessages) : archiveInput.canonicalMessages,
+                        genericWire: snapshot.wireMessages !== undefined
+                          ? structuredClone(snapshot.wireMessages) : archiveInput.genericWire,
+                      }));
                       executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch',
                         turn: entry,
@@ -2907,6 +2917,7 @@ export class ModelHandler {
                       }
                       return entry.id;
                     } catch (error) {
+                      if (error instanceof ModelTurnArchiveMemoryError) throw error;
                       if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
@@ -3537,6 +3548,7 @@ export class ModelHandler {
       // A native attempt keeps Stop polling through terminal persistence. Every
       // outer return path, including a held invocation, must then release it.
       stopCancelWatch();
+      archiveSnapshotReservation?.release();
     }
   }
 
