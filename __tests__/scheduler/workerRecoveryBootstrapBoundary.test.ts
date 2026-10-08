@@ -293,21 +293,33 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   worker = launch(data, workerEnv);
   const disabledBoot = await worker.wait(message => message.phase === 'bootstrapped');
   expect(disabledBoot.plans.find((row: Reply) => row.execution.id === planId).status.workerRecovery.reason).toBe('disabled');
-  await crossMinute();
+  // Preserve the original journal check before starting the sibling branch.
+  // Keep this disabled worker alive while the independent sibling bootstraps.
   expect(await effects(snapshot.journal)).toHaveLength(2);
-  await worker.request('stop'); await worker.exit();
   const sibling = launch(path.join(sandbox, 'sibling'), { ...workerEnv, FLUJO_WORKER_RECOVERY_ID: 'owned-sibling',
     FLUJO_WORKER_SNAPSHOT: localSnapshot.archivePath, FLUJO_WORKER_SNAPSHOT_SHA256: localSnapshot.sha256,
-    FLUJO_WORKER_SNAPSHOT_KEY: localSnapshot.key });
+    FLUJO_WORKER_SNAPSHOT_KEY: localSnapshot.key, FLUJO_SNAPSHOT_CONTROL_TOKEN: randomUUID() });
   const siblingBoot = await sibling.wait(message => message.phase === 'bootstrapped');
   expect(siblingBoot.plans.find((row: Reply) => row.execution.id === planId).status.workerRecovery.reason)
     .toBe('no-local-provenance');
+  expect(path.resolve(siblingBoot.journal)).not.toBe(path.resolve(snapshot.journal));
+  expect(await effects(snapshot.journal)).toHaveLength(2);
+  expect(await effects(siblingBoot.journal)).toHaveLength(1);
+  // Both real workers must remain inert across the same natural minute. The
+  // earlier missed-minute and paused-restart boundaries are unchanged.
   await crossMinute();
   expect(await effects(snapshot.journal)).toHaveLength(2);
   // The exported sibling journal includes the one completed effect at export;
   // no locally enrolled copied row may append another effect in its own tree.
   expect(await effects(siblingBoot.journal)).toHaveLength(1);
-  await sibling.request('stop'); await sibling.exit();
+  const retirement = await Promise.allSettled([worker, sibling].map(async owned => {
+    const failures: unknown[] = [];
+    try { await owned.request('stop'); } catch (error) { failures.push(error); }
+    try { await owned.exit(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, 'Independent final worker stop/exit/drain failed');
+  }));
+  const retirementFailures = retirement.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+  if (retirementFailures.length) throw new AggregateError(retirementFailures, 'Final disabled/sibling worker retirement failed');
 }));
 
 it.each(['invalid-provenance', 'generation-changed', 'retired', 'not-opted-in'] as const)(

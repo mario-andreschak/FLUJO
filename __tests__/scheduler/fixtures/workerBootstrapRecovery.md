@@ -37,6 +37,16 @@ have exited. That requires actual descendant ownership/exit evidence in the
 separate watchdog acceptance fixture, not a simulated ACK or readiness flag.
 These remain separate #553 acceptance gaps. Package-runner review commitments
 also remain separate from actual protected resolver/launch enforcement.
+
+Source timing proposal: the final disabled original and exported sibling run
+concurrently in separate data directories, with separate owner equipment and
+snapshot-control tokens. Both readiness/recovery reasons and both independent
+journals (original two, sibling one) are checked before and after one shared
+natural minute. Their stop/exit/close/stdio-drain observations are attempted
+independently and aggregated. Earlier missed-minute recovery and paused restart
+boundaries, all suppression assertions, and 420/75-second deadlines remain.
+This proposal is unqualified and does not change the currently frozen live run.
+
 # Failure diagnostics (Source only)
 
 The unchanged 75-second effect wait requests at most three actual scheduler
