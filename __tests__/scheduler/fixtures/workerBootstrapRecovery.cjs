@@ -27,6 +27,10 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   } }).outputText, filename);
 const source = name => require(path.join(root, 'src', name));
 const send = message => { if (process.connected) process.send(message); };
+const sendFlushed = message => new Promise((resolve, reject) => {
+  if (!process.connected) { resolve(); return; }
+  process.send(message, error => error ? reject(error) : resolve());
+});
 let owner;
 let scheduler;
 let stopping = false;
@@ -49,7 +53,7 @@ async function shutdown() {
     send({ phase: 'cleanup-failed', error: failures.map(error => String(error.stack || error)).join('\n') });
     throw new AggregateError(failures, 'Worker fixture shutdown/owner cleanup failed');
   }
-  send({ phase: 'cleanup-completed' });
+  await sendFlushed({ phase: 'cleanup-completed' });
 }
 
 async function exitSeedOnly(code) {
@@ -168,9 +172,9 @@ async function command(message) {
     let written;
     try { written = await archive.writeWorkspaceSnapshotArchive(captured); }
     finally { if (captured.dispose) await captured.dispose(); }
-    send({ phase: 'seeded', archivePath: written.archivePath, stagingDir: written.stagingDir,
+    await sendFlushed({ phase: 'seeded', archivePath: written.archivePath, stagingDir: written.stagingDir,
       sha256: written.sha256, key, workspace, flowId: compiled.flow.id, journal });
-    send({ phase: 'cleanup-completed' }); // Captured owned descriptors were disposed above; no worker was started.
+    await sendFlushed({ phase: 'cleanup-completed' }); // Captured owned descriptors were disposed above; no worker was started.
     stopping = true;
     await exitSeedOnly(0);
     return;
@@ -203,7 +207,7 @@ async function command(message) {
   send({ phase: 'bootstrapped', status, plans: await scheduler.list(),
     workspaceDataDir: source('utils/workspace.ts').getWorkspaceDataDir() });
 })().catch(async error => {
-  send({ phase: 'failed', error: String(error.stack || error) });
+  await sendFlushed({ phase: 'failed', error: String(error.stack || error) });
   let cleaned = false;
   try { await shutdown(); cleaned = true; } catch (cleanup) { send({ phase: 'cleanup-failed', error: String(cleanup) }); }
   process.exitCode = 1;
