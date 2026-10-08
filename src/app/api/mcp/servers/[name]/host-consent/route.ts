@@ -6,6 +6,7 @@ import { authorizeExecutionTransport } from '@/backend/execution/extensions';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
 import { approveBundledHostConsent, BundledConsentError, previewBundledHostConsent, revokeBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
+import { consentDiagnosticCode } from '@/backend/services/security/bundledConsentDiagnostic';
 
 type RouteContext = { params: Promise<{ name: string }> };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -25,7 +26,10 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     return json({ serverName: name, policyDigest: preview.policyDigest, privileges: 'owner-account',
       command: preview.config.command, args: preview.config.args, roots: preview.config.roots,
       runtimeHome, environmentNames: policy.environmentNames, revision: preview.revision });
-  } catch { return json({ error: 'A fixed installed package proposal is unavailable.' }, 409); }
+  } catch (error) {
+    if (!owner.authorization.recheck()) console.warn(`[bundled-consent-preview] ${consentDiagnosticCode(error)}`);
+    return json({ error: 'A fixed installed package proposal is unavailable.' }, 409);
+  }
 }
 
 async function POST_handler(request: NextRequest, { params }: RouteContext) {
