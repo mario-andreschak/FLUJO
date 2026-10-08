@@ -659,17 +659,18 @@ export class CodexAdapter implements CompletionAdapter {
           handler: async (args, requestIdentity) => {
             try {
               if (!requestIdentity) throw new Error('Native Codex tool lacks a stable model callback identity.');
+              const capturedArgs = JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
               if (!recordedNativeCalls.has(requestIdentity)) {
-                recordToolCall({ id: requestIdentity, name: advertised.name, argsJson: JSON.stringify(args) });
+                recordToolCall({ id: requestIdentity, name: advertised.name, argsJson: JSON.stringify(capturedArgs) });
                 recordedNativeCalls.add(requestIdentity);
               }
               const dispatched = await nativeToolPort.dispatch({
-                toolInvocationId: requestIdentity, name: advertised.name, args,
+                toolInvocationId: requestIdentity, name: advertised.name, args: capturedArgs,
                 signal: abortController.signal,
               });
               if (!recordedNativeResults.has(requestIdentity)) {
                 if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
-                  handoffCalls.push({ id: requestIdentity, name: advertised.name, args });
+                  handoffCalls.push({ id: requestIdentity, name: advertised.name, args: capturedArgs });
                   if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
                     endSpawning = true;
                   }

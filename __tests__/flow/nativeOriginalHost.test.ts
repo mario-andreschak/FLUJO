@@ -34,6 +34,9 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
       args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
       register: async registration => { codexRegistrations.push(registration);
         let closeObserved = false;
+        codexCloseDelays.push(registration.exit.then(async () => {
+          const atExit = performance.now(); await registration.close; return performance.now() - atExit;
+        }));
         void registration.close.then(() => { closeObserved = true; });
         codexExitWitnesses.push(registration.exit.then(async () => {
           const pipeCloseObservedAtExit = closeObserved;
@@ -86,6 +89,7 @@ let offeredLateUsage: unknown;
 let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
 let codexFrames: unknown[] = [];
 let codexForeignScope = '';
+let codexCloseDelays: Array<Promise<number>> = [];
 let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
 const codexChildFixture = `
 const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
@@ -110,6 +114,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
      const raw=await response.text();const data=raw.split('\\n').find(line=>line.startsWith('data: '));return JSON.parse(data?data.slice(6):raw);
     };
     const tools=await rpc('tools/list',{});const tool=tools.result.tools.find(t=>t.name.startsWith('handoff_to_'));
+    const keeper=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+    await new Promise(resolve=>keeper.once('spawn',resolve));
     fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
     await rpc('tools/call',{name:tool.name,arguments:{},_meta:{callId:'codex-handoff-1',threadId}});return;
    }
@@ -138,7 +144,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = [];
+  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = [];
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -391,6 +397,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(codexRegistrations).toHaveLength(1);
       const witness = await codexExitWitnesses[0];
       expect(witness.pipeCloseObservedAtExit).toBe(false);
+      expect(await codexCloseDelays[0]).toBeGreaterThan(400);
       expect(witness.stateAtExit).not.toBe('released');
       const reservation = (await ledger()).reservations[0];
       expect(reservation.handoff).toMatchObject({ protocol: 'owned-codex-app-server-exit-close-v1',
