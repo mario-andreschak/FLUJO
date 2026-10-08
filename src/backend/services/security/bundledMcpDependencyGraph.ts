@@ -48,8 +48,8 @@ async function checkpoint(filename: string, identity: fs.BigIntStats, handle?: F
     if (!result.value || !same(identity, result.value)) throw new Error(refusal);
   }
   // Parallel observations may precede the final canonical-path yield. Reread
-  // every identity after all operations settle, without another await between
-  // the descriptor and named-file observations and the caller's publication.
+  // every identity after all operations settle. This restores post-canonical
+  // witness ordering; subsequent caller awaits still require their own checks.
   if (handle && !same(identity, fs.fstatSync(handle.fd, { bigint: true }))) throw new Error(refusal);
   if (!same(identity, fs.lstatSync(filename, { bigint: true }))) throw new Error(refusal);
 }

@@ -86,7 +86,11 @@ test('unchanged actual dependency assets retain a deterministic graph digest', a
 test('replacement after the final scan named observation but before canonical completion is refused', async () => {
   const realpath = fs.promises.realpath.bind(fs.promises);
   const lstat = fs.promises.lstat.bind(fs.promises);
+  const lstatSync = fs.lstatSync.bind(fs);
   let canonicalReads = 0;
+  let oldIdentity: fs.BigIntStats | undefined;
+  let replacementIdentity: fs.BigIntStats | undefined;
+  let witnessedReplacement: fs.BigIntStats | undefined;
   let release!: () => void;
   let observed!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
@@ -99,15 +103,30 @@ test('replacement after the final scan named observation but before canonical co
   }) as typeof fs.promises.realpath);
   jest.spyOn(fs.promises, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.promises.lstat>) => {
     const result = await lstat(...args);
-    if (String(args[0]) === manifest && canonicalReads === 5) observed();
+    if (String(args[0]) === manifest && canonicalReads === 5) {
+      oldIdentity = result as fs.BigIntStats;
+      observed();
+    }
     return result;
   }) as typeof fs.promises.lstat);
+  jest.spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+    const result = lstatSync(...args);
+    if (String(args[0]) === manifest && replacementIdentity) witnessedReplacement = result as fs.BigIntStats;
+    return result;
+  }) as typeof fs.lstatSync);
   const inspection = inspectBundledMcpDependencyGraph(root, [directory]);
   const outcome = inspection.then(() => undefined, error => error);
   try {
     await namedObserved;
     fs.renameSync(manifest, `${manifest}.old`);
     fs.writeFileSync(manifest, '{"name":"late-replacement","version":"3.0.0"}');
+    replacementIdentity = lstatSync(manifest, { bigint: true });
   } finally { release(); }
   expect(await outcome).toEqual(new Error('Installation changed during dependency inspection.'));
+  expect(oldIdentity).toBeDefined();
+  expect(replacementIdentity).toBeDefined();
+  expect(oldIdentity!.ino).not.toBe(replacementIdentity!.ino);
+  expect(witnessedReplacement).toBeDefined();
+  expect(witnessedReplacement!.ino).toBe(replacementIdentity!.ino);
+  expect(witnessedReplacement!.dev).toBe(replacementIdentity!.dev);
 });
