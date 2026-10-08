@@ -427,6 +427,44 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         .toMatchObject({ callId: 'codex-handoff-1', threadId: 'native_codex_thread' });
     }, revoked ? 'handoff-refusal' : 'handoff');
   }, 30000);
+  it.each([false, true])('owns a Codex descendant under the root budget and fences parent drift (drift=%s)', async drift => {
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
+    let rootConversation: string | undefined, rootRun: string | undefined;
+    const events: string[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+    try {
+      await withClaim(async input => {
+        rootConversation = input.conversationId; rootRun = input.runId;
+        if (drift) afterPrompt = async () => {
+          const reservation = (await ledger()).reservations[0];
+          const child = (await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined))!;
+          expect(child.parentLogicalRunId).toBe(rootRun);
+          await saveCollectionItem('conversations', child.conversationId!, { ...child, parentLogicalRunId: 'foreign_codex_parent' });
+        };
+      }, async (_personaId, goalId) => {
+        expect(codexRegistrations).toHaveLength(1);
+        const saved = await ledger(); expect(saved.goalId).toBe(goalId);
+        expect(saved.reservations).toHaveLength(1);
+        const reservation = saved.reservations[0];
+        expect(reservation.owner.conversationId).not.toBe(rootConversation);
+        expect(reservation.owner.runId).not.toBe(rootRun);
+        expect(reservation.codexBudget).toMatchObject({ scope: 'outer-turn', admittedTurns: 1, maxTurns: 3 });
+        const child = (await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined))!;
+        expect(child).toMatchObject({ parentConversationId: rootConversation, rootConversationId: rootConversation,
+          flowId: 'native_pinned_child', runDepth: 1 });
+        if (drift) {
+          expect(reservation.state).not.toBe('released'); expect(reservation.sdkUsage).toBeUndefined();
+          expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'item/completed' })]));
+          expect(events.join('\n')).not.toContain('offline codex done');
+          expect(JSON.stringify(child.messages)).not.toContain('offline codex done');
+        } else {
+          expect(child.parentLogicalRunId).toBe(rootRun);
+          expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+            sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 } });
+        }
+      }, drift ? 'child-refusal' : 'child');
+    } finally { unsubscribe(); }
+  }, 30000);
   it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
     let rootConversation: string | undefined;
     let rootRun: string | undefined;
