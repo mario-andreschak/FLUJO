@@ -80,6 +80,7 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     write('mcp-servers/flujo/package.json', JSON.stringify({ name: descriptor.packageId, version: '1.0.0', type: 'module', dependencies: { 'fixture-dependency': '1.0.0' } }));
     write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
     write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
+    fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
     await ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']);
     const proposed = createShippedServerConfig(descriptor);
     expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
