@@ -32,7 +32,7 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
     const wire = path.join(directory, 'codex-wire.jsonl');
     return actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
       args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
-      register: async registration => { codexRegistrations.push(registration);
+      register: async registration => { codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
         let closeObserved = false;
         codexCloseDelays.push(registration.exit.then(async () => {
           const atExit = performance.now(); await registration.close; return performance.now() - atExit;
@@ -68,6 +68,7 @@ import { runWithWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
+import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexOwnedThread';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createPersonaNativeOriginalHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
@@ -89,6 +90,7 @@ let offeredLateUsage: unknown;
 let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
 let codexFrames: unknown[] = [];
 let codexForeignScope = '';
+let codexOwners: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost[] = [];
 let codexCloseDelays: Array<Promise<number>> = [];
 let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
 const codexChildFixture = `
@@ -324,7 +326,17 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     // NODE_OPTIONS is deliberately syntactically valid: it must still be absent in the child.
     process.env.NODE_OPTIONS = '--no-warnings';
     try {
-    await withClaim(async () => {}, async (_personaId, goalId) => {
+    await withClaim(async () => {
+      afterPrompt = async () => {
+        const replay = createOwnedCodexThread({ host: codexOwners[0], env: { NODE_ENV: 'production' }, config: {},
+          options: { model: selectedModel.name, workingDirectory: directory }, maxTurns: 3 });
+        const attempt = await replay.runStreamed('unauthorized successor', {});
+        await expect(attempt.events.next()).rejects.toThrow('held');
+        expect(codexRegistrations).toHaveLength(1);
+        expect((await ledger()).reservations[0].codexBudget)
+          .toMatchObject({ scope: 'outer-turn', admittedTurns: 1, maxTurns: 3 });
+      };
+    }, async (_personaId, goalId) => {
       const environment = JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.environment'), 'utf8'));
       expect(environment).toMatchObject({ selectedKey: true, managedHome: true });
       for (const name of canaries) expect(environment.names).not.toContain(name);
@@ -337,6 +349,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(saved.reservations[0]).toMatchObject({ state: 'released', sdkOutcome: 'completed',
         sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 },
         exit: { code: 0, signal: null } });
+      expect(saved.reservations[0].codexBudget).toMatchObject({ scope: 'outer-turn', admittedTurns: 1, completedTurns: 1, maxTurns: 3 });
       expect(saved.reservations[0].identity.processBirthMarkerV2).toBeTruthy();
       expect(await codexExitWitnesses[0]).toMatchObject({ pipeCloseObservedAtExit: false });
       expect((await codexExitWitnesses[0]).stateAtExit).not.toBe('released');

@@ -36,6 +36,7 @@ const positive = (value: unknown): number | undefined =>
 type Reservation = { invocationId: string; descriptorDigest: string; owner: NativeInvocationSession['descriptor']['receipt']['owner'];
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
+  codexBudget?: { scope: 'outer-turn'; admittedTurns: 1; maxTurns: number; completedTurns?: 1 };
   handoff?: { protocol: NativeHandoffProtocol; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
   sdkUsage?: { source: 'claude-sdk-result' | 'codex-app-server-turn'; numTurns?: number; outerTurns?: number; inputTokens?: number;
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
@@ -317,6 +318,7 @@ export async function createPersonaNativeOriginalHost(input: {
   let exited = false;
   let closed = false;
   let handoffStopRequested = false;
+  let codexTurnAdmitted = false;
   const handoffIds = new Set<string>();
   const update = async (task: (reservation: Reservation) => Promise<void>, cap = launchCap) => {
     if (!original) return held();
@@ -427,6 +429,10 @@ export async function createPersonaNativeOriginalHost(input: {
         totalCostUsd: number(value.total_cost_usd), durationMs: number(value.duration_ms) };
       await authority.commitWhileCurrent!(() => update(async reservation => {
         if (reservation.sdkUsage && nativeDigest(reservation.sdkUsage) !== nativeDigest(receipt)) return held();
+        if (adapter === 'codex-cli') {
+          if (!codexTurnAdmitted || reservation.codexBudget?.admittedTurns !== 1) return held();
+          reservation.codexBudget.completedTurns = 1;
+        }
         reservation.sdkUsage = receipt;
       }));
       if (receipt.numTurns !== undefined && receipt.numTurns > maxTurns) return held();
@@ -435,10 +441,20 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!original || value !== maxTurns
         || nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
       await assertCurrent();
+      if (adapter === 'codex-cli') {
+        await authority.commitWhileCurrent!(() => update(async reservation => {
+          if (codexTurnAdmitted || child || reservation.state !== 'accepted' || reservation.codexBudget) return held();
+          reservation.codexBudget = { scope: 'outer-turn', admittedTurns: 1, maxTurns };
+          codexTurnAdmitted = true;
+        }));
+      }
     },
     register: async value => {
       if (adapter === 'claude-cli') assertClaudeOwnedProcessRegistration(value, processHost);
-      else assertCodexOwnedProcessRegistration(value, processHost);
+      else {
+        assertCodexOwnedProcessRegistration(value, processHost);
+        if (!codexTurnAdmitted) return held();
+      }
       if (!original || child || !value.identity.processBirthMarkerV2) return held();
       child = value;
       void value.exit.then(() => { exited = true; });
