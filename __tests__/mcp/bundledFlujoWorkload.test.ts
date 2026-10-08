@@ -16,7 +16,7 @@ import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/ba
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
 
 function reportRetirementSites(error: unknown, seen = new Set<unknown>()) {
   if (!(error instanceof Error) || seen.has(error)) return;
@@ -173,7 +173,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     }));
     if (mode === 'verification-threeway-drain') {
       const actualOpen = fs.promises.open.bind(fs.promises);
-      const sourceFile = approved.config.trustedHost!.entryPoint;
+      const sourceFile = trustedHostMcpPolicySchema.parse(approved.config.trustedHost).entryPoint;
       const dependencyFile = path.join(application, 'node_modules', 'fixture-dependency', 'index.js');
       let sourceEntered!: () => void, dependencyEntered!: () => void, executableFinished!: () => void;
       let releaseSource!: () => void, releaseDependency!: () => void;
