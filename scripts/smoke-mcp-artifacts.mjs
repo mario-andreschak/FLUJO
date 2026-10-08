@@ -166,7 +166,7 @@ async function connectProxy(baseUrl, serverName, ownerToken) {
   if (ownerToken) await approveSmokeServer(baseUrl, serverName, ownerToken, timeoutMs);
   await client.connect(new StreamableHTTPClientTransport(new URL(`/mcp-proxy/${serverName}`, baseUrl), {
     requestInit: { headers: ownerToken ? { authorization: `Bearer ${ownerToken}` } : {} },
-  }));
+  }), { timeout: 240_000 });
   return client;
 }
 
@@ -193,12 +193,12 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
 
   const filesystem = await connectProxy(baseUrl, 'filesystem', ownerToken);
   try {
-    const listed = await filesystem.listTools();
+    const listed = await filesystem.listTools(undefined, { timeout: 240_000 });
     const names = listed.tools.map((tool) => tool.name);
     if (!names.includes('read_file') || !names.includes('get_allowed_directories')) {
       throw new Error(`Installed filesystem proxy returned unexpected tools: ${names.join(', ')}`);
     }
-    const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} });
+    const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} }, undefined, { timeout: 240_000 });
     if (roots.isError === true) {
       const refusalCodes = ['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'MCP_RUNTIME_AUTHORITY_RETIRED'];
       const code = refusalCodes.find((candidate) => Array.isArray(roots.content) && roots.content.some((item) =>
@@ -225,7 +225,7 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
 
   const bash = await connectProxy(baseUrl, 'bash', ownerToken);
   try {
-    const names = (await bash.listTools()).tools.map((tool) => tool.name);
+    const names = (await bash.listTools(undefined, { timeout: 240_000 })).tools.map((tool) => tool.name);
     if (!names.includes('run') || !names.includes('list_sessions')) {
       throw new Error(`Installed bash proxy returned unexpected tools: ${names.join(', ')}`);
     }
@@ -274,7 +274,7 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
   await updateBuiltIn(baseUrl, 'bash', { disabled: false }, ownerToken);
   const restarted = await connectProxy(baseUrl, 'bash', ownerToken);
   try {
-    if (!(await restarted.listTools()).tools.some((tool) => tool.name === 'run')) {
+    if (!(await restarted.listTools(undefined, { timeout: 240_000 })).tools.some((tool) => tool.name === 'run')) {
       throw new Error('Re-enabled bash proxy did not establish a fresh connection.');
     }
   } finally {
