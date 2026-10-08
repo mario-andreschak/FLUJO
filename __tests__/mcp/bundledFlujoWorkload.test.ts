@@ -142,6 +142,8 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
   const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
   const fixtureIdentity = fs.lstatSync(fixture, { bigint: true });
   const canonicalParent = fs.realpathSync.native(parent);
+  const parentIdentity = fs.lstatSync(canonicalParent, { bigint: true });
+  if (!parentIdentity.isDirectory() || parentIdentity.isSymbolicLink()) throw new Error('Unsafe workload fixture parent.');
   const application = path.join(fixture, 'application');
   const write = (relative: string, content: string) => {
     const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
@@ -554,7 +556,10 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     }
     if (cleanupErrors.length === 0) try {
       const current = fs.lstatSync(fixture, { bigint: true });
+      const currentParent = fs.lstatSync(canonicalParent, { bigint: true });
       if (path.dirname(fixture) !== parent || fs.realpathSync.native(parent) !== canonicalParent
+          || !currentParent.isDirectory() || currentParent.isSymbolicLink()
+          || currentParent.dev !== parentIdentity.dev || currentParent.ino !== parentIdentity.ino || currentParent.birthtimeNs !== parentIdentity.birthtimeNs
           || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || !current.isDirectory() || current.isSymbolicLink()
           || current.dev !== fixtureIdentity.dev || current.ino !== fixtureIdentity.ino || current.birthtimeNs !== fixtureIdentity.birthtimeNs) throw new Error('Unsafe workload fixture cleanup.');
       fs.rmSync(fixture, { recursive: true, force: true });
