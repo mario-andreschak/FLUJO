@@ -54,6 +54,15 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const foreign=path.join(owned,'foreign-package');fs.mkdirSync(foreign);fs.writeFileSync(path.join(foreign,'package.json'),'{}');
   await assert.rejects(graph.inspectBundledMcpDependencyGraph(app,[foreign]));
   const hardlink=path.join(a,'hardlink.js');fs.linkSync(path.join(a,'index.js'),hardlink);await assert.rejects(graph.inspectBundledMcpDependencyGraph(app,[a]));fs.unlinkSync(hardlink);
+  const flatNamespace=path.join(owned,'installed/node_modules'),flatApp=path.join(flatNamespace,'flujo-ai'),flatWorkspace=path.join(owned,'flat-workspace');
+  fs.mkdirSync(flatApp,{recursive:true});fs.mkdirSync(flatWorkspace);fs.writeFileSync(path.join(flatApp,'package.json'),JSON.stringify({name:'flujo-ai'}));
+  fs.cpSync(path.join(app,'mcp-servers'),path.join(flatApp,'mcp-servers'),{recursive:true});
+  fs.cpSync(a,path.join(flatNamespace,'synthetic-a'),{recursive:true});fs.cpSync(b,path.join(flatNamespace,'synthetic-b'),{recursive:true});
+  await copied.ensureShippedWorkspacePackages(flatWorkspace,flatApp,['filesystem']);
+  const flattened=await copied.inspectShippedWorkspaceProvenance(flatWorkspace,'filesystem',flatApp);
+  assert.equal(flattened.installation,fs.realpathSync(flatApp));assert.equal(flattened.dependencyNamespaceRoot,fs.realpathSync(flatNamespace));assert.equal(flattened.dependencyGraph.packages.length,2);
+  fs.writeFileSync(path.join(flatApp,'package.json'),JSON.stringify({name:'foreign-app'}));await assert.rejects(copied.inspectShippedWorkspaceProvenance(flatWorkspace,'filesystem',flatApp));
+  console.log(JSON.stringify({sourceControl:'flattened-bundled-provenance',actualSiblingDependencyNamespace:true,applicationAssetsRemainSeparatelyBound:true,foreignApplicationNameRefused:true,scope:'Synthetic inspection mechanics; no packed installed functional acceptance'}));
   fs.appendFileSync(path.join(workspace,'mcp-servers/filesystem/dist/index.js'),'\n// workspace edit');
   await assert.rejects(copied.inspectShippedWorkspaceProvenance(workspace,'filesystem',app));
   console.log(JSON.stringify({sourceControl:'bundled-provenance-inspection',actualWorkspaceCopyAndDependencyJunction:true,actualDeclaredTransitiveCycleBounded:true,actualEarlierDependencyMutationWhileLaterReadRefused:changedDuringRead,actualParsedManifestChangeBeforeTreeReadRefused:manifestChanged,dependencyRevisionSensitive:true,retargetedJunctionRefused:true,foreignInstallationRootRefused:true,hardlinkRefused:true,editedWorkspaceAssetRefused:true,inspectedCodeNeverExecuted:true,scope:'Synthetic inspection mechanics only; no grant issuance, arbitrary import closure, installed functional acceptance or scanner clearance'}));

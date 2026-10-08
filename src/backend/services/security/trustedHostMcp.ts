@@ -51,6 +51,7 @@ export const trustedHostMcpPolicySchema = z.object({
   bundledInstallation: z.object({
     packageDirectory: z.enum(['flujo', 'filesystem', 'bash', 'browser']),
     installationRoot: absolutePath,
+    dependencyNamespaceRoot: absolutePath,
     assetDigest: digestSchema,
     dependencyGraphDigest: digestSchema,
     dependencyDirectories: z.array(absolutePath).max(256),
@@ -350,26 +351,20 @@ export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal
     const ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
     if (!approvalFile || !ownerFile) throw new Error();
     const identities = [approvalFile, ownerFile].map(filename => fs.lstatSync(filename, { bigint: true }));
-    // Independent readers retain their own before/after ACL and FD checks.
-    // Compare both named identities again after the last reader has returned.
-    const settled = await Promise.allSettled([readPrivateApprovalEvidenceAsync(approvalFile, signal), readPrivateApprovalEvidenceAsync(ownerFile, signal)]);
-    const results = settled.map(result => { if (result.status === 'rejected') throw result.reason; return result.value; });
+    // One fresh native snapshot covers BOTH chains before and after the held-FD
+    // reads. There is no gap where one private reader awaits another helper.
+    const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync([approvalFile, ownerFile], signal) : undefined;
+    const results = [readPrivateApprovalContents(approvalFile), readPrivateApprovalContents(ownerFile)];
     if (process.platform === 'win32') {
-      // File identity alone cannot detect an exclusive ancestor's changed DACL
-      // while the other private reader was yielding. Reinspect both chains.
-      const finalStamps = await Promise.allSettled([windowsPrivateAuthorityStampAsync(approvalFile, signal), windowsPrivateAuthorityStampAsync(ownerFile, signal)]);
-      for (const [index, result] of finalStamps.entries()) {
-        if (result.status === 'rejected') throw result.reason;
-        if (result.value !== results[index].windowsAuthority) throw new Error();
-      }
+      if (await windowsPrivateAuthorityStampAsync([approvalFile, ownerFile], signal) !== before) throw new Error();
     }
     for (const [index, filename] of [approvalFile, ownerFile].entries()) {
       assertLinkFree(filename);
       if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new Error();
     }
     if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
-    const approvals = approvalsSchema.parse(results[0].value);
-    const owner = ownerPolicySchema.parse(results[1].value);
+    const approvals = approvalsSchema.parse(results[0]);
+    const owner = ownerPolicySchema.parse(results[1]);
     const grant = approvals.approvals.find(item => item.workspace === workspace && item.serverName === captured.name);
     if (signal?.aborted || workspace !== getCurrentWorkspace() || owner.ownerId !== approvals.ownerId
         || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
@@ -466,6 +461,7 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
       const { inspectShippedWorkspaceProvenance } = await import('../mcp/shippedWorkspacePackages');
       const inspected = await inspectShippedWorkspaceProvenance(getWorkspaceDataDir(), bundle.packageDirectory, bundle.installationRoot);
       if (signal?.aborted || inspected.assetDigest !== bundle.assetDigest
+          || canonical(inspected.dependencyNamespaceRoot) !== canonical(bundle.dependencyNamespaceRoot)
           || inspected.dependencyGraph.digest !== bundle.dependencyGraphDigest
           || JSON.stringify(inspected.dependencyLinks) !== JSON.stringify(bundle.dependencyLinks)
           || JSON.stringify(inspected.dependencies.map(item => item.directory)) !== JSON.stringify(bundle.dependencyDirectories)) throw new Error();

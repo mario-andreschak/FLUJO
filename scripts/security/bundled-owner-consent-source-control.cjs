@@ -44,13 +44,18 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const beta=require(path.join(sourceRoot,'src/backend/services/mcp/betaClient.ts'));
   const tools=require(path.join(sourceRoot,'src/backend/services/mcp/tools.ts'));
   for(const era of['v1','beta']){
+   const started=performance.now();
    const preview=await consent.previewBundledHostConsent(config.name,{runtimeHome:'host'});
+   console.log(JSON.stringify({stage:'bundle-preview',sdk:era,elapsedMs:performance.now()-started,dependencyPackages:preview.revision.dependencyGraph.packages.length}));
    await assert.rejects(consent.approveBundledHostConsent(new Request('http://127.0.0.1'),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000}),e=>e.response?.status===401);
    await assert.rejects(consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:'0'.repeat(64),expiresAt:Date.now()+120000}));
    await consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000});
+   console.log(JSON.stringify({stage:'bundle-approved',sdk:era,elapsedMs:performance.now()-started}));
    const approved=(await stored.loadServerConfigs()).find(item=>item.name===config.name);assert.ok(approved.trustedHost?.bundledInstallation);
    transport=era==='v1'?ordinary.createStdioTransport(approved):beta.createBetaTransport(approved);
    const client=era==='v1'?ordinary.createNewClient(approved):beta.createNewBetaClient(approved);await client.connect(transport);
+   const grant=JSON.parse(fs.readFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE,'utf8')).approvals.find(item=>item.serverName===approved.name);
+   console.log(JSON.stringify({stage:'bundle-before-read',sdk:era,elapsedMs:performance.now()-started,grantRemainingMs:grant.expiresAt-Date.now()}));
    const read=await tools.callTool(client,approved.name,'read_file',{path:path.join(target,'input.txt')},30);assert.equal(read.success,true,JSON.stringify(read));
    const write=await tools.callTool(client,approved.name,'write_file',{path:path.join(target,`${era}-output.txt`),content:'actual authorized bundled write'},30);assert.equal(write.success,true,JSON.stringify(write));assert.equal(fs.readFileSync(path.join(target,`${era}-output.txt`),'utf8'),'actual authorized bundled write');
    const pid=transport.pid;await transport.close();transport=undefined;if(pid)assert.throws(()=>process.kill(pid,0),e=>e.code==='ESRCH');
