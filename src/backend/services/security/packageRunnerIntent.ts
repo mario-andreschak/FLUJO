@@ -8,6 +8,7 @@ import { trustedHostEnvironment } from './trustedHostMcp';
 import { prepareResolvedPackageTree, revalidateResolvedPackageTree } from './packageRunnerResolution';
 import { preparePackageRunnerLookup, revalidatePackageRunnerLookup, type PackageRunnerLookupRequest } from './packageRunnerLookup';
 import { inspectPackageRunnerNativeStage } from './packageRunnerNativeStage';
+import { inspectControlledPackageRunnerAssets } from './packageRunnerShims';
 
 export interface PackageRunnerPreparation {
   revision: string;
@@ -16,6 +17,9 @@ export interface PackageRunnerPreparation {
   node: string;
   shell: string;
   artifactFiles: Readonly<Record<string, string>>;
+  upstreamNpmRoot: string;
+  binShim: string;
+  binName: string;
 }
 export interface PreparedPackageRunnerIntent { readonly digest: string }
 type Evidence = Awaited<ReturnType<typeof collect>>;
@@ -49,7 +53,8 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
     createHash('sha256').update(config.name, 'utf8').digest('hex').slice(0, 24));
   if (path.resolve(preparation.lookup.cwd) !== path.join(runtime, 'cwd')
       || path.resolve(preparation.lookup.home) !== path.join(runtime, 'home')) throw new Error('Package runtime binding changed');
-  for (const filename of [preparation.lookup.npmRoot, preparation.lookup.cache, preparation.lookup.globalBin,
+  for (const filename of [preparation.lookup.npmRoot, preparation.upstreamNpmRoot, preparation.binShim,
+    preparation.lookup.cache, preparation.lookup.globalBin,
     preparation.launcher, preparation.node, preparation.shell, ...preparation.lookup.configFiles]) {
     const relative = path.relative(runtime, path.resolve(filename));
     if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -64,8 +69,13 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
   const launcher = await executable(preparation.launcher, signal);
   const node = await executable(preparation.node, signal);
   const shell = await executable(preparation.shell, signal);
+  const controlledAssetsInput = { node: preparation.node, npmRoot: preparation.lookup.npmRoot,
+    upstreamNpmRoot: preparation.upstreamNpmRoot, launcher: preparation.launcher, packageBin: tree.bin,
+    binShim: preparation.binShim, binName: preparation.binName, cwd: preparation.lookup.cwd,
+    packageName: tree.packageName, version: tree.version };
+  const controlledAssets = await inspectControlledPackageRunnerAssets(controlledAssetsInput, signal);
   if (await inspectPackageRunnerNativeStage(runtime, signal) !== nativeStage) throw new Error('Native runner stage authority changed');
-  return { tree, lookup, launcher, node, shell, nativeStage, runtime };
+  return { tree, lookup, launcher, node, shell, nativeStage, runtime, controlledAssets, controlledAssetsInput };
 }
 
 /** Opaque inspection intent, deliberately separate from consent/launch authority. */
@@ -97,6 +107,9 @@ export async function revalidatePackageRunnerIntent(intent: PreparedPackageRunne
     if (JSON.stringify(await executable(prior.path, signal)) !== JSON.stringify(prior)) throw new Error('Package runner executable changed');
   }
   if (state.request !== requestIdentity(config)) throw new Error('Package request changed during revalidation');
+  if (await inspectControlledPackageRunnerAssets(state.evidence.controlledAssetsInput, signal) !== state.evidence.controlledAssets) {
+    throw new Error('Actual controlled runner assets changed');
+  }
   if (await inspectPackageRunnerNativeStage(state.evidence.runtime, signal) !== state.evidence.nativeStage) {
     throw new Error('Native runner stage authority changed after preparation');
   }
