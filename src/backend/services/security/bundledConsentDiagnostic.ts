@@ -17,6 +17,15 @@ export async function consentDiagnosticStage<T>(stage: Stage, operation: () => T
   }
 }
 
+/** Preserve adjacent synchronous evidence captures without introducing a yield. */
+export function consentDiagnosticStageSync<T>(stage: Stage, operation: () => T): T {
+  try { return operation(); }
+  catch (cause) {
+    if (cause instanceof BundledConsentDiagnostic) throw cause;
+    throw new BundledConsentDiagnostic(stage, cause);
+  }
+}
+
 export function consentDiagnosticCode(error: unknown): Stage {
   return error instanceof BundledConsentDiagnostic && stages.includes(error.stage) ? error.stage : 'CONFIG';
 }

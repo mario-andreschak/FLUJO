@@ -8,7 +8,7 @@ import { shippedDescriptorForConfig, shippedMcpAppRoot } from '../mcp/shippedSer
 import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackages';
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
-import { consentDiagnosticStage } from './bundledConsentDiagnostic';
+import { consentDiagnosticStage, consentDiagnosticStageSync } from './bundledConsentDiagnostic';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
 import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
@@ -130,8 +130,8 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   const config: MCPStdioConfig = { ...stored, command: process.execPath, args: [entryPoint, ...originalArgs.slice(1)],
     cwd: revision.sourceRoot, rootPath: revision.sourceRoot, env: environment, runtimeHomeMode: options.runtimeHome,
     trustedHost: { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'node', runtimeHome: options.runtimeHome,
-      entryPoint, sourceRoot: revision.sourceRoot, sourceDigest: await consentDiagnosticStage('SOURCE_FINGERPRINT', () => fingerprintTrustedHostSource(revision.sourceRoot, revision.dependencyLinks)),
-      executableDigest: await consentDiagnosticStage('EXEC_FINGERPRINT', () => fingerprintTrustedHostExecutable(process.execPath)), environmentNames: [...new Set(environmentNames)],
+      entryPoint, sourceRoot: revision.sourceRoot, sourceDigest: consentDiagnosticStageSync('SOURCE_FINGERPRINT', () => fingerprintTrustedHostSource(revision.sourceRoot, revision.dependencyLinks)),
+      executableDigest: consentDiagnosticStageSync('EXEC_FINGERPRINT', () => fingerprintTrustedHostExecutable(process.execPath)), environmentNames: [...new Set(environmentNames)],
       bundledInstallation: { packageDirectory: descriptor.packageDirectory as 'flujo' | 'filesystem' | 'bash' | 'browser',
         installationRoot: revision.installation, dependencyNamespaceRoot: revision.dependencyNamespaceRoot,
         assetDigest: revision.assetDigest, dependencyGraphDigest: revision.dependencyGraph.digest,
