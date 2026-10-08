@@ -7,6 +7,8 @@ import { spawn, spawnSync } from 'node:child_process';
 // travels as JSON on stdin and is only passed to native filesystem ACL APIs.
 const inspect = String.raw`
 $ErrorActionPreference = 'Stop'
+$phase = 'input'
+try {
 $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $allowed = @($identity.User.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
@@ -18,9 +20,12 @@ $target = [IO.FileInfo]::new([string]$filename)
 $current = $target
 $file = $true
 while ($null -ne $current) {
+  $phase = 'native-acl'
   $acl = $current.GetAccessControl()
   $raw = [Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+  $phase = 'owner-dacl'
   if ($null -eq $raw.DiscretionaryAcl -or $allowed -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { throw 'Unprotected authority' }
+  $phase = 'outsider-access'
   foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
     if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
     if ($allowed -contains $rule.IdentityReference.Value) { continue }
@@ -32,6 +37,7 @@ while ($null -ne $current) {
     if ($file -or ($mask -band ($dangerous -bor 0x10000000L))) { throw 'Foreign authority access' }
   }
   $record = $current.FullName + ':' + [Convert]::ToBase64String($acl.GetSecurityDescriptorBinaryForm())
+  $phase = 'evidence-bounds'
   if ($records.Count -ge 128 -or $record.Length -gt 8192) { throw 'Bounded authority evidence refused' }
   $records.Add($record)
   if ($file) { $current = $current.Directory } else { $current = $current.Parent }
@@ -39,7 +45,19 @@ while ($null -ne $current) {
 }
 }
 [pscustomobject]@{schemaVersion=1; records=$records.ToArray()} | ConvertTo-Json -Compress
+} catch {
+  [Console]::Error.WriteLine('FLUJO_AUTHORITY_REFUSED:' + $phase)
+  exit 1
+}
 `;
+
+function traceNativeRefusal(reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'bounds' | 'exit' | 'evidence', stderr = '') {
+  try {
+    if (process.env.FLUJO_MCP_WORKLOAD_TRACE !== '1') return;
+    const phase = /^FLUJO_AUTHORITY_REFUSED:(input|native-acl|owner-dacl|outsider-access|evidence-bounds)\s*$/.exec(stderr)?.[1];
+    console.info('[private-authority-native]', 'refused', phase ?? reason);
+  } catch { /* Diagnostics cannot change authority disposition. */ }
+}
 
 /** DACL evidence supplements stable file identity; 0600 is not a Windows ACL. */
 export function windowsPrivateAuthorityStamp(filename: string | readonly string[]): string {
@@ -87,26 +105,29 @@ export async function windowsPrivateAuthorityStampAsync(filename: string | reado
     let failure: Error | undefined;
     let bytes = 0;
     const output: Buffer[] = [];
-    const stop = () => { failure ??= new Error('Windows authority inspection cancelled or exceeded bounds'); child.kill(); };
-    const timer = setTimeout(stop, 5000);
-    signal?.addEventListener('abort', stop, { once: true });
-    child.on('error', error => { failure = error; stop(); });
-    child.stdin.on('error', error => { failure = error; stop(); });
+    const errors: Buffer[] = [];
+    const stop = (reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'bounds') => { traceNativeRefusal(reason); failure ??= new Error('Windows authority inspection cancelled or exceeded bounds'); child.kill(); };
+    const abort = () => stop('abort');
+    const timer = setTimeout(() => stop('deadline'), 5000);
+    signal?.addEventListener('abort', abort, { once: true });
+    child.on('error', error => { failure = error; stop('spawn'); });
+    child.stdin.on('error', error => { failure = error; stop('stdin'); });
     for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > 64 * 1024) { stop(); return; }
+      if (bytes > 64 * 1024) { stop('bounds'); return; }
       if (stream === child.stdout) output.push(chunk);
+      else errors.push(chunk);
     });
     child.on('close', (code, exitSignal) => {
-      clearTimeout(timer); signal?.removeEventListener('abort', stop);
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
       try {
         if (failure || code !== 0 || exitSignal || signal?.aborted) throw failure ?? new Error('Windows authority inspection refused');
         resolve(authorityEvidence(Buffer.concat(output).toString('utf8')));
-      } catch (error) { reject(error); }
-      finally { for (const chunk of output) chunk.fill(0); }
+      } catch (error) { traceNativeRefusal(code === 0 ? 'evidence' : 'exit', Buffer.concat(errors).toString('utf8')); reject(error); }
+      finally { for (const chunk of [...output, ...errors]) chunk.fill(0); }
     });
     const request = typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filename.map(item => path.resolve(item)) };
     child.stdin.end(JSON.stringify(request));
-    if (signal?.aborted) stop();
+    if (signal?.aborted) abort();
   });
 }
