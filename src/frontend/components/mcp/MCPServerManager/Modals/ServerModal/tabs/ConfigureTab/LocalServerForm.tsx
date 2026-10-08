@@ -28,13 +28,15 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
   onRootPathSelect
 }) => {
   const { t } = useI18n();
+  const formId = React.useId();
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="subtitle2" gutterBottom>
+        <Typography component="label" htmlFor={`${formId}-name`} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
           {t('mcp.local.form.name')}
         </Typography>
         <TextField
+          id={`${formId}-name`}
           fullWidth
           size="small"
           value={name}
@@ -46,10 +48,11 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
       </Box>
 
       <Box>
-        <Typography variant="subtitle2" gutterBottom>
+        <Typography component="label" htmlFor={`${formId}-root`} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
           {t('mcp.local.form.rootPath')}
         </Typography>
         <TextField
+          id={`${formId}-root`}
           fullWidth
           size="small"
           value={rootPath}

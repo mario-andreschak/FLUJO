@@ -5,6 +5,10 @@ import { createLogger } from '@/utils/logger';
 import { executionEventBus, GlobalEvent } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 
+import {
+  createExecutionStream, executionStreamAdmission, executionStreamCapacityResponse, EXECUTION_SSE_HEADERS,
+} from '@/backend/execution/flow/engine/executionStream';
+
 const log = createLogger('app/v1/chat/events/route');
 
 // The chat sidebar only needs events that can add a conversation or change its
@@ -33,12 +37,13 @@ export const dynamic = 'force-dynamic';
  * (/v1/chat/conversations/{id}/events), which chat still uses unchanged. Each
  * frame's `data` is the same event shape as that stream (already carrying
  * `conversationId`, `flowId`, `depth`, lane fields, …); the SSE `id` is a
- * process-global sequence so ?fromSeq= / Last-Event-ID can resume after a drop
+ * workspace sequence so ?fromSeq= / Last-Event-ID can resume after a drop
  * without tracking per-conversation seqs.
  *
  * Unlike the per-conversation stream this NEVER closes on a `run:done` — it
  * spans every conversation, so a single run finishing must not tear it down.
- * It ends only when the client disconnects.
+ * It closes on disconnection or a projection recovery control. Numeric IDs
+ * remain the default; cursorVersion=1 binds IDs to the projection epoch.
  */
 async function GET_handler(request: NextRequest) {
   // Global events do not carry a durable ownership discriminator, so they
@@ -49,105 +54,50 @@ async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
+  const release = executionStreamAdmission.reserve();
+  if (!release) return executionStreamCapacityResponse();
+  if (!executionEventBus.ensureGlobalProjection()) { release(); return executionStreamCapacityResponse(); }
   const sidebarOnly = request.nextUrl.searchParams.get('scope') === 'sidebar';
-
-  // Replay position: explicit ?fromSeq= wins; otherwise honor the browser's
-  // Last-Event-ID on auto-reconnect (resume just after the last seen event).
-  const fromSeqParam = request.nextUrl.searchParams.get('fromSeq');
+  const versioned = request.nextUrl.searchParams.get('cursorVersion') === '1';
   const lastEventId = request.headers.get('last-event-id');
-  let fromSeq: number | null = null;
-  if (fromSeqParam !== null) {
-    fromSeq = parseInt(fromSeqParam, 10);
-  } else if (lastEventId !== null) {
-    const parsed = parseInt(lastEventId, 10);
-    if (!Number.isNaN(parsed)) fromSeq = parsed + 1;
-  }
-
-  log.info('Opening global SSE firehose', { fromSeq });
-
-  const encoder = new TextEncoder();
-  let unsubscribe: (() => void) | null = null;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  let maxSentSeq = -1;
-  let closed = false;
-
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        if (heartbeat) {
-          clearInterval(heartbeat);
-          heartbeat = null;
-        }
-        if (unsubscribe) {
-          unsubscribe();
-          unsubscribe = null;
-        }
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
-
+  const cursor = lastEventId ?? request.nextUrl.searchParams.get('fromSeq');
+  const window = executionEventBus.globalReplayWindow();
+  // Numeric IDs remain the default. Owned clients opt in to epoch-bound IDs.
+  const match = cursor === null ? null : versioned
+    ? /^([a-zA-Z0-9-]{1,64}):(\d+)$/.exec(cursor)
+    : /^(\d+)$/.exec(cursor);
+  const cursorEpoch = versioned ? match?.[1] : undefined;
+  const numeric = match ? Number(match[versioned ? 2 : 1]) : NaN;
+  const fromSeq = cursor === null ? null : numeric + (lastEventId === null ? 0 : 1);
+  const stream = createExecutionStream(request.signal, release,
+    () => {
+      const current = executionEventBus.globalReplayWindow();
+      return { nextSeq: current.nextSeq, ...(versioned ? { epoch: current.epoch } : {}) };
+    },
+    session => {
+      if (fromSeq !== null && (!Number.isSafeInteger(fromSeq) || fromSeq < 0
+        || (versioned && cursorEpoch !== window.epoch) || fromSeq > window.nextSeq)) {
+        session.reset('cursor-reset');
+        return;
+      }
+      if (fromSeq !== null && fromSeq < window.firstSeq) { session.reset('replay-gap'); return; }
+      let maxSentSeq = -1;
       const send = ({ globalSeq, event }: GlobalEvent) => {
         if (sidebarOnly && !SIDEBAR_EVENT_TYPES.has(event.type)) return;
-        // Guard ordering/duplication: only forward strictly-newer entries.
-        if (globalSeq <= maxSentSeq) return;
-        maxSentSeq = globalSeq;
-        try {
-          // `id:` (the global seq) lets the browser resume via Last-Event-ID.
-          controller.enqueue(encoder.encode(`id: ${globalSeq}\ndata: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          cleanup();
-        }
-        // Deliberately NO run:done teardown — the firehose spans all
-        // conversations and outlives any single run.
+        if (globalSeq <= maxSentSeq || session.closed) return;
+        if (session.send(event, versioned ? window.epoch + ':' + globalSeq : globalSeq)) maxSentSeq = globalSeq;
+        // The firehose spans conversations and remains open across run:done.
       };
-
-      // Initial frame: reconnection hint + comment so proxies flush headers.
-      controller.enqueue(encoder.encode(`retry: 3000\n\n: connected firehose\n\n`));
-
-      // Replay buffered entries first (ascending globalSeq), then go live.
-      if (fromSeq !== null && !Number.isNaN(fromSeq)) {
+      if (fromSeq !== null) {
         for (const entry of executionEventBus.getGlobalBufferedSince(fromSeq)) {
           send(entry);
-          if (closed) break;
+          if (session.closed) return;
         }
       }
-      if (closed) return;
-
-      unsubscribe = executionEventBus.subscribeGlobal(send);
-
-      heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(`: ping\n\n`));
-        } catch {
-          cleanup();
-        }
-      }, 15000);
-
-      // Client disconnected.
-      request.signal.addEventListener('abort', () => {
-        log.debug('Global SSE firehose client disconnected');
-        cleanup();
-      });
-    },
-    cancel() {
-      if (heartbeat) clearInterval(heartbeat);
-      if (unsubscribe) unsubscribe();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+      if (!session.closed) session.onCleanup(executionEventBus.subscribeGlobal(send));
+    });
+  log.info('Opening global SSE firehose', { sidebarOnly, versioned });
+  return new Response(stream, { headers: EXECUTION_SSE_HEADERS });
 }
 
 export const GET = withWorkspaceRoute(GET_handler);

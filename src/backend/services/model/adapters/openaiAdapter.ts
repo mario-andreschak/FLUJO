@@ -9,6 +9,7 @@ import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
 import type { Model } from '@/shared/types/model';
+import { ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -41,6 +42,18 @@ const rejectedPromptCacheKey = new Set<string>();
 const rejectedPromptCacheControls = new Set<string>();
 
 const endpointKey = (provider?: string, baseUrl?: string) => `${provider ?? 'openai'}|${baseUrl ?? ''}`;
+
+function modelAbortSignal(context: ExecutionExtensionContext | undefined, signal?: AbortSignal): AbortSignal | undefined {
+  if (!context) return signal;
+  const ownerSignal = executionExtensionSignal(context);
+  return ownerSignal && signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal ?? signal;
+}
+
+async function assertModelRequestPolicy(context: ExecutionExtensionContext | undefined, model: Model, singlePhysicalAttempt: boolean): Promise<void> {
+  if (context && await executionExtensionSinglePhysicalAttempt(context, model) !== singlePhysicalAttempt) {
+    throw new ExecutionExtensionError('execution_model_attempt_policy_changed');
+  }
+}
 
 function applyRequestedOutputModalities(
   body: Record<string, unknown>,
@@ -138,14 +151,17 @@ export class OpenAiAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
-    signal,
+    signal: inputSignal,
     onProviderAttempt,
     onSdkRequest,
     onSdkRequestResult,
     promptCacheKey,
     promptCacheMode,
     toolNameMap,
+    executionExtensionContext,
   }: CompletionInput): Promise<CompletionResult> {
+    const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
+    const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     const openai = this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const providerMessages = translateMessagesForProvider(messages, toolNames);
@@ -225,12 +241,15 @@ export class OpenAiAdapter implements CompletionAdapter {
             operation: 'chat.completions.create',
             request: body,
           },
-          () => openai.chat.completions.create(
+          async () => {
+            await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
+            return openai.chat.completions.create(
               body as OpenAI.Chat.ChatCompletionCreateParams,
-              signal ? { signal } : undefined
-            ),
+              singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
+            );
+          },
         ),
-        { signal, onAttempt: onProviderAttempt }
+        { signal, onAttempt: onProviderAttempt, ...(singlePhysicalAttempt ? { maxAttempts: 1 } : {}) }
       ) as Promise<OpenAI.Chat.Completions.ChatCompletion>;
     };
 
@@ -246,6 +265,7 @@ export class OpenAiAdapter implements CompletionAdapter {
           media: extractAssistantMedia(canonicalCompletion.choices?.[0]?.message),
         };
       } catch (error) {
+        if (singlePhysicalAttempt) throw error;
         // Negotiate the two cache capabilities independently. An endpoint may
         // support the routing key but not GPT-5.6 breakpoint controls (or vice
         // versa), so each rejected feature is removed once and the request is
@@ -281,14 +301,17 @@ export class OpenAiAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
-    signal,
+    signal: inputSignal,
     promptCacheKey,
     promptCacheMode,
     onModelDelta,
     onSdkRequest,
     onSdkRequestResult,
     toolNameMap,
+    executionExtensionContext,
   }: CompletionInput): Promise<CompletionResult> {
+    const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
+    const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     const openai = this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const providerMessages = translateMessagesForProvider(messages, toolNames);
@@ -345,10 +368,13 @@ export class OpenAiAdapter implements CompletionAdapter {
           operation: 'chat.completions.create(stream)',
           request: body,
         },
-        () => openai.chat.completions.create(
-          body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-          signal ? { signal } : undefined,
-        ),
+        async () => {
+          await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
+          return openai.chat.completions.create(
+            body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+            singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
+          );
+        },
       );
 
       let completionId = `chatcmpl_${uuidv4()}`;
@@ -476,6 +502,7 @@ export class OpenAiAdapter implements CompletionAdapter {
       try {
         return await consume(useCacheKey, useCacheControls);
       } catch (error) {
+        if (singlePhysicalAttempt) throw error;
         if (useCacheControls && isPromptCacheControlsRejection(error)) {
           rejectedPromptCacheControls.add(cacheControlsKey);
           useCacheControls = false;

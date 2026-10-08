@@ -4,17 +4,27 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 201.
+Route files: 217.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
 | `/api/approvals` | GET | [source](../../src/app/api/approvals/route.ts) |
 | `/api/approvals/{id}` | POST | [source](../../src/app/api/approvals/[id]/route.ts) |
 | `/api/automation-map` | GET | [source](../../src/app/api/automation-map/route.ts) |
+| `/api/avatar/connections` | GET | [source](../../src/app/api/avatar/connections/route.ts) |
+| `/api/avatar/remote/availability` | GET | [source](../../src/app/api/avatar/remote/availability/route.ts) |
+| `/api/avatar/remote/{voiceAction}` | POST | [source](../../src/app/api/avatar/remote/[voiceAction]/route.ts) |
+| `/api/avatar/voice` | GET | [source](../../src/app/api/avatar/voice/route.ts) |
+| `/api/avatar/work-model` | POST | [source](../../src/app/api/avatar/work-model/route.ts) |
+| `/api/avatar/world` | GET | [source](../../src/app/api/avatar/world/route.ts) |
+| `/api/avatar/{voiceAction}` | POST | [source](../../src/app/api/avatar/[voiceAction]/route.ts) |
 | `/api/backup` | POST | [source](../../src/app/api/backup/route.ts) |
 | `/api/browse` | GET | [source](../../src/app/api/browse/route.ts) |
 | `/api/bugs/enhance` | POST | [source](../../src/app/api/bugs/enhance/route.ts) |
 | `/api/cloud/instance` | GET | [source](../../src/app/api/cloud/instance/route.ts) |
+| `/api/credential-migration` | GET, POST | [source](../../src/app/api/credential-migration/route.ts) |
+| `/api/credential-transfer` | POST | [source](../../src/app/api/credential-transfer/route.ts) |
+| `/api/credential-transfer/restore` | POST | [source](../../src/app/api/credential-transfer/restore/route.ts) |
 | `/api/cwd` | GET | [source](../../src/app/api/cwd/route.ts) |
 | `/api/encryption/secure` | POST | [source](../../src/app/api/encryption/secure/route.ts) |
 | `/api/env` | GET, POST | [source](../../src/app/api/env/route.ts) |
@@ -56,6 +66,7 @@ Route files: 201.
 | `/api/mcp/oauth-capability` | POST | [source](../../src/app/api/mcp/oauth-capability/route.ts) |
 | `/api/mcp/servers` | GET, POST | [source](../../src/app/api/mcp/servers/route.ts) |
 | `/api/mcp/servers/{name}` | DELETE, GET, PUT | [source](../../src/app/api/mcp/servers/[name]/route.ts) |
+| `/api/mcp/servers/{name}/host-consent` | DELETE, GET, POST | [source](../../src/app/api/mcp/servers/[name]/host-consent/route.ts) |
 | `/api/mcp/servers/{name}/prompts` | GET | [source](../../src/app/api/mcp/servers/[name]/prompts/route.ts) |
 | `/api/mcp/servers/{name}/prompts/get` | POST | [source](../../src/app/api/mcp/servers/[name]/prompts/get/route.ts) |
 | `/api/mcp/servers/{name}/resources` | GET | [source](../../src/app/api/mcp/servers/[name]/resources/route.ts) |
@@ -80,6 +91,9 @@ Route files: 201.
 | `/api/oauth/callback` | GET, POST | [source](../../src/app/api/oauth/callback/route.ts) |
 | `/api/oauth/initiate` | POST | [source](../../src/app/api/oauth/initiate/route.ts) |
 | `/api/oauth/reset` | POST | [source](../../src/app/api/oauth/reset/route.ts) |
+| `/api/operations/status` | GET | [source](../../src/app/api/operations/status/route.ts) |
+| `/api/owner/bootstrap` | GET, POST | [source](../../src/app/api/owner/bootstrap/route.ts) |
+| `/api/owner/session` | DELETE, GET, POST | [source](../../src/app/api/owner/session/route.ts) |
 | `/api/packages/build` | POST | [source](../../src/app/api/packages/build/route.ts) |
 | `/api/packages/derive-secrets` | POST | [source](../../src/app/api/packages/derive-secrets/route.ts) |
 | `/api/packages/install` | POST | [source](../../src/app/api/packages/install/route.ts) |
@@ -96,6 +110,7 @@ Route files: 201.
 | `/api/planned-executions/{id}` | DELETE, GET, PATCH | [source](../../src/app/api/planned-executions/[id]/route.ts) |
 | `/api/planned-executions/{id}/run` | POST | [source](../../src/app/api/planned-executions/[id]/run/route.ts) |
 | `/api/planned-executions/{id}/runs` | GET | [source](../../src/app/api/planned-executions/[id]/runs/route.ts) |
+| `/api/planned-executions/{id}/worker-recovery` | POST | [source](../../src/app/api/planned-executions/[id]/worker-recovery/route.ts) |
 | `/api/reference-search/files` | GET | [source](../../src/app/api/reference-search/files/route.ts) |
 | `/api/registry/auth` | DELETE, GET, POST | [source](../../src/app/api/registry/auth/route.ts) |
 | `/api/registry/auth/resend` | POST | [source](../../src/app/api/registry/auth/resend/route.ts) |
@@ -179,6 +194,7 @@ Route files: 201.
 | `/v1/personas/{personaId}/composition` | GET, PATCH | [source](../../src/app/v1/personas/[personaId]/composition/route.ts) |
 | `/v1/personas/{personaId}/composition/behaviors` | POST | [source](../../src/app/v1/personas/[personaId]/composition/behaviors/route.ts) |
 | `/v1/personas/{personaId}/composition/copy` | POST | [source](../../src/app/v1/personas/[personaId]/composition/copy/route.ts) |
+| `/v1/personas/{personaId}/core/reconcile` | POST | [source](../../src/app/v1/personas/[personaId]/core/reconcile/route.ts) |
 | `/v1/personas/{personaId}/deletion-preview` | GET | [source](../../src/app/v1/personas/[personaId]/deletion-preview/route.ts) |
 | `/v1/personas/{personaId}/execution-preview` | GET | [source](../../src/app/v1/personas/[personaId]/execution-preview/route.ts) |
 | `/v1/personas/{personaId}/export` | POST | [source](../../src/app/v1/personas/[personaId]/export/route.ts) |

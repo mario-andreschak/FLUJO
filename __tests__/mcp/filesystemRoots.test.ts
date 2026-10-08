@@ -58,6 +58,37 @@ describe('filesystem persisted roots confinement', () => {
     expect(text(r)).toMatch(/outside/i);
   });
 
+  it.each([
+    ['read_file', { pattern: '*' }],
+    ['write_file', { content: 'x' }],
+    ['write_file', { content: 'x', mode: 'append' }],
+    ['write_file', { content: 'x', mode: 'insert', startLine: 1 }],
+    ['write_file', { content: 'x', startLine: 1, endLine: 2 }],
+    ['edit_file', { edits: [{ oldText: 'a', newText: 'b' }] }],
+    ['edit_file', { diff: '@@ -1 +1 @@\n-a\n+b\n' }],
+  ] as const)('rejects an outside path before disk access: %s %j', async (tool, args) => {
+    mockedRoots.mockResolvedValue([dir]);
+    const outside = path.join(dir, '..', `${path.basename(dir)}-rejected.txt`);
+    const open = jest.spyOn(fsp, 'open');
+    const read = jest.spyOn(fsp, 'readFile');
+    const write = jest.spyOn(fsp, 'writeFile');
+    const mkdir = jest.spyOn(fsp, 'mkdir');
+    try {
+      const result = await filesystemCallTool(tool, { path: outside, ...args });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/outside the configured filesystem roots/i);
+      expect(open).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      expect(mkdir).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      read.mockRestore();
+      write.mockRestore();
+      mkdir.mockRestore();
+    }
+  });
+
   it('keeps the FLUJO_FS_ROOTS env as a hard ceiling over persisted roots', async () => {
     // Env ceiling is `dir`; a persisted root OUTSIDE it must not widen access.
     process.env.FLUJO_FS_ROOTS = dir;

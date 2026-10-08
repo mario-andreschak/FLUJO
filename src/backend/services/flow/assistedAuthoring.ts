@@ -27,6 +27,7 @@ import {
 } from '@/utils/shared/flowAssistance';
 import { gatherGenerationContext } from './generationContext';
 import { flowService } from './index';
+import { FlowAuthoringValidationError } from './authoringErrors';
 
 const log = createLogger('backend/services/flow/assistedAuthoring');
 
@@ -79,10 +80,10 @@ async function authoringCompletion(
   messages: OpenAI.ChatCompletionMessageParam[],
 ): Promise<string> {
   const model = await modelService.getModel(modelId);
-  if (!model) throw new Error(`AI model not found: ${modelId}`);
+  if (!model) throw new FlowAuthoringValidationError(`AI model not found: ${modelId}`);
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
-  if (apiKey === null) throw new Error('Could not resolve the selected AI model credentials.');
+  if (apiKey === null) throw new FlowAuthoringValidationError('Could not resolve the selected AI model credentials.');
   const adapter = getCompletionAdapter(model);
   const { completion } = await adapter.createCompletion({
     model,
@@ -200,7 +201,7 @@ export async function suggestToolsForFlowStep(input: {
   previousSuggestion?: StepToolSuggestionResult;
 }): Promise<StepToolSuggestionResult> {
   const node = input.flow.nodes.find((candidate) => candidate.id === input.nodeId && candidate.data.type === 'process');
-  if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
+  if (!node) throw new FlowAuthoringValidationError(`Process node not found: ${input.nodeId}`);
   const context = await gatherGenerationContext();
   const connected = context.blocks.servers.filter((server) => server.connected && (server.tools?.length ?? 0) > 0);
   const originalPrompt = String(node.data.properties?.promptTemplate ?? '').trim();
@@ -277,6 +278,9 @@ export async function applyToolsToFlowStep(input: {
   proposedPrompt?: string;
 }): Promise<Flow> {
   const context = await gatherGenerationContext();
+  if (!input.flow.nodes.some((node) => node.id === input.nodeId && node.data.type === 'process')) {
+    throw new FlowAuthoringValidationError(`Process node not found: ${input.nodeId}`);
+  }
   return applyStepToolSelections(input.flow, {
     nodeId: input.nodeId,
     selections: input.selections,
@@ -313,7 +317,7 @@ export async function suggestAgentsForFlowStep(input: {
   goal?: string;
 }): Promise<StepAgentSuggestionResult> {
   const node = input.flow.nodes.find((candidate) => candidate.id === input.nodeId && candidate.data.type === 'process');
-  if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
+  if (!node) throw new FlowAuthoringValidationError(`Process node not found: ${input.nodeId}`);
   const connectedAgentIds = new Set(
     input.flow.edges
       .filter((edge) => (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional === true
@@ -387,6 +391,9 @@ export async function applyAgentsToFlowStep(input: {
   selections: StepAgentSuggestion[];
 }): Promise<Flow> {
   const availableAgents = await flowService.loadFlows();
+  if (!input.flow.nodes.some((node) => node.id === input.nodeId && node.data.type === 'process')) {
+    throw new FlowAuthoringValidationError(`Process node not found: ${input.nodeId}`);
+  }
   return applyStepAgentSelections(input.flow, {
     nodeId: input.nodeId,
     selections: input.selections,
@@ -525,7 +532,7 @@ export async function improvePromptForFlowStep(input: {
   draftPrompt?: string;
 }): Promise<StepPromptImprovementResult> {
   const node = input.flow.nodes.find((candidate) => candidate.id === input.nodeId && candidate.data.type === 'process');
-  if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
+  if (!node) throw new FlowAuthoringValidationError(`Process node not found: ${input.nodeId}`);
   const originalPrompt = String(node.data.properties?.promptTemplate ?? '').trim();
   const handoffs = stepHandoffs(input.flow, input.nodeId);
   const workflowTree = await referencedAgentTree(input.flow, input.relatedFlows);

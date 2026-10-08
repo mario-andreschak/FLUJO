@@ -9,8 +9,74 @@ interface WorkspaceGateState {
   drainWaiters: Set<() => void>;
 }
 
+interface MutationAdmission {
+  participants: number;
+  waiters: Set<() => void>;
+  recovery?: { signal?: AbortSignal; assertOwned(): Promise<void> };
+}
+interface MutationParticipant { live: boolean; admission: MutationAdmission }
 interface WorkspaceMutationContext {
-  workspaces: Set<string>;
+  participants: Map<string, MutationParticipant>;
+  readCaptures?: Set<string>;
+}
+
+export interface WorkspaceRecoveryOperation {
+  readonly workspace: string;
+  readonly generation: number;
+  assertOwned(): Promise<void>;
+}
+
+function contextError(recovery: boolean, reason: string): Error {
+  const error = new Error(`Workspace ${recovery ? 'recovery' : 'mutation'} ${reason}.`);
+  error.name = recovery ? 'WorkspaceRecoveryOwnershipError' : 'WorkspaceMutationContextError';
+  return error;
+}
+
+async function participate<T>(
+  workspace: string, admission: MutationAdmission,
+  task: (participant: MutationParticipant) => Promise<T>,
+): Promise<T> {
+  const participant = { live: true, admission };
+  admission.participants += 1;
+  const participants = new Map(mutationContext.getStore()?.participants ?? []);
+  participants.set(workspace, participant);
+  try {
+    return await runWithWorkspace(workspace, () => mutationContext.run({ participants, readCaptures: mutationContext.getStore()?.readCaptures }, () => task(participant)));
+  } finally {
+    participant.live = false;
+    admission.participants -= 1;
+    if (admission.participants === 0) {
+      for (const resolve of admission.waiters) resolve();
+      admission.waiters.clear();
+    }
+  }
+}
+
+async function drain(admission: MutationAdmission): Promise<void> {
+  if (admission.participants > 0) await new Promise<void>(resolve => admission.waiters.add(resolve));
+}
+
+async function checkParticipant(workspace: string, participant: MutationParticipant): Promise<void> {
+  const recovery = participant.admission.recovery;
+  const check = () => {
+    if (!participant.live) throw contextError(!!recovery, 'context has finished');
+    if (getCurrentWorkspace() !== workspace) throw contextError(!!recovery, 'workspace changed');
+    if (recovery?.signal?.aborted) throw contextError(true, 'was cancelled');
+  };
+  check();
+  if (recovery) {
+    try { await recovery.assertOwned(); }
+    catch { throw contextError(true, 'ownership was lost'); }
+    check();
+  }
+}
+
+/** Revalidate an admitted write after awaits and immediately before publication. */
+export async function assertWorkspaceMutationOwned(): Promise<void> {
+  const workspace = normalizeWorkspaceName(getCurrentWorkspace());
+  const participant = mutationContext.getStore()?.participants?.get(workspace);
+  if (!participant) throw contextError(false, 'has no admitted participant');
+  await checkParticipant(workspace, participant);
 }
 
 export interface WorkspaceSnapshotBoundary {
@@ -71,8 +137,30 @@ export async function withWorkspaceMutation<T>(
 ): Promise<T> {
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
-  if (current?.workspaces.has(normalizedWorkspace)) {
-    return task();
+  // A hot-reloaded process can retain the predecessor's workspaces-only store.
+  // Its inherited Set is never authority to join a current admission.
+  if (current && !current.participants) throw contextError(false, 'context predates the current admission protocol');
+  if (current?.readCaptures?.has(normalizedWorkspace)) throw contextError(false, 'cannot write from a read capture');
+  const inherited = current?.participants?.get(normalizedWorkspace);
+  // Ordinary background callbacks may inherit a retired token. They must obtain
+  // new admission, rather than borrow the old owner's or a surviving sibling's.
+  // Recovery callbacks retain an exclusive capability and must never fall back.
+  if (inherited && !inherited.live && inherited.admission.recovery) {
+    throw contextError(true, 'context has finished');
+  }
+  if (inherited?.live) {
+    await runWithWorkspace(normalizedWorkspace, () => checkParticipant(normalizedWorkspace, inherited));
+    // Ownership verification can yield. A retired ordinary callback starts a
+    // fresh registration below; a retired recovery callback remains refused.
+    if (!inherited.live && inherited.admission.recovery) throw contextError(true, 'context has finished');
+    if (inherited.live) {
+      return runWithWorkspace(normalizedWorkspace, () => participate(normalizedWorkspace, inherited.admission, async participant => {
+        await checkParticipant(normalizedWorkspace, participant);
+        const result = await task();
+        await checkParticipant(normalizedWorkspace, participant);
+        return result;
+      }));
+    }
   }
 
   const state = stateFor(normalizedWorkspace);
@@ -86,22 +174,63 @@ export async function withWorkspaceMutation<T>(
   }
   state.activeMutations += 1;
 
-  const nextContext: WorkspaceMutationContext = {
-    workspaces: new Set(current?.workspaces ?? []),
-  };
-  nextContext.workspaces.add(normalizedWorkspace);
+  const admission: MutationAdmission = { participants: 0, waiters: new Set() };
 
   try {
     // Import lazily: the filesystem lock primitive itself uses storage helpers
     // that import this gate. Its admission path deliberately avoids write queues.
     const { withWorkspaceProcessMutation } = await import('../enduringAgents/runtimeLock');
     return await runWithWorkspace(normalizedWorkspace, () => withWorkspaceProcessMutation(
-      () => mutationContext.run(nextContext, task),
+      async () => {
+        try { return await participate(normalizedWorkspace, admission, task); }
+        finally { await drain(admission); }
+      },
     ));
   } finally {
     state.activeMutations -= 1;
     notifyDrain(state);
   }
+}
+
+/** Exclusive writes borrow the held physical capture admission, never reopen it. */
+export async function withWorkspaceRecoveryMutation<T>(
+  task: (operation: WorkspaceRecoveryOperation) => Promise<T>,
+  options: { workspace?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  const workspace = normalizeWorkspaceName(options.workspace ?? getCurrentWorkspace());
+  const signal = options.signal;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const started = performance.now();
+  if (signal?.aborted) throw contextError(true, 'was cancelled');
+  let boundary: WorkspaceSnapshotBoundary;
+  try { boundary = await beginWorkspaceSnapshotBoundary(workspace, timeoutMs, signal, true); }
+  catch (error) {
+    if (signal?.aborted) throw contextError(true, 'was cancelled');
+    throw error;
+  }
+  try {
+    const { withWorkspaceProcessSnapshot } = await import('../enduringAgents/runtimeLock');
+    return await runWithWorkspace(workspace, () => withWorkspaceProcessSnapshot(async lock => {
+      const admission: MutationAdmission = { participants: 0, waiters: new Set(), recovery: { signal, assertOwned: () => lock.assertOwned() } };
+      try {
+        const result = await participate(workspace, admission, async participant => {
+          const operation = Object.freeze({ workspace, generation: boundary.generation, assertOwned: () => checkParticipant(workspace, participant) });
+          await operation.assertOwned();
+          const value = await task(operation);
+          await operation.assertOwned();
+          return value;
+        });
+        await drain(admission);
+        if (signal?.aborted) throw contextError(true, 'was cancelled');
+        try { await lock.assertOwned(); } catch { throw contextError(true, 'ownership was lost'); }
+        if (signal?.aborted) throw contextError(true, 'was cancelled');
+        return result;
+      } finally { await drain(admission); }
+    }, { signal, timeoutMs: Math.max(1, timeoutMs - (performance.now() - started)) }));
+  } catch (error) {
+    if (signal?.aborted) throw contextError(true, 'was cancelled');
+    throw error;
+  } finally { boundary.release(); }
 }
 
 /** A coherent capture for registered writers in all processes on this workspace. */
@@ -110,14 +239,22 @@ export async function withWorkspaceRecoveryCapture<T>(
   options: { workspace?: string; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<T> {
   const workspace = normalizeWorkspaceName(options.workspace ?? getCurrentWorkspace());
+  const signal = options.signal;
   const timeoutMs = options.timeoutMs ?? 30_000;
   const started = performance.now();
-  const boundary = await beginWorkspaceSnapshotBoundary(workspace, timeoutMs, options.signal);
+  // A read may abandon its local admission on cancellation. The physical
+  // snapshot primitive still retains its owner until the pending read settles.
+  const boundary = await beginWorkspaceSnapshotBoundary(workspace, timeoutMs, signal);
   try {
     const { withWorkspaceProcessSnapshot } = await import('../enduringAgents/runtimeLock');
     return await runWithWorkspace(workspace, () => withWorkspaceProcessSnapshot(
-      () => task(boundary.generation),
-      { signal: options.signal, timeoutMs: Math.max(1, timeoutMs - (performance.now() - started)) },
+      () => {
+        const current = mutationContext.getStore();
+        const readCaptures = new Set(current?.readCaptures ?? []);
+        readCaptures.add(workspace);
+        return mutationContext.run({ participants: new Map(current?.participants ?? []), readCaptures }, () => task(boundary.generation));
+      },
+      { signal, timeoutMs: Math.max(1, timeoutMs - (performance.now() - started)) },
     ));
   } finally {
     boundary.release();
@@ -132,11 +269,13 @@ export async function beginWorkspaceSnapshotBoundary(
   workspace = getCurrentWorkspace(),
   timeoutMs = 30_000,
   signal?: AbortSignal,
+  retainAfterAdmission = false,
 ): Promise<WorkspaceSnapshotBoundary> {
   signal?.throwIfAborted();
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
-  if (current?.workspaces.has(normalizedWorkspace)) {
+  if (current && !current.participants) throw contextError(false, 'context predates the current admission protocol');
+  if (current?.participants?.has(normalizedWorkspace)) {
     throw new Error('A workspace snapshot cannot begin inside a workspace mutation.');
   }
 
@@ -152,6 +291,7 @@ export async function beginWorkspaceSnapshotBoundary(
   let drainWaiter: (() => void) | undefined;
   let rejectAbort: ((reason: unknown) => void) | undefined;
   let released = false;
+  let admitted = false;
   const release = (): void => {
     if (released) return;
     released = true;
@@ -159,6 +299,7 @@ export async function beginWorkspaceSnapshotBoundary(
     unblock(state);
   };
   const onAbort = (): void => {
+    if (admitted && retainAfterAdmission) return;
     release();
     rejectAbort?.(signal?.reason ?? new Error('Workspace snapshot was aborted.'));
   };
@@ -191,6 +332,7 @@ export async function beginWorkspaceSnapshotBoundary(
   }
 
   state.generation += 1;
+  admitted = true;
   return {
     generation: state.generation,
     release,

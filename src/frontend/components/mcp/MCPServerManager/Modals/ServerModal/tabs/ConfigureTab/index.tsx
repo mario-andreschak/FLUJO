@@ -917,7 +917,7 @@ const ConfigureTab: React.FC<TabProps> = ({
           variant="contained"
           color="primary"
         >
-          {initialConfig ? t('mcp.local.updateServer') : t('mcp.local.addServer')}
+          {initialConfig && onUpdate ? t('mcp.local.updateServer') : t('mcp.local.addServer')}
         </Button>
       </Box>
 

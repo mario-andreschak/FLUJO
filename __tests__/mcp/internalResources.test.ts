@@ -234,3 +234,82 @@ describe('internalReadResource', () => {
     expect(listPersonaFlowDispatchesMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MCP resource unexpected-error response contract', () => {
+  it.each<[string, unknown]>([
+    ['Error', new Error('EACCES C:/private/workspace/db/index.json Bearer synthetic_private_credential')],
+    ['string', 'C:/private/workspace/db/index.json sk-synthetic_private_key'],
+  ])('bounds a cold index read %s failure without exposing internal details or emitting a read event', async (_label, failure) => {
+    const readSpy = jest.spyOn(fs, 'readFile').mockRejectedValueOnce(failure);
+    const events: ExecutionEvent[] = [];
+    const unsubscribe = executionEventBus.subscribe('conv-index-error', event => events.push(event));
+    try {
+      const result = await internalReadResource('flujo://run/conv-index-error/resource-1');
+      expect(readSpy).toHaveBeenCalledTimes(1);
+      expect(readSpy).toHaveBeenCalledWith(path.join(tmpDir, 'conv-index-error', 'index.json'), 'utf-8');
+      expect(result).toEqual({ success: false, error: 'Failed to read run resource.', statusCode: 500 });
+      expect(events.filter(event => event.type === 'resource:read')).toEqual([]);
+    } finally {
+      readSpy.mockRestore();
+      unsubscribe();
+    }
+  });
+
+  it('fails closed on an ownership-check fault before reading the resource store', async () => {
+    const failure = new Error('Private ownership state C:/private/persona/state.json sk-synthetic_private_key');
+    loadConversationStateMock.mockRejectedValueOnce(failure);
+    const readSpy = jest.spyOn(fs, 'readFile');
+    try {
+      const result = await internalReadResource(entry.uri);
+      expect(result).toEqual({ success: false, error: 'Failed to read run resource.', statusCode: 500 });
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(listPersonaFlowDispatchesMock).not.toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+});
+
+describe('MCP resource-list error response contract', () => {
+  beforeEach(() => { loadConversationStateMock.mockClear(); });
+  it.each<[string, unknown]>([
+    ['Error', new Error('EACCES C:/private/workspace/db/run-resources Bearer synthetic_private_credential')],
+    ['string', 'C:/private/workspace/db/run-resources sk-synthetic_private_key'],
+  ])('bounds a directory-list %s failure before any ownership scan', async (_label, failure) => {
+    const listSpy = jest.spyOn(fs, 'readdir').mockRejectedValueOnce(failure);
+    try {
+      const result = await internalListResources();
+      expect(listSpy).toHaveBeenCalledTimes(1);
+      expect(listSpy).toHaveBeenCalledWith(tmpDir, { withFileTypes: true });
+      expect(result).toEqual({ resources: [], error: 'Failed to list run resources.' });
+      expect(loadConversationStateMock).not.toHaveBeenCalled();
+      expect(listPersonaFlowDispatchesMock).not.toHaveBeenCalled();
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it.each<[string, string, string]>([
+    ['malformed', 'not-a-real-cursor', '"cursor" is invalid or malformed.'],
+    ['oversized', 'x'.repeat(513), '"cursor" must be a non-empty cursor returned by a previous list call.'],
+  ])('preserves the exact %s cursor message before accessing the resource directory', async (_label, cursor, message) => {
+    const listSpy = jest.spyOn(fs, 'readdir');
+    try {
+      expect(await internalListResources(cursor)).toEqual({ resources: [], error: message });
+      expect(listSpy).not.toHaveBeenCalled();
+      expect(loadConversationStateMock).not.toHaveBeenCalled();
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it('preserves the public retry message for a cross-bundle pressure error without forwarding its raw text', async () => {
+    const pressure = Object.assign(new Error('C:/private/workspace/db/index.json Bearer synthetic_private_credential'), {
+      code: 'RUN_RESOURCE_INDEX_PRESSURE',
+    });
+    loadConversationStateMock.mockRejectedValueOnce(pressure);
+    expect(await internalListResources()).toEqual({
+      resources: [], error: 'Resource index reads are busy. Retry after current reads finish.',
+    });
+  });
+});

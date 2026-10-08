@@ -134,7 +134,8 @@ export function normalizeChatError(
     : undefined;
 
   return {
-    message,
+    // Provider raw reasons can appear here as well as in details.
+    message: maskSecretsInString(message),
     ...(code ? { code } : {}),
     ...(httpStatus !== undefined ? { httpStatus } : {}),
     ...(providerType ? { providerType } : {}),

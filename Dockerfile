@@ -11,7 +11,7 @@
 # which is why HOME points at a writable, owned directory.
 
 # ---- Builder --------------------------------------------------------------
-FROM node:22-bookworm-slim AS builder
+FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
 WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
@@ -19,17 +19,25 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 # production build has its build-time tooling (typescript, webpack, etc.).
 COPY package.json package-lock.json ./
 COPY mcp-servers ./mcp-servers
+# The locked lint dependency is a private local adapter, so npm ci needs its
+# package metadata before the later full source copy.
+COPY tooling/next-lint-glob ./tooling/next-lint-glob
 COPY packages/antigravity-cli ./packages/antigravity-cli
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
+RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only
+RUN node scripts/build-smoke-owner-issuer.mjs
 ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
 WORKDIR /app
+COPY --from=builder /app/bin ./bin
+COPY --from=builder /app/scripts/verify-ci-node.mjs /app/scripts/ci-node-binaries.json ./scripts/
+RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only
 
 # CI supplies these from the checked-out source before building. Empty defaults
 # deliberately do not claim compatibility or a published revision for an
@@ -40,6 +48,9 @@ LABEL io.flujo.application.version="${FLUJO_APPLICATION_VERSION}" \
       io.flujo.snapshot.format="2" \
       io.flujo.workspace.layout="2" \
       io.flujo.worker.protocol="1" \
+      io.flujo.worker.snapshot-source="1" \
+      io.flujo.worker.snapshot-envelope-read-versions="1,2" \
+      io.flujo.worker.snapshot-default-limits='{"maxFileBytes":268435456,"maxUncompressedBytes":1073741824,"maxManifestBytes":8388608,"maxArchiveBytes":1082130432,"maxEncryptedBytes":1442844672,"maxMembers":65534}' \
       org.opencontainers.image.version="${FLUJO_APPLICATION_VERSION}" \
       org.opencontainers.image.revision="${FLUJO_BUILD_REVISION}" \
       org.opencontainers.image.source="https://github.com/mario-andreschak/FLUJO"
@@ -96,6 +107,8 @@ RUN if [ -n "$FLUJO_APPLICATION_VERSION" ]; then \
       node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION)) process.exit(1)'; \
     fi
 COPY --from=builder /app/mcp-servers ./mcp-servers
+# Keep local lockfile targets available during the production install.
+COPY --from=builder /app/tooling/next-lint-glob ./tooling/next-lint-glob
 COPY --from=builder /app/packages/antigravity-cli ./packages/antigravity-cli
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
@@ -108,6 +121,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/src/shared/snapshotTransfer.json ./src/shared/snapshotTransfer.json
 
 # Keep writable data separate from the immutable bundled package workspace so a
 # persistent mcp-servers volume cannot mask the offline built-ins. Seed the

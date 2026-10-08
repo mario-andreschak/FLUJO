@@ -24,6 +24,9 @@ concurrency:
   group: publish-cloud-worker
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     if: github.ref == 'refs/heads/main' && github.repository == 'mario-andreschak/FLUJO'
@@ -35,21 +38,24 @@ jobs:
     env:
       IMAGE: ghcr.io/mario-andreschak/flujo
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          persist-credentials: false
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - name: Read application version
         id: version
         run: |
           node -e 'const fs=require("fs"); const version=require("./package.json").version; if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version)) throw Error("Invalid image version"); fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);'
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build Linux worker image without publishing
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64
@@ -78,9 +84,13 @@ jobs:
           assert.equal(image.Os, 'linux');
           assert.equal(image.Architecture, 'amd64');
           assert.equal(image.Config.User, 'node');
+          assert.ok(!image.Config.Env?.some(value => /^(?:FLUJO_SNAPSHOT_MAX_FILE_BYTES|FLUJO_SNAPSHOT_MAX_BYTES)(?:=|$)/.test(value)));
           for (const [key, value] of Object.entries({
             'io.flujo.application.version': process.env.APPLICATION_VERSION,
             'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+            'io.flujo.worker.snapshot-source': '1',
+            'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+            'io.flujo.worker.snapshot-default-limits': JSON.stringify(JSON.parse(fs.readFileSync('src/shared/snapshotTransfer.json', 'utf8')).snapshotLimits),
             'org.opencontainers.image.revision': process.env.GITHUB_SHA,
             'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
           })) assert.equal(image.Config.Labels[key], value, `Incorrect ${key}`);
@@ -93,9 +103,13 @@ jobs:
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
             --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
             "$image_id" node scripts/smoke-cloud-worker.mjs --production
+          docker run --rm --network none --read-only --no-healthcheck \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+            "$image_id" node scripts/smoke-cloud-worker.mjs --production --snapshot-v1
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -115,12 +129,21 @@ jobs:
           if docker manifest inspect "$revision_tag" >/dev/null 2>&1; then
             docker pull "$revision_tag"
             IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$revision_tag")"
-            test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_ID")" = "$GITHUB_SHA"
-            test "$(docker image inspect --format '{{index .Config.Labels "io.flujo.application.version"}}' "$IMAGE_ID")" = "$APPLICATION_VERSION"
+            export IMAGE_ID
+            node --input-type=module <<'NODE'
+            import { execFileSync } from 'node:child_process';
+            import { inspectTestedImage } from './scripts/image-release.mjs';
+            inspectTestedImage((command, args) => execFileSync(command, args, { encoding: 'utf8' }),
+              process.env.IMAGE_ID, process.env.GITHUB_SHA, process.env.APPLICATION_VERSION);
+            NODE
             docker run --rm --network none --read-only --no-healthcheck \
               --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
               --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
               "$IMAGE_ID" node scripts/smoke-cloud-worker.mjs --production
+            docker run --rm --network none --read-only --no-healthcheck \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+              --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+              "$IMAGE_ID" node scripts/smoke-cloud-worker.mjs --production --snapshot-v1
           else
             docker tag "$IMAGE_ID" "$revision_tag"
             docker push "$revision_tag"

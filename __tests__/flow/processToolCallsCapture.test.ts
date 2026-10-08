@@ -30,6 +30,7 @@ jest.mock('@/backend/services/runResources/capture', () => ({
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { createHash } from 'node:crypto';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import OpenAI from 'openai';
 
@@ -100,6 +101,13 @@ describe('processToolCalls auto-capture', () => {
     });
 
     expect(result.success).toBe(true);
+    const toolMessage = (result as { value: { toolCallMessages: Array<{ content: string }> } }).value.toolCallMessages[0];
+    const resultEvent = emit.mock.calls.map(([row]) => row).find(row => row.type === 'tool:result');
+    expect(resultEvent.resultContentBinding).toEqual({ serialization: 'utf8-string-v1',
+      sha256: createHash('sha256').update(toolMessage.content, 'utf8').digest('hex'),
+      bytes: Buffer.byteLength(toolMessage.content, 'utf8') });
+    expect(resultEvent.resultContentBinding.sha256)
+      .not.toBe(createHash('sha256').update(JSON.stringify(imageResult), 'utf8').digest('hex'));
     expect(captureToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: 'conv-1',
       server: 'srv',
@@ -203,6 +211,132 @@ describe('processToolCalls auto-capture', () => {
       mimeType: 'image/png',
       data: 'aGVsbG8=',
     })]);
+  });
+
+  it.each(['stored', 'refused'])('binds the exact bounded tool-message content after a %s spill', async (spill) => {
+    const data = { isError: false, content: [{ type: 'text', text: 'café🙂'.repeat(250) }] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 0 });
+    writeRunResourceMock.mockResolvedValue(spill === 'stored'
+      ? { ...capturedEntry, mimeType: 'text/plain', kind: 'text', size: Buffer.byteLength(full, 'utf8') }
+      : { skipped: 'size-cap' });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap,
+      conversationId: 'conv-1', emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      mimeType: 'text/plain', data: { text: full },
+      producedBy: expect.objectContaining({ source: 'tool-result', payloadRole: 'tool-message', toolCallId: 'call1' }),
+    }));
+    const content = result.value.toolCallMessages[0].content;
+    expect(typeof content).toBe('string');
+    const message = content as string;
+    expect(message).toContain('tool result truncated for context');
+    expect(message).not.toBe(full);
+    if (spill === 'stored') expect(message).toContain(capturedEntry.uri);
+    else expect(message).toContain('the full result could not be stored');
+    const resultEvents = emit.mock.calls.map(([row]) => row).filter(row => row.type === 'tool:result');
+    expect(resultEvents).toHaveLength(1);
+    expect(resultEvents[0]).toMatchObject({ toolCallId: 'call1', isError: false,
+      result: message.length > 500 ? `${message.slice(0, 500)}…` : message,
+      resultContentBinding: { serialization: 'utf8-string-v1',
+        sha256: createHash('sha256').update(message, 'utf8').digest('hex'), bytes: Buffer.byteLength(message, 'utf8') } });
+    expect(resultEvents[0].resultContentBinding.sha256)
+      .not.toBe(createHash('sha256').update(full, 'utf8').digest('hex'));
+  });
+
+  it.each([['text', 'stored'], ['text', 'refused'], ['media', 'stored'], ['media', 'refused']])(
+    'protects protocol %s errors through capture and a %s context spill', async (kind, spill) => {
+    const start = { type: 'text', text: 'START_DIAGNOSTIC' };
+    const tail = { type: 'text', text: 'café🙂\n'.repeat(150) + 'END_DIAGNOSTIC' };
+    const data = { isError: true, content: [start, ...(kind === 'media' ? imageResult.content : []), tail] };
+    // Rewriting can omit isError. Status must still come from the ORIGINAL
+    // protocol payload, while this protected content proceeds to the bound.
+    const protectedData = { content: [start, ...(kind === 'media'
+      ? [{ type: 'text', text: `[stored image at ${capturedEntry.uri}]` }] : []), tail] };
+    const full = JSON.stringify(protectedData);
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: protectedData,
+      captured: kind === 'media' ? [capturedEntry] : [],
+      media: kind === 'media' ? [{ type: 'image', mimeType: 'image/png', resourceUri: capturedEntry.uri }] : [],
+    });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+      autoCaptureEnabled: true, textThresholdChars: 32,
+      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 2 });
+    const spillUri = 'flujo://run/conv-1/error-overflow';
+    writeRunResourceMock.mockResolvedValue(spill === 'stored'
+      ? { ...capturedEntry, uri: spillUri, mimeType: 'text/plain', kind: 'text', size: Buffer.byteLength(full, 'utf8') }
+      : { skipped: 'size-cap' });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap,
+      conversationId: 'conv-1', emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(Buffer.byteLength(full, 'utf8')).toBeGreaterThan(128);
+    expect(full.length).toBeGreaterThan(500);
+    expect(captureToolResultMock).toHaveBeenCalledWith(expect.objectContaining({ result: data, toolCallId: 'call1' }));
+    expect(writeRunResourceMock).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      mimeType: 'text/plain', data: { text: full },
+      producedBy: expect.objectContaining({ source: 'tool-result', payloadRole: 'tool-message', toolCallId: 'call1' }),
+    }));
+    expect(result.value.toolCallMessages).toHaveLength(1);
+    const message = result.value.toolCallMessages[0];
+    expect(message).toMatchObject({ role: 'tool', tool_call_id: 'call1' });
+    expect(typeof message.content).toBe('string');
+    const content = message.content as string;
+    expect(content).not.toBe(full);
+    expect(content).toContain('tool result truncated for context');
+    expect(content).toContain('START_DIAGNOSTIC');
+    expect(content).toContain('END_DIAGNOSTIC');
+    expect(content).not.toContain('aGVsbG8=');
+    if (spill === 'stored') expect(content).toContain(spillUri);
+    else expect(content).toContain('the full result could not be stored');
+    if (kind === 'media') expect(message.media).toEqual([expect.objectContaining({ resourceUri: capturedEntry.uri })]);
+    else expect(message).not.toHaveProperty('media');
+    expect(result.value.processedToolCalls[0]).toMatchObject({ id: 'call1', result: content, exitCode: 1 });
+    const events = emit.mock.calls.map(([row]) => row);
+    const results = events.filter(row => row.type === 'tool:result');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ toolCallId: 'call1', isError: true,
+      result: content.length > 500 ? `${content.slice(0, 500)}…` : content });
+    expect(results[0]).not.toHaveProperty('resultContentBinding');
+  });
+
+  it.each(['disabled', 'failed'])('preserves inline error media and failure status when capture is %s', async (capture) => {
+    const data = { isError: true, content: [{ type: 'text', text: 'Synthetic MCP tool failure' }, ...imageResult.content] };
+    callToolMock.mockResolvedValue({ success: true, data });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+      autoCaptureEnabled: capture !== 'disabled' });
+    if (capture === 'failed') captureToolResultMock.mockRejectedValue(new Error('Synthetic capture refusal'));
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap, conversationId: 'conv-1', emit,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    if (capture === 'disabled') expect(captureToolResultMock).not.toHaveBeenCalled();
+    else expect(captureToolResultMock).toHaveBeenCalledTimes(1);
+    const message = result.value.toolCallMessages[0];
+    expect(message.content).toContain('Synthetic MCP tool failure');
+    expect(message.content).toContain('native image input');
+    expect(message.content).not.toContain('aGVsbG8=');
+    expect(message.media).toEqual([expect.objectContaining({ type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' })]);
+    expect(result.value.processedToolCalls[0]).toMatchObject({ result: message.content, exitCode: 1 });
+    const results = emit.mock.calls.map(([row]) => row).filter(row => row.type === 'tool:result');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ toolCallId: 'call1', isError: true, result: message.content });
+    expect(results[0]).not.toHaveProperty('resultContentBinding');
   });
 
   it('does not capture failed tool calls', async () => {

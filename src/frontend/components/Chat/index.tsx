@@ -76,7 +76,7 @@ import DebuggerConversation from './DebuggerConversation';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import ModelTurnTimeline from './ModelTurnTimeline';
-import ModelTurnInspector, { type ModelTurnInspectorTab } from './ModelTurnInspector';
+import ModelTurnInspector, { ArchivedModelTurnChat, type ModelTurnInspectorTab } from './ModelTurnInspector';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
@@ -97,21 +97,23 @@ import {
   emitBigTutorialEvent,
   isBigTutorialEvent,
 } from '@/frontend/components/Tour/bigTutorialEvents';
-// Correctly import SharedState here
 import {
   ChatCompletionMetadata,
   FlujoChatMessage,
   type McpAppModelContext,
   type McpAppModelContextMap,
 } from '@/shared/types/chat'; // Import the shared types
-import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types'; // Import SharedState type from backend
+import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
+import type { ModelInputSnapshot, WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ExecutionEvent, ModelDeltaEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
   mcpSkillCacheKey,
   type McpLoadedSkill,
   type McpSkillSelection,
 } from '@/shared/types/mcp';
-import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
+import type { ModelTurnIndexEntry } from '@/shared/types/modelTurn';
+import { ModelTurnDetailCache } from './modelTurnDetailCache';
+import { isModelTurnInspection, type ModelTurnView } from '@/frontend/services/chat/modelTurnInspection';
 import {
   LiveActivity,
   EMPTY_LIVE_ACTIVITY,
@@ -232,9 +234,9 @@ export interface Conversation {
 export interface ChatApiResponse extends Partial<Conversation> {
   conversation_id?: string;
   pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
-  debugState?: SharedState;
+  debugState?: DebuggerStateView;
   error?: { message?: string };
-  lastResponse?: SharedState['lastResponse'];
+  lastResponse?: DebuggerStateView['lastResponse'];
 }
 
 // Represents the summary item shown in the list
@@ -260,7 +262,7 @@ export interface ConversationListItem {
   recovery?: RecoveryRecord;
   /** Durable invocation origin recorded by runFlow. New UI-created
    *  conversations are seeded as `chat`; optional for legacy records. */
-  source?: SharedState['source'] | null;
+  source?: DebuggerStateView['source'] | null;
   /** Id of the scheduler planned-execution that originated this conversation
    *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
    *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
@@ -559,7 +561,7 @@ const Chat: React.FC = () => {
   // and the picked process node.
   const [editingMessage, setEditingMessage] = useState<{ messageId: string; content: string; nodeId: string | null } | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
-  const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
+  const [debugState, setDebugState] = useState<DebuggerStateView | null>(null); // State to hold debug data
   // The debugger publishes its selected trace row, while the regular chat owns
   // presentation of that row's exact model-facing conversation.
   const [debuggerSelectedStepIndex, setDebuggerSelectedStepIndex] = useState<number>(-1);
@@ -578,7 +580,7 @@ const Chat: React.FC = () => {
   // the selected sidecar supplies both its historical Chat render and Model Input.
   const [modelTurns, setModelTurns] = useState<ModelTurnIndexEntry[]>([]);
   const [selectedModelTurnId, setSelectedModelTurnId] = useState<string | null>(null);
-  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnSnapshot | null>(null);
+  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnView | null>(null);
   const [modelTurnLoading, setModelTurnLoading] = useState(false);
   const [modelTurnError, setModelTurnError] = useState<string | null>(null);
   const [modelTurnRetry, setModelTurnRetry] = useState(0);
@@ -588,7 +590,7 @@ const Chat: React.FC = () => {
   const [modelTurnFollowLive, setModelTurnFollowLive] = useState(true);
   const [unseenModelTurnCount, setUnseenModelTurnCount] = useState(0);
   const modelTurnFollowLiveRef = useRef(true);
-  const modelTurnDetailCacheRef = useRef(new Map<string, ModelTurnSnapshot>());
+  const modelTurnDetailCacheRef = useRef(new ModelTurnDetailCache());
   const modelTurnIdsRef = useRef(new Set<string>());
   const modelTurnsRef = useRef<ModelTurnIndexEntry[]>([]);
   // Whether a debug session is active (panel should stay open). Decoupled from
@@ -865,6 +867,7 @@ const Chat: React.FC = () => {
   const modelDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushModelDeltasRef = useRef<() => void>(() => undefined);
   const eventStreamGenerationRef = useRef(0);
+  const eventStreamRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingToolProgressRef = useRef<Extract<ExecutionEvent, { type: 'tool:progress' }> | null>(null);
   const toolProgressFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The debugger toggle is defined before handleDebugClose (it is handed to the
@@ -1189,6 +1192,16 @@ const Chat: React.FC = () => {
       if (sidebarEvents || disposed || document.visibilityState !== 'visible') return;
       sidebarEvents = chatService.subscribeToSidebarEvents({
         onEvent: refreshFromEvent,
+        onReset: () => {
+          if (disposed) return;
+          clearTimers();
+          disconnect();
+          lastRefreshStartedAt = Date.now();
+          void fetchConversations(undefined, { silent: true }).finally(() => {
+            if (disposed || document.visibilityState !== 'visible' || sidebarEvents) return;
+            eventTimer = setTimeout(() => { eventTimer = null; connect(); scheduleFallback(); }, 3000);
+          });
+        },
       });
     };
     const disconnect = () => {
@@ -2017,6 +2030,8 @@ const Chat: React.FC = () => {
 
   const closeEventStream = useCallback(() => {
     eventStreamGenerationRef.current++;
+    if (eventStreamRetryTimerRef.current !== null) clearTimeout(eventStreamRetryTimerRef.current);
+    eventStreamRetryTimerRef.current = null;
     // Preserve any final delta-only burst even when navigation/unmount closes
     // the stream before a terminal non-delta event arrives.
     flushModelDeltasRef.current();
@@ -2521,7 +2536,7 @@ const Chat: React.FC = () => {
   // so the subscription exists before the server emits any events — otherwise a
   // fast run can finish before the stream attaches and the live view sees
   // nothing. The browser auto-reconnects using Last-Event-ID to replay misses.
-  const openEventStream = useCallback((
+  const openEventStream: (conversationId: string, fromSeq?: number, replayOptions?: { activityOnly?: boolean }) => Promise<void> = useCallback((
     conversationId: string,
     fromSeq?: number,
     replayOptions?: { activityOnly?: boolean },
@@ -2549,6 +2564,20 @@ const Chat: React.FC = () => {
               if (eventStreamGenerationRef.current === streamGeneration) applyExecutionEvent(event);
             },
             onOpen: settle,
+            onReset: (control) => {
+              settle();
+              if (eventStreamGenerationRef.current !== streamGeneration) return;
+              closeEventStream();
+              const recoveryGeneration = eventStreamGenerationRef.current;
+              void fetchDetailedConversation(conversationId).then(() => {
+                if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
+                eventStreamRetryTimerRef.current = setTimeout(() => {
+                  eventStreamRetryTimerRef.current = null;
+                  if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
+                  void openEventStream(conversationId, control.nextSeq, { activityOnly: true });
+                }, 3000);
+              }).catch(err => log.warn('Failed to recover execution snapshot', { conversationId, err }));
+            },
           },
           fromSeq,
           replayOptions,
@@ -2560,7 +2589,7 @@ const Chat: React.FC = () => {
         settle();
       }
     });
-  }, [applyExecutionEvent, closeEventStream]);
+  }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation]);
 
   // Re-attach to a run that is still in progress on the backend — e.g. after
   // navigating to another page (which unmounts Chat and tears down the stream)
@@ -4590,7 +4619,7 @@ const Chat: React.FC = () => {
       try {
         const data = await chatService.getDebugState(currentConversationId);
         if (cancelled || !data?.debugState) return;
-        setDebugState(data.debugState as SharedState);
+        setDebugState(data.debugState as DebuggerStateView);
         setDebugSessionActive(true);
         setIsDebugPaused(true);
         setDebugAttaching(false);
@@ -4698,7 +4727,7 @@ const Chat: React.FC = () => {
     && currentPreviewAvailable;
   const showingWireView = showingArchivedModelTurn || showingHistoricalWireView || showingCurrentPreview;
   const selectedModelTurnChatMessages = useMemo(
-    () => (modelTurnSnapshot?.canonicalMessages ?? [])
+    () => (modelTurnSnapshot && !isModelTurnInspection(modelTurnSnapshot) ? modelTurnSnapshot.canonicalMessages : [])
       .filter(message => message.role !== 'system') as ChatMessage[],
     [modelTurnSnapshot],
   );
@@ -4717,11 +4746,14 @@ const Chat: React.FC = () => {
       return;
     }
 
+    // Release the previously selected, durably archived snapshot before the
+    // next response is parsed. Revisiting another marker reloads its history.
+    modelTurnDetailCacheRef.current.clear();
     const controller = new AbortController();
     setModelTurnSnapshot(null);
     setModelTurnError(null);
     setModelTurnLoading(true);
-    void chatService.getModelTurn(
+    void chatService.getModelTurnInspection(
       selectedModelTurn.conversationId,
       selectedModelTurn.id,
       { signal: controller.signal },
@@ -5535,7 +5567,9 @@ const Chat: React.FC = () => {
                       {modelTurnError}
                     </Alert>
                   ) : modelTurnSnapshot ? (
-                    selectedModelTurnChatMessages.length > 0 ? (
+                    isModelTurnInspection(modelTurnSnapshot) && selectedModelTurn ? (
+                      <ArchivedModelTurnChat key={modelTurnSnapshot.entry.id} snapshot={modelTurnSnapshot} conversationId={selectedModelTurn.conversationId} />
+                    ) : selectedModelTurnChatMessages.length > 0 ? (
                       <ChatMessages
                         messages={selectedModelTurnChatMessages}
                         availableNodes={availableNodes}

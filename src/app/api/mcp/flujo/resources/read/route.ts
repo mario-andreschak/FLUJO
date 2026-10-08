@@ -4,6 +4,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { json } from '@/app/api/mcp/_helpers';
 import { mcpService } from '@/backend/services/mcp';
+import { assertBundledFlujoWorkloadAction, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 import {
   decodeStandaloneSkillResource,
   FLUJO_STANDALONE_SKILL_SCHEME,
@@ -33,11 +34,13 @@ async function POST_handler(request: NextRequest) {
   try {
     if (uri.startsWith(`${FLUJO_STANDALONE_SKILL_SCHEME}//`)) {
       const decoded = decodeStandaloneSkillResource(uri);
+      await assertBundledFlujoWorkloadAction('readResource', 'POST', '/api/mcp/flujo/resources/read', { uri });
       const result = await mcpService.readVerifiedSkillResource(
         decoded.serverName,
         decoded.skillUri,
         decoded.resourceUri,
       );
+      await assertBundledFlujoWorkloadAction('readResource', 'POST', '/api/mcp/flujo/resources/read', { uri });
       if (!result.success || !result.data) {
         return json({ error: result.error || 'Failed to verify MCP Skill resource.' }, result.statusCode || 502);
       }
@@ -56,8 +59,12 @@ async function POST_handler(request: NextRequest) {
     // internalReadResource performs the full URI parse, records readBy lineage,
     // and emits the resource:read event. Do not reproduce that logic here.
     const { internalReadResource } = await import('@/backend/services/mcp/internalResources');
-    return json(await internalReadResource(uri), 200);
+    await assertBundledFlujoWorkloadAction('readResource', 'POST', '/api/mcp/flujo/resources/read', { uri });
+    const result = await internalReadResource(uri);
+    await assertBundledFlujoWorkloadAction('readResource', 'POST', '/api/mcp/flujo/resources/read', { uri });
+    return json(result, 200);
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) return error.response;
     log.error('Failed to read internal or Skill resource', {
       uri,
       error: error instanceof Error ? error.message : String(error),

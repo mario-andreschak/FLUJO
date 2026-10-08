@@ -1,6 +1,8 @@
 const path = require('node:path');
+const { realpathSync } = require('node:fs');
 const { spawn } = require('node:child_process');
 const { assertLocalTestDependencies } = require('./local-test-dependencies.cjs');
+const EXPECTED_TEST_FILES_ENV = 'FLUJO_JEST_EXPECTED_TEST_FILES';
 
 const root = path.resolve(__dirname, '..');
 
@@ -55,6 +57,74 @@ function withoutForeignNodeModuleBins(value, localBin) {
   ].join(path.delimiter);
 }
 
+function canonicalTestPath(file) {
+  const absolute = path.resolve(file);
+  try { return realpathSync.native(absolute); } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    // A missing selected file still belongs in the execution contract. Resolve
+    // its nearest existing parent so aliases cannot hide an omitted suite.
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(canonicalTestPath(parent), path.basename(absolute));
+  }
+}
+
+function selectionContract(argv, rootDir) {
+  if (argv.some((arg) => /^--pass(?:WithNoTests|-with-no-tests)(?:=|$)/.test(arg))) {
+    throw new Error('The local runner refuses --passWithNoTests; zero execution must fail.');
+  }
+  const diagnostic = argv.some((arg) => ['--listTests', '--showConfig', '--help', '-h', '--version', '-v'].includes(arg));
+  if (diagnostic) return { args: argv, expectedFiles: [] };
+  const expectedFiles = [];
+  const args = argv.map((arg) => {
+    if (arg.startsWith('-') || !/\.test\.(?:[cm]?[jt]s|[jt]sx)$/.test(arg) || /[*?{}()|^$]/.test(arg)) return arg;
+    const file = canonicalTestPath(path.resolve(rootDir, arg));
+    expectedFiles.push(file);
+    // Jest also treats positional paths as patterns. POSIX separators retain
+    // the separator before dotted directories on Windows.
+    return file.replaceAll('\\', '/');
+  });
+  const reporter = __filename;
+  const hasReporter = argv.some((arg) => arg === '--reporters' || arg.startsWith('--reporters='));
+  return {
+    args: [...args, ...(hasReporter ? [] : ['--reporters=default']), `--reporters=${reporter}`],
+    expectedFiles: [...new Set(expectedFiles)],
+  };
+}
+
+const testIdentity = (file) => {
+  const absolute = canonicalTestPath(file);
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+};
+
+function assertTestExecution(results, expectedFiles = []) {
+  if (!results || !(results.numPassedTests + results.numFailedTests > 0)) {
+    throw new Error('Local Jest completed no test assertions; refusing zero-execution success.');
+  }
+  for (const file of expectedFiles) {
+    const matches = results.testResults?.filter((result) => testIdentity(result.testFilePath) === testIdentity(file)) ?? [];
+    if (matches.length !== 1) throw new Error(`Explicitly selected suite did not run exactly once: ${file}`);
+    if (!(matches[0].numPassingTests + matches[0].numFailingTests > 0)) {
+      throw new Error(`Explicitly selected suite completed no assertions: ${file}`);
+    }
+  }
+}
+
+class SelectionReporter {
+  constructor() {
+    this.expectedFiles = JSON.parse(process.env[EXPECTED_TEST_FILES_ENV] || '[]');
+    this.error = undefined;
+  }
+
+  onRunComplete(_contexts, results) {
+    try { assertTestExecution(results, this.expectedFiles); } catch (error) {
+      this.error = error;
+      process.stderr.write(`Local Jest selection refused: ${error.message}\n`);
+    }
+  }
+
+  getLastError() { return this.error; }
+}
+
 function main() {
   let dependencies;
   try {
@@ -68,14 +138,21 @@ function main() {
   const { jestArgs, env: runnerEnv } = partitionRunnerFlags(
     jestArgsFromNpm(process.argv.slice(2), process.env),
   );
+  let selection;
+  try { selection = selectionContract(jestArgs, root); } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
   const child = spawn(process.execPath, [
     dependencies.jestBin,
-    ...jestArgs,
+    ...selection.args,
   ], {
     cwd: root,
     env: {
       ...process.env,
       ...runnerEnv,
+      [EXPECTED_TEST_FILES_ENV]: JSON.stringify(selection.expectedFiles),
       // Do not let a caller-provided NODE_PATH or npm-injected ancestor .bin
       // directory reintroduce the dependency leak this wrapper is preventing.
       NODE_PATH: '',
@@ -103,13 +180,20 @@ function main() {
   });
 }
 
-module.exports = {
+// Jest loads this same already-shipped file as a reporter. Named helper APIs
+// remain available to existing callers, without adding a package dependency.
+module.exports = SelectionReporter;
+Object.assign(module.exports, {
+  EXPECTED_TEST_FILES_ENV,
   EXCLUDE_ISOLATED_SUITES_ENV,
   EXCLUDE_ISOLATED_SUITES_FLAG,
   jestArgsFromNpm,
   main,
   partitionRunnerFlags,
+  selectionContract,
+  canonicalTestPath,
   withoutForeignNodeModuleBins,
-};
+  assertTestExecution,
+});
 
 if (require.main === module) main();

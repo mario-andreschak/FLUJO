@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React from 'react';
 import ToolTester, { type ToolTesterPrefill } from './ToolTester';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
-import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -39,22 +38,6 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
     return await testTool(toolName, params, timeout);
   };
 
-  // Set up a periodic refresh for tools
-  useEffect(() => {
-    if (serverName) {
-      // Set up a periodic refresh every 30 seconds
-      const intervalId = setInterval(() => {
-        log.debug('Periodic tool refresh');
-        // Clear cache first to ensure we get fresh data
-        mcpService.clearToolsCache(serverName);
-        loadTools(true); // Force reload
-      }, 30000);
-      
-      // Clean up on unmount
-      return () => clearInterval(intervalId);
-    }
-  }, [loadTools, serverName]);
-
   const { getThemeValue } = useThemeUtils();
   
   // If there's an error and no tools, show a message
@@ -68,14 +51,10 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
         <h3 className="text-lg font-semibold mb-4" style={{ color: getThemeValue('#111', '#f8f8f8') }}>
           {t('mcp.tools.managerServer', { server: serverName || t('mcp.tools.noServer') })}
         </h3>
-        <div className="text-red-500">
-          <p>{t('mcp.tools.errorLoading', { error })}</p>
+        <div style={{ color: getThemeValue('#b91c1c', '#fca5a5') }}>
+          <p role="alert">{t('mcp.tools.errorLoading', { error })}</p>
           <button
             onClick={() => {
-              // Clear cache first to ensure we get fresh data
-              if (serverName) {
-                mcpService.clearToolsCache(serverName);
-              }
               retryLoadTools();
             }}
             className="mt-2 px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center"
@@ -118,7 +97,18 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
 
   return (
     <div className="mt-8" style={{ color: getThemeValue('#333', '#f0f0f0') }}>
+      <div className="mb-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => void loadTools(true)}
+          className="rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isLoading}
+        >
+          {isLoading ? t('mcp.tools.loading') : t('mcp.tools.refresh')}
+        </button>
+      </div>
       <ToolTester
+        key={serverName}
         serverName={serverName}
         tools={tools}
         onTestTool={handleTestTool}
@@ -126,21 +116,24 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
         prefill={prefill}
       />
       {isLoading && (
-        <div className="mt-4 flex items-center space-x-2 text-blue-500">
+        <div
+          role="status"
+          aria-atomic="true"
+          className="mt-4 flex items-center space-x-2"
+          style={{ color: getThemeValue('#1d4ed8', '#93c5fd') }}
+        >
           <Spinner size="small" color="primary" />
           <p>{t('mcp.tools.loading')}</p>
         </div>
       )}
       {error && tools && tools.length > 0 && (
-        <div className="mt-2 text-yellow-500">
-          <p>{t('mcp.tools.warning', { error })}</p>
-          <p className="text-sm">{t('mcp.tools.cached')}</p>
+        <div className="mt-2" style={{ color: getThemeValue('#854d0e', '#fde047') }}>
+          <div role="alert">
+            <p>{t('mcp.tools.warning', { error })}</p>
+            <p className="text-sm">{t('mcp.tools.cached')}</p>
+          </div>
           <button
             onClick={() => {
-              // Clear cache first to ensure we get fresh data
-              if (serverName) {
-                mcpService.clearToolsCache(serverName);
-              }
               retryLoadTools();
             }}
             className="mt-1 px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center"

@@ -166,7 +166,6 @@ export async function runRemoteTaskLifecycle(
       serverName,
       serverIdentity,
       toolName,
-      args: options.args,
       ownership,
       status: initialTask.status,
       statusMessage: initialTask.statusMessage,

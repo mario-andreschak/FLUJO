@@ -1,3 +1,14 @@
+import type { ModelInputSnapshot } from '@/shared/types/execution/modelInput';
+import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
+export type {
+  WireStatus,
+  ModelInputProvenanceEntry,
+  ModelInputSnapshot,
+  WirePreviewUnavailableReason,
+  WirePreviewWarningCode,
+  WirePreviewWarning,
+  WirePreviewResponse,
+} from '@/shared/types/execution/modelInput';
 import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
@@ -6,8 +17,6 @@ import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPToolParameterPresets, McpSkillSelection } from '@/shared/types/mcp';
 import OpenAI from 'openai';
-import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
-import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
@@ -19,142 +28,15 @@ import type {
   PersonaInstructionContext,
   PersonaNativeAbilityId,
 } from '@/shared/types/enduringAgent';
+import type { FlowInvocationSource } from '@/shared/types/execution/invocation';
 
-// --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
-
-/**
- * Explicit origin for every runFlow invocation (issue #339). Chat and direct
- * API calls have an interactive caller; scheduled/triggered, subflow, MCP,
- * meeting-participant, and internal-tool runs are headless and unattended.
- */
-export const FLOW_INVOCATION_SOURCES = [
-  'chat',
-  'api',
-  'schedule',
-  'trigger',
-  'subflow',
-  'mcp',
-  'internal',
-  'meeting',
-] as const;
-
-export type FlowInvocationSource = typeof FLOW_INVOCATION_SOURCES[number];
-
-export function isFlowInvocationSource(value: unknown): value is FlowInvocationSource {
-  return typeof value === 'string' &&
-    (FLOW_INVOCATION_SOURCES as readonly string[]).includes(value);
-}
-
-export function isUnattendedFlowInvocation(source: FlowInvocationSource): boolean {
-  return source !== 'chat' && source !== 'api';
-}
-
-// --- Debugger Types ---
-
-/**
- * Why a message from the node's full THREADED history is (or isn't) in the exact
- * wire conversation the model receives. Derived from the SAME pipeline functions
- * the runtime uses (deriveModelInputView in buildNodeContext.ts), so the
- * explanation can never drift from behaviour. Issue #153.
- *   - 'system'           — the resolved system message the node used.
- *   - 'sent'             — present in the final wire view (what the model sees).
- *   - 'folded'           — removed by collapseNodeOutputs (outputMode fold).
- *   - 'scoped-out'       — removed by scopeMessagesForInput (inputMode narrowing).
- *   - 'handoff-stripped' — removed/rewritten by stripHandoffPlumbing (handoff
- *                          tool-call/result + synthetic "Continue").
- */
-export type WireStatus =
-  | 'system'
-  | 'sent'
-  | 'folded'
-  | 'scoped-out'
-  | 'handoff-stripped'
-  | 'summarized'
-  | 'visually-archived'
-  | 'emergency-stripped'
-  | 'content-truncated';
-
-/** Per-message provenance in a ModelInputSnapshot (see WireStatus). Carries only
- *  a short content preview, never the full payload, so the snapshot stays bounded. */
-export interface ModelInputProvenanceEntry {
-  id?: string;
-  role: string;
-  status: WireStatus;
-  /** Human-readable explanation of the wire transformation. */
-  reason?: string;
-  /** Truncated content preview for the annotated history view. */
-  preview?: string;
-  /** Names of any tool calls this assistant turn made (for annotation). */
-  toolCallNames?: string[];
-}
-
-/**
- * A purpose-built, debug-mode-gated snapshot of exactly what a Process node's
- * model call receives (issue #153): the resolved system message, the exact wire
- * conversation (after fold + scope + handoff-plumbing strip), and per-message
- * provenance explaining how the wire differs from the threaded history.
- *
- * SECURITY: conversation content ONLY. Never carries provider credentials,
- * modelId-resolved keys, or headers — honours "API keys never to the frontend".
- */
-export interface ModelInputSnapshot {
-  /** The resolved system text the model saw (null for none). */
-  systemMessage: { content: string } | null;
-  /** The exact final wire conversation (post-strip), for rich rendering. Content
-   *  is per-message capped to keep the trace roughly constant size per step. */
-  wireMessages: FlujoChatMessage[];
-  /** One entry per message in the node's full threaded history. */
-  provenance: ModelInputProvenanceEntry[];
-  /** Summary counts for a one-line "18 in history → 11 sent · 5 folded …". */
-  counts: {
-    threaded: number;
-    sent: number;
-    folded: number;
-    scopedOut: number;
-    handoffStripped: number;
-    summarized?: number;
-    visuallyArchived?: number;
-    emergencyStripped?: number;
-    contentTruncated?: number;
-  };
-  inputMode?: 'full-history' | 'latest-message' | 'isolated';
-  /** Final wire-time visual routing metrics, captured by ModelHandler. */
-  visualCompaction?: VisualCompactionDiagnostic;
-  /** Ordered late-wire transformations, including emergency provider refits. */
-  contextCompaction?: ContextCompactionDiagnostic;
-}
-
-export type WirePreviewUnavailableReason =
-  | 'non_process_node'
-  | 'missing_node'
-  | 'missing_history'
-  | 'scope_mismatch'
-  | 'unsupported_transformation';
-
-export type WirePreviewWarningCode =
-  | 'current_state'
-  | 'provider_finalization_omitted'
-  | 'resource_resolution_omitted'
-  | 'tool_configuration_omitted'
-  | 'history_projection_omitted';
-
-export interface WirePreviewWarning {
-  code: WirePreviewWarningCode;
-  message: string;
-}
-
-export interface WirePreviewResponse {
-  status: 'available' | 'unavailable';
-  mode: 'current-preview';
-  conversationId: string;
-  rootConversationId: string | null;
-  parentConversationId: string | null;
-  nodeId: string;
-  snapshot?: ModelInputSnapshot;
-  providerMessages?: OpenAI.ChatCompletionMessageParam[];
-  warnings: WirePreviewWarning[];
-  unavailableReason?: WirePreviewUnavailableReason;
-}
+// Retain the backend interface while shared consumers use the contract directly.
+export {
+  FLOW_INVOCATION_SOURCES,
+  isFlowInvocationSource,
+  isUnattendedFlowInvocation,
+  type FlowInvocationSource,
+} from '@/shared/types/execution/invocation';
 
 /**
  * Represents a single step in the execution trace for debugging.
@@ -954,7 +836,7 @@ export interface PersonaActivityMutationContext {
 }
 
 // Shared state (minimized)
-export interface SharedState {
+export interface SharedState extends DebuggerStateView {
     executionExtensionOwned?: boolean;
     /** Run-scoped repeated tool-call/result counters. */
     toolRepeatGuard?: import('./toolRepeatGuard').ToolRepeatGuardState;
@@ -1574,6 +1456,10 @@ export interface StartNodePrepResult extends BasePrepResult {
 // ProcessNode prep result
 export interface ProcessNodePrepResult extends BasePrepResult {
     nodeType: 'process';
+    /** Identity only; Native admission resolves the plan from the frozen root. */
+    flowId?: string;
+    /** Non-enumerable preparation field, checked against the immutable plan. */
+    nativeFlowSnapshot?: Flow;
     currentPrompt: string;
     boundModel: string;
     modelDisplayName?: string;
@@ -1625,6 +1511,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+    /** Runtime-only run cancellation forwarded to the in-flight model call. */
+    abortSignal?: AbortSignal;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
     personaAttribution?: PersonaAttribution;
     /** One logical model-turn override armed by the repeated-tool guard. */

@@ -1,5 +1,15 @@
 <div align="center">
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=mario-andreschak%2Fflujo&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mario-andreschak/flujo&type=date&legend=top-left" />
+ </picture>
+</a>
+
 # FLUJO
 
 ### Build private AI agents visually. Run them your way.
@@ -13,7 +23,7 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.46.2-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.46.3-green.svg)](package.json)
 </div>
 
 
@@ -68,9 +78,9 @@ FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.i
 
 ### 🔐 Local-first Security & Workspace Controls
 
-- **Local-first by default**: keep FLUJO on localhost, allow devices on your private network, or configure it for a public deployment
-- **Encrypted at rest**: API keys and other secrets are encrypted in local storage, with an optional custom encryption password for extra protection
-- **Never sent to the browser**: secrets stay server-side — the frontend only ever sees a masked placeholder, even in your own DevTools
+- **Local-first by default**: one trusted operator on localhost. Deliberate network exposure needs authenticating controls; workspace selection alone does not provide individual user isolation. See [Network exposure](#network-exposure).
+- **Credential storage**: set a private encryption password for protection at rest. The public default password provides obfuscation, and historical plaintext records need explicit repair. See the [encryption and migration guide](src/utils/encryption/README.md).
+- **Backup and transfer limits**: workspace backups and portable-worker snapshots can contain credentials. Treat them as secrets and follow the [worker transfer guide](docs/features/hot-clone-workspace.md).
 - **Reusable global variables**: define a key once and bind it into any AI or connected-app configuration instead of pasting it repeatedly
 - **Backup & restore** your encrypted workspace from Settings
 
@@ -181,7 +191,7 @@ As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn F
 
 ### 🔄 External Tool Integration
 
-- **OpenAI-compatible endpoint**: point Cline, Roo Code, Cursor, or any OpenAI-SDK client at `http://localhost:4200/v1`, use any API key value, and pick a model named `flow-<your-flow-name>`
+- **OpenAI-compatible endpoint**: point Cline, Roo Code, Cursor, or an OpenAI-SDK client at `http://localhost:4200/v1` and pick a model named `flow-<your-flow-name>`. The default local profile accepts a compatibility API-key value; an explicitly enabled owner policy requires an issued, scoped bearer. See the [API guide](docs/api-reference/README.md).
 - **FLUJO as an MCP server (proxy)**: point an external MCP client at `http://localhost:4200/mcp-proxy/<server-name>` to reuse a server you configured once in FLUJO (localhost-only in the current version)
 
 > **Note:** FLUJO does not expose an Ollama-compatible *server* endpoint — use the OpenAI-compatible provider above to consume flows from other apps. (Connecting FLUJO *to* a local Ollama instance as a model provider is a separate, supported feature.)
@@ -199,7 +209,7 @@ Start with the [first successful conversation guide](docs/getting-started/README
 ### Manual installation:
 ### Prerequisites
 
-- Node.js (v22 or higher)
+- Node.js 22.17+ within 22.x, or 24.2+ within 24.x ([runtime compatibility evidence](docs/operations/windows-native-runtime-profile.md))
 - claude code (optional, if you want to use Anthropic Subscription) 
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
@@ -273,10 +283,11 @@ Then open http://localhost:4200.
   `http://<originKey>.localhost:4201` browser origin. Keep both port mappings
   when using interactive MCP Apps.
 
-> ⚠️ **Security:** FLUJO has no authentication layer and its git API runs
-> commands on the server, so the port is bound to **localhost only** by default.
-> Do **not** expose it on `0.0.0.0` / publish it publicly unless it sits behind
-> your own authenticating reverse proxy on a trusted network.
+> ⚠️ **Security:** the default local profile has no owner login, and its git API
+> runs commands with the server's permissions. Ports bind to **localhost only**
+> by default. Deliberate exposure requires your own authenticating reverse proxy
+> and review of the [security policy](SECURITY.md). The opt-in source bearer
+> profile has no browser login yet and does not qualify public/shared hosting.
 
 ### Network exposure
 
@@ -285,11 +296,18 @@ Use **Settings → Network access** to choose one deployment posture:
 - **Localhost** (default) — only this computer; both listeners bind loopback.
 - **Local Network** — listen on all interfaces and accept private LAN addresses
   and this machine's hostnames.
-- **Public** — accept any hostname. FLUJO has no built-in authentication, so use
-  this only behind an authenticating HTTPS reverse proxy.
+- **Public** — accept any hostname. This setting controls exposure, not owner
+  authentication or user isolation; use it only behind authenticating HTTPS
+  controls. Public/shared release acceptance remains open.
 
 The one setting controls the UI, API, OpenAI/MCP endpoints, Host/Origin guard,
 and MCP Apps sandbox binding together. Restart FLUJO after changing it.
+
+The [owner access source contract](docs/security/owner-access-v1.md) describes
+an opt-in native API bearer policy. It retains anonymous localhost behavior when
+no policy is selected, has no browser login flow yet, and needs installed-client
+and independent security acceptance. Keep existing browser-dependent installs on
+their current profile until a compatible login/migration path is accepted.
 
 MCP Apps require no additional configuration on localhost or a plain-HTTP Local
 Network install. FLUJO discovers the browser-visible host automatically and uses
@@ -321,6 +339,18 @@ This runs a prebuilt FLUJO with no git clone or local build. Your data lives in
 `PATH`. To update, just rerun with `npx flujo-ai@latest`. (The npm package is
 `flujo-ai` — the name `flujo` is blocked by npm's similarity rules — but the
 installed command is still `flujo`.)
+
+Embedding launchers can set `FLUJO_BOOTSTRAP_DIR` to an absolute directory before
+starting FLUJO. Both the npm entry point and the Next launcher then load dotenv
+files and keep runtime environment settings in that directory. An empty or
+relative override fails before loading dotenv. Without the override, the npm
+entry point uses `~/.flujo`, and the Next launcher uses its working directory
+(or `/app/data` in a container). The override selects environment settings only;
+set `FLUJO_DATA_DIR` and `FLUJO_LOCAL_INSTANCE_DIR` separately when isolating an
+embedded instance's data and discovery records. Supply a clean child environment
+as well: this option does not clear already inherited credentials or settings.
+Keep data and discovery directories outside the package's `public` and
+`.next/static` folders; native launchers reject direct or aliased locations there.
 
 ### One-line install (Windows)
 
@@ -364,7 +394,7 @@ to `main`.
 
 ### Corporate proxy and custom CA
 
-Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22 or newer and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
+Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22.17+ within 22.x, or 24.2+ within 24.x and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
 
 Prefer your organization's approved OS trust configuration. If that is unavailable, set an explicit proxy and readable PEM CA bundle for the installer session. The `FLUJO_*` aliases are mapped only into installer child processes; they do not change global npm/Git configuration, the certificate store, or persistent environment variables.
 

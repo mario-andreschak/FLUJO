@@ -1,3 +1,4 @@
+import { installOwnerFixture } from '../utils/ownerFixture';
 /**
  * Tests for the `FLUJO_EXTRA_LOCAL_HOSTS` hosted-posture opt-in (#155).
  *
@@ -111,27 +112,30 @@ describe('FLUJO_EXTRA_LOCAL_HOSTS exact entries and lists', () => {
 });
 
 describe('middleware honors FLUJO_EXTRA_LOCAL_HOSTS end-to-end', () => {
+  let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>>;
+  beforeEach(async () => { ownerFixture = await installOwnerFixture(); });
+  afterEach(async () => { await ownerFixture.restore(); });
   const makeRequest = (host: string, origin?: string): NextRequest => {
-    const headers: Record<string, string> = { host };
+    const headers: Record<string, string> = { host, ...ownerFixture.headers };
     if (origin) headers.origin = origin;
     return new NextRequest(`http://${host}/api/cwd`, { method: 'GET', headers });
   };
 
-  it('403s the internal tenant hostname when env is unset', () => {
+  it('403s the internal tenant hostname when env is unset', async () => {
     delete process.env[ENV];
-    const res = middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
+    const res = await middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
     expect(res.status).toBe(403);
   });
 
-  it('passes the internal tenant hostname when the suffix is opted in', () => {
+  it('passes the internal tenant hostname when the suffix is opted in', async () => {
     process.env[ENV] = '.vm.brain-tenants-dev.internal';
-    const res = middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
-    expect(res.status).not.toBe(403);
+    const res = await middleware(makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200'));
+    expect(res.status).toBe(200);
   });
 
-  it('still 403s an attacker Origin against the opted-in host', () => {
+  it('still 403s an attacker Origin against the opted-in host', async () => {
     process.env[ENV] = '.vm.brain-tenants-dev.internal';
-    const res = middleware(
+    const res = await middleware(
       makeRequest('e82014dc4e5428.vm.brain-tenants-dev.internal:4200', 'http://evil.com')
     );
     expect(res.status).toBe(403);

@@ -30,7 +30,7 @@ import {
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import type { PackageFlowInfo } from '@/backend/services/packages/installPackage';
+import type { PackageFlowInfo } from '@/shared/types/package/install';
 
 // Every builder node type must be registered — an unregistered type falls back
 // to React Flow's default node, which lacks the named handles the edges

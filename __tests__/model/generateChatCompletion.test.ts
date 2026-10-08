@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Tests for issue #53 — exposing configured FLUJO models on /v1/models and the
  * single-turn ModelService.generateChatCompletion used by /v1/chat/completions
@@ -78,10 +81,11 @@ const completionFixture = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   for (const k of Object.keys(store)) delete store[k];
   mockCreateCompletion.mockReset();
   (getCompletionAdapter as jest.Mock).mockClear();
+  privateFixture = await installPrivateProfileFixture(metadata => { store['encryption_key'] = metadata; });
   jest.mocked(testModelConnection).mockClear();
 });
 

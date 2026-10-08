@@ -8,6 +8,8 @@ const planMock = jest.fn();
 const restoreMock = jest.fn();
 const unlockMock = jest.fn();
 const workerMock = jest.fn();
+const originalSnapshotControlToken = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+const fixtureControlToken = 'persona-recovery-fixture-control';
 jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: () => unlockMock() }));
 jest.mock('@/backend/services/workspace/workerMode', () => ({ isWorkerMode: () => workerMock(), assertWorkerRequestReady: () => undefined }));
 jest.mock('@/backend/services/enduringAgents/personaRecoveryCapture', () => ({ capturePersonaRecovery: (...args: unknown[]) => captureMock(...args) }));
@@ -27,7 +29,12 @@ function request(action: string, options: { query?: string; headers?: Record<str
 describe('Persona recovery HTTP boundary', () => {
   beforeEach(async () => {
     jest.clearAllMocks(); unlockMock.mockResolvedValue(undefined); workerMock.mockReturnValue(false);
+    delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
     await ensureWorkspaceDirs('recovery-route-a'); await ensureWorkspaceDirs('recovery-route-b');
+  });
+  afterEach(() => {
+    if (originalSnapshotControlToken === undefined) delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+    else process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = originalSnapshotControlToken;
   });
 
   it('captures the explicitly selected workspace and returns no-store binary bytes with an inspectable summary', async () => {
@@ -43,15 +50,37 @@ describe('Persona recovery HTTP boundary', () => {
       .toMatchObject({ sourceWorkspace: 'recovery-route-b', archiveBytes: 3, counts: { personas: 2 } });
   });
 
-  it('rejects foreign origins, locked data, workers and implicit/missing workspaces before recovery work', async () => {
+  it('rejects foreign origins, locked data and implicit/missing workspaces before recovery work', async () => {
     expect((await POST(request('capture', { origin: 'https://external.example' }))).status).toBe(403);
     unlockMock.mockResolvedValueOnce(NextResponse.json({}, { status: 423 }));
     expect((await POST(request('capture'))).status).toBe(423);
-    workerMock.mockReturnValueOnce(true);
-    expect((await POST(request('capture'))).status).toBe(403);
     expect((await POST(request('capture', { query: '' }))).status).toBe(400);
     expect((await POST(request('capture', { query: '?workspace=does-not-exist' }))).status).toBe(404);
     expect(captureMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unconfigured worker control', undefined, undefined, 503],
+    ['missing worker bearer', fixtureControlToken, undefined, 401],
+    ['invalid worker bearer', fixtureControlToken, 'incorrect-fixture-bearer', 401],
+    ['authenticated worker', fixtureControlToken, fixtureControlToken, 403],
+  ] as const)('rejects %s before Persona capture, preview or restore', async (_label, configured, bearer, expectedStatus) => {
+    // Both the workspace admission wrapper and the handler observe the same profile.
+    workerMock.mockReturnValue(true);
+    if (configured !== undefined) process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = configured;
+    for (const action of ['capture', 'inspect', 'restore']) {
+      const response = await POST(request(action, {
+        ...(bearer ? { headers: { authorization: `Bearer ${bearer}` } } : {}),
+      }));
+      expect(response.status).toBe(expectedStatus);
+      if (expectedStatus === 403) {
+        expect(await response.json()).toEqual({ error: 'Persona recovery is unavailable on execution workers.' });
+        expect(response.headers.get('cache-control')).toBe('no-store');
+      } else expect(unlockMock).not.toHaveBeenCalled();
+    }
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(planMock).not.toHaveBeenCalled();
+    expect(restoreMock).not.toHaveBeenCalled();
   });
 
   it('bounds both declared and streamed uploads, and rejects empty data or invalid destinations', async () => {

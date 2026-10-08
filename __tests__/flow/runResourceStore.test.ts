@@ -344,3 +344,31 @@ describe('listAllRunResources + delete', () => {
     await expect(fs.access(path.join(tmpDir, 'convA'))).rejects.toThrow();
   });
 });
+
+it('refuses a ranged payload substituted with a directory before any descriptor read', async () => {
+  const entry = await writeRunResource({ conversationId: 'nonregular_range', mimeType: 'text/plain', kind: 'text',
+    data: { text: 'retained resource' }, producedBy }) as RunResourceEntry;
+  const file = path.join(tmpDir, 'nonregular_range', `${entry.id}.dat`);
+  const originalOpen = fs.open.bind(fs);
+  const reads: jest.Mock[] = [];
+  let swapped = false;
+  jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]) === file && !swapped) {
+      swapped = true;
+      await fs.unlink(file);
+      await fs.mkdir(file);
+    }
+    const handle = await originalOpen(...args);
+    if (String(args[0]) === file) {
+      const read = jest.fn(handle.read.bind(handle));
+      handle.read = read;
+      reads.push(read);
+    }
+    return handle;
+  });
+  try {
+    expect(await readRunResourceRange(entry.uri, 0, 4)).toBeNull();
+    expect(swapped).toBe(true);
+    expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
+  } finally { jest.restoreAllMocks(); }
+});

@@ -204,7 +204,7 @@ function ConvertTo-InstallManifest {
 function Get-KnownInstallerPrerequisites {
     return @(
         [PSCustomObject]@{ command = 'git';    wingetId = 'Git.Git';            displayName = 'Git' }
-        [PSCustomObject]@{ command = 'node';   wingetId = 'OpenJS.NodeJS';      displayName = 'Node.js (includes npm)' }
+        [PSCustomObject]@{ command = 'node';   wingetId = 'OpenJS.NodeJS.LTS';      displayName = 'Node.js (includes npm)' }
         [PSCustomObject]@{ command = 'python'; wingetId = 'Python.Python.3.12'; displayName = 'Python 3.12' }
         [PSCustomObject]@{ command = 'uv';     wingetId = 'astral-sh.uv';       displayName = 'uv' }
         [PSCustomObject]@{ command = 'rg';     wingetId = 'BurntSushi.ripgrep.MSVC'; displayName = 'ripgrep' }
@@ -288,9 +288,10 @@ function Test-NodeVersion {
 
     # Parse version components
     $parts = $version.Split('.')
-    $major = [int]$parts[0]
-    $minor = [int]$parts[1]
-    $patch = [int]$parts[2]
+    $major = 0; $minor = 0; $patch = 0
+    if (-not [int]::TryParse($parts[0], [ref]$major) -or -not [int]::TryParse($parts[1], [ref]$minor) -or -not [int]::TryParse($parts[2], [ref]$patch)) {
+        return [PSCustomObject]@{ Status = 'Malformed'; Version = $version; ExitCode = $exitCode; Message = 'Node.js version components exceed the numeric range.' }
+    }
 
     # Compare against minimum
     if ($major -gt $MinMajor -or ($major -eq $MinMajor -and $minor -ge $MinMinor)) {
@@ -308,6 +309,33 @@ function Test-NodeVersion {
             Message = "Node.js $version is below minimum requirement (>= $MinMajor.$MinMinor)"
         }
     }
+}
+
+function Test-FlujoNodeVersion {
+    param(
+        [string]$CommandName = 'node',
+        [scriptblock]$CommandResolver,
+        [scriptblock]$VersionResolver
+    )
+    # Preserve the generic minimum-version helper and its injected probe contract.
+    $probeArgs = @{ CommandName = $CommandName; MinMajor = 22; MinMinor = 17 }
+    foreach ($name in @('CommandResolver', 'VersionResolver')) {
+        if ($PSBoundParameters.ContainsKey($name)) { $probeArgs[$name] = $PSBoundParameters[$name] }
+    }
+    $result = Test-NodeVersion @probeArgs
+    if ($result.Status -notin @('Supported', 'Outdated')) { return $result }
+    if ($result.Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        $result.Status = 'Malformed'
+        $result.Message = 'Node.js version must contain three canonical numeric components.'
+        return $result
+    }
+    $parts = $result.Version.Split('.')
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    $supported = ($major -eq 22 -and $minor -ge 17) -or ($major -eq 24 -and $minor -ge 2)
+    $result.Status = if ($supported) { 'Supported' } else { 'Outdated' }
+    $result.Message = 'FLUJO requires Node.js 22.17+ within 22.x, or 24.2+ within 24.x; use a current patched release on either line.'
+    return $result
 }
 
 function Get-UninstallPrerequisiteDecisions {

@@ -11,6 +11,7 @@ import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/To
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
 import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
+import McpAgentJourney from './McpAgentJourney';
 import McpAppsDashboard, { type McpAppsDashboardSelection } from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import {
@@ -858,6 +859,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           </>
         )}
       />
+
+      <McpAgentJourney servers={servers} onConnect={handleConnectApp} onInspect={handleOpenDetails} />
 
       {/* Toolbar with search, sort, and bulk actions */}
       {/* #372: the outer spacing lives on the sticky wrapper (as padding rather

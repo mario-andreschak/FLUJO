@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import os from 'node:os';
@@ -1132,12 +1132,42 @@ export async function browserDiagnostics(session?: BrowserSession): Promise<Reco
   };
 }
 
+function samePreferencesFile(opened: BigIntStats, observed: BigIntStats): boolean {
+  return observed.isFile() && !observed.isSymbolicLink()
+    && observed.ino !== BigInt(0) && observed.nlink === BigInt(1)
+    && opened.dev === observed.dev && opened.ino === observed.ino
+    && opened.size === observed.size && opened.mtimeNs === observed.mtimeNs
+    && opened.ctimeNs === observed.ctimeNs && opened.mode === observed.mode
+    && opened.uid === observed.uid && opened.gid === observed.gid;
+}
+
 async function installedProfileExtensions(): Promise<Array<Record<string, unknown>>> {
   const preferencesPath = path.join(trustedProfileDir(), 'Default', 'Preferences');
   try {
-    const stat = await fs.stat(preferencesPath);
-    if (!stat.isFile() || stat.size > 50_000_000) return [];
-    const preferences = JSON.parse(await fs.readFile(preferencesPath, 'utf8')) as {
+    const handle = await fs.open(preferencesPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    let text: string;
+    try {
+      const opened = await handle.stat({ bigint: true });
+      const named = await fs.lstat(preferencesPath, { bigint: true });
+      if (!samePreferencesFile(opened, opened) || !samePreferencesFile(opened, named)
+          || opened.size < BigInt(0) || opened.size > BigInt(50_000_000)) return [];
+      const size = Number(opened.size);
+      // Keep allocation and reads bounded to the admitted size plus a growth sentinel.
+      const bytes = Buffer.alloc(size + 1);
+      let consumed = 0;
+      while (consumed < bytes.length) {
+        const { bytesRead } = await handle.read(bytes, consumed, Math.min(bytes.length - consumed, 1024 * 1024), consumed);
+        if (bytesRead === 0) break;
+        consumed += bytesRead;
+      }
+      const after = await handle.stat({ bigint: true });
+      const namedAfter = await fs.lstat(preferencesPath, { bigint: true });
+      if (consumed !== size || !samePreferencesFile(opened, after) || !samePreferencesFile(opened, namedAfter)) return [];
+      text = bytes.subarray(0, consumed).toString('utf8');
+    } finally {
+      await handle.close();
+    }
+    const preferences = JSON.parse(text) as {
       extensions?: { settings?: Record<string, Record<string, unknown>> };
     };
     const settings = preferences.extensions?.settings ?? {};

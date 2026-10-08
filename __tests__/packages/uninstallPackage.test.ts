@@ -283,3 +283,24 @@ describe('uninstallPackage — legacy ledger without provenance', () => {
     expect(summary.skipped.some((s) => s.kind === 'model' && s.reason === 'legacy-ledger-no-provenance')).toBe(true);
   });
 });
+
+describe('uninstallPackage — ambiguous flow ownership', () => {
+  it.each(['another-package', 'another-local-flow'])('retains every entity and ledger when an ID is claimed by %s', async (conflict) => {
+    const record = recordWithProvenance();
+    const ledger = conflict === 'another-package'
+      ? { ...record, other: { entities: { flows: { foreign: 'pkg-my-pkg-local-root' } } } }
+      : record;
+    if (conflict === 'another-local-flow') {
+      record['my-pkg'].entities.flows['local-child'] = record['my-pkg'].entities.flows['local-root'];
+    }
+    store.set(LEDGER_KEY, ledger);
+    const summary = await uninstallPackage('my-pkg');
+    expect(summary.ok).toBe(false);
+    expect(summary.hasErrors).toBe(true);
+    expect(deleteFlowMock).not.toHaveBeenCalled();
+    expect(deleteModelMock).not.toHaveBeenCalled();
+    expect(deleteServerConfigMock).not.toHaveBeenCalled();
+    expect(schedulerDeleteMock).not.toHaveBeenCalled();
+    expect(store.get(LEDGER_KEY)).toBe(ledger);
+  });
+});

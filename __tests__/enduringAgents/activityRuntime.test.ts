@@ -22,6 +22,7 @@ import {
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
 import { projectPersonaPresentation } from '@/backend/services/enduringAgents/personaPresentation';
+import { assertHeldPersonaActivityRead, readWithPersonaActivityLease, type HeldPersonaActivityRead } from '@/backend/services/enduringAgents/activityRuntime';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import { flowService } from '@/backend/services/flow';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
@@ -570,6 +571,17 @@ describe('enduring-agent Activity runtime', () => {
       const { persona } = await createJim('runtime-transient-release-jim');
       await enqueuePersonaMailboxItem(assignment(persona.id, 'transient-release'));
       const originalLink = fs.link.bind(fs);
+      const originalUnlink = fs.unlink.bind(fs);
+      let releaseFailures = 0;
+      // Exhaust healthy-owner unlink retries so the guarded recovery fallback
+      // actually runs; successful releases need no recovery intent.
+      jest.spyOn(fs, 'unlink').mockImplementation(async (targetPath) => {
+        if (String(targetPath).endsWith(`${persona.id}.lock`) && releaseFailures < 20) {
+          releaseFailures += 1;
+          throw Object.assign(new Error('transient canonical sharing conflict'), { code: 'EBUSY' });
+        }
+        return originalUnlink(targetPath);
+      });
       let injected = false;
       jest.spyOn(fs, 'link').mockImplementation(async (existingPath, targetPath) => {
         if (!injected && String(targetPath).includes('.lock.recovery.')) {
@@ -1389,6 +1401,74 @@ describe('enduring-agent Activity runtime', () => {
       expect(next.mailboxItem.summary).toBe('Assignment continues');
       expect((await getPersonaMailboxItem(active.mailboxItem.personaId, active.mailboxItem.id))?.status).toBe('rejected');
       expect((await getPersona(persona.id))?.lifecycleState).toBe('busy');
+    });
+  });
+
+  it.each(['checkpoint', 'final'])('rejects actual lease expiry at the held-read %s boundary', async boundary => {
+    await inFreshWorkspace(async () => {
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(50_000);
+      const { persona } = await createJim(`held-expiry-${boundary}`);
+      await enqueuePersonaMailboxItem(assignment(persona.id, `held-expiry-${boundary}`));
+      const active = await claim(persona.id, 1_000);
+      await expect(readWithPersonaActivityLease(fence(active), async reader => {
+        await reader.assertCurrent();
+        clock.mockReturnValue(51_000);
+        if (boundary === 'checkpoint') await reader.assertCurrent();
+        return 'must-not-escape';
+      })).rejects.toBeInstanceOf(PersonaLeaseLostError);
+      expect((await getPersonaLeaseRecord(active.lease.id))?.status).toBe('expired');
+    });
+  });
+
+  it('rereads runnable Activity under the held lock instead of reusing admission', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createJim('held-activity-revoked');
+      await enqueuePersonaMailboxItem(assignment(persona.id, 'held-activity-revoked'));
+      const active = await claim(persona.id);
+      await expect(readWithPersonaActivityLease(fence(active), async reader => {
+        await reader.assertCurrent();
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.activities,
+          PersonaActivitySchema.parse({ ...active.activity, status: 'completed',
+            updatedAt: Date.now(), completedAt: Date.now() }));
+        await reader.assertCurrent();
+      })).rejects.toBeInstanceOf(PersonaLeaseLostError);
+    });
+  });
+
+  it('refuses actual filesystem lock loss during a held read', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createJim('held-lock-loss');
+      await enqueuePersonaMailboxItem(assignment(persona.id, 'held-lock-loss'));
+      const active = await claim(persona.id);
+      const lockPath = path.join(getWorkspaceDbDir(), '.runtime-locks', 'enduring-agents', `${persona.id}.lock`);
+      await expect(readWithPersonaActivityLease(fence(active), async reader => {
+        await reader.assertCurrent();
+        const owner = await fs.readFile(lockPath);
+        await fs.unlink(lockPath);
+        try { await reader.assertCurrent(); }
+        finally { await fs.writeFile(lockPath, owner, { flag: 'wx' }); }
+      })).rejects.toThrow();
+      await expect(assertPersonaActivityLease(fence(active))).resolves.toMatchObject({ id: active.lease.id });
+    });
+  });
+
+  it('invalidates escaped readers after callback return and refuses lookalikes', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createJim('held-escape');
+      await enqueuePersonaMailboxItem(assignment(persona.id, 'held-escape'));
+      const active = await claim(persona.id);
+      let escaped: HeldPersonaActivityRead | undefined;
+      await expect(readWithPersonaActivityLease(fence(active), async reader => {
+        assertHeldPersonaActivityRead(reader);
+        escaped = reader;
+        await reader.assertCurrent();
+        return 'current';
+      })).resolves.toBe('current');
+      expect(() => assertHeldPersonaActivityRead(escaped)).toThrow();
+      await expect(escaped!.assertCurrent()).rejects.toBeInstanceOf(PersonaLeaseLostError);
+      expect(() => assertHeldPersonaActivityRead({ assertCurrent: async () => undefined })).toThrow();
+      // A failed escaped call leaves the original lock available to a new owner.
+      await expect(assertPersonaActivityLease(fence(active))).resolves.toMatchObject({ id: active.lease.id });
     });
   });
 

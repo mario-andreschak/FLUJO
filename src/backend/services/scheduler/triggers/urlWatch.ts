@@ -16,6 +16,8 @@ const FETCH_TIMEOUT_MS = 30_000;
 const MAX_CONTEXT_CHARS = 8192;
 
 export interface UrlWatchDeps {
+  /** Trusted durable definition admission, repeated before each effect. */
+  assertCurrent?: () => Promise<void>;
   loadState: () => Promise<PlannedExecutionState>;
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
   /**
@@ -58,6 +60,7 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
     }
     busy = true;
     try {
+      await deps.assertCurrent?.();
       const response = await doFetch(config.url, {
         redirect: 'follow',
         headers: { 'User-Agent': 'FLUJO-url-watch' },
@@ -67,10 +70,13 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
         deps.onError(`The URL answered with HTTP ${response.status}`);
         return;
       }
+      await deps.assertCurrent?.();
       const body = await response.text();
+      await deps.assertCurrent?.();
       const hash = hashResult(body);
 
       const state = await deps.loadState();
+      await deps.assertCurrent?.();
       if (disposed) {
         return;
       }
@@ -85,6 +91,7 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
       }
       // Content changed → fire, but advance the baseline only once the run
       // actually processes the change (commit-after-success, issue #75).
+      await deps.assertCurrent?.();
       const { status } = await deps.onFire({
         summary: 'Online content changed',
         // Retain identity across ambiguous admission/crash retries, but advance
@@ -104,6 +111,7 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
       if (disposed) {
         return; // disarmed while the run was in flight
       }
+      await deps.assertCurrent?.();
       const { giveUpError } = await commitPendingAfterOutcome({
         status,
         pendingState: { lastHash: hash },
