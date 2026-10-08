@@ -1903,9 +1903,13 @@ export class MCPService {
         try { config = (await this.getServerConfig(serverName)) || undefined; }
         catch (error) { teardownFailure = error; }
         // Cleanup owns the client now and must finish even after request revocation.
-        try { return await safelyCloseClient(closingClient, serverName, config); }
+        try {
+          const observation = await safelyCloseClient(closingClient, serverName, config);
+          if (teardownFailure) throw teardownFailure;
+          return observation;
+        }
         catch (error) {
-          teardownFailure = teardownFailure
+          teardownFailure = teardownFailure && teardownFailure !== error
             ? new BundledFlujoWorkloadError(new AggregateError([teardownFailure, error], 'MCP teardown failed'))
             : error;
           if (error instanceof McpRuntimeAuthorityRetirementError) retirementFailure = error;
