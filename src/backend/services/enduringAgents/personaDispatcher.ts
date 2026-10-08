@@ -2916,6 +2916,8 @@ export class PersonaFlowDispatcher {
             scope.assertActive();
             await reader.assertCurrent();
             scope.assertActive();
+            abortController.signal.throwIfAborted();
+            if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
             if (additionalCheck) {
               await additionalCheck();
               scope.assertActive();
