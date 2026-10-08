@@ -24,7 +24,7 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
 import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
-import { NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
+import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -2730,9 +2730,12 @@ export class ModelHandler {
                     const nativeExecutors = Object.freeze({ ...localToolExecutors });
                     const hasHandoff = nativeTools.some(tool => tool.type === 'function'
                       && (tool.function.name === 'handoff' || tool.function.name.startsWith('handoff_to_')));
-                    const terminationProtocol = hasHandoff && model.adapter === 'claude-cli'
-                      && opts.nativeOriginalProcessHost ? NATIVE_HANDOFF_PROTOCOL : undefined;
-                    if (terminationProtocol) assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                    const terminationProtocol = hasHandoff && opts.nativeOriginalProcessHost
+                      ? opts.nativeOriginalProcessHost.terminationProtocol : undefined;
+                    if (terminationProtocol) {
+                      assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                      if(terminationProtocol!==(model.adapter==='codex-cli'?CODEX_HANDOFF_PROTOCOL:NATIVE_HANDOFF_PROTOCOL))throw new Error('Native Original adapter/termination protocol mismatch.');
+                    }
                     const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
                     nativeInventory = { digest: inventoryDigest, tools: nativeTools,
                       ...(terminationProtocol ? { terminationProtocol } : {}),

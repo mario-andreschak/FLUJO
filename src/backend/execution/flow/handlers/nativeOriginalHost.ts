@@ -15,6 +15,10 @@ import { createNativeLineageRootBinding } from './nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from './nativeInvocationSession';
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
+import { assertCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
+import { qualifyNativeCodex, assertNativeCodexQualification } from '@/backend/services/model/adapters/codexNativeQualification';
+import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
+import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
 import { readNativeHeldFile } from './nativeHeldFile';
 
 type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
@@ -31,8 +35,8 @@ const positive = (value: unknown): number | undefined =>
 type Reservation = { invocationId: string; descriptorDigest: string; owner: NativeInvocationSession['descriptor']['receipt']['owner'];
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
-  handoff?: { protocol: 'owned-claude-exit-close-v1'; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
-  sdkUsage?: { source: 'claude-sdk-result'; numTurns?: number; inputTokens?: number;
+  handoff?: { protocol: NativeHandoffProtocol; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
+  sdkUsage?: { source: 'claude-sdk-result'|'codex-app-server-usage'; numTurns?: number; appServerTurns?:number; inputTokens?: number;
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
   identity?: ClaudeOwnedProcessRegistration['identity']; sdkOutcome?: string; exit?: { code: number | null; signal: NodeJS.Signals | null } };
 type Ledger = { version: 1; goalId: string; personaId: string; reservations: Reservation[] };
@@ -196,8 +200,10 @@ export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutio
 }
 
 export interface NativeOriginalProcessHost {
+  readonly terminationProtocol: NativeHandoffProtocol;
+  readonly codexProfile?: Readonly<RestrictedCodexProfile>;
   assertTurnBudget(maxTurns: number): Promise<void>;
-  register(process: ClaudeOwnedProcessRegistration): Promise<void>;
+  register(process: ClaudeOwnedProcessRegistration | CodexOwnedProcessRegistration): Promise<void>;
   beforeFirstPrompt(): Promise<void>;
   waitForExit(): Promise<void>;
   releaseAfterTerminal(): Promise<void>;
@@ -229,10 +235,7 @@ export async function createPersonaNativeOriginalHost(input: {
     if (!task || task.goal || task.parentGoalId) return held();
     return undefined;
   }
-  if (model?.adapter !== 'claude-cli') {
-    if (model?.adapter === 'codex-cli') return held(); // No verified public owned-child hook.
-    return undefined;
-  }
+  if (model?.adapter !== 'claude-cli' && model?.adapter !== 'codex-cli') return undefined;
   // Always use the mint's captured real lease closures, including when a causal
   // wrapper carries the binding. Caller-owned wrapper methods are not authority.
   const authority = binding.authority;
@@ -241,6 +244,7 @@ export async function createPersonaNativeOriginalHost(input: {
   const node = binding.flow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
   if (!node || node.data.properties?.boundModel !== input.modelId) return held();
   if (model.id !== input.modelId || model.fallbackPolicy) return held();
+  if(model.adapter==='codex-cli' && model.ApiKey?.trim())return held();
   const maxTurns = positive(node.data.properties?.maxTurns) ?? positive(model.maxTurns) ?? DEFAULT_AGENTIC_MAX_TURNS;
   const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, adapter: value?.adapter,
     provider: value?.provider, maxTurns: value?.maxTurns, temperature: value?.temperature,
@@ -263,12 +267,17 @@ export async function createPersonaNativeOriginalHost(input: {
   const launchCap: CommitCapability = { assertCurrent: assertGoalCurrent,
     assertActive: () => authority.signal.throwIfAborted() };
   await assertCurrent();
+  const codexProfile=model.adapter==='codex-cli'
+    ? await qualifyNativeCodex(model.name,model.reasoningEffort,authority.signal,assertCurrent):undefined;
+  if(codexProfile)assertNativeCodexQualification(codexProfile);
+  await assertCurrent();
+  const terminationProtocol=model.adapter==='codex-cli'?CODEX_HANDOFF_PROTOCOL:NATIVE_HANDOFF_PROTOCOL;
   const broker = createNativeBrokerAuthority(binding.leaseEpoch, assertCurrent);
   const root = createNativeLineageRootBinding({ workspace: binding.workspace, fleetRunId: binding.dispatchId,
     workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
   let original: NativeInvocationSession | undefined;
-  let child: ClaudeOwnedProcessRegistration | undefined;
+  let child: ClaudeOwnedProcessRegistration | CodexOwnedProcessRegistration | undefined;
   let exited = false;
   let closed = false;
   let handoffStopRequested = false;
@@ -288,7 +297,7 @@ export async function createPersonaNativeOriginalHost(input: {
       const owner = descriptor.receipt.owner;
       if (owner.conversationId !== binding.conversationId || owner.runId !== binding.runId
         || owner.nodeId !== input.nodeId || owner.modelId !== input.modelId || owner.leaseEpoch !== binding.leaseEpoch
-        || descriptor.archive.adapter !== 'claude-cli' || descriptor.lineage.edges.length
+        || descriptor.archive.adapter !== model.adapter || descriptor.lineage.edges.length
         || descriptor.lineage.rootFlowId !== binding.flow.id) return held();
       const saved = await readSavedNativeOrigin({ invocationId: descriptor.receipt.invocationId,
         authority: broker, root, signal: authority.signal });
@@ -321,15 +330,17 @@ export async function createPersonaNativeOriginalHost(input: {
     },
   });
   const processHost: NativeOriginalProcessHost = {
+    terminationProtocol,
+    ...(codexProfile?{codexProfile}:{}),
     prepareHandoff: async (invocationId, toolInvocationId) => {
       if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
-        || original.descriptor.inventory.terminationProtocol !== 'owned-claude-exit-close-v1'
+        || original.descriptor.inventory.terminationProtocol !== terminationProtocol
         || handoffStopRequested || !toolInvocationId || toolInvocationId.length > 256
         || handoffIds.size >= 32 || handoffIds.has(toolInvocationId)) return held();
       await processHost.beforeFirstPrompt();
       await authority.commitWhileCurrent!(() => update(async reservation => {
         if (reservation.state !== 'registered') return held();
-        reservation.handoff = { protocol: 'owned-claude-exit-close-v1',
+        reservation.handoff = { protocol: terminationProtocol,
           toolInvocationIds: [...handoffIds, toolInvocationId], state: 'requested' };
       }));
       handoffIds.add(toolInvocationId);
@@ -356,11 +367,14 @@ export async function createPersonaNativeOriginalHost(input: {
     observeSdkUsage: async result => {
       if (!result || typeof result !== 'object' || !child || !original) return held();
       const value = result as Record<string, unknown>;
-      if (value.type !== 'result') return held();
       const usage = value.usage && typeof value.usage === 'object' ? value.usage as Record<string, unknown> : {};
       const number = (candidate: unknown): number | undefined => typeof candidate === 'number'
         && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
-      const receipt: NonNullable<Reservation['sdkUsage']> = { source: 'claude-sdk-result',
+      if(model.adapter==='codex-cli' && (value.type!=='codex-app-server-usage' || value.appServerTurns!==1))return held();
+      if(model.adapter==='claude-cli' && value.type!=='result')return held();
+      const receipt: NonNullable<Reservation['sdkUsage']> = model.adapter==='codex-cli'
+        ? {source:'codex-app-server-usage',appServerTurns:1,inputTokens:number(usage.input_tokens),outputTokens:number(usage.output_tokens),cacheReadTokens:number(usage.cached_input_tokens),cacheCreationTokens:number(usage.cache_write_input_tokens)}
+        : { source: 'claude-sdk-result',
         numTurns: number(value.num_turns), inputTokens: number(usage.input_tokens), outputTokens: number(usage.output_tokens),
         cacheReadTokens: number(usage.cache_read_input_tokens), cacheCreationTokens: number(usage.cache_creation_input_tokens),
         totalCostUsd: number(value.total_cost_usd), durationMs: number(value.duration_ms) };
@@ -376,7 +390,8 @@ export async function createPersonaNativeOriginalHost(input: {
       await assertCurrent();
     },
     register: async value => {
-      assertClaudeOwnedProcessRegistration(value, processHost);
+      if(model.adapter==='codex-cli')assertCodexOwnedProcessRegistration(value,processHost);
+      else assertClaudeOwnedProcessRegistration(value, processHost);
       if (!original || child || !value.identity.processBirthMarkerV2) return held();
       child = value;
       void value.exit.then(() => { exited = true; });

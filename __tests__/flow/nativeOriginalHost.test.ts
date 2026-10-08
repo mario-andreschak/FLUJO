@@ -13,12 +13,69 @@ const modelFixture: Model = { id: 'model-test', name: 'offline-native', displayN
 let selectedModel = { ...modelFixture };
 const queryMock = jest.fn();
 jest.mock('@/backend/services/model', () => ({ modelService: {
-  getModel: async () => selectedModel, resolveAndDecryptApiKey: async () => 'offline-fixture-token',
+  getModel: async () => selectedModel, resolveAndDecryptApiKey: async () => selectedModel.adapter==='codex-cli'?'':'offline-fixture-token',
   loadModels: async () => [selectedModel],
 } }));
-jest.mock('@/backend/services/model/adapters', () => ({ getCompletionAdapter: () =>
-  new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
+jest.mock('@/backend/services/model/adapters', () => ({ getCompletionAdapter: () => selectedModel.adapter==='codex-cli'
+  ? new (jest.requireActual<typeof import('@/backend/services/model/adapters/codexAdapter')>('@/backend/services/model/adapters/codexAdapter').CodexAdapter)()
+  : new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
     '@/backend/services/model/adapters/claudeSubscriptionAdapter').ClaudeSubscriptionAdapter)() }));
+jest.mock('@openai/codex-sdk',()=>({Codex:class {constructor(){throw new Error('Offline owned Original must not use SDK exec');}}}),{virtual:true});
+// Only the model edge is deterministic. Production Original, Persona lease,
+// journal, thread wrapper, MCP bridge and born-child registration remain real.
+// The separate opt-in live qualification suite proves the real profile mint.
+jest.mock('@/backend/services/model/adapters/codexNativeQualification',()=>{
+  const profile=Object.freeze({verifiedCliVersion:'offline-fixture',verifiedCliPath:process.execPath,
+    verifiedCliSha256:'fixture',verifiedModelCatalogPath:'fixture',verifiedModelCatalogSha256:'fixture'});
+  return {qualifyNativeCodex:async()=>profile,assertNativeCodexQualification:(value:unknown)=>{
+    if(value!==profile)throw new Error('Fixture qualification capability mismatch');}};
+});
+jest.mock('@/backend/services/model/adapters/codexRestrictedProfile',()=>{
+  const actual=jest.requireActual<typeof import('@/backend/services/model/adapters/codexRestrictedProfile')>('@/backend/services/model/adapters/codexRestrictedProfile');
+  return {...actual,assertRestrictedCodexProfile:async()=>process.execPath,prepareRestrictedCodexRuntimeEnvironment:async()=>({
+    home:directory,workingDirectory:directory,env:Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&/^(path|systemroot|windir|comspec|pathext)$/i.test(key))),
+    configOverrides:[],modelCatalogPath:'offline-fixture-catalog',cleanup:async()=>{},
+  })};
+});
+const codexFixture=`
+const rl=require('node:readline'),bridge=process.argv[1],handoff=process.argv[2]==='true';
+setInterval(()=>{},1000);process.stdin.on('end',()=>process.exit(0));
+const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+rl.createInterface({input:process.stdin}).on('line',async line=>{
+ const request=JSON.parse(line);if(request.id===undefined)return;
+ if(request.method==='thread/start'){send({id:request.id,result:{thread:{id:'thread-offline-owned'},model:request.params.model}});return;}
+ if(request.method!=='turn/start'){send({id:request.id,result:{}});return;}
+ const threadId='thread-offline-owned',turnId='turn-offline-owned';send({id:request.id,result:{turn:{id:turnId}}});
+ const emit=(method,extra)=>send({method,params:{threadId,turnId,...extra}});
+ if(handoff){
+   const call=async(method,params)=>{const response=await fetch(bridge,{method:'POST',headers:{'content-type':'application/json',Accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});return response.json();};
+   await call('initialize',{protocolVersion:'2025-03-26',clientInfo:{name:'offline-fixture',version:'1'},capabilities:{}});
+   const listed=await call('tools/list',{});const tool=listed.result.tools.find(value=>value.name.startsWith('handoff_to_'));
+   if(!tool){process.exitCode=1;process.stdin.destroy();return;}
+   // Exit and pipe close are independently observable even with inherited
+   // fixture stdout held briefly by another actual process.
+   require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+   emit('item/started',{item:{type:'mcpToolCall',id:'offline-code-call-1',server:'flujo',tool:tool.name,status:'inProgress',arguments:{}}});
+   await call('tools/call',{name:tool.name,arguments:{},_meta:{callId:'offline-code-call-1',threadId}});return;
+ }
+ emit('item/completed',{item:{type:'agentMessage',id:'offline-code-message',text:'done'}});
+ emit('thread/tokenUsage/updated',{tokenUsage:{last:{inputTokens:7,cachedInputTokens:2,outputTokens:4,reasoningOutputTokens:1}}});
+ emit('turn/completed',{turn:{id:turnId,status:'completed'}});
+});`;
+jest.mock('@/backend/services/model/adapters/codexAppServerProcess',()=>{
+  const actual=jest.requireActual<typeof import('@/backend/services/model/adapters/codexAppServerProcess')>('@/backend/services/model/adapters/codexAppServerProcess');
+  return {...actual,startOwnedCodexAppServer:async(input:Parameters<typeof actual.startOwnedCodexAppServer>[0])=>{
+    const arg=input.args?.find(value=>value.startsWith('mcp_servers.flujo.url='));
+    const bridge=arg?JSON.parse(arg.slice(arg.indexOf('=')+1)):'';
+    const transport=await actual.startOwnedCodexAppServer({...input,executable:process.execPath,args:['-e',codexFixture,bridge,String(emitHandoff)],
+      register:async process=>{await input.register(process);await beforePrompt?.();}});
+    return {...transport,request:async(method:string,params:unknown,timeout?:number)=>{
+      const result=await transport.request(method,params,timeout);
+      if(method==='turn/start'){promptCount++;await afterPrompt?.();}
+      return result;
+    }};
+  }};
+});
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: (...args: unknown[]) => queryMock(...args),
   createSdkMcpServer: (value: unknown) => value,
   tool: (name: string, _description: unknown, _schema: unknown, handler: unknown) => ({ name, handler }) }));
@@ -204,6 +261,30 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  function selectCodex(){selectedModel={...modelFixture,name:'gpt-6-luna',provider:'codex',adapter:'codex-cli',ApiKey:'',reasoningEffort:'medium'};}
+  it('runs a Codex Core through its saved Original, owned app-server child, actual usage and terminal release',async()=>{
+    selectCodex();await withClaim(async()=>{},async()=>{
+      expect(promptCount).toBe(1);const reservation=(await ledger()).reservations[0];
+      expect(reservation).toMatchObject({state:'released',sdkOutcome:'completed',exit:{code:0,signal:null},
+        sdkUsage:{source:'codex-app-server-usage',appServerTurns:1,inputTokens:7,outputTokens:4,cacheReadTokens:2}});
+      expect(reservation.sdkUsage.totalCostUsd).toBeUndefined();expect(reservation.identity.processBirthMarkerV2).toBeDefined();
+      expect(reservation.sdkUsage.cacheCreationTokens).toBeUndefined();
+    },'no-handoff');
+  },30000);
+  it('confirms Codex routing only after the Original child exits and its inherited output pipe closes',async()=>{
+    selectCodex();emitHandoff=true;await withClaim(async()=>{},async()=>{
+      expect(promptCount).toBe(1);expect((await ledger()).reservations[0]).toMatchObject({state:'released',sdkOutcome:'completed',
+        handoff:{protocol:'owned-codex-app-server-exit-close-v1',state:'confirmed',toolInvocationIds:['offline-code-call-1']}});
+    },'handoff');
+  },30000);
+  it('holds a Codex Original and rejects late provider output after its genuine Persona goal pauses',async()=>{
+    selectCodex();await withClaim(async(input,goalId)=>{
+      afterPrompt=async()=>{const goal=(await getPersonaWorkItem(input.personaAttribution!.personaId,goalId))!;
+        await savePersonaWorkItem({...goal,goal:{...goal.goal!,state:'paused'}});};
+    },async()=>{const reservation=(await ledger()).reservations[0];expect(promptCount).toBe(1);
+      expect(reservation.state).not.toBe('released');expect(reservation.sdkUsage).toBeUndefined();
+    },'handoff-refusal');
+  },30000);
   it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
     transcriptText = 'late-private-persona-transcript';
     lateResultFirst = true;
@@ -374,7 +455,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     });
   }, 30000);
 
-  it('holds Codex without inferring a public child hook and rejects changed model budget before launch', async () => {
+  it('holds unqualified Codex credentials and rejects changed model budget before launch', async () => {
     await withClaim(async input => {
       const { invoke, node, state } = await prepare(input);
       try {

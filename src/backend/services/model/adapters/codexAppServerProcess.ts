@@ -106,7 +106,15 @@ export async function startOwnedCodexAppServer(input: {
   };
   try {
     await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
-    const identity=Object.freeze(await captureRuntimeChildIdentity(child.pid!));
+    // A slow OS probe is uncertainty, never permission to use PID alone. Retry
+    // only the birth read on this same still-owned child, before any wire input.
+    let captured:RuntimeProcessIdentity|undefined;
+    for(let attempt=0;attempt<3;attempt++) {
+      try {captured=await captureRuntimeChildIdentity(child.pid!);break;}
+      catch(error) {if(attempt===2||exited||closed||stopping||input.signal?.aborted)throw error;}
+    }
+    if(!captured)throw unavailable();
+    const identity=Object.freeze(captured);
     if (exited || closed || input.signal?.aborted) throw unavailable();
     const registration=Object.freeze({identity,requestStop,exit,close});
     registrations.set(registration,input.owner);
