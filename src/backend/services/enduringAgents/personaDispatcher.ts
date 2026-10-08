@@ -2923,6 +2923,13 @@ export class PersonaFlowDispatcher {
               scope.assertActive();
               await reader.assertCurrent();
               scope.assertActive();
+              // The Native guard awaited independently of the dispatch goal.
+              // Re-read that goal after it returns; a fresh lease alone cannot
+              // detect a goal/dispatch mutation on the separate store chain.
+              await this.assertGoalDispatchCurrent(record, false);
+              scope.assertActive();
+              await reader.assertCurrent();
+              scope.assertActive();
             }
             abortController.signal.throwIfAborted();
             if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');

@@ -81,7 +81,7 @@ jest.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: (...args: unknown[])
   createSdkMcpServer: (value: unknown) => value,
   tool: (name: string, _description: unknown, _schema: unknown, handler: unknown) => ({ name, handler }) }));
 
-import { PersonaFlowDispatcher, personaFlowDispatchId } from '@/backend/services/enduringAgents/personaDispatcher';
+import { PersonaFlowDispatcher, personaFlowDispatchId, readWithPersonaFlowAuthority } from '@/backend/services/enduringAgents/personaDispatcher';
 import { createPersonaWorkItem } from '@/backend/services/enduringAgents/workItems';
 import { createRoleVersion, getPersonaWorkItem, savePersonaWorkItem } from '@/backend/services/enduringAgents/store';
 import { stopPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
@@ -341,6 +341,33 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  it.each(['pause', 'dispatch-drift'])('refuses actual %s while an additional held Native goal guard is awaiting', async mode => {
+    await withClaim(async (input, goalId) => {
+      const personaId = input.personaAttribution!.personaId;
+      let reached!: () => void;
+      let resume!: () => void;
+      const started = new Promise<void>(resolve => { reached = resolve; });
+      const continuation = new Promise<void>(resolve => { resume = resolve; });
+      const attempt = readWithPersonaFlowAuthority(input.executionAuthority!, assertCurrent => assertCurrent(async () => {
+        const observed = await getPersonaWorkItem(personaId, goalId);
+        expect(observed?.goal?.state).toBe('active');
+        reached();
+        await continuation;
+      }));
+      const refused = expect(attempt).rejects.toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+      await started;
+      try {
+        const goal = (await getPersonaWorkItem(personaId, goalId))!;
+        await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!,
+          ...(mode === 'pause' ? { state: 'paused' as const } : { pendingDispatchId: 'foreign-dispatch' }) } });
+      } finally { resume(); }
+      await refused;
+    }, async () => {
+      expect(children).toHaveLength(0);
+      expect(codexRegistrations).toHaveLength(0);
+    }, 'no-handoff-refusal');
+  }, 30000);
+
   it('runs a genuine Codex Original through its owned public app-server and releases only after exit and pipe close', async () => {
     selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
     const canaries = ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_PRIVATE_OWNER_GRANT', 'MCP_SECRET',
