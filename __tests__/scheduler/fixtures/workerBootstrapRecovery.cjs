@@ -36,6 +36,7 @@ let scheduler;
 let stopping = false;
 let backendEntered = false;
 let pendingApprovedConfigs;
+const captures = new (require('./ownedCaptureLedger.cjs').OwnedCaptureLedger)();
 let commands = Promise.resolve();
 
 async function shutdown() {
@@ -43,6 +44,7 @@ async function shutdown() {
   const failures = [];
   try { if (scheduler) await scheduler.stopWorker(); }
   catch (error) { failures.push(error); }
+  try { await captures.drain(); } catch (error) { failures.push(error); }
   if (pendingApprovedConfigs) {
     try {
       if (!(await source('backend/services/mcp/config.ts').saveConfig(new Map(
@@ -126,27 +128,31 @@ async function command(message) {
       const portable = { ...shipped.createShippedServerConfig(descriptor, {}), name: 'bash', disabled: false,
         roots: [effectRoot], env: { FLUJO_BASH_ROOTS: effectRoot, FLUJO_FS_ROOTS: effectRoot } };
       pendingApprovedConfigs = configs;
-      if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name,
-        config.name === 'bash' ? portable : config])))).success) throw new Error('Portable export projection failed');
-      let primary;
+      const failures = [];
       let captured;
       try {
+      if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name,
+        config.name === 'bash' ? portable : config])))).success) throw new Error('Portable export projection failed');
       const key = require('node:crypto').randomBytes(32).toString('base64');
       const archive = source('backend/services/workspace/snapshotArchive.ts');
-      captured = await archive.captureWorkspaceSnapshot(
-        source('utils/workspace.ts').getCurrentWorkspace(), 2, { recipientKey: key });
-      try {
+      captured = captures.own(await archive.captureWorkspaceSnapshot(
+        source('utils/workspace.ts').getCurrentWorkspace(), 2, { recipientKey: key }));
         const written = await archive.writeWorkspaceSnapshotArchive(captured);
         result = { archivePath: written.archivePath, stagingDir: written.stagingDir, sha256: written.sha256, key };
-      } finally { if (captured.dispose) await captured.dispose(); captured = undefined; }
-      } catch (error) { primary = error; throw error; }
+      } catch (error) { failures.push(error); }
       finally {
-        if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name, config])))).success) {
-          send({ phase: 'cleanup-failed', error: 'Exact approved configuration restoration failed' });
-          throw new AggregateError(primary ? [primary] : [], 'Approved configuration restoration failed');
+        try { if (captured) await captures.dispose(captured); }
+        catch (error) { failures.push(error); send({ phase: 'cleanup-failed', error: String(error.stack || error) }); }
+        try {
+          if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name, config])))).success) {
+            throw new Error('Exact approved configuration restoration failed');
+          }
+          pendingApprovedConfigs = undefined;
+        } catch (error) {
+          failures.push(error); send({ phase: 'cleanup-failed', error: String(error.stack || error) });
         }
-        pendingApprovedConfigs = undefined;
       }
+      if (failures.length) throw new AggregateError(failures, 'Export and independent owned cleanup failed');
       break;
     }
     case 'start-again': await scheduler.start(); result = await scheduler.list(); break;
@@ -205,10 +211,13 @@ async function command(message) {
     const key = require('node:crypto').randomBytes(32).toString('base64');
     const archive = source('backend/services/workspace/snapshotArchive.ts');
     const workspace = source('utils/workspace.ts').getCurrentWorkspace();
-    const captured = await archive.captureWorkspaceSnapshot(workspace, 1, { recipientKey: key });
+    const captured = captures.own(await archive.captureWorkspaceSnapshot(workspace, 1, { recipientKey: key }));
     let written;
+    const failures = [];
     try { written = await archive.writeWorkspaceSnapshotArchive(captured); }
-    finally { if (captured.dispose) await captured.dispose(); }
+    catch (error) { failures.push(error); }
+    try { await captures.dispose(captured); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, 'Seed export and owned capture cleanup failed');
     await sendFlushed({ phase: 'seeded', archivePath: written.archivePath, stagingDir: written.stagingDir,
       sha256: written.sha256, key, workspace, flowId: compiled.flow.id, journal });
     await sendFlushed({ phase: 'cleanup-completed' }); // Captured owned descriptors were disposed above; no worker was started.
