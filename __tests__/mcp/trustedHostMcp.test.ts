@@ -62,6 +62,49 @@ it('requires a separate grant and accepts the matching explicit package revision
   expect(() => assertTrustedHostMcpAllowed({ ...config, trustedHost: undefined })).toThrow('explicit owner consent');
 });
 
+it('overlaps eight actual sibling reads while preserving the synchronous ordered package digest', async () => {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  for (let index = 0; index < 24; index++) {
+    fs.writeFileSync(path.join(policy.sourceRoot, `a-${String(index).padStart(2, '0')}.js`), `source member ${index}`);
+  }
+  const nested = path.join(policy.sourceRoot, 'm-nested');
+  fs.mkdirSync(nested);
+  fs.writeFileSync(path.join(nested, 'child.js'), 'nested member');
+  config.trustedHost = { ...policy, sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot) };
+  approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(config);
+  persist();
+  const open = fs.promises.open.bind(fs.promises);
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>(resolve => { entered = resolve; });
+  const finish = new Promise<void>(resolve => { release = resolve; });
+  let readers = 0, closed = 0;
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (/^a-0[0-7]\.js$/.test(path.basename(String(args[0])))) {
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      let first = true;
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        if (first) { first = false; if (++readers === 8) entered(); await finish; }
+        return read(...readArgs);
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); closed++; };
+    }
+    return handle;
+  });
+  const verification = verifyTrustedHostMcp(config);
+  const outcome = verification.then(value => ({ value }), error => ({ error }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([checking, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Sibling reads remained serial.')), 30_000);
+    })]);
+    expect(readers).toBe(8);
+    release();
+    expect(await outcome).toHaveProperty('value');
+    expect(closed).toBe(8);
+  } finally { clearTimeout(timer); release(); await outcome; spy.mockRestore(); }
+}, 120_000);
+
 it.each(['sync', 'async'] as const)('fresh %s private sets reject mutation of another member during a genuine held read', async mode => {
   const first = path.join(root, 'set-first.json'), second = path.join(root, 'set-second.json');
   fs.writeFileSync(first, '{"value":"first"}', { mode: 0o600 });
