@@ -38,8 +38,17 @@ async function initializePrivateLedger(filename: string, request: Request, autho
   await consentDiagnosticStage('APPROVAL_SEED_PARENT', async () => {
     if (canonical(await fs.promises.realpath(parent)) !== canonical(parent)) throw new Error('Approval parent must be canonical.');
   });
-  const owner = await consentDiagnosticStage('APPROVAL_SEED_OWNER', async () =>
-    ownerPolicySchema.parse(await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal)));
+  const owner = await consentDiagnosticStage('APPROVAL_SEED_OWNER', async () => {
+    let ownerPhase: 'read' | 'schema' = 'read';
+    try {
+      const value = await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal);
+      ownerPhase = 'schema';
+      return ownerPolicySchema.parse(value);
+    } catch (error) {
+      try { if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[approval-seed-owner]', 'refused', ownerPhase); } catch { /* Preserve the original failure. */ }
+      throw error;
+    }
+  });
   const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
   if (owner.ownerId !== authorization.principal.ownerId || request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
   let handle: fs.promises.FileHandle;
