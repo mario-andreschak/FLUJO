@@ -262,6 +262,7 @@ export async function createPersonaNativeOriginalHost(input: {
   const authority = binding.authority;
   if (binding.workspace !== getCurrentWorkspace() || !input.conversationId || !input.runId
     || !authority.commitWhileCurrent) return held();
+  const originConversationId = input.conversationId;
   const isRoot = input.conversationId === binding.conversationId && input.runId === binding.runId;
   let selectedFlow = binding.flow;
   if (isRoot) {
@@ -308,7 +309,7 @@ export async function createPersonaNativeOriginalHost(input: {
     workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
   const readOriginal = async (invocationId: string) => {
-      return readWithNativeHeldLineageFallback(authority, input.conversationId, binding.conversationId, async heldRead => {
+      return readWithNativeHeldLineageFallback(authority, originConversationId, binding.conversationId, async heldRead => {
         const assertHeldCurrent = async () => {
           authority.signal.throwIfAborted();
           await heldRead.assertCurrent(assertGoalCurrent);

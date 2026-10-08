@@ -2199,11 +2199,11 @@ export async function readWithPersonaActivityLease<T>(
 ): Promise<T> {
   const fence = LeaseFenceSchema.parse(value) as PersonaLeaseFence;
   return withPersonaRuntimeLock(fence.personaId, async (lock) => {
-    const deadline = performance.now() + 5_000;
+    const deadline = runtimeClock.monotonicNow() + 5_000;
     let active = true;
     const pending = new Set<Promise<void>>();
     const assertLifetime = () => {
-      if (!active || performance.now() >= deadline) {
+      if (!active || runtimeClock.monotonicNow() >= deadline) {
         throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read expired.');
       }
     };
