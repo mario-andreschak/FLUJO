@@ -16,6 +16,26 @@ mock copies lazy export descriptors and replaces only the named budget controls,
 without enumerating getter values during module initialization. These repairs
 have not yet been executed or qualified.
 
+The next actual repaired run passed guarded execution (72.816 s) but the
+admission-off process hit the unchanged production archive read limit while
+checking its large archives. That failure and both process roots are preserved.
+This successor retains the real production reader and separates readability
+from byte fidelity. Each archive first receives an independent streaming gzip
+witness: checked file containment/identity, compressed SHA256, decoded byte
+count, and decoded canonical ASCII history hash at the root canonicalMessages
+entry. The witness holds at most 32 KiB decoded hash text plus bounded token/id
+metadata and stream buffers; it does not parse or retain a complete snapshot.
+It is a narrow test witness for writer-produced JSON with id before content,
+not a generic JSON reader or a replacement SDK archive API. Its independent
+allowances are 64 MiB compressed, 512 MiB decoded, depth64 and 100,000 strings.
+Small controls cover chunked escapes, decoys, missing history and corruption.
+The real reader is then called. Only admission-off may record an actual typed
+MODEL_TURN_ARCHIVE_READ_LIMIT after a successful canonical witness; every other
+error fails and guarded reads must remain admitted. The proof records each
+archive's production readability separately. A byte-fidelity witness does not
+establish reader support, an OOM cause or full #520 closure. New controls are
+Source-only and UNRUN until exact-pin qualification.
+
 The original report describes approximately 500k parent tokens, 900–1400k child
 tokens, three completed children, one AtlasCloud 400 failure and four queued
 children. This fixture retains a 2,000,000-character parent and eight independent

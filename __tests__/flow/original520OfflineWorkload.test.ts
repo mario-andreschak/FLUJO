@@ -11,6 +11,7 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { SubflowInvocation, SubflowNodePrepResult } from '@/backend/execution/flow/types';
 import { createArchiveOwnedFixture } from './fixtures/archiveOwnedFixture';
+import { witnessArchiveHistory } from './fixtures/archiveHistoryWitness';
 
 // This switch exists only in this disposable test worker. No production bypass.
 const control = process.env.FLUJO_520_WORKER === 'admission-off';
@@ -55,6 +56,7 @@ import { runSubflowLanes } from '@/backend/execution/flow/nodes/SubflowNode';
 import { persistSubflowParent } from '@/backend/execution/flow/subflowRecovery';
 import { _setModelTurnArchiveDirForTests, readModelTurnSnapshot, archiveModelDispatch, readModelTurnMedia } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
+import { ModelTurnArchiveReadError } from '@/backend/execution/flow/modelTurnArchiveReadBudget';
 
 let observations = 0;
 const observationsByModel: Record<string, number> = {};
@@ -280,6 +282,8 @@ async function workerScenario(root: string) {
     for (let i = 0; i < originals.length; i++) expect(digest(originals[i][0].content as string)).toBe(hashes[i]);
     phase = 'verify-canonical-archives';
     let archiveCount = 0;
+    const archiveWitnesses: Array<{ conversation: string; dispatch: string; witness: Awaited<ReturnType<typeof witnessArchiveHistory>>;
+      productionRead: 'admitted' | 'MODEL_TURN_ARCHIVE_READ_LIMIT' }> = [];
     for (let i = 0; i < 9; i++) {
       const conversation = i === 0 ? 'parent' : `child-${i - 1}`;
       const directory = path.join(resolved, 'archives', conversation);
@@ -289,11 +293,23 @@ async function workerScenario(root: string) {
         continue;
       }
       for (const file of files.filter(name => name.endsWith('.v2.json.gz'))) {
-        const snapshot = await readModelTurnSnapshot(conversation, file.slice(0, -'.v2.json.gz'.length));
-        const original = snapshot!.canonicalMessages.find(message => message.id === originals[i][0].id);
-        const setup = snapshot!.canonicalMessages.find(message => message.id === setupHistories[i][0].id);
-        expect(original ?? setup).toBeDefined();
-        expect(digest((original ?? setup)!.content as string)).toBe(original ? hashes[i] : setupHashes[i]);
+        const dispatch = file.slice(0, -'.v2.json.gz'.length);
+        const witness = await witnessArchiveHistory(path.join(directory, file), resolved, {
+          [originals[i][0].id]: hashes[i], [setupHistories[i][0].id]: setupHashes[i],
+        });
+        let productionRead: 'admitted' | 'MODEL_TURN_ARCHIVE_READ_LIMIT' = 'admitted';
+        try {
+          const snapshot = await readModelTurnSnapshot(conversation, dispatch);
+          const retained = snapshot!.canonicalMessages.find(message => message.id === witness.id);
+          expect(retained).toBeDefined();
+          expect(digest(retained!.content as string)).toBe(witness.sha256);
+        } catch (error) {
+          // Independently proven archive bytes do not waive production read
+          // admission. Only the explicit negative control may record this refusal.
+          if (!control || !(error instanceof ModelTurnArchiveReadError) || error.code !== 'MODEL_TURN_ARCHIVE_READ_LIMIT') throw error;
+          productionRead = error.code;
+        }
+        archiveWitnesses.push({ conversation, dispatch, witness, productionRead });
         archiveCount++;
       }
     }
@@ -332,7 +348,7 @@ async function workerScenario(root: string) {
       if (cgroup[file] !== null) cgroup[file] = await fs.readFile(`/sys/fs/cgroup/${file}`, 'utf8');
     }
     phase = 'drained'; sample();
-    await fs.writeFile(path.join(resolved, 'proof.json'), JSON.stringify({ control, physical, observations, observationsByModel, archiveCount,
+    await fs.writeFile(path.join(resolved, 'proof.json'), JSON.stringify({ control, physical, observations, observationsByModel, archiveCount, archiveWitnesses,
       hashes, setupHashes, parentAttempt, actualLaneReceipts, durableLaneStatuses: invocation.lanes.map(lane => lane.status),
       characters, parentCharacters: 2_000_000, initialTopology: [3, 1, 4], queue: queue.lanes!.map(lane => ({
         success: lane.success, error: lane.error, conversationId: lane.conversationId })),
