@@ -12,6 +12,7 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $allowed = @($identity.User.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 $records = [Collections.Generic.List[string]]::new()
 $filenames = if ($null -ne $request.filenames) { @($request.filenames) } else { @($request.filename) }
+if ($filenames.Count -lt 1 -or $filenames.Count -gt 4) { throw 'Bounded authority input refused' }
 foreach ($filename in $filenames) {
 $target = [IO.FileInfo]::new([string]$filename)
 $current = $target
@@ -30,7 +31,9 @@ while ($null -ne $current) {
     if ($file -or $null -ne $current.Parent) { $dangerous = $dangerous -bor 0x00010000L }
     if ($file -or ($mask -band ($dangerous -bor 0x10000000L))) { throw 'Foreign authority access' }
   }
-  $records.Add($current.FullName + ':' + [Convert]::ToBase64String($acl.GetSecurityDescriptorBinaryForm()))
+  $record = $current.FullName + ':' + [Convert]::ToBase64String($acl.GetSecurityDescriptorBinaryForm())
+  if ($records.Count -ge 128 -or $record.Length -gt 8192) { throw 'Bounded authority evidence refused' }
+  $records.Add($record)
   if ($file) { $current = $current.Directory } else { $current = $current.Parent }
   $file = $false
 }
@@ -42,7 +45,7 @@ while ($null -ne $current) {
 export function windowsPrivateAuthorityStamp(filename: string | readonly string[]): string {
   if (process.platform !== 'win32') throw new Error('Windows authority inspection unavailable');
   const filenames = typeof filename === 'string' ? [filename] : filename;
-  if (filenames.length < 1 || filenames.length > 2 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
+  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -70,7 +73,7 @@ function authorityEvidence(stdout: string): string {
 export async function windowsPrivateAuthorityStampAsync(filename: string | readonly string[], signal?: AbortSignal): Promise<string> {
   if (process.platform !== 'win32' || signal?.aborted) throw new Error('Windows authority inspection unavailable');
   const filenames = typeof filename === 'string' ? [filename] : filename;
-  if (filenames.length < 1 || filenames.length > 2 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
+  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');

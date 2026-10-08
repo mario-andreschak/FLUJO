@@ -9,16 +9,16 @@ import { readPlainFile } from '@/utils/readPlainFile';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { ownerPolicySchema } from './ownerCredentials';
 import { ownerPolicyRevision } from './ownerPolicy';
-import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalPairAsync, sameTrustedHostConsent, trustedHostEnvironment,
-  trustedHostMcpApproval, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
+import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalSet, readPrivateApprovalSetAsync, sameTrustedHostConsent, trustedHostEnvironment,
+  trustedHostApprovalsSchema, trustedHostMcpApproval, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
 import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeBundledFlujoWorkloadInventory,
   type WorkloadAction } from '../mcp/bundledFlujoWorkloadInventory';
 
 export const BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV = 'FLUJO_MCP_WORKLOAD_TOKEN';
 export const BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV = 'FLUJO_MCP_WORKLOAD_AUDIENCE';
 const tokenPattern = /^flo_mcp1_[A-Za-z0-9_-]{43}$/;
-type GuardStage = 'record-marker-private' | 'owner-private' | 'config-first' | 'package-verification'
-  | 'inventory' | 'config-latest' | 'owner-latest' | 'config-final' | 'grant-final' | 'owner-final'
+type GuardStage = 'private-set-initial' | 'config-first' | 'package-verification'
+  | 'inventory' | 'config-latest' | 'config-final' | 'private-set-final' | 'digest-final'
   | 'activation-owner' | 'activation-grant' | 'activation-marker' | 'activation-record' | 'activation-owner-final' | 'activation-grant-final';
 function traceAsync<T>(stage: GuardStage, operation: () => Promise<T>): Promise<T> {
   if (process.env.FLUJO_MCP_WORKLOAD_TRACE !== '1') return operation();
@@ -272,7 +272,7 @@ export interface BundledFlujoWorkloadAuthorization {
   recheck(): Promise<Response | null>;
 }
 /** Never initialize, back up, migrate, normalize, or join a storage write chain. */
-async function readCurrentConfig(serverName: string, signal: AbortSignal): Promise<MCPStdioConfig> {
+async function readCurrentConfig(serverName: string, signal: AbortSignal) {
   const root = path.resolve(getWorkspaceDataDir());
   const filename = path.join(root, 'db', 'mcp_servers.json');
   const parents: Array<{ filename: string; identity: fs.BigIntStats }> = [];
@@ -294,7 +294,8 @@ async function readCurrentConfig(serverName: string, signal: AbortSignal): Promi
     await assertCredentialStoreReady(filename);
   };
   await verifyPath();
-  const bytes = await readPlainFile(filename, { maxBytes: 4 * 1024 * 1024, signal, verifyPath });
+  const identity = fs.lstatSync(filename, { bigint: true });
+  const bytes = await readPlainFile(filename, { maxBytes: 4 * 1024 * 1024, signal, verifyPath, expected: identity });
   try {
     const stored: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     if (!stored || typeof stored !== 'object' || Array.isArray(stored) || !Object.hasOwn(stored, serverName)) throw new BundledFlujoWorkloadError();
@@ -303,7 +304,16 @@ async function readCurrentConfig(serverName: string, signal: AbortSignal): Promi
     const config = { ...selected, name: serverName } as MCPStdioConfig;
     if (config.transport !== 'stdio' || config.disabled || typeof config.command !== 'string' || typeof config.cwd !== 'string') throw new BundledFlujoWorkloadError();
     trustedHostMcpPolicySchema.parse(config.trustedHost);
-    return config;
+    return { config, assertCurrent: () => {
+      if (!same(identity, fs.lstatSync(filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
+      for (const parent of parents) {
+        const fresh = fs.lstatSync(parent.filename, { bigint: true });
+        if (!fresh.isDirectory() || fresh.isSymbolicLink() || fresh.dev !== parent.identity.dev || fresh.ino !== parent.identity.ino
+            || fresh.mode !== parent.identity.mode || fresh.uid !== parent.identity.uid || fresh.gid !== parent.identity.gid
+            || path.relative(fs.realpathSync(parent.filename), parent.filename) !== '') throw new BundledFlujoWorkloadError();
+      }
+      signal.throwIfAborted();
+    } };
   } finally { bytes.fill(0); }
 }
 async function evidence(request: Request) {
@@ -315,13 +325,19 @@ async function evidence(request: Request) {
   const key = hash(match[1]), filename = path.join(directory(ledger), `${key}.json`), markerFilename = path.join(directory(ledger), `${key}.lease`);
   const recordBefore = fs.lstatSync(filename, { bigint: true });
   const markerBefore = fs.lstatSync(markerFilename, { bigint: true });
-  const [recordValue, markerValue] = await traceAsync('record-marker-private', () => readPrivateApprovalPairAsync(filename, markerFilename, request.signal));
+  const files = [filename, markerFilename, ownerFile, ledger];
+  const [recordValue, markerValue, ownerValue, approvalValue] = await traceAsync('private-set-initial', () => readPrivateApprovalSetAsync(files, request.signal));
   const record = recordSchema.parse(recordValue), marker = markerSchema.parse(markerValue);
+  const initialOwner = ownerPolicySchema.parse(ownerValue), initialApprovals = trustedHostApprovalsSchema.parse(approvalValue);
+  const initialGrant = initialApprovals.approvals.find(item => item.workspace === record.workspace && item.serverName === record.serverName);
   if (record.tokenHash !== key || record.issuedAt > Date.now() || record.expiresAt <= Date.now()
       || !identityFields.every(name => String(markerBefore[name]) === record.markerIdentity[name])
       || marker.version !== 1 || marker.generation !== record.generation || marker.state !== 'active'
       || marker.recordDev !== String(recordBefore.dev) || marker.recordIno !== String(recordBefore.ino)
-      || hash(JSON.stringify(marker)) !== record.markerDigest) throw new BundledFlujoWorkloadError();
+      || hash(JSON.stringify(marker)) !== record.markerDigest
+      || initialOwner.ownerId !== record.ownerId || ownerPolicyRevision(initialOwner) !== record.ownerRevision
+      || initialApprovals.ownerId !== record.ownerId || !initialGrant || initialGrant.expiresAt <= Date.now()
+      || initialGrant.policyDigest !== record.policyDigest) throw new BundledFlujoWorkloadError();
   const url = new URL(request.url);
   if (url.origin !== record.audience || audience(process.env.FLUJO_BASE_URL) !== record.audience || request.headers.get('host') !== url.host
       || (request.headers.get('origin') !== null && request.headers.get('origin') !== record.audience)
@@ -329,9 +345,8 @@ async function evidence(request: Request) {
       || !record.inventory.some(item => item.path === url.pathname && item.method === request.method)
       || /%|\\|\/\//.test(url.pathname)) throw new BundledFlujoWorkloadError();
   await runWithWorkspace(record.workspace, async () => {
-    const owner = ownerPolicySchema.parse(await traceAsync('owner-private', () => readPrivateApprovalAsync(ownerFile, request.signal)));
-    if (owner.ownerId !== record.ownerId || ownerPolicyRevision(owner) !== record.ownerRevision) throw new BundledFlujoWorkloadError();
-    const config = await traceAsync('config-first', () => readCurrentConfig(record.serverName, request.signal));
+    const first = await traceAsync('config-first', () => readCurrentConfig(record.serverName, request.signal));
+    const config = first.config;
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     if (policy.bundledInstallation?.packageDirectory !== 'flujo') throw new BundledFlujoWorkloadError();
     const approved = await traceAsync('package-verification', () => verifyTrustedHostMcp(config, request.signal));
@@ -340,14 +355,22 @@ async function evidence(request: Request) {
         || canonicalWorkloadJson(policy.bundledInstallation.workload?.inventory) !== canonicalWorkloadJson(record.inventory)
         || canonicalWorkloadJson(inventory) !== canonicalWorkloadJson(record.inventory)) throw new BundledFlujoWorkloadError();
     const latest = await traceAsync('config-latest', () => readCurrentConfig(record.serverName, request.signal));
-    if (!sameTrustedHostConsent(latest, config)) throw new BundledFlujoWorkloadError();
-    const freshOwner = ownerPolicySchema.parse(await traceAsync('owner-latest', () => readPrivateApprovalAsync(ownerFile, request.signal)));
-    const finalConfig = await traceAsync('config-final', () => readCurrentConfig(record.serverName, request.signal));
+    if (!sameTrustedHostConsent(latest.config, config)) throw new BundledFlujoWorkloadError();
+    const finalEvidence = await traceAsync('config-final', () => readCurrentConfig(record.serverName, request.signal));
+    const finalConfig = finalEvidence.config;
     if (!sameTrustedHostConsent(finalConfig, config)) throw new BundledFlujoWorkloadError();
-    const freshGrant = traceSync('grant-final', () => trustedHostMcpApproval(finalConfig));
-    if (ownerPolicyRevision(freshOwner) !== record.ownerRevision || freshOwner.ownerId !== record.ownerId
-        || freshGrant.ownerId !== record.ownerId || freshGrant.digest !== record.policyDigest) throw new BundledFlujoWorkloadError();
-    if (ownerPolicyRevision(ownerPolicySchema.parse(traceSync('owner-final', () => readPrivateApproval(ownerFile)))) !== record.ownerRevision) throw new BundledFlujoWorkloadError();
+    const finalDigest = traceSync('digest-final', () => trustedHostMcpPolicyDigest(finalConfig));
+    // The last fresh set covers every private file after ALL yielding source,
+    // executable, environment, inventory and config checks. No verdict is reused.
+    const [lastRecord, lastMarker, lastOwner, lastApprovals] = traceSync('private-set-final', () => readPrivateApprovalSet(files, request.signal));
+    const freshOwner = ownerPolicySchema.parse(lastOwner), approvals = trustedHostApprovalsSchema.parse(lastApprovals);
+    const freshGrant = approvals.approvals.find(item => item.workspace === record.workspace && item.serverName === record.serverName);
+    if (canonicalWorkloadJson(recordSchema.parse(lastRecord)) !== canonicalWorkloadJson(record)
+        || canonicalWorkloadJson(markerSchema.parse(lastMarker)) !== canonicalWorkloadJson(marker)
+        || freshOwner.ownerId !== record.ownerId || ownerPolicyRevision(freshOwner) !== record.ownerRevision
+        || approvals.ownerId !== record.ownerId || !freshGrant || freshGrant.expiresAt <= Date.now()
+        || freshGrant.policyDigest !== record.policyDigest || finalDigest !== record.policyDigest) throw new BundledFlujoWorkloadError();
+    finalEvidence.assertCurrent();
   });
   if (!same(recordBefore, fs.lstatSync(filename, { bigint: true })) || !same(markerBefore, fs.lstatSync(markerFilename, { bigint: true }))
       || ledger !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE
