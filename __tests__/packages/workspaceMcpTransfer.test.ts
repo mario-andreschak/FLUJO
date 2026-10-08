@@ -585,6 +585,12 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
       cause: connectionFailed ? connectionPrimary : primary,
     }), { child, sourceRoot });
     phase('close-ready');
+    // reinstall intentionally converts a connection rejection into a failed
+    // result. Preserve that actual cause alongside the strict result assertion
+    // even when cleanup itself succeeded; cleanup certainty stays unchanged.
+    if (connectionFailed) throw new AggregateError([
+      connectionPrimary, ...(primaryFailed ? [primary] : []),
+    ], 'Actual filesystem connection failed after successful cleanup', { cause: connectionPrimary });
   }
   })().finally(() => { clearTimeout(deadline); context.settled = true; });
   return context.body;
