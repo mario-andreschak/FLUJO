@@ -215,6 +215,7 @@ export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutio
 }
 
 export interface NativeOriginalProcessHost {
+  assertOutputCurrent(): Promise<void>;
   assertTurnBudget(maxTurns: number): Promise<void>;
   register(process: ClaudeOwnedProcessRegistration): Promise<void>;
   beforeFirstPrompt(): Promise<void>;
@@ -369,6 +370,13 @@ export async function createPersonaNativeOriginalHost(input: {
     },
   });
   const processHost: NativeOriginalProcessHost = {
+    assertOutputCurrent: async () => {
+      if (!original || !child) return held();
+      await assertCurrent();
+      await assertDescendantCurrent();
+      if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
+      await assertCurrent();
+    },
     prepareHandoff: async (invocationId, toolInvocationId) => {
       if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
         || original.descriptor.inventory.terminationProtocol !== 'owned-claude-exit-close-v1'
@@ -405,6 +413,7 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!result || typeof result !== 'object' || !child || !original) return held();
       const value = result as Record<string, unknown>;
       if (value.type !== 'result') return held();
+      await processHost.assertOutputCurrent();
       const usage = value.usage && typeof value.usage === 'object' ? value.usage as Record<string, unknown> : {};
       const number = (candidate: unknown): number | undefined => typeof candidate === 'number'
         && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;

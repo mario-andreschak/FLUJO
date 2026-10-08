@@ -284,6 +284,30 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(reservation.sdkOutcome).not.toBe('completed');
     }, 'child-refusal');
   }, 30000);
+  it('discards a descendant SDK result and transcript after its saved parent lineage changes', async () => {
+    lateResultFirst = true;
+    transcriptText = 'stale-descendant-private-output';
+    afterPrompt = async () => {
+      const reservation = (await ledger()).reservations[0];
+      const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+      await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
+    };
+    const observed: unknown[] = [];
+    const listener = (event: unknown) => observed.push(event);
+    executionEventBus.on('event', listener);
+    try {
+      await withClaim(async () => {}, async () => {
+        expect(promptCount).toBe(1);
+        expect(offeredLateUsage).toMatchObject({ type: 'result', usage: { input_tokens: 7, output_tokens: 4 } });
+        const reservation = (await ledger()).reservations[0];
+        expect(reservation.state).not.toBe('released');
+        expect(reservation.sdkUsage).toBeUndefined();
+        const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+        expect(JSON.stringify(child!.messages)).not.toContain(transcriptText);
+        expect(JSON.stringify(observed)).not.toContain(transcriptText);
+      }, 'child-refusal');
+    } finally { executionEventBus.off('event', listener); }
+  }, 30000);
   it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
     await withClaim(async input => {
       const { invoke, state } = await prepare(input);

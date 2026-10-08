@@ -1190,6 +1190,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // An issued descendant can lose saved lineage while its SDK still
+        // yields messages. Fence every frame before live/transcript/usage callbacks.
+        await nativeOriginalProcessHost?.assertOutputCurrent();
         const streamType = message.type === 'stream_event'
           ? (message as SDKPartialAssistantMessage).event.type : undefined;
         const liveProgress = message.type === 'assistant'
