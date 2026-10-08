@@ -21,7 +21,7 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerConfigs: jest.fn(async () => [
-    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
+    { name: 'srv', transport: 'streamable', serverUrl: 'https://lifecycle.example.test/mcp', disabled: false },
   ]),
   saveConfig: jest.fn(async () => ({ success: true })),
 }));

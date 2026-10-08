@@ -32,6 +32,7 @@ describe('model-turn archive inspection bounds', () => {
     _setModelTurnArchiveDirForTests(previous);
     await fs.rm(root, { recursive: true, force: true });
     expect(getModelTurnArchiveReadDiagnostics().activeReads).toBe(0);
+    expect(getModelTurnArchiveReadDiagnostics().reservedJsonAllocationBytes).toBe(0);
   });
 
   const snapshot = (): ModelTurnSnapshot => ({
@@ -174,6 +175,61 @@ describe('model-turn archive inspection bounds', () => {
       await Promise.all(admitted);
     }
     await expect(withModelTurnArchiveRead(async () => 'admitted')).resolves.toBe('admitted');
+  });
+
+  it('refuses dense JSON object inflation before parsing and leaves the original archive unchanged', async () => {
+    const file = path.join(root, 'dense.gz');
+    const compressed = gzipSync(`[${'{"a":0},'.repeat(400_000)}{}]`);
+    await fs.writeFile(file, compressed);
+    const parse = jest.spyOn(JSON, 'parse');
+    await expect(withModelTurnArchiveRead(() => readBoundedModelTurnJson(file)))
+      .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_LIMIT', status: 413 });
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
+    expect(await fs.readFile(file)).toEqual(compressed);
+    expect(getModelTurnArchiveReadDiagnostics().reservedJsonAllocationBytes).toBe(0);
+  });
+
+  it('retains JSON allocation reservation until the admitted caller finishes, including awaits after parsing', async () => {
+    const { file } = await writeSnapshot(snapshot());
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let ready!: () => void;
+    const parsed = new Promise<void>(resolve => { ready = resolve; });
+    const reading = withModelTurnArchiveRead(async () => {
+      const result = await readBoundedModelTurnJson(file);
+      ready(); await held;
+      return result;
+    });
+    try {
+      await parsed;
+      expect(getModelTurnArchiveReadDiagnostics().reservedJsonAllocationBytes).toBeGreaterThan(0);
+    } finally { release(); await reading; }
+    expect(getModelTurnArchiveReadDiagnostics().reservedJsonAllocationBytes).toBe(0);
+  });
+
+  it('reports aggregate allocation pressure as retryable and admits the same valid input after release', async () => {
+    const heldFile = path.join(root, 'held-large.gz');
+    const nextFile = path.join(root, 'next.gz');
+    await fs.writeFile(heldFile, gzipSync(JSON.stringify({ content: 'a'.repeat(14 * 1024 * 1024) })));
+    await fs.writeFile(nextFile, gzipSync(JSON.stringify({ content: 'b'.repeat(4 * 1024 * 1024) })));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let ready!: () => void;
+    const parsed = new Promise<void>(resolve => { ready = resolve; });
+    const reading = withModelTurnArchiveRead(async () => {
+      const result = await readBoundedModelTurnJson(heldFile);
+      ready(); await held;
+      return result;
+    });
+    try {
+      await parsed;
+      await expect(withModelTurnArchiveRead(() => readBoundedModelTurnJson(nextFile)))
+        .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_BUSY', status: 429 });
+    } finally { release(); await reading; }
+    const accepted = await withModelTurnArchiveRead(() => readBoundedModelTurnJson<{ content: string }>(nextFile));
+    expect(accepted.content.length).toBe(4 * 1024 * 1024);
+    expect(accepted.content[0]).toBe('b');
   });
 
   it('propagates pre-admission cancellation without opening a file or retaining a permit', async () => {

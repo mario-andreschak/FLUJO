@@ -14,6 +14,17 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
+import { assertNativeBrokerAuthority, createNativeToolPort, nativeDigest, nativeToolInventoryDigest,
+  type NativeBrokerAuthority } from './nativeToolBroker';
+import { prepareNativeInvocation, submitNativeInvocation, finishNativeInvocation, holdNativeInvocation,
+  NativeInvocationHeldError, type NativeInvocationReceipt } from './nativeToolJournal';
+import { readNativeOriginLineage } from './nativeOriginLineage';
+import { assertNativeInvocationSessionHook, createNativeInvocationSession,
+  type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
+import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
+import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
+import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -118,6 +129,7 @@ import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import {
   archiveModelDispatch,
+  readNativeModelTurnSnapshot,
   updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
@@ -1160,12 +1172,33 @@ export class ModelHandler {
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (!input.nativeOriginalHost && input.personaAttribution) {
+      input = { ...input, nativeOriginalHost: await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
+        conversationId, runId, nodeId, modelId, personaAttribution: input.personaAttribution }) };
+    }
+    if (input.nativeOriginalHost) {
+      assertNativeOriginalProcessHost(input.nativeOriginalHost.process);
+      input = { ...input, nativeBrokerAuthority: input.nativeOriginalHost.broker,
+        nativeInvocationSessionHook: input.nativeOriginalHost.session };
+    }
+    if (input.nativeBrokerAuthority) {
+      assertNativeBrokerAuthority(input.nativeBrokerAuthority);
+      if (!conversationId || !runId || !nodeId || input.executionExtensionContext
+        || modelIsFallbackPolicy || (modelAdapter !== 'codex-cli' && modelAdapter !== 'claude-cli')) {
+        throw new Error('Native broker requires an owned native model run and cannot use a private extension or fallback route.');
+      }
+    }
+    if (input.nativeInvocationSessionHook) {
+      assertNativeInvocationSessionHook(input.nativeInvocationSessionHook);
+      if (!input.nativeBrokerAuthority) throw new Error('Native session publication requires broker authority.');
+    }
 
     // Native session reuse is safe only for FULL-HISTORY nodes (a scoped
     // `wireMessages` view can't be reconciled against a persisted message-count
     // watermark). Codex enables it by default; Claude subscription keeps its
     // existing experimental setting. Ineligible adapters always re-flatten.
     const sessionResume =
+      !input.nativeBrokerAuthority &&
       !wireMessages &&
       (modelAdapter === 'codex-cli' ||
         (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
@@ -1606,6 +1639,9 @@ export class ModelHandler {
 
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
+      nativeBrokerAuthority: input.nativeBrokerAuthority,
+      nativeInvocationSessionHook: input.nativeInvocationSessionHook,
+      nativeOriginalProcessHost: input.nativeOriginalHost?.process,
       toolNameMap,
       maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -1925,6 +1961,9 @@ export class ModelHandler {
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
       executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+      nativeBrokerAuthority?: NativeBrokerAuthority;
+      nativeInvocationSessionHook?: NativeInvocationSessionHook;
+      nativeOriginalProcessHost?: NativeOriginalProcessHost;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -1988,6 +2027,17 @@ export class ModelHandler {
             modelId
           )
         };
+      }
+      if (opts?.nativeBrokerAuthority) {
+        assertNativeBrokerAuthority(opts.nativeBrokerAuthority);
+        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext
+          || model.fallbackPolicy || (model.adapter !== 'codex-cli' && model.adapter !== 'claude-cli')) {
+          throw new Error('Native broker requires a fully owned native model attempt.');
+        }
+      }
+      if (opts?.nativeInvocationSessionHook) {
+        assertNativeInvocationSessionHook(opts.nativeInvocationSessionHook);
+        if (!opts.nativeBrokerAuthority) throw new Error('Native session publication requires broker authority.');
       }
 
       singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(opts?.executionExtensionContext, model);
@@ -2578,6 +2628,13 @@ export class ModelHandler {
 
         const attemptStartedAt = Date.now();
         let providerAttemptObserved = false;
+        let nativeReceipt: NativeInvocationReceipt | undefined;
+        let nativeSession: ReturnType<typeof createNativeInvocationSession> | undefined;
+        let nativeTerminal = false;
+        let nativeSdkRequestStarted = false;
+        let nativeLiveObserved = false;
+        let nativeSdkOutcome: 'completed' | 'error' | 'cancelled' | undefined;
+        if (opts?.nativeBrokerAuthority) attemptProducedOutput = true;
         let attemptOutcome: 'completed' | 'error' | 'cancelled' = 'error';
         let attemptError: unknown;
         let attemptUsage: OpenAiUsageLike | undefined;
@@ -2664,6 +2721,47 @@ export class ModelHandler {
                     commitFlowDurableMutation(opts?.durableContext ?? {}, task),
                 },
               );
+              let nativeInventory: NativeInvocationSessionPayload['inventory'] & { digest: string } | undefined;
+              const nativeToolPort = opts?.nativeBrokerAuthority
+                ? await (async () => {
+                    await opts.nativeBrokerAuthority!.assertCurrent();
+                    const nativeTools = structuredClone(attemptTools ?? []);
+                    const nativeBindings = structuredClone(opts.toolNameMap ?? {});
+                    const nativeExecutors = Object.freeze({ ...localToolExecutors });
+                    const hasHandoff = nativeTools.some(tool => tool.type === 'function'
+                      && (tool.function.name === 'handoff' || tool.function.name.startsWith('handoff_to_')));
+                    const terminationProtocol = hasHandoff && model.adapter === 'claude-cli'
+                      && opts.nativeOriginalProcessHost ? NATIVE_HANDOFF_PROTOCOL : undefined;
+                    if (terminationProtocol) assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                    const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
+                    nativeInventory = { digest: inventoryDigest, tools: nativeTools,
+                      ...(terminationProtocol ? { terminationProtocol } : {}),
+                      bindings: nativeBindings, syntheticNames: Object.keys(nativeExecutors).sort() };
+                    nativeReceipt = await prepareNativeInvocation({
+                      conversationId: opts.conversationId!, runId: opts.runId!, nodeId: opts.nodeId!,
+                      modelId, leaseEpoch: opts.nativeBrokerAuthority!.leaseEpoch, inventoryDigest,
+                      attemptOrdinal: sdkDispatchOrdinal + 1,
+                      inputDigest: nativeDigest({ modelId, messages: hydratedMessages, tools: nativeTools,
+                        temperature: attemptTemperature, maxTokens: opts.maxTokens }),
+                    });
+                    return createNativeToolPort({
+                      receipt: nativeReceipt, tools: nativeTools, toolNameMap: nativeBindings,
+                      localToolExecutors: nativeExecutors, service: mcpService, requestToolApproval: opts.requestToolApproval,
+                      beforeToolDispatch: opts.beforeToolDispatch,
+                      afterToolDispatch: () => assertFlowExecutionCurrent(opts.durableContext ?? {}),
+                      authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
+                      authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
+                      terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
+                    });
+                  })()
+                : undefined;
+              const markNativeSdkFinished = () => {
+                if (!nativeSession || nativeSession.session.phase() === 'sdk-finished') return;
+                // The original stream has ended. A delayed archive/host outcome
+                // acknowledgement must not leave a cancellable live handle.
+                nativeToolPort?.cancel();
+                nativeSession.emit('sdk-finished');
+              };
               const input = {
               model,
               apiKey: decryptedApiKey,
@@ -2689,15 +2787,19 @@ export class ModelHandler {
                 providerAttemptObserved = true;
                 recordProviderAttempt(observation);
               },
-              onSdkRequest: opts?.archiveModelTurns && opts.conversationId && opts.nodeId
+              onSdkRequest: (nativeReceipt || (opts?.archiveModelTurns && opts.conversationId && opts.nodeId))
                 ? async (snapshot: SdkRequestSnapshot): Promise<string | undefined> => {
+                    if (nativeReceipt && nativeSdkRequestStarted) {
+                      throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                    }
                     try {
                       const entry = await archiveModelDispatch({
-                        durableContext: opts.durableContext,
-                        conversationId: opts.conversationId!,
-                        runId: opts.runId,
-                        nodeId: opts.nodeId!,
-                        nodeName: opts.nodeName,
+                        ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
+                        durableContext: opts?.durableContext,
+                        conversationId: opts!.conversationId!,
+                        runId: opts?.runId,
+                        nodeId: opts!.nodeId!,
+                        nodeName: opts?.nodeName,
                         modelId: routingModel.id,
                         modelName: routingModel.displayName || routingModel.name,
                         adapter: snapshot.adapter,
@@ -2705,7 +2807,7 @@ export class ModelHandler {
                         attempt: ++sdkDispatchOrdinal,
                         canonicalMessages: archiveCanonicalMessages
                           ? structuredClone(archiveCanonicalMessages)
-                          : opts.canonicalMessages ?? messages,
+                          : opts?.canonicalMessages ?? messages,
                         genericWire: snapshot.wireMessages !== undefined
                           ? structuredClone(snapshot.wireMessages)
                           : hydratedMessages,
@@ -2713,67 +2815,180 @@ export class ModelHandler {
                         modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,
                       });
-                      executionEventBus.emit(opts.conversationId!, {
+                      executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch',
                         turn: entry,
                       });
+                      if (nativeReceipt) {
+                        nativeReceipt = await submitNativeInvocation(nativeReceipt);
+                        await opts!.nativeBrokerAuthority!.assertCurrent();
+                        abortController.signal.throwIfAborted();
+                        if (opts?.nativeInvocationSessionHook) {
+                          const archived = await readNativeModelTurnSnapshot(nativeReceipt.owner.conversationId,
+                            entry.id, opts.nativeInvocationSessionHook.root.workspace, abortController.signal);
+                          if (archived) assertNativeArchiveFormat(archived, entry.archiveVersion);
+                          if (!archived || archived.entry.outcome !== 'running' || archived.entry.id !== nativeReceipt.invocationId
+                            || archived.entry.conversationId !== nativeReceipt.owner.conversationId
+                            || archived.entry.runId !== nativeReceipt.owner.runId
+                            || archived.entry.node.nodeId !== nativeReceipt.owner.nodeId
+                            || archived.entry.modelId !== nativeReceipt.owner.modelId
+                            || archived.entry.attempt !== nativeReceipt.owner.attemptOrdinal
+                            || archived.entry.adapter !== snapshot.adapter
+                            || archived.entry.operation !== snapshot.operation
+                            || !nativeInventory || nativeInventory.digest !== nativeReceipt.owner.inventoryDigest) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          const lineage = await readNativeOriginLineage({
+                            receipt: nativeReceipt, authority: opts.nativeBrokerAuthority!,
+                            root: opts.nativeInvocationSessionHook.root, signal: abortController.signal,
+                          });
+                          const payloadRef = await saveNativeSessionPayload({
+                            invocationId: nativeReceipt.invocationId,
+                            archive: { sdkRequest: archived.sdkRequest, genericWire: archived.genericWire,
+                              media: archived.media },
+                            inventory: { tools: nativeInventory.tools, bindings: nativeInventory.bindings,
+                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}),
+                              syntheticNames: nativeInventory.syntheticNames },
+                          });
+                          const savedPayload = await readNativeSessionPayload(payloadRef);
+                          if (savedPayload.invocationId !== nativeReceipt.invocationId
+                            || nativeDigest(savedPayload.archive.sdkRequest) !== nativeDigest(archived.sdkRequest)
+                            || nativeDigest(savedPayload.archive.genericWire) !== nativeDigest(archived.genericWire)
+                            || nativeDigest(savedPayload.archive.media) !== nativeDigest(archived.media)
+                            || nativeDigest(savedPayload.inventory.tools) !== nativeDigest(nativeInventory.tools)
+                            || nativeDigest(savedPayload.inventory.bindings) !== nativeDigest(nativeInventory.bindings)
+                            || nativeDigest(savedPayload.inventory.syntheticNames) !== nativeDigest(nativeInventory.syntheticNames)) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          nativeSession = createNativeInvocationSession({
+                            receipt: nativeReceipt, lineage,
+                            archive: {
+                              dispatchId: entry.id, adapter: archived.entry.adapter,
+                                archiveVersion: archived.version,
+                              operation: archived.entry.operation,
+                              sanitizedSdkRequestDigest: nativeDigest(archived.sdkRequest),
+                              sanitizedGenericWireDigest: nativeDigest(archived.genericWire),
+                              mediaCount: archived.media.length,
+                            },
+                              inventory: { digest: nativeInventory.digest, toolCount: nativeInventory.tools.length,
+                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}) },
+                            payloadRef,
+                          }, abortController.signal, () => {
+                            abortController.abort();
+                            nativeToolPort?.cancel();
+                          });
+                          await saveNativeSessionOrigin(nativeSession.session.descriptor);
+                          const savedOrigin = await readSavedNativeOrigin({ invocationId: nativeReceipt.invocationId,
+                            authority: opts.nativeBrokerAuthority!, root: opts.nativeInvocationSessionHook.root,
+                            signal: abortController.signal });
+                          if (nativeDigest(savedOrigin) !== nativeDigest(nativeSession.session.descriptor)) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          await opts.nativeInvocationSessionHook.publish(nativeSession.session);
+                          abortController.signal.throwIfAborted();
+                          const publishedLineage = await readNativeOriginLineage({
+                            receipt: nativeReceipt, authority: opts.nativeBrokerAuthority!,
+                            root: opts.nativeInvocationSessionHook.root, signal: abortController.signal,
+                          });
+                          if (publishedLineage.digest !== lineage.digest) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          nativeSession.emit('issue-uncertain');
+                          // A synchronous subscriber can cancel this very session.
+                          abortController.signal.throwIfAborted();
+                          await opts.nativeBrokerAuthority!.assertCurrent();
+                          await opts.nativeInvocationSessionHook.root.assertCurrent();
+                          await opts.nativeBrokerAuthority!.assertCurrent();
+                          abortController.signal.throwIfAborted();
+                        }
+                        nativeSdkRequestStarted = true;
+                      }
                       return entry.id;
                     } catch (error) {
+                      if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
                       return undefined;
                     }
                   }
                 : undefined,
-              onSdkRequestResult: opts?.archiveModelTurns && opts.conversationId
+              onSdkRequestResult: (nativeReceipt || (opts?.archiveModelTurns && opts.conversationId))
                 ? async ({ dispatchId, outcome }: {
                     dispatchId: string;
                     outcome: 'completed' | 'error' | 'cancelled';
                   }): Promise<void> => {
                     try {
-                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome, opts.durableContext);
-                      executionEventBus.emit(opts.conversationId!, {
+                      if (nativeSession) markNativeSdkFinished();
+                      await updateModelDispatchOutcome(opts!.conversationId!, dispatchId, outcome, opts?.durableContext);
+                      if (nativeSession) {
+                        await opts!.nativeInvocationSessionHook!.acknowledgeSdkOutcome(nativeSession.session, outcome);
+                        abortController.signal.throwIfAborted();
+                        await opts!.nativeBrokerAuthority!.assertCurrent();
+                        abortController.signal.throwIfAborted();
+                        nativeSession.emit('sdk-outcome', outcome);
+                      }
+                      if (nativeReceipt) nativeSdkOutcome = outcome;
+                      executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch-result',
                         dispatchId,
                         outcome,
                       });
                     } catch (error) {
+                      if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }
                   }
                 : undefined,
+              onNativeSdkLive: opts?.nativeInvocationSessionHook
+                ? async (): Promise<void> => {
+                    if (!nativeSession || !nativeReceipt) throw new Error('Native original session was not published.');
+                    if (nativeLiveObserved) return;
+                    if (nativeSession.session.phase() === 'sdk-finished') {
+                      throw new Error('Native original stream already finished.');
+                    }
+                    await opts.nativeInvocationSessionHook!.acknowledgeLive(nativeSession.session);
+                    abortController.signal.throwIfAborted();
+                    await opts.nativeBrokerAuthority!.assertCurrent();
+                    abortController.signal.throwIfAborted();
+                    nativeLiveObserved = true;
+                    nativeSession.emit('confirmed-live');
+                  }
+                : undefined,
+              onNativeSdkFinished: opts?.nativeInvocationSessionHook ? markNativeSdkFinished : undefined,
               messages: hydratedMessages,
-              tools: attemptTools,
+              tools: nativeInventory?.tools ?? attemptTools,
               temperature: attemptTemperature,
               // Effective output-token cap: node-level override → per-model default
               // (resolved in callModel, #189), falling back to the per-model value
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
-              toolNameMap: opts?.toolNameMap,
-              localToolExecutors,
+              toolNameMap: nativeToolPort ? undefined : opts?.toolNameMap,
+              localToolExecutors: nativeToolPort ? undefined : localToolExecutors,
+              nativeToolPort,
+              nativeOriginalProcessHost: opts?.nativeOriginalProcessHost,
               shouldEndAgenticTurn: opts?.shouldEndAgenticTurn,
               maxTurns: opts?.maxTurns,
-              requestToolApproval: opts?.requestToolApproval,
+              requestToolApproval: nativeToolPort ? undefined : opts?.requestToolApproval,
               onTranscriptMessage,
-              consumeSteeringMessages: opts?.consumeSteeringMessages,
-              steering: opts?.steering,
+              consumeSteeringMessages: nativeToolPort ? undefined : opts?.consumeSteeringMessages,
+              steering: nativeToolPort ? undefined : opts?.steering,
               onModelDelta,
-              onToolProgress,
+              onToolProgress: nativeToolPort ? undefined : onToolProgress,
               signal: abortController.signal,
-              beforeToolDispatch: opts?.beforeToolDispatch,
+              beforeToolDispatch: nativeToolPort ? undefined : opts?.beforeToolDispatch,
               executionExtensionContext: opts?.executionExtensionContext,
-              authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
-              afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
-              commitDurableMutation: <T>(task: () => Promise<T>) =>
+              authorizePersonaCoreMcp: nativeToolPort ? undefined : opts?.authorizePersonaCoreMcp,
+              afterToolDispatch: nativeToolPort ? undefined : () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
+              commitDurableMutation: nativeToolPort ? undefined : <T>(task: () => Promise<T>) =>
                 commitFlowDurableMutation(opts?.durableContext ?? {}, task),
               conversationId: opts?.conversationId,
               runId: opts?.runId,
               nodeId: opts?.nodeId,
-              codexSession: opts?.codexSession,
-              onCodexSessionChange: opts?.onCodexSessionChange,
+              codexSession: nativeToolPort ? undefined : opts?.codexSession,
+              onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
-              sessionResume: opts?.sessionResume,
+              sessionResume: nativeToolPort ? false : opts?.sessionResume,
               // Derived from the tool-block hash, or from the conversation for a
               // no-tool history-first wire, so requests sharing the reusable
               // prefix route to one prompt-cache shard (see derivePromptCacheKey).
@@ -2792,9 +3007,17 @@ export class ModelHandler {
                 await assertExecutionExtensionCurrent(opts.executionExtensionContext);
               }
               if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
-              return opts?.onModelDelta && adapter.createStreamCompletion
+              const nativeResult = await (opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
-                : adapter.createCompletion(input);
+                : adapter.createCompletion(input));
+              if (nativeReceipt) {
+                if (!nativeSdkRequestStarted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (nativeSdkOutcome !== 'completed') throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (!nativeResult.nativeSdkTerminal) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                await opts!.nativeBrokerAuthority!.assertCurrent();
+              }
+              return nativeResult;
             };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
@@ -2819,7 +3042,9 @@ export class ModelHandler {
               ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await issueCompletion());
             }
           } finally {
-            stopCancelWatch();
+            // Native terminalization remains part of the cancellable original
+            // invocation. Keep Stop polling through its durable release write.
+            if (!opts?.nativeBrokerAuthority) stopCancelWatch();
           }
 
           // Prompt-cache effectiveness for this call, attributed to a prefix-drift
@@ -2959,6 +3184,24 @@ export class ModelHandler {
             }
           };
 
+          if (nativeReceipt) {
+            await opts!.nativeBrokerAuthority!.assertCurrent();
+            if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+            if (nativeSession) {
+              await opts!.nativeInvocationSessionHook!.acknowledgeTerminalReady(nativeSession.session);
+              abortController.signal.throwIfAborted();
+              await opts!.nativeBrokerAuthority!.assertCurrent();
+              abortController.signal.throwIfAborted();
+            }
+            await finishNativeInvocation(nativeReceipt, 'completed', {
+              assertCurrent: opts!.nativeBrokerAuthority!.assertCurrent,
+              signal: abortController.signal,
+            });
+            nativeTerminal = true;
+            nativeSession?.settle({ state: 'terminal', outcome: 'completed' });
+            await opts?.nativeOriginalProcessHost?.releaseAfterTerminal();
+          }
+
           attemptOutcome = 'completed';
 
           return result;
@@ -2975,6 +3218,10 @@ export class ModelHandler {
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
+          if (nativeReceipt && !nativeTerminal) {
+            await holdNativeInvocation(nativeReceipt).catch(() => undefined);
+            nativeSession?.settle({ state: 'held' });
+          }
           // Request/response adapters report each transport retry themselves.
           // Other adapters have one authoritative outer invocation here.
           if (!providerAttemptObserved) {
@@ -3031,6 +3278,7 @@ export class ModelHandler {
           if (singlePhysicalAttempt) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
+          if (opts?.nativeBrokerAuthority) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
           // The policy has already applied its trigger and replay boundaries.
           // An outer rate-limit replay must not restart that decision (including
@@ -3103,7 +3351,7 @@ export class ModelHandler {
       // make one final attempt with an explicit user nudge so models that became
       // stuck at an assistant boundary can recover. If that is empty too, return
       // the original normalized error shape.
-      if (!singlePhysicalAttempt && !result.success && isEmptyStoppedCompletionError(result.error)) {
+      if (!singlePhysicalAttempt && !opts?.nativeBrokerAuthority && !result.success && isEmptyStoppedCompletionError(result.error)) {
         for (let retry = 1; retry <= EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE; retry++) {
           if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
           const retryTemperature = retry === EMPTY_STOP_TEMPERATURE_RETRY
@@ -3157,6 +3405,7 @@ export class ModelHandler {
       // proactive budgeting. This path is adapter-neutral.
       if (
         !opts?.executionExtensionContext &&
+        !opts?.nativeBrokerAuthority &&
         !result.success &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
@@ -3280,9 +3529,12 @@ export class ModelHandler {
       return result;
     } catch (error) {
       // Setup (model fetch / key decrypt / compaction) threw — attempts shape
-      // their own errors and never throw out. stopCancelWatch is idempotent.
-      stopCancelWatch();
+      // their own errors and never throw out.
       return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
+    } finally {
+      // A native attempt keeps Stop polling through terminal persistence. Every
+      // outer return path, including a held invocation, must then release it.
+      stopCancelWatch();
     }
   }
 

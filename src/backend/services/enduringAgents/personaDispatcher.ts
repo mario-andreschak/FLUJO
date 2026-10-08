@@ -1,4 +1,14 @@
 import { createHash, randomUUID } from 'crypto';
+import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+
+const authorityRegistryRoot = globalThis as typeof globalThis & { __flujoPersonaFlowAuthorities?: WeakSet<object> };
+const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthorities ??= new WeakSet<object>();
+/** Provenance only: the live lease and goal must still be checked on every use. */
+export function assertPersonaFlowExecutionAuthority(value: unknown): asserts value is FlowExecutionAuthority {
+  if (!value || typeof value !== 'object' || !personaFlowAuthorities.has(value) || !Object.isFrozen(value)) {
+    throw new Error('A dispatcher-owned Persona Flow authority is required.');
+  }
+}
 
 import { z } from 'zod';
 
@@ -2864,6 +2874,9 @@ export class PersonaFlowDispatcher {
       ),
     };
 
+    Object.freeze(authority);
+    personaFlowAuthorities.add(authority);
+
     // Approval/debug state mutation must happen under the same freshly claimed
     // authority as the continuation. The callback receives no raw fence. A
     // process restart loses callbacks by design; the durable marker below then
@@ -3076,6 +3089,12 @@ export class PersonaFlowDispatcher {
             coreAppRefs,
             structuredClone(revision.flowSnapshot),
           ));
+      await this.inWorkspace(() => bindPersonaNativeOriginalAuthority(authority, {
+        personaId: record.personaId, activityId: claim.activity.id, dispatchId: record.id,
+        taskId: record.admission.kind === 'assignment' ? record.admission.source.sourceId : undefined,
+        revisionId: revision.id, leaseEpoch: sha256(canonicalJson(fence)),
+        conversationId, runId, flow: coreFlowDefinition,
+      }));
       result = await this.inWorkspace(() => this.dependencies.runFlow({
         ...flowInput,
         // Persona Apps are projected only into this Activity-local Core clone.

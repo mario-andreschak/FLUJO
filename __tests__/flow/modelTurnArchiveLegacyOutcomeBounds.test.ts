@@ -5,12 +5,20 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { createGzip, gzipSync, gunzipSync } from 'zlib';
 import { spawnSync } from 'child_process';
+import * as workspaceAdmission from '@/backend/services/workspace/workspaceMutationGate';
 import {
   _setModelTurnArchiveDirForTests, updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
 import {
   MODEL_TURN_ARCHIVE_READ_LIMITS, getModelTurnArchiveReadDiagnostics, withModelTurnArchiveRead,
 } from '@/backend/execution/flow/modelTurnArchiveReadBudget';
+
+// Preserve real admission and ownership behavior, while exposing a replaceable
+// ownership assertion for the explicit publication-failure injection below.
+jest.mock('@/backend/services/workspace/workspaceMutationGate', () => ({
+  __esModule: true,
+  ...jest.requireActual('@/backend/services/workspace/workspaceMutationGate'),
+}));
 
 describe('legacy model-turn outcome allocation bounds', () => {
   let root: string;
@@ -45,6 +53,60 @@ describe('legacy model-turn outcome allocation bounds', () => {
     expect([after.size, after.mtimeMs]).toEqual([before.size, before.mtimeMs]);
     expect(await fs.readdir(path.dirname(filename()))).toEqual(['dispatch.json.gz']);
   });
+
+  it.each(['{"entry":{"outcome":"running"},"history":[1,]}', 'not gzip'])('leaves malformed legacy archives unchanged and removes partial output: %s', async text => {
+    const before = text === 'not gzip' ? Buffer.from(text) : gzipSync(text);
+    await fs.writeFile(filename(), before);
+    await expect(updateModelDispatchOutcome('conversation', 'dispatch', 'completed')).rejects.toThrow();
+    expect(await fs.readFile(filename())).toEqual(before);
+    expect(await fs.readdir(path.dirname(filename()))).toEqual(['dispatch.json.gz']);
+  });
+
+  it('preserves original legacy history after an atomic replacement failure and removes the temporary stream', async () => {
+    const before = await fs.readFile(filename());
+    const rename = fs.rename.bind(fs);
+    jest.spyOn(fs, 'rename').mockImplementation(async (source, target) => {
+      if (String(target) === filename()) throw new Error('Injected archive replacement failure');
+      return rename(source, target);
+    });
+    await expect(updateModelDispatchOutcome('conversation', 'dispatch', 'completed')).rejects.toThrow('Injected archive replacement failure');
+    expect(await fs.readFile(filename())).toEqual(before);
+    expect(await fs.readdir(path.dirname(filename()))).toEqual(['dispatch.json.gz']);
+  });
+
+  it('refuses publication when workspace ownership is lost after the streamed rewrite', async () => {
+    const before = await fs.readFile(filename());
+    const realAssert = workspaceAdmission.assertWorkspaceMutationOwned;
+    const lost = new Error('Workspace ownership lost before archive publication');
+    let assertions = 0;
+    jest.spyOn(workspaceAdmission, 'assertWorkspaceMutationOwned').mockImplementation(async () => {
+      if (++assertions === 2) throw lost;
+      await realAssert();
+    });
+    await expect(updateModelDispatchOutcome('conversation', 'dispatch', 'completed')).rejects.toBe(lost);
+    expect(assertions).toBe(2);
+    expect(await fs.readFile(filename())).toEqual(before);
+    expect(await fs.readdir(path.dirname(filename()))).toEqual(['dispatch.json.gz']);
+  });
+
+  it('refuses outcome growth beyond the decoded boundary before publishing the streamed replacement', async () => {
+    const value = { ...legacy(), canonicalMessages: [{ id: 'history', role: 'user', content: '__CONTENT__' }] };
+    const [prefix, suffix] = JSON.stringify(value).split('__CONTENT__');
+    const remaining = MODEL_TURN_ARCHIVE_READ_LIMITS.decodedSnapshotBytes - Buffer.byteLength(prefix + suffix);
+    const input = async function* () {
+      yield Buffer.from(prefix);
+      for (let offset = 0; offset < remaining; offset += 64 * 1024) {
+        yield Buffer.alloc(Math.min(64 * 1024, remaining - offset), 97);
+      }
+      yield Buffer.from(suffix);
+    };
+    await pipeline(Readable.from(input()), createGzip(), createWriteStream(filename()));
+    const before = await fs.readFile(filename());
+    await expect(updateModelDispatchOutcome('conversation', 'dispatch', 'completed'))
+      .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_LIMIT', status: 413 });
+    expect(await fs.readFile(filename())).toEqual(before);
+    expect(await fs.readdir(path.dirname(filename()))).toEqual(['dispatch.json.gz']);
+  }, 45_000);
 
   it('shares the no-queue inspection allowance and leaves a busy legacy archive unchanged', async () => {
     const before = await fs.readFile(filename());

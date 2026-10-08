@@ -1,5 +1,6 @@
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { FlowExecutionAuthority } from './types';
+import { inheritNativeOriginalAuthority } from './nativeOriginalAuthorityInheritance';
 import { assertExecutionExtensionCurrent, commitExecutionExtensionMutation, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 /**
@@ -29,11 +30,13 @@ export interface FlowDurableMutationContext {
 /** Causal children inherit fencing and audit attribution, never Persona abilities. */
 export function subflowExecutionAuthority(authority?: FlowExecutionAuthority): FlowExecutionAuthority | undefined {
   if (!authority) return undefined;
-  return {
+  const child = {
     signal: authority.signal,
     assertCurrent: () => authority.assertCurrent(),
     ...(authority.commitWhileCurrent ? { commitWhileCurrent: authority.commitWhileCurrent.bind(authority) } : {}),
   };
+  inheritNativeOriginalAuthority(authority, child);
+  return Object.freeze(child);
 }
 
 export function isFlowExecutionAuthorityError(

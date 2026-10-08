@@ -370,7 +370,6 @@ describe('mid-flight completion cancellation', () => {
         commitWhileCurrent,
         signal: new AbortController().signal,
       },
-      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
     });
 
     await providerStarted;

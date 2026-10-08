@@ -12,6 +12,9 @@
  *   - a plain handoff ends the run and surfaces as a routing tool_call.
  */
 import type OpenAI from 'openai';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -65,6 +68,9 @@ jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({
 const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
 const listServerToolsMock = jest.fn();
+const getClientMock = jest.fn();
+const getClientGenerationMock = jest.fn();
+const getToolSchemaHashMock = jest.fn();
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({
   loadConversationState: jest.fn(async () => null),
 }));
@@ -73,6 +79,9 @@ jest.mock('@/backend/services/mcp', () => ({
     callTool: (...a: unknown[]) => callToolMock(...(a as [])),
     loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
     listServerTools: (...a: unknown[]) => listServerToolsMock(...(a as [])),
+    getClient: (...a: unknown[]) => getClientMock(...(a as [])),
+    getClientGeneration: (...a: unknown[]) => getClientGenerationMock(...(a as [])),
+    getToolSchemaHash: (...a: unknown[]) => getToolSchemaHashMock(...(a as [])),
     isMcpAppAccessEnabled: async (serverName: string) => {
       const configs = await loadServerConfigsMock();
       return Array.isArray(configs)
@@ -107,6 +116,8 @@ import {
 } from '@/backend/services/model/adapters/codexAdapter';
 import { _clearCodexSessionsForTests } from '@/backend/services/model/adapters/codexSessionStore';
 import { prepareCodexRuntimeEnvironment } from '@/backend/services/model/adapters/codexRuntimeHome';
+import { _setNativeToolJournalRootForTests, prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
+import { createNativeBrokerAuthority, createNativeToolPort, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 
 type AnyEvent = Record<string, unknown>;
 
@@ -144,6 +155,9 @@ beforeEach(() => {
   callToolMock.mockReset();
   loadServerConfigsMock.mockReset();
   listServerToolsMock.mockReset();
+  getClientMock.mockReset().mockReturnValue({});
+  getClientGenerationMock.mockReset().mockReturnValue(1);
+  getToolSchemaHashMock.mockReset().mockReturnValue('advertised-schema');
   loadServerConfigsMock.mockResolvedValue([
     { name: 'my-server', enableMcpApps: true },
   ]);
@@ -343,6 +357,81 @@ describe('CodexAdapter — thread setup', () => {
       { type: 'text', text: expect.stringContaining('hi') },
     ]);
   });
+});
+
+it('routes a native Codex callback through the durable Worker port without host tool fallback', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-native-port-'));
+  _setNativeToolJournalRootForTests(directory);
+  try {
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [{
+      type: 'function', function: { name: 'worker_search', description: 'Search',
+        parameters: { type: 'object', properties: {} } },
+    }];
+    const executor = jest.fn(async () => ({ found: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation({
+      conversationId: 'native-codex', runId: 'run-1', nodeId: 'node-1', modelId: 'm1',
+      leaseEpoch: 'lease-1', inputDigest: 'input-1', attemptOrdinal: 1,
+      inventoryDigest: nativeToolInventoryDigest(tools, undefined, executors),
+    });
+    await submitNativeInvocation(receipt);
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-1', async () => undefined),
+      signal: new AbortController().signal });
+    const observedLive = jest.fn(async () => undefined);
+    callToolMock.mockImplementation(() => { throw new Error('host MCP fallback called'); });
+    await new CodexAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
+      onSdkRequest: async () => receipt.invocationId,
+      onNativeSdkLive: observedLive,
+      onSdkRequestResult: async () => undefined }));
+    expect(observedLive).toHaveBeenCalledTimes(1);
+    const result = await capturedBridgeTools[0].handler({ q: 'test' }, 'model-call-1');
+    expect(result.isError).not.toBe(true);
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+    await expect(capturedBridgeTools[0].handler({ q: 'without-id' })).rejects.toThrow(/identity/);
+    expect(executor).toHaveBeenCalledTimes(1);
+  } finally {
+    _setNativeToolJournalRootForTests(undefined);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ['terminal-only', [turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 })]],
+  ['failed-first', [{ type: 'turn.failed', error: { message: 'fixture failure' } }]],
+] as const)('does not call a native Codex stream live after %s events', async (_name, events) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-native-terminal-'));
+  _setNativeToolJournalRootForTests(directory);
+  try {
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [];
+    const receipt = await prepareNativeInvocation({
+      conversationId: `native-codex-${_name}`, runId: 'run-1', nodeId: 'node-1', modelId: 'm1',
+      leaseEpoch: 'lease-1', inputDigest: 'input-1', attemptOrdinal: 1,
+      inventoryDigest: nativeToolInventoryDigest(tools),
+    });
+    await submitNativeInvocation(receipt);
+    const port = createNativeToolPort({ receipt, tools,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-1', async () => undefined),
+      signal: new AbortController().signal });
+    const observedLive = jest.fn(async () => undefined);
+    const observedFinished = jest.fn();
+    runStreamedMock.mockResolvedValueOnce({ events: eventStream([...events])() });
+    await new CodexAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
+      onSdkRequest: async () => receipt.invocationId,
+      onNativeSdkLive: observedLive,
+      onNativeSdkFinished: observedFinished,
+      onSdkRequestResult: async () => undefined })).catch(() => undefined);
+    expect(observedLive).not.toHaveBeenCalled();
+    expect(observedFinished).toHaveBeenCalledTimes(1);
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+  } finally {
+    _setNativeToolJournalRootForTests(undefined);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 describe('CodexAdapter — transcript & usage', () => {
@@ -621,6 +710,48 @@ describe('CodexAdapter — cooperative terminal controls', () => {
 });
 
 describe('CodexAdapter — tool bridging', () => {
+  it('rejects an MCP client replaced while bridge approval was pending', async () => {
+    const approve = jest.fn(async () => {
+      getClientGenerationMock.mockReturnValue(2);
+      return true;
+    });
+    let sdkResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      sdkResult = await capturedBridgeTools[0].handler({ q: 'recent' });
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(baseInput({
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: {
+        server: 'my-server', tool: 'list_things', clientGeneration: 1, schemaHash: 'advertised-schema',
+      } },
+      requestToolApproval: approve,
+    }));
+
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(sdkResult).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('re-registered') }] });
+    expect(transcript?.filter(message => message.role === 'tool')).toHaveLength(1);
+  });
+
+  it('checks MCP identity again after the asynchronous dispatch fence', async () => {
+    let sdkResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      sdkResult = await capturedBridgeTools[0].handler({ q: 'recent' });
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+    await new CodexAdapter().createCompletion(baseInput({
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: {
+        server: 'my-server', tool: 'list_things', clientGeneration: 1,
+      } },
+      beforeToolDispatch: async () => { getClientGenerationMock.mockReturnValue(2); },
+    }));
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(sdkResult).toMatchObject({ isError: true });
+  });
+
   it('hides preset identity fields and overrides forged bridge arguments before MCP dispatch', async () => {
     const presetArgs = { customer_id: 'fixed-customer-a', conversation_id: '@conversation.id' };
     const originalSchema = {
