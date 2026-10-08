@@ -19,13 +19,19 @@ jest.mock('@/backend/execution/flow/modelTurnArchiveWriteBudget', () => {
     '@/backend/execution/flow/modelTurnArchiveWriteBudget');
   if (process.env.FLUJO_520_WORKER !== 'admission-off') return actual;
   const fileSystem = jest.requireActual<typeof import('node:fs')>('node:fs');
-  return { ...actual,
+  // SWC exposes exports through getters. A spread evaluates every getter while
+  // this module's owned-schema dependency can still be circularly initializing.
+  // Retain the original lazy descriptors without reading their values.
+  const descriptors = Object.getOwnPropertyDescriptors(actual);
+  const overrides = {
     reserveArchiveSnapshot: () => ({ grow: () => undefined, release: () => undefined }),
     withArchiveWriteMemory: async (_payload: unknown, task: () => Promise<unknown>) => task(),
     recheckArchiveWriteMemory: () => undefined,
     getArchiveSchemaProjectionPolicy: () => 'legacy-unbounded',
     readArchiveLocalMedia: (file: string) => fileSystem.promises.readFile(file),
   };
+  for (const key of Object.keys(overrides)) delete descriptors[key];
+  return Object.assign(Object.defineProperties({}, descriptors), overrides);
 });
 const getModelMock = jest.fn();
 const getFlowMock = jest.fn();
@@ -91,6 +97,40 @@ function flow(id: string): Flow {
   ], edges: [{ id: 'start-process', source: 'start', target: 'process' }] };
 }
 
+async function installedSdkMetadata() {
+  const modules = await fs.realpath(path.join(process.cwd(), 'node_modules'));
+  const entry = await fs.realpath(require.resolve('openai'));
+  const inside = (file: string) => {
+    const relative = path.relative(modules, file);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  };
+  if (!inside(entry)) throw new Error('OpenAI entry is outside this installed checkout');
+  const readMetadata = async (file: string, maximum: number) => {
+    const resolved = await fs.realpath(file);
+    if (!inside(resolved)) throw new Error('SDK metadata escapes installed modules');
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile() || stat.size > maximum) throw new Error('SDK metadata exceeds allowance');
+    const bytes = await fs.readFile(resolved);
+    if (bytes.length > maximum) throw new Error('SDK metadata grew beyond allowance');
+    return bytes;
+  };
+  let directory = path.dirname(entry);
+  for (let depth = 0; depth < 6 && inside(directory); depth++, directory = path.dirname(directory)) {
+    let bytes: Buffer;
+    try { bytes = await readMetadata(path.join(directory, 'package.json'), 256 * 1024); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    const metadata = JSON.parse(bytes.toString('utf8')) as { name?: unknown; version?: unknown };
+    if (metadata.name !== 'openai') continue;
+    if (typeof metadata.version !== 'string' || !metadata.version) throw new Error('SDK package version is missing');
+    return { version: metadata.version, entrySha256: digest((await readMetadata(entry, 2 * 1024 * 1024)).toString('utf8')),
+      packageSha256: digest(bytes.toString('utf8')), entryRelative: path.relative(modules, entry) };
+  }
+  throw new Error('OpenAI package metadata was not found near its supported entry');
+}
+
 async function workerScenario(root: string) {
   const resolved = await fs.realpath(root);
   if (resolved !== path.resolve(root) || path.dirname(resolved) !== await fs.realpath(os.tmpdir())
@@ -98,6 +138,7 @@ async function workerScenario(root: string) {
   process.env.FLUJO_DATA_DIR = resolved;
   delete process.env.FLUJO_PARENT_DATA_DIR;
   _setModelTurnArchiveDirForTests(path.join(resolved, 'archives'));
+  const sdkMetadata = await installedSdkMetadata();
   const started = performance.now();
   let phase = 'setup';
   let gcCount = 0, gcDurationMs = 0;
@@ -297,11 +338,12 @@ async function workerScenario(root: string) {
         success: lane.success, error: lane.error, conversationId: lane.conversationId })),
       node: process.version, platform: process.platform, arch: process.arch, execArgv: process.execArgv,
       nodeOptions: process.env.NODE_OPTIONS ?? null, heapSizeLimit: getHeapStatistics().heap_size_limit,
-      installedOpenAI: JSON.parse(await fs.readFile(require.resolve('openai/package.json'), 'utf8')).version,
+      installedOpenAI: sdkMetadata.version, sdkPackageSha256: sdkMetadata.packageSha256,
+      sdkEntryRelative: sdkMetadata.entryRelative,
       pressure: getArchiveWritePressure(), gcCount, gcDurationMs, elapsedMs: performance.now() - started,
       cgroup, osRelease: os.release(), osTotalMemory: os.totalmem(), mediaRoundTripBytes: mediaBytes.length,
       lockSha256: digest(await fs.readFile(path.join(process.cwd(), 'package-lock.json'), 'utf8')),
-      installedSdkEntrySha256: digest(await fs.readFile(require.resolve('openai'), 'utf8')),
+      installedSdkEntrySha256: sdkMetadata.entrySha256,
       limitation: 'Synthetic four-character/token proxy; not original transcript or original fatal cause proof.' }, null, 2));
     completed = true;
   } finally {
@@ -379,6 +421,7 @@ if (process.env.FLUJO_520_WORKER) {
       const currentProfile = { node: proof.node, platform: proof.platform, arch: proof.arch,
         osRelease: proof.osRelease, heapSizeLimit: proof.heapSizeLimit, installedOpenAI: proof.installedOpenAI,
         lockSha256: proof.lockSha256, installedSdkEntrySha256: proof.installedSdkEntrySha256,
+        sdkPackageSha256: proof.sdkPackageSha256,
         cgroupMax: proof.cgroup['memory.max'] };
       if (mode === 'admission-on') resourceProfile = currentProfile;
       else { expect(resourceProfile).toBeDefined(); expect(currentProfile).toEqual(resourceProfile); }
