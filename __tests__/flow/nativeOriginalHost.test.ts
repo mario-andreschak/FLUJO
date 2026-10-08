@@ -101,6 +101,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  }
 });`;
 let observedPrompt: unknown;
+let phaseStart: number | undefined;
+function phase(name: string) {
+  if (phaseStart !== undefined) console.info(JSON.stringify({ nativeOriginalHostPhase: name,
+    elapsedMs: Math.round(performance.now() - phaseStart) }));
+}
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
@@ -111,6 +116,7 @@ beforeEach(async () => {
   afterPrompt = undefined; transcriptText = 'done';
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
+  phaseStart = undefined;
   codexRegistrations = []; codexFrames = []; codexForeignScope = "";
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
@@ -124,11 +130,13 @@ beforeEach(async () => {
       args: ['-e', childScript],
       env: options.env, signal: forwarded.signal });
     children.push(child);
+    phase('child spawned');
     const close = () => child.stdin.end();
     options.abortController.signal.addEventListener('abort', close, { once: true });
     const stream = (async function* () {
       await beforePrompt?.();
       observedPrompt = (await prompt[Symbol.asyncIterator]().next()).value;
+      phase('prompt received');
       expect((await ledger()).reservations[0].state).toBe('registered');
       expect(child.exitCode).toBeNull();
       promptCount++;
@@ -178,6 +186,7 @@ afterEach(async () => {
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
   after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' | 'no-handoff-refusal' = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
+    phase('claim setup started');
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
     if (production === 'no-handoff' || production === 'no-handoff-refusal' || production === 'child' || production === 'child-refusal') {
@@ -202,10 +211,13 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
         call.data.properties = { subflowId: child.id, inputMode: 'isolated', promptTemplate: 'Offline child task' };
       }
       roleVersionId = (await createRoleVersion(version)).id;
+      phase('role authored');
     }
     const { persona } = await createPersonaFromRole({ name: 'Native host fixture', idempotencyKey: 'native-host-persona', autonomyLevel: 'locked', roleVersionId });
+    phase('persona created');
     const goal = await createPersonaWorkItem({ personaId: persona.id, title: 'Offline host contract',
       goal: { successCriteria: 'Offline lifecycle proof', continuationIntervalMs: 10000 } });
+    phase('goal created');
     const dispatchId = personaFlowDispatchId(persona.id, 'native-host-round');
     await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, rounds: 1, roundsInWindow: 1,
       pendingTaskId: goal.id, pendingDispatchId: dispatchId, pendingAttemptKey: 'native-host-round',
@@ -213,11 +225,15 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
     let observed = false;
     let failure: unknown;
     const dispatcher = new PersonaFlowDispatcher({ dependencies: { runFlow: async input => {
+      phase('dispatcher entered');
       observed = true;
       try {
         await task(input, goal.id);
+        phase('task assertions completed');
         if (production) {
+          phase('production flow started');
           const result = await runFlow(input);
+          phase('production flow completed');
           expect(result.status).toBe(production === 'handoff-refusal' || production === 'child-refusal' || production === 'no-handoff-refusal' ? 'error' : 'completed');
           return result;
         }
@@ -229,17 +245,19 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       await dispatcher.submit({ personaId: persona.id, idempotencyKey: 'native-host-round', kind: 'assignment',
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
       { startPump: false });
+      phase('dispatch submitted');
       if (production === 'handoff-refusal' || production === 'no-handoff-refusal') {
         try { await dispatcher.pump(persona.id); }
         catch (error) { expect(error).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' }); }
       } else await dispatcher.pump(persona.id);
+      phase('dispatcher pump completed');
       expect(observed).toBe(true);
       if (failure) {
         if (production === 'handoff-refusal' || production === 'no-handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
         else throw failure;
       }
       await after?.(persona.id, goal.id);
-    } finally { await dispatcher.quiesce(persona.id); }
+    } finally { await dispatcher.quiesce(persona.id); phase('dispatcher quiesced'); }
   });
 }
 
@@ -354,16 +372,20 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     }, 'child');
   }, 30000);
   it('refuses missing, unlisted, and changed descendant plans before the actual child executes', async () => {
+    phaseStart = performance.now();
     await withClaim(async input => {
       const child = input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot;
       const common = { authority: subflowExecutionAuthority(input.executionAuthority),
         conversationId: 'unissued_child', runId: 'unissued_child_run',
         nodeId: 'test_core_process', modelId: 'model-test', flowId: child.id };
       await expect(createPersonaNativeOriginalHost(common)).rejects.toThrow('held');
+      phase('missing plan refused');
       await expect(createPersonaNativeOriginalHost({ ...common, flowId: 'unlisted_child', flowSnapshot: child })).rejects.toThrow('held');
+      phase('unlisted plan refused');
       const changed = structuredClone(child);
       changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'forged plan';
       await expect(createPersonaNativeOriginalHost({ ...common, flowSnapshot: changed })).rejects.toThrow('held');
+      phase('changed plan refused');
       expect(queryMock).not.toHaveBeenCalled();
     }, async () => {
       expect(promptCount).toBe(1);
