@@ -93,11 +93,12 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     await timed('provision', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
     const proposed = createShippedServerConfig(descriptor);
     expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
-    owner = installBundledFixtureOwner();
+    const fixtureOwner = installBundledFixtureOwner();
+    owner = fixtureOwner;
     const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
-    const approvalRequest = new Request(owner.request(proposed.name), { signal: cancellation.signal });
+    const approvalRequest = new Request(fixtureOwner.request(proposed.name), { signal: cancellation.signal });
     const approved = await timed('approve', () => approveBundledHostConsent(approvalRequest, proposed.name, {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
     }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
