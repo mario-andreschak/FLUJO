@@ -17,6 +17,7 @@ import { createNativeInvocationSessionHook, type NativeInvocationSession } from 
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
 import { readNativeHeldFile } from './nativeHeldFile';
+import { assertCodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { resolveBehaviorSubflowSnapshot, verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 
 type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
@@ -34,7 +35,7 @@ type Reservation = { invocationId: string; descriptorDigest: string; owner: Nati
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
   handoff?: { protocol: 'owned-claude-exit-close-v1'; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
-  sdkUsage?: { source: 'claude-sdk-result'; numTurns?: number; inputTokens?: number;
+  sdkUsage?: { source: 'claude-sdk-result' | 'codex-app-server-turn'; numTurns?: number; outerTurns?: number; inputTokens?: number;
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
   identity?: ClaudeOwnedProcessRegistration['identity']; sdkOutcome?: string; exit?: { code: number | null; signal: NodeJS.Signals | null } };
 type Ledger = { version: 1; goalId: string; personaId: string; reservations: Reservation[] };
@@ -250,10 +251,8 @@ export async function createPersonaNativeOriginalHost(input: {
     if (!task || task.goal || task.parentGoalId) return held();
     return undefined;
   }
-  if (model?.adapter !== 'claude-cli') {
-    if (model?.adapter === 'codex-cli') return held(); // No verified public owned-child hook.
-    return undefined;
-  }
+  if (model?.adapter !== 'claude-cli' && model?.adapter !== 'codex-cli') return undefined;
+  const adapter = model.adapter;
   // Always use the mint's captured real lease closures, including when a causal
   // wrapper carries the binding. Caller-owned wrapper methods are not authority.
   const authority = binding.authority;
@@ -276,6 +275,9 @@ export async function createPersonaNativeOriginalHost(input: {
     || (input.flowSnapshot && graphDigest(input.flowSnapshot) !== selectedPlanDigest)) return held();
   const node = selectedFlow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
   if (!node || node.data.properties?.boundModel !== input.modelId) return held();
+  // Codex's owned one-turn protocol does not yet certify a handoff. A terminal
+  // Process or child can complete; synthetic Finish routing must remain held.
+  if (adapter === 'codex-cli' && selectedFlow.nodes.some(item => item.data.type === 'finish')) return held();
   if (model.id !== input.modelId || model.fallbackPolicy) return held();
   const maxTurns = positive(node.data.properties?.maxTurns) ?? positive(model.maxTurns) ?? DEFAULT_AGENTIC_MAX_TURNS;
   const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, adapter: value?.adapter,
@@ -331,7 +333,7 @@ export async function createPersonaNativeOriginalHost(input: {
       const owner = descriptor.receipt.owner;
       if (owner.conversationId !== input.conversationId || owner.runId !== input.runId
         || owner.nodeId !== input.nodeId || owner.modelId !== input.modelId || owner.leaseEpoch !== binding.leaseEpoch
-        || descriptor.archive.adapter !== 'claude-cli'
+        || descriptor.archive.adapter !== adapter
         || (isRoot ? descriptor.lineage.edges.length !== 0 : descriptor.lineage.edges.length === 0)
         || descriptor.lineage.rootFlowId !== binding.flow.id) return held();
       const saved = await readSavedNativeOrigin({ invocationId: descriptor.receipt.invocationId,
@@ -412,14 +414,16 @@ export async function createPersonaNativeOriginalHost(input: {
     observeSdkUsage: async result => {
       if (!result || typeof result !== 'object' || !child || !original) return held();
       const value = result as Record<string, unknown>;
-      if (value.type !== 'result') return held();
+      if (value.type !== (adapter === 'claude-cli' ? 'result' : 'turn.completed')) return held();
       await processHost.assertOutputCurrent();
       const usage = value.usage && typeof value.usage === 'object' ? value.usage as Record<string, unknown> : {};
       const number = (candidate: unknown): number | undefined => typeof candidate === 'number'
         && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
-      const receipt: NonNullable<Reservation['sdkUsage']> = { source: 'claude-sdk-result',
-        numTurns: number(value.num_turns), inputTokens: number(usage.input_tokens), outputTokens: number(usage.output_tokens),
-        cacheReadTokens: number(usage.cache_read_input_tokens), cacheCreationTokens: number(usage.cache_creation_input_tokens),
+      const receipt: NonNullable<Reservation['sdkUsage']> = { source: adapter === 'claude-cli' ? 'claude-sdk-result' : 'codex-app-server-turn',
+        ...(adapter === 'claude-cli' ? { numTurns: number(value.num_turns) } : { outerTurns: 1 }),
+        inputTokens: number(usage.input_tokens), outputTokens: number(usage.output_tokens),
+        cacheReadTokens: number(adapter === 'claude-cli' ? usage.cache_read_input_tokens : usage.cached_input_tokens),
+        cacheCreationTokens: number(usage.cache_creation_input_tokens),
         totalCostUsd: number(value.total_cost_usd), durationMs: number(value.duration_ms) };
       await authority.commitWhileCurrent!(() => update(async reservation => {
         if (reservation.sdkUsage && nativeDigest(reservation.sdkUsage) !== nativeDigest(receipt)) return held();
@@ -433,7 +437,8 @@ export async function createPersonaNativeOriginalHost(input: {
       await assertCurrent();
     },
     register: async value => {
-      assertClaudeOwnedProcessRegistration(value, processHost);
+      if (adapter === 'claude-cli') assertClaudeOwnedProcessRegistration(value, processHost);
+      else assertCodexOwnedProcessRegistration(value, processHost);
       if (!original || child || !value.identity.processBirthMarkerV2) return held();
       child = value;
       void value.exit.then(() => { exited = true; });
