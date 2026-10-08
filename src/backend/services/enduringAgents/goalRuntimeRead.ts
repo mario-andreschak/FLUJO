@@ -78,8 +78,9 @@ async function readSnapshot(personaId: string, goalId: string) {
   }
   const dispatch = await getPersonaFlowDispatch(round.dispatchId);
   if (!dispatch) {
+    if (!hasPending) return unverified('historical_round_not_current');
     result.state = 'reserved';
-    result.verified = hasPending;
+    result.verified = true;
     return result;
   }
   if (dispatch.id !== round.dispatchId || dispatch.personaId !== personaId
@@ -90,6 +91,9 @@ async function readSnapshot(personaId: string, goalId: string) {
     return unverified('dispatch_identity_mismatch');
   }
   result.dispatch = { id: dispatch.id, state: dispatch.state };
+  // A saved round can identify terminal history, but only the Goal's current
+  // pending fields can verify a reservation or queued mailbox.
+  if (!hasPending && !dispatch.activityId) return unverified('historical_round_not_current');
   if (!dispatch.mailboxItemId) {
     if (dispatch.activityId || dispatch.state !== 'queued') return unverified('dispatch_without_mailbox');
     result.state = 'reserved';
@@ -163,6 +167,12 @@ export async function readPersonaGoalRuntime(personaId: string, goalId: string) 
         || root.goal.pendingDispatchId !== snapshot.round.dispatchId))) {
     return changed('snapshot_changed');
   }
+  const currentPending = (candidate: typeof root) => candidate?.goal?.pendingTaskId === snapshot.round?.taskId
+    && candidate?.goal?.pendingAttemptKey === snapshot.round?.attemptId
+    && candidate?.goal?.pendingDispatchId === snapshot.round?.dispatchId;
+  if (['reserved', 'queued', 'accepted_running'].includes(snapshot.state) && !currentPending(root)) {
+    return changed('snapshot_changed');
+  }
   if (snapshot.state !== 'accepted_running' && snapshot.state !== 'terminal_observed') return snapshot;
   const round = snapshot.round!;
   const dispatch = await getPersonaFlowDispatch(round.dispatchId);
@@ -190,6 +200,7 @@ export async function readPersonaGoalRuntime(personaId: string, goalId: string) 
   }
   const finalRoot = await getPersonaWorkItem(personaId, goalId);
   if (!finalRoot || finalRoot.updatedAt !== snapshot.goal.version || finalRoot.personaId !== personaId
-    || finalRoot.goal?.rounds !== snapshot.goal.rounds) return changed('snapshot_changed');
+    || finalRoot.goal?.rounds !== snapshot.goal.rounds
+    || (snapshot.state === 'accepted_running' && !currentPending(finalRoot))) return changed('snapshot_changed');
   return snapshot;
 }

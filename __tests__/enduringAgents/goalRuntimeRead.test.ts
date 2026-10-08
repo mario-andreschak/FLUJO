@@ -102,7 +102,9 @@ it('reports joined running and terminal evidence, projecting no private fields',
     lease: { id: 'lease_one', status: 'active' },
   });
   expect(JSON.stringify(running)).not.toMatch(/private|fencingToken|holderId|flowInput|instructionContext/);
-  workItem.mockResolvedValueOnce({ ...root(), goal: { state: 'active', rounds: 1, lastActivityId: 'activity_one' } });
+  workItem.mockImplementation(async () => ({
+    ...root(), goal: { state: 'active', rounds: 1, lastActivityId: 'activity_one' },
+  }));
   eventRead.mockResolvedValueOnce([{
     type: 'goal:round', goalId: 'goal_one', round: 1, taskId: 'goal_one',
     attemptKey: 'attempt_one', dispatchId,
@@ -127,6 +129,39 @@ it.each([
   arrange();
   await expect(readPersonaGoalRuntime('persona_owner', 'goal_one')).resolves.toMatchObject({
     state: 'unverified', verified: false, reason,
+  });
+});
+
+it.each([
+  ['missing dispatch', () => dispatchGet.mockResolvedValueOnce(null)],
+  ['queued dispatch without mailbox', () => dispatchGet.mockResolvedValueOnce({ ...dispatch(), mailboxItemId: undefined, activityId: undefined })],
+  ['queued dispatch and mailbox', () => {
+    dispatchGet.mockResolvedValueOnce({ ...dispatch(), activityId: undefined });
+    mailboxGet.mockResolvedValueOnce({ ...mailbox(), status: 'queued', claimedActivityId: undefined });
+  }],
+] as const)('does not verify historical %s after pending clears', async (_name, arrange) => {
+  workItem.mockImplementation(async () => ({ ...root(), goal: { state: 'paused', rounds: 1 } }));
+  eventRead.mockResolvedValue([{
+    type: 'goal:round', goalId: 'goal_one', round: 1, taskId: 'goal_one',
+    attemptKey: 'attempt_one', dispatchId,
+  }]);
+  arrange();
+  await expect(readPersonaGoalRuntime('persona_owner', 'goal_one')).resolves.toMatchObject({
+    state: 'unverified', verified: false, reason: 'historical_round_not_current',
+    round: { number: 1, taskId: 'goal_one', attemptId: 'attempt_one', dispatchId },
+  });
+});
+
+it.each(['reserved', 'queued'] as const)('does not verify %s when current pending clears during the read', async state => {
+  if (state === 'reserved') dispatchGet.mockResolvedValueOnce(null);
+  else {
+    dispatchGet.mockResolvedValueOnce({ ...dispatch(), activityId: undefined });
+    mailboxGet.mockResolvedValueOnce({ ...mailbox(), status: 'queued', claimedActivityId: undefined });
+  }
+  workItem.mockResolvedValueOnce(root());
+  workItem.mockResolvedValueOnce({ ...root(), goal: { state: 'paused', rounds: 1 } });
+  await expect(readPersonaGoalRuntime('persona_owner', 'goal_one')).resolves.toMatchObject({
+    state: 'unverified', verified: false, reason: 'snapshot_changed',
   });
 });
 
