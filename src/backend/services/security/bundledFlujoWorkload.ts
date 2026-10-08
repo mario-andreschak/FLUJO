@@ -433,7 +433,9 @@ async function evidence(request: Request) {
   request.signal.throwIfAborted();
   return record;
   } catch (error) {
-    if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[workload-guard]', 'refused', phase);
+    try {
+      if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[workload-guard]', 'refused', phase);
+    } catch { /* Diagnostics must preserve the original authorization failure. */ }
     throw error;
   }
 }
