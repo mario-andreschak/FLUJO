@@ -23,6 +23,14 @@ function same(first: fs.BigIntStats, second: fs.BigIntStats): boolean {
     && first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs && first.mode === second.mode;
 }
 
+async function settledBatch<T>(operations: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(operations);
+  return results.map(result => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
+}
+
 /** Declared dependency inspection only: never loads package code or conveys consent. */
 export async function inspectBundledMcpDependencyGraph(installationRoot: string, initialDirectories: readonly string[], signal?: AbortSignal) {
   const installation = await fs.promises.realpath(installationRoot);
@@ -90,19 +98,31 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
       if (!before.isDirectory()) throw new Error('Dependency directory refused.');
       identities.set(current, before);
       tree.update(JSON.stringify(['directory', path.relative(directory, current), String(before.mode)]));
-      for (const name of (await fs.promises.readdir(current)).sort()) {
-        // Runtime resolution of declared dependencies is separately pinned below.
-        if (name === 'node_modules') continue;
-        const filename = path.join(current, name), stat = await fs.promises.lstat(filename, { bigint: true });
-        if (stat.isDirectory() && !stat.isSymbolicLink()) { await walk(filename); continue; }
-        if (++members > MAX_FILES || !stat.isFile() || stat.isSymbolicLink()) throw new Error('Dependency member refused.');
-        const content = await read(filename, MAX_BYTES - bytes);
-        try {
-          const digest = createHash('sha256').update(content).digest('hex');
-          if (filename === manifestFile && digest !== manifestDigest) throw new Error('Parsed dependency manifest differs from the fingerprinted manifest.');
-          bytes += content.length; tree.update(JSON.stringify(['file', path.relative(directory, filename), String(stat.mode), digest]));
+      // Files in each directory use bounded parallel I/O; digest order remains
+      // the same sorted depth-first order. Every started read settles on refusal.
+      const names = (await fs.promises.readdir(current)).sort().filter(name => name !== 'node_modules');
+      for (let offset = 0; offset < names.length; offset += 16) {
+        const entries = await settledBatch(names.slice(offset, offset + 16).map(async name => {
+          live();
+          const filename = path.join(current, name), stat = await fs.promises.lstat(filename, { bigint: true });
+          if (stat.isDirectory() && !stat.isSymbolicLink()) return { filename, stat, digest: undefined };
+          if (++members > MAX_FILES || !stat.isFile() || stat.isSymbolicLink()) throw new Error('Dependency member refused.');
+          // Reserve the complete observed size before yielding to another read.
+          const length = Number(stat.size);
+          bytes += length;
+          if (bytes > MAX_BYTES) throw new Error('Dependency graph exceeds its byte bound.');
+          const content = await read(filename, length);
+          try {
+            if (!same(stat, identities.get(filename)!)) throw new Error('Dependency member changed before reading.');
+            const digest = createHash('sha256').update(content).digest('hex');
+            if (filename === manifestFile && digest !== manifestDigest) throw new Error('Parsed dependency manifest differs from the fingerprinted manifest.');
+            return { filename, stat, digest };
+          } finally { content.fill(0); }
+        }));
+        for (const entry of entries) {
+          if (entry.digest === undefined) await walk(entry.filename);
+          else tree.update(JSON.stringify(['file', path.relative(directory, entry.filename), String(entry.stat.mode), entry.digest]));
         }
-        finally { content.fill(0); }
       }
       await linkFree(current);
       if (!same(before, await fs.promises.lstat(current, { bigint: true }))) throw new Error('Dependency directory changed.');
@@ -129,9 +149,12 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
     }
   }
   live();
-  for (const [filename, identity] of identities) {
-    live(); await linkFree(filename);
-    if (!same(identity, await fs.promises.lstat(filename, { bigint: true }))) throw new Error('Installation changed during dependency inspection.');
+  const observed = [...identities];
+  for (let offset = 0; offset < observed.length; offset += 32) {
+    await settledBatch(observed.slice(offset, offset + 32).map(async ([filename, identity]) => {
+      live(); await linkFree(filename);
+      if (!same(identity, await fs.promises.lstat(filename, { bigint: true }))) throw new Error('Installation changed during dependency inspection.');
+    }));
   }
   packages.sort((a, b) => a.directory.localeCompare(b.directory));
   edges.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
