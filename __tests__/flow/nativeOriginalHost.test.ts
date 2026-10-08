@@ -116,7 +116,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
      const raw=await response.text();const data=raw.split('\\n').find(line=>line.startsWith('data: '));return JSON.parse(data?data.slice(6):raw);
     };
     const tools=await rpc('tools/list',{});const tool=tools.result.tools.find(t=>t.name.startsWith('handoff_to_'));
-    const keeper=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+    const keeperScript='const parent='+process.pid+';const tick=setInterval(()=>{try{process.kill(parent,0)}catch{clearInterval(tick);setTimeout(()=>process.exit(0),700)}},10);setTimeout(()=>process.exit(0),15000);';
+    const keeper=require('node:child_process').spawn(process.execPath,['-e',keeperScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
     await new Promise(resolve=>keeper.once('spawn',resolve));
     fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
     await rpc('tools/call',{name:tool.name,arguments:{},_meta:{callId:'codex-handoff-1',threadId}});return;
