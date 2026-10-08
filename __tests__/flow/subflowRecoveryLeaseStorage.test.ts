@@ -119,6 +119,9 @@ describe('parent resume lease with real storage', () => {
   let root: string;
   let identity: FixtureIdentity;
   const pendingReports = new Set<Promise<void>>();
+  // Keep failures by original root, even if a later test creates a new fixture.
+  // Expected task faults do not enter this ledger: only real cleanup steps do.
+  const fixtureCleanupFailures = new Map<string, Map<string, unknown>>();
   let priorData: string | undefined;
   let priorParentData: string | undefined;
 
@@ -132,11 +135,44 @@ describe('parent resume lease with real storage', () => {
     return report;
   };
 
+  const ownedCleanupStep = (name: string, step: () => Promise<void>) => {
+    const fixtureRoot = root;
+    return async () => {
+      const failures = fixtureCleanupFailures.get(fixtureRoot)!;
+      try {
+        await step();
+        failures.delete(name); // Only successful recovery of this step clears it.
+      } catch (error) {
+        failures.set(name, error);
+        throw error;
+      }
+    };
+  };
+
+  const removeSnapshotBlocker = async (target: string, original: BigIntStats) => {
+    if (hasPendingOwner()) throw new Error('Preserving snapshot with pending recovery ownership');
+    await verifyOwnedFixture(identity);
+    const relative = path.relative(identity.root, path.resolve(target));
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Snapshot cleanup escapes fixture');
+    const parent = path.dirname(path.resolve(target));
+    if ((await fs.lstat(parent)).isSymbolicLink() || await fs.realpath(parent) !== parent) {
+      throw new Error('Preserving redirected snapshot parent');
+    }
+    const current = await fs.lstat(target, { bigint: true });
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== original.dev
+        || current.ino !== original.ino || current.birthtimeNs !== original.birthtimeNs) {
+      throw new Error('Preserving replaced snapshot blocker');
+    }
+    if (hasPendingOwner()) throw new Error('Preserving snapshot with pending recovery ownership');
+    await fs.rmdir(target);
+  };
+
   beforeEach(async () => {
     if (hasPendingOwner()) throw new Error('Prior fixture still has recovery ownership; preserving it');
     const temporaryParent = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(temporaryParent, fixturePrefix));
     identity = await captureFixture(root, temporaryParent);
+    fixtureCleanupFailures.set(root, new Map());
     priorData = process.env.FLUJO_DATA_DIR;
     priorParentData = process.env.FLUJO_PARENT_DATA_DIR;
     process.env.FLUJO_DATA_DIR = root;
@@ -147,11 +183,18 @@ describe('parent resume lease with real storage', () => {
       outputText: 'parent output', sharedState: FlowExecutor.conversationStates.get('lease-parent')! }));
   });
 
-  afterEach(async () => {
+  const cleanupFixture = async () => {
     // Do not restore mocks/env, clear live state, or remove data beneath an
     // unsettled writer. Preserve the fixture and make that uncertainty fail.
     if (hasPendingOwner()) throw new Error(`Pending recovery ownership; fixture preserved at ${root}`);
-    await withIndependentCleanup(() => removeOwnedFixture(identity, hasPendingOwner), [
+    await withIndependentCleanup(async () => {
+      const failures = fixtureCleanupFailures.get(root)!;
+      if (failures.size) {
+        throw new AggregateError([...failures.values()], `Unresolved cleanup steps; fixture preserved at ${root}`);
+      }
+      await ownedCleanupStep('fixture-root', () => removeOwnedFixture(identity, hasPendingOwner))();
+      fixtureCleanupFailures.delete(root);
+    }, [
       () => { jest.restoreAllMocks(); },
       ...workspaces.map(workspace => () => runWithWorkspace(workspace, () => FlowExecutor.conversationStates.clear())),
       () => {
@@ -163,6 +206,46 @@ describe('parent resume lease with real storage', () => {
         else process.env.FLUJO_PARENT_DATA_DIR = priorParentData;
       },
     ]);
+  };
+
+  afterEach(cleanupFixture);
+
+  it('preserves a replaced snapshot sentinel through teardown until actual owned cleanup recovers', async () => {
+    const target = path.join(root, 'workspaces', workspaces[0], 'db', 'conversations', 'replacement.json');
+    const displaced = `${target}.original`;
+    await verifyOwnedFixture(identity);
+    await fs.mkdir(target, { recursive: true });
+    const original = await fs.lstat(target, { bigint: true });
+    await fs.rename(target, displaced);
+    await fs.mkdir(target);
+    const replacement = await fs.lstat(target, { bigint: true });
+    const sentinel = path.join(target, 'foreign-sentinel.txt');
+    await fs.writeFile(sentinel, 'must survive teardown');
+    const cleanup = ownedCleanupStep('snapshot-blocker', () => removeSnapshotBlocker(target, original));
+    await expect(cleanup()).rejects.toThrow('replaced snapshot blocker');
+    await expect(cleanupFixture()).rejects.toThrow('Unresolved cleanup steps');
+    expect(await fs.readFile(sentinel, 'utf8')).toBe('must survive teardown');
+    expect(fixtureCleanupFailures.get(root)?.has('snapshot-blocker')).toBe(true);
+    expect(process.env.FLUJO_DATA_DIR).toBe(priorData);
+    expect(process.env.FLUJO_PARENT_DATA_DIR).toBe(priorParentData);
+    // This control owns the replacement too. Recover it with its separately
+    // captured identity, without deleting any unrecognized replacement.
+    await verifyOwnedFixture(identity);
+    const current = await fs.lstat(target, { bigint: true });
+    expect(current.dev).toBe(replacement.dev);
+    expect(current.ino).toBe(replacement.ino);
+    expect(current.birthtimeNs).toBe(replacement.birthtimeNs);
+    await fs.unlink(sentinel);
+    await removeSnapshotBlocker(target, replacement);
+    await assertAbsent(target);
+    const displacedIdentity = await fs.lstat(displaced, { bigint: true });
+    expect(displacedIdentity.isDirectory() && !displacedIdentity.isSymbolicLink()).toBe(true);
+    expect(displacedIdentity.dev).toBe(original.dev);
+    expect(displacedIdentity.ino).toBe(original.ino);
+    expect(displacedIdentity.birthtimeNs).toBe(original.birthtimeNs);
+    await fs.rename(displaced, target);
+    await cleanup();
+    expect(fixtureCleanupFailures.get(root)?.size).toBe(0);
   });
 
   it('retains the primary refusal and each independent restoration failure while attempting later steps', async () => {
@@ -212,8 +295,8 @@ describe('parent resume lease with real storage', () => {
       await expect(removeOwnedFixture(identity, () => false)).rejects.toThrow('replaced fixture root');
       expect(await fs.readFile(path.join(root, 'replacement-proof.txt'), 'utf8')).toBe('preserve me');
     }, [
-      async () => { if (replacement) await removeOwnedFixture(replacement, () => false); },
-      async () => {
+      ownedCleanupStep('replacement-root', async () => { if (replacement) await removeOwnedFixture(replacement, () => false); }),
+      ownedCleanupStep('restore-original-root', async () => {
         const original = await captureFixture(displaced, identity.parent);
         expect(original.dev).toBe(identity.dev);
         expect(original.ino).toBe(identity.ino);
@@ -222,7 +305,7 @@ describe('parent resume lease with real storage', () => {
         expect(path.dirname(path.resolve(root))).toBe(identity.parent);
         await assertAbsent(root);
         await fs.rename(displaced, root);
-      },
+      }),
     ]);
   });
 
@@ -267,17 +350,12 @@ describe('parent resume lease with real storage', () => {
         const saved = JSON.parse(await fs.readFile(backup, 'utf8')) as SharedState;
         expect(saved.subflowInvocations?.['lease-invocation'].lanes[0].outputText).toBe(outcome.outputText);
       }, [
-        async () => {
+        ownedCleanupStep('snapshot-blocker', async () => {
           if (!blockerIdentity) return;
           await verifyRestoration();
-          const current = await fs.lstat(target, { bigint: true });
-          if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== blockerIdentity.dev
-              || current.ino !== blockerIdentity.ino || current.birthtimeNs !== blockerIdentity.birthtimeNs) {
-            throw new Error('Preserving replaced snapshot blocker');
-          }
-          await fs.rmdir(target);
-        },
-        async () => {
+          await removeSnapshotBlocker(target, blockerIdentity);
+        }),
+        ownedCleanupStep('restore-snapshot-backup', async () => {
           if (!backupIdentity) return;
           await verifyRestoration();
           const current = await fs.lstat(backup, { bigint: true });
@@ -288,7 +366,7 @@ describe('parent resume lease with real storage', () => {
           }
           await assertAbsent(target);
           await fs.rename(backup, target);
-        },
+        }),
       ], () => storageFailure === undefined ? [] : [storageFailure]);
       await reportOutcome(outcome);
       expect(runFlowMock).toHaveBeenCalledTimes(1);
