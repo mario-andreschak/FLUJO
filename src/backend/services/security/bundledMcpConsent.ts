@@ -35,8 +35,11 @@ async function initializePrivateLedger(filename: string, request: Request, autho
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   if (dataRoots.some(root => { const relative = path.relative(root, resolved); return !relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)); })) throw new Error('Approval authority must be outside workspace data.');
   const canonical = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
-  if (canonical(await fs.promises.realpath(parent)) !== canonical(parent)) throw new Error('Approval parent must be canonical.');
-  const owner = ownerPolicySchema.parse(await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal));
+  await consentDiagnosticStage('APPROVAL_SEED_PARENT', async () => {
+    if (canonical(await fs.promises.realpath(parent)) !== canonical(parent)) throw new Error('Approval parent must be canonical.');
+  });
+  const owner = await consentDiagnosticStage('APPROVAL_SEED_OWNER', async () =>
+    ownerPolicySchema.parse(await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal)));
   const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
   if (owner.ownerId !== authorization.principal.ownerId || request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
   let handle: fs.promises.FileHandle;
@@ -61,11 +64,12 @@ async function initializePrivateLedger(filename: string, request: Request, autho
   try {
     await handle.writeFile(content); await handle.sync();
     written = await handle.stat({ bigint: true });
-    await assertExactSeed();
-    const observed = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(resolved, request.signal));
+    await consentDiagnosticStage('APPROVAL_SEED_IDENTITY', assertExactSeed);
+    const observed = await consentDiagnosticStage('APPROVAL_SEED_AUTHORITY', async () =>
+      trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(resolved, request.signal)));
     const current = await handle.stat({ bigint: true }), named = await fs.promises.lstat(resolved, { bigint: true });
     if (!stable(current) || !stable(named) || observed.ownerId !== owner.ownerId || observed.approvals.length) throw new Error('Created approval ledger changed.');
-    await assertExactSeed();
+    await consentDiagnosticStage('APPROVAL_SEED_IDENTITY', assertExactSeed);
     const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
     if (request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval initialization retired.');
     initialized = true;
