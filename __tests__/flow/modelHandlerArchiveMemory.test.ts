@@ -3,6 +3,7 @@ import { promises as fs, type BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { z } from 'zod';
 import type OpenAI from 'openai';
 import type { Model } from '@/shared/types/model';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -30,12 +31,18 @@ jest.mock('@/backend/services/model/adapters', () => ({
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot } from '@/backend/execution/flow/modelTurnArchive';
+import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
+let archiveMetadata: Record<string, unknown> | undefined;
 class LocalAdapter extends OpenAiAdapter {
+  async createCompletion(input: CompletionInput) {
+    return super.createCompletion({ ...input, onSdkRequest: snapshot => input.onSdkRequest?.({
+      ...snapshot, request: archiveMetadata ? { ...(snapshot.request as Record<string, unknown>), ...archiveMetadata } : snapshot.request,
+    }) ?? Promise.resolve(undefined) });
+  }
   protected createClient(model: Model, apiKey: string): OpenAI {
     return createOpenAIClient({ baseURL: model.baseUrl, apiKey, maxRetries: 0, timeout: 5000 });
   }
@@ -67,6 +74,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
   let priorParentData: string | undefined;
   let requests: unknown[];
   let bad400: boolean;
+  let fixtureUncertain: boolean;
   const message: FlujoChatMessage = { id: 'original', role: 'user', timestamp: 1, content: 'retained history' };
 
   beforeEach(async () => {
@@ -81,7 +89,9 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     delete process.env.FLUJO_PARENT_DATA_DIR;
     requests = [];
     bad400 = false;
+    fixtureUncertain = false;
     writeOpenControl = undefined;
+    archiveMetadata = undefined;
     server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -105,7 +115,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
   afterEach(async () => {
     // Do not delete underneath a writer, even on a failed assertion.
     const pressure = getArchiveWritePressure();
-    if (pressure.writers || pressure.quarantined || pressure.bytes) {
+    if (pressure.writers || pressure.quarantined || pressure.bytes || fixtureUncertain) {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       throw new Error(`Archive ownership still pending; preserving ${root}`);
@@ -118,6 +128,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
       },
       () => { _setModelTurnArchiveDirForTests(priorArchive); },
       () => { writeOpenControl = undefined; },
+      () => { archiveMetadata = undefined; },
       () => { if (priorData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = priorData; },
       () => { if (priorParentData === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = priorParentData; },
       async () => {
@@ -184,6 +195,63 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(snapshots.map(snapshot => snapshot!.entry.outcome).sort()).toEqual(['completed', 'error']);
     for (const snapshot of snapshots) expect(snapshot!.canonicalMessages).toEqual([message]);
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
+  });
+
+  it('projects actual Zod schema and omits AbortSignal/environment metadata before actual SDK dispatch', async () => {
+    const schema = z.object({ text: z.string() });
+    const privateEnvironment = new Proxy({}, { ownKeys: () => { throw new Error('Environment was traversed'); } });
+    class PrivateGraph { get hidden() { throw new Error('Private getter was invoked'); } }
+    archiveMetadata = { schema, signal: new AbortController().signal, env: privateEnvironment, privateGraph: new PrivateGraph() };
+    expect((await invoke([message])).success).toBe(true);
+    expect(requests).toHaveLength(1);
+    const files = (await fs.readdir(path.join(root, 'archives', 'memory-conversation'))).filter(file => file.endsWith('.v2.json.gz'));
+    expect(files).toHaveLength(1);
+    const snapshot = await readModelTurnSnapshot('memory-conversation', files[0].slice(0, -'.v2.json.gz'.length));
+    expect(snapshot!.sdkRequest).toMatchObject({ schema: { type: 'object', properties: { text: { type: 'string' } } },
+      signal: '[AbortSignal]', env: '[environment omitted]', privateGraph: '[object omitted]' });
+    expect(snapshot!.canonicalMessages).toEqual([message]);
+  });
+
+  it('preserves a physical outcome temp on unscoped close uncertainty and does not replace the committed outcome', async () => {
+    expect((await invoke([message])).success).toBe(true);
+    const directory = path.join(root, 'archives', 'memory-conversation');
+    const files = (await fs.readdir(directory)).filter(file => file.endsWith('.v2.json.gz'));
+    expect(files).toHaveLength(1);
+    const id = files[0].slice(0, -'.v2.json.gz'.length);
+    let uncertainTemp: string | undefined;
+    let physicallyClosed = false;
+    const closeCalls = jest.fn();
+    writeOpenControl = (handle, file) => {
+      if (!file.includes('.outcome.json.') || !file.endsWith('.tmp')) return handle;
+      uncertainTemp = file;
+      fixtureUncertain = true;
+      return new Proxy(handle, { get(target, key) {
+        if (key === 'close') return async () => {
+          closeCalls();
+          await target.close();
+          physicallyClosed = true;
+          fixtureUncertain = false;
+          // Controlled ambiguous result AFTER actual OS close: the production
+          // writer cannot know this, but fixture cleanup can prove drainage.
+          throw new Error('Injected ambiguous close result');
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    };
+    try {
+      await expect(updateModelDispatchOutcome('memory-conversation', id, 'error'))
+        .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP' });
+      expect(physicallyClosed).toBe(true);
+      expect(closeCalls).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(await fs.readFile(uncertainTemp!, 'utf8'))).toMatchObject({ outcome: 'error' });
+      expect((await readModelTurnSnapshot('memory-conversation', id))!.entry.outcome).toBe('completed');
+    } finally {
+      writeOpenControl = undefined;
+      // Cleanup may remove this owned fixture only with independently observed
+      // successful OS drainage, never from the production error alone.
+      if (uncertainTemp && !physicallyClosed) throw new Error(`Unresolved descriptor; preserve ${root}`);
+    }
   });
 
   it('holds admission while a real snapshot write has produced disk bytes but its owned task has not drained', async () => {

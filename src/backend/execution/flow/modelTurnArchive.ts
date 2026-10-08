@@ -3,8 +3,10 @@ import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
+import { z } from 'zod';
+import { types as utilTypes } from 'node:util';
 import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
-  settleArchiveWrites, ModelTurnArchiveMemoryError } from './modelTurnArchiveWriteBudget';
+  settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -117,12 +119,14 @@ function mimeFromDataUrl(value: string): { mimeType: string; data: Buffer } | un
 function inferredMime(parent: Record<string, unknown> | undefined): string | undefined {
   if (!parent) return undefined;
   for (const key of ['mimeType', 'mime_type', 'media_type']) {
-    if (typeof parent[key] === 'string' && String(parent[key]).includes('/')) {
-      return String(parent[key]);
+    const value = Object.getOwnPropertyDescriptor(parent, key)?.value;
+    if (typeof value === 'string' && value.includes('/')) {
+      return value;
     }
   }
-  if (typeof parent.format === 'string') {
-    const format = parent.format.toLowerCase();
+  const publicFormat = Object.getOwnPropertyDescriptor(parent, 'format')?.value;
+  if (typeof publicFormat === 'string') {
+    const format = publicFormat.toLowerCase();
     if (['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg'].includes(format)) return `audio/${format === 'mp3' ? 'mpeg' : format}`;
   }
   return undefined;
@@ -130,10 +134,11 @@ function inferredMime(parent: Record<string, unknown> | undefined): string | und
 
 function isNativeBase64Field(key: string, parent: Record<string, unknown> | undefined): boolean {
   if (!parent || !['data', 'file_data'].includes(key)) return false;
-  return parent.type === 'base64'
-    || parent.type === 'input_audio'
-    || parent.type === 'inline_data'
-    || parent.type === 'inlineData'
+  const type = Object.getOwnPropertyDescriptor(parent, 'type')?.value;
+  return type === 'base64'
+    || type === 'input_audio'
+    || type === 'inline_data'
+    || type === 'inlineData'
     || Boolean(inferredMime(parent));
 }
 
@@ -152,10 +157,6 @@ function redactRemoteUrl(value: string): string {
   } catch {
     return value;
   }
-}
-
-function isSecretKey(key: string): boolean {
-  return /(api[_-]?key|authorization|cookie|(?:^|[_-])(?:access[_-]?|refresh[_-]?|oauth[_-]?)?token$|secret|password|signature)/i.test(key);
 }
 
 interface SanitizeContext {
@@ -226,7 +227,8 @@ async function sanitizeValue(
       try {
         const bytes = Buffer.from(value.replace(/\s/g, ''), 'base64');
         if (bytes.byteLength > 0) {
-          const filename = typeof parent?.filename === 'string' ? parent.filename : undefined;
+          const filenameValue = parent ? Object.getOwnPropertyDescriptor(parent, 'filename')?.value : undefined;
+          const filename = typeof filenameValue === 'string' ? filenameValue : undefined;
           return archiveBinary(
             ctx,
             parameterPath,
@@ -245,6 +247,7 @@ async function sanitizeValue(
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'function') return '[function omitted]';
   if (typeof value !== 'object') return String(value);
+  if (utilTypes.isProxy(value)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
   if (seen.has(value as object)) return '[circular]';
   seen.add(value as object);
 
@@ -253,46 +256,46 @@ async function sanitizeValue(
   // Zod's large private implementation graph, however, and that graph is not
   // what the SDK serializes for the model. Zod 4 exposes the public JSON-Schema
   // projection on each schema; archive that provider-facing representation.
-  const maybeZodSchema = value as { toJSONSchema?: () => unknown };
-  if (typeof maybeZodSchema.toJSONSchema === 'function') {
+  if (isArchiveSchema(value as object)) {
     try {
+      const projected = z.toJSONSchema(value as z.ZodType);
+      recheckArchiveWriteMemory(projected);
       return await sanitizeValue(
-        maybeZodSchema.toJSONSchema(),
+        projected,
         parameterPath,
         ctx,
         parent,
         key,
         seen,
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof ModelTurnArchiveMemoryError) throw error;
       return '[schema could not be serialized]';
     }
   }
   if (Array.isArray(value)) {
     const out = [];
     for (let i = 0; i < value.length; i++) {
-      out.push(await sanitizeValue(value[i], `${parameterPath}[${i}]`, ctx, undefined, String(i), seen));
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+      if (descriptor && !('value' in descriptor)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      out.push(await sanitizeValue(descriptor?.value, `${parameterPath}[${i}]`, ctx, undefined, String(i), seen));
     }
     return out;
   }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return '[object omitted]';
   const source = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const [childKey, childValue] of Object.entries(source)) {
-    if (isSecretKey(childKey)) {
-      out[childKey] = '[redacted]';
-      continue;
-    }
-    if (childKey === 'env') {
-      out[childKey] = '[environment omitted]';
-      continue;
-    }
-    if (childKey === 'signal' || childKey === 'abortSignal' || childKey === 'abortController') {
-      out[childKey] = childKey === 'abortController' ? '[AbortController]' : '[AbortSignal]';
-      continue;
-    }
+  for (const childKey in source) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, childKey);
+    if (!descriptor) continue;
+    const omitted = archiveOmission(childKey);
+    if (omitted !== undefined) { out[childKey] = omitted; continue; }
+    if (!('value' in descriptor)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+    const childValue = descriptor.value;
     if (
       childKey === 'path'
-      && source.type === 'local_image'
+      && Object.getOwnPropertyDescriptor(source, 'type')?.value === 'local_image'
       && typeof childValue === 'string'
     ) {
       try {
