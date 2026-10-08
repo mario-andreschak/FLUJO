@@ -114,7 +114,10 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     try { return await operation(); } finally { stamp(`${name}:settled`); }
   };
   const cancellation = new AbortController();
-  const deadline = setTimeout(() => cancellation.abort(new Error('Workload fixture cancellation deadline.')), 55_000);
+  const deadline = setTimeout(() => {
+    cancellation.abort(new Error('Workload fixture cancellation deadline.'));
+    stamp('deadline-abort');
+  }, 55_000);
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
   let readerDelegate!: { current: typeof import('@/backend/services/security/trustedHostMcp').readPrivateApprovalSetAsync };
   if (mode === 'deferred-owner-drift') jest.doMock('@/backend/services/security/trustedHostMcp', () => {
@@ -430,6 +433,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     for (const fd of foreignDescriptors) expect(fs.fstatSync(fd).isFile()).toBe(true);
   } catch (error) {
+    try { console.info('[workload-fixture-signal]', cancellation.signal.aborted ? 'aborted' : 'live'); } catch { /* Preserve fixture failure. */ }
     reportRetirementSites(error);
     primaryFailed = true; primaryError = error; throw error;
   } finally {
