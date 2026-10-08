@@ -48,16 +48,20 @@ async function verifyParents(parents: Parent[]) {
   for (const parent of parents) {
     // Both reads inspect an already-admitted parent. Validate every field at
     // the same strict read checkpoints, without serial metadata round trips.
-    const [current, canonical] = await Promise.all([
+    const [currentResult, canonicalResult] = await Promise.allSettled([
       fs.lstat(parent.filename, { bigint: true }),
       fs.realpath(parent.filename),
     ]);
+    // Drain both reads even on refusal; no metadata promise survives unlock.
+    if (currentResult.status === 'rejected') throw currentResult.reason;
+    const current = currentResult.value;
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== parent.stats.dev
         || current.ino !== parent.stats.ino || current.mode !== parent.stats.mode
-        || current.uid !== parent.stats.uid || current.gid !== parent.stats.gid
-        || canonical !== parent.canonical) {
+        || current.uid !== parent.stats.uid || current.gid !== parent.stats.gid) {
       throw new Error('Persona record parent changed during its read.');
     }
+    if (canonicalResult.status === 'rejected') throw canonicalResult.reason;
+    if (canonicalResult.value !== parent.canonical) throw new Error('Persona record parent changed during its read.');
   }
 }
 
