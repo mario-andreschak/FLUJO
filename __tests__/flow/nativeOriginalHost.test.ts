@@ -146,7 +146,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = [];
+  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = [];
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
