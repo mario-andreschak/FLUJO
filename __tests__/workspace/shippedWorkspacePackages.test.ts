@@ -8,6 +8,9 @@ import { createWorkspace, getWorkspaceDir, renameWorkspace, runWithWorkspace } f
 import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
 import { ensureShippedWorkspacePackages, shippedWorkspacePackageRuntimeDigest } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { attachShippedWorkspaceReadiness, resolveStdioLaunch } from '@/backend/services/mcp/connection';
+import { saveConfig } from '@/backend/services/mcp/config';
+import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
+import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
 
 const execute = promisify(execFile);
 
@@ -118,10 +121,15 @@ describe('workspace copies of shipped application packages', () => {
         module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022,
       } }).outputText;
       await fs.writeFile(path.join(fixture, 'helper.mjs'), compiled);
+      const graphSource = await fs.readFile(path.join(process.cwd(), 'src/backend/services/security/bundledMcpDependencyGraph.ts'), 'utf8');
+      await fs.writeFile(path.join(fixture, 'bundledMcpDependencyGraph.mjs'), ts.transpileModule(graphSource, {
+        compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+      }).outputText);
       await fs.writeFile(path.join(fixture, 'shippedServers.mjs'),
         'export const SHIPPED_MCP_SERVERS = ' + ${JSON.stringify(JSON.stringify(SHIPPED_MCP_SERVERS))} + '; export function shippedMcpAppRoot(){ return process.env.FLUJO_APP_ROOT; }');
       const compiler = webpack({ mode: 'production', target: 'node', optimization: { minimize: false },
-        entry: path.join(fixture, 'helper.mjs'), resolve: { extensions: ['.mjs', '.js'], fullySpecified: false },
+        entry: path.join(fixture, 'helper.mjs'), resolve: { extensions: ['.mjs', '.js'], fullySpecified: false,
+          alias: { '../security/bundledMcpDependencyGraph': path.join(fixture, 'bundledMcpDependencyGraph.mjs') } },
         module: { rules: [{ test: /\\.mjs$/, type: 'javascript/auto', parser: { createRequire: true }, resolve: { fullySpecified: false } }] },
         output: { path: path.join(fixture, 'bundle'), filename: 'helper.cjs', library: { type: 'commonjs2' } },
       });
@@ -196,10 +204,21 @@ describe('workspace copies of shipped application packages', () => {
     await createWorkspace('before-rename');
     const config = runWithWorkspace('before-rename', () => createShippedServerConfig(SHIPPED_MCP_SERVERS[1]));
     await renameWorkspace('before-rename', 'after-rename');
-    const launch = runWithWorkspace('after-rename', () => resolveStdioLaunch(config));
-    expect(launch.cwd).toBe(copied('after-rename', 'filesystem'));
-    expect(launch.env.FLUJO_DATA_DIR).toBe(getWorkspaceDir('after-rename'));
-    await expect(fs.stat(path.resolve(launch.cwd, launch.args[0]))).resolves.toBeDefined();
+    await runWithWorkspace('after-rename', async () => {
+      expect(() => resolveStdioLaunch(config)).toThrow('explicit owner consent');
+      expect((await saveConfig(new Map([[config.name, config]]))).success).toBe(true);
+      const owner = installBundledFixtureOwner();
+      try {
+        const preview = await previewBundledHostConsent(config.name, { runtimeHome: 'host' });
+        const approved = await approveBundledHostConsent(owner.request(config.name), config.name, {
+          runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+        });
+        const launch = resolveStdioLaunch(approved.config);
+        expect(launch.cwd).toBe(copied('after-rename', 'filesystem'));
+        expect(launch.env.FLUJO_DATA_DIR).toBe(getWorkspaceDir('after-rename'));
+        await expect(fs.stat(path.resolve(launch.cwd, launch.args[0]))).resolves.toBeDefined();
+      } finally { owner.restore(); }
+    });
   });
 
   it('accepts an application-root alias but does not copy its runtime data', async () => {

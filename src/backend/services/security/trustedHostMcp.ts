@@ -1,12 +1,12 @@
 import fs, { constants, type BigIntStats } from 'node:fs';
 import path from 'node:path';
-import { createHash, scryptSync } from 'node:crypto';
+import { createHash, scrypt, scryptSync } from 'node:crypto';
 import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { ownerPolicySchema } from './ownerCredentials';
-import { windowsPrivateAuthorityStamp } from './windowsPrivateAuthority';
+import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
 
 /** Admit only own data properties; configuration accessors never run during consent. */
 export function trustedHostEnvironment(config: MCPStdioConfig): Map<string, string> {
@@ -48,11 +48,20 @@ export const trustedHostMcpPolicySchema = z.object({
   sourceRoot: absolutePath,
   sourceDigest: digestSchema,
   executableDigest: digestSchema,
+  bundledInstallation: z.object({
+    packageDirectory: z.enum(['flujo', 'filesystem', 'bash', 'browser']),
+    installationRoot: absolutePath,
+    dependencyNamespaceRoot: absolutePath,
+    assetDigest: digestSchema,
+    dependencyGraphDigest: digestSchema,
+    dependencyDirectories: z.array(absolutePath).max(256),
+    dependencyLinks: z.array(z.object({ link: absolutePath, target: absolutePath }).strict()).max(64),
+  }).strict().optional(),
   environmentNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)
     .refine(name => !['NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'].includes(name.toUpperCase()))).max(64),
 }).strict().refine(value => new Set(value.environmentNames.map(name => process.platform === 'win32' ? name.toUpperCase() : name)).size === value.environmentNames.length);
 
-const approvalsSchema = z.object({
+export const trustedHostApprovalsSchema = z.object({
   schemaVersion: z.literal(1),
   ownerId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
   approvals: z.array(z.object({
@@ -62,6 +71,7 @@ const approvalsSchema = z.object({
     expiresAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   }).strict()).max(128),
 }).strict().refine(value => new Set(value.approvals.map(item => JSON.stringify([item.workspace, item.serverName]))).size === value.approvals.length);
+const approvalsSchema = trustedHostApprovalsSchema;
 
 export class TrustedHostMcpError extends Error {
   constructor(readonly code: 'HOST_CONSENT_REQUIRED' | 'HOST_SOURCE_CHANGED' | 'HOST_POLICY_INVALID') {
@@ -128,7 +138,7 @@ export function fingerprintTrustedHostExecutable(filename: string): string {
 }
 
 /** Fingerprint every admitted package member; never run package or inspection code. */
-export function fingerprintTrustedHostSource(sourceRoot: string): string {
+export function fingerprintTrustedHostSource(sourceRoot: string, dependencyLinks: readonly { link: string; target: string }[] = []): string {
   try {
     const root = path.resolve(sourceRoot);
     const packages = path.resolve(getWorkspaceDataDir(), 'mcp-servers');
@@ -147,6 +157,12 @@ export function fingerprintTrustedHostSource(sourceRoot: string): string {
       for (const name of names) {
         const filename = path.join(directory, name);
         const stat = fs.lstatSync(filename, { bigint: true });
+        if (stat.isSymbolicLink()) {
+          const admitted = dependencyLinks.find(item => canonical(item.link) === canonical(filename));
+          if (!admitted || canonical(fs.realpathSync(filename)) !== canonical(admitted.target)) throw new Error();
+          tree.update(JSON.stringify(['approved-dependency-link', path.relative(root, filename).split(path.sep).join('/'), canonical(admitted.target)]));
+          continue;
+        }
         if (stat.isDirectory() && !stat.isSymbolicLink()) { visit(filename); continue; }
         if (++members > MAX_MEMBERS || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== BigInt(1)) throw new Error();
         const content = createHash('sha256');
@@ -164,10 +180,49 @@ export function fingerprintTrustedHostSource(sourceRoot: string): string {
 
 /** Shared local execution authority reader; callers translate profile-specific errors. */
 export function readPrivateApproval(filename: string | undefined): unknown {
+  const before = process.platform === 'win32' && filename ? windowsPrivateAuthorityStamp(filename) : undefined;
+  const identity = filename ? fs.lstatSync(filename, { bigint: true }) : undefined;
+  const value = readPrivateApprovalContents(filename);
+  if (before !== undefined && windowsPrivateAuthorityStamp(filename!) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  if (identity && filename) { assertLinkFree(filename); if (!sameIdentity(identity, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); }
+  return value;
+}
+
+export async function readPrivateApprovalAsync(filename: string | undefined, signal?: AbortSignal): Promise<unknown> {
+  return (await readPrivateApprovalEvidenceAsync(filename, signal)).value;
+}
+
+/** Fresh private evidence for two related files, never a cross-request cache. */
+export async function readPrivateApprovalPairAsync(first: string | undefined, second: string | undefined, signal?: AbortSignal): Promise<[unknown, unknown]> {
+  if (!first || !second || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const filenames = [first, second];
+  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
+  const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
+  const values = filenames.map(filename => readPrivateApprovalContents(filename));
+  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  for (const [index, filename] of filenames.entries()) {
+    assertLinkFree(filename);
+    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  }
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  return [values[0], values[1]];
+}
+
+async function readPrivateApprovalEvidenceAsync(filename: string | undefined, signal?: AbortSignal) {
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const before = process.platform === 'win32' && filename ? await windowsPrivateAuthorityStampAsync(filename, signal) : undefined;
+  const identity = filename ? fs.lstatSync(filename, { bigint: true }) : undefined;
+  const value = readPrivateApprovalContents(filename);
+  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filename!, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  if (identity && filename) { assertLinkFree(filename); if (!sameIdentity(identity, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); }
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  return { value, windowsAuthority: before };
+}
+
+function readPrivateApprovalContents(filename: string | undefined): unknown {
   if (!filename || !path.isAbsolute(filename)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const relative = path.relative(path.resolve(getDataDir()), path.resolve(filename));
   if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const windowsAuthority = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filename) : undefined;
   if (process.platform !== 'win32' && typeof process.getuid === 'function') {
     const uid = BigInt(process.getuid());
     let directory = path.dirname(path.resolve(filename));
@@ -183,7 +238,6 @@ export function readPrivateApproval(filename: string | undefined): unknown {
   const chunks: Buffer[] = [];
   try {
     const stat = readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk)));
-    if (windowsAuthority !== undefined && windowsPrivateAuthorityStamp(filename) !== windowsAuthority) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (process.platform !== 'win32' && typeof process.getuid === 'function'
         && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -192,7 +246,7 @@ export function readPrivateApproval(filename: string | undefined): unknown {
   finally { for (const chunk of chunks) chunk.fill(0); }
 }
 
-export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
+function consentInput(config: MCPStdioConfig): { consent: string; salt: string } {
   try {
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     const command = absolutePath.parse(config.command);
@@ -207,6 +261,16 @@ export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
       if (executableName !== 'node' || args[0] !== policy.entryPoint || !/\.(?:mjs|cjs|js)$/.test(policy.entryPoint)) throw new Error();
     } else if (canonical(command) !== canonical(policy.entryPoint)
         || ['node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack', 'uv', 'uvx', 'pip', 'pip3', 'python', 'python3', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'ruby', 'perl', 'deno', 'bun', 'go', 'cargo'].includes(executableName)) throw new Error();
+    if (policy.bundledInstallation) {
+      if (policy.runtime !== 'node' || canonical(policy.entryPoint) !== canonical(path.join(policy.sourceRoot, 'dist', 'index.js'))) throw new Error();
+      if (canonical(policy.sourceRoot) !== canonical(path.join(getWorkspaceDataDir(), 'mcp-servers', policy.bundledInstallation.packageDirectory))) throw new Error();
+      const relativeInstallation = path.relative(path.resolve(getDataDir()), policy.bundledInstallation.installationRoot);
+      if (!relativeInstallation || (relativeInstallation !== '..' && !relativeInstallation.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeInstallation))) throw new Error();
+      for (const item of policy.bundledInstallation.dependencyLinks) {
+        const relativeLink = path.relative(path.join(policy.sourceRoot, 'node_modules'), item.link);
+        if (relativeLink === '..' || relativeLink.startsWith(`..${path.sep}`) || path.isAbsolute(relativeLink)) throw new Error();
+      }
+    }
     const requestedEnvironment = [...trustedHostEnvironment(config)].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, value]) => {
       if (!policy.environmentNames.includes(name)) throw new Error();
       return [name, value];
@@ -225,8 +289,30 @@ export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
     // commitment must resist cheap offline guessing, rather than hash secrets
     // with the same fast SHA-256 used for public package byte fingerprints.
     const salt = JSON.stringify(['flujo:mcp:trusted-host-consent:v2', getCurrentWorkspace(), config.name, policy.sourceRoot]);
-    return scryptSync(consent, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex');
+    return { consent, salt };
   } catch { throw new TrustedHostMcpError('HOST_POLICY_INVALID'); }
+}
+
+export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
+  const { consent, salt } = consentInput(config);
+  return scryptSync(consent, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex');
+}
+
+/** Compare full admitted consent inputs within one check; never caches authority. */
+export function sameTrustedHostConsent(left: MCPStdioConfig, right: MCPStdioConfig): boolean {
+  const first = consentInput(left), second = consentInput(right);
+  return first.consent === second.consent && first.salt === second.salt;
+}
+
+export async function trustedHostMcpPolicyDigestAsync(config: MCPStdioConfig, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const { consent, salt } = consentInput(config);
+  const digest = await new Promise<Buffer>((resolve, reject) => scrypt(consent, salt, 32,
+    { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (error, result) => error ? reject(error) : resolve(result)));
+  try {
+    if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    return digest.toString('hex');
+  } finally { digest.fill(0); }
 }
 
 /** The config requests trust. Only a private owner-matched grant conveys it. */
@@ -260,11 +346,48 @@ export function trustedHostMcpApproval(config: MCPStdioConfig) {
   try {
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     const digest = trustedHostMcpPolicyDigest(config);
-    const approvals = approvalsSchema.parse(readPrivateApproval(process.env.FLUJO_MCP_TRUSTED_HOST_FILE));
-    const owner = ownerPolicySchema.parse(readPrivateApproval(process.env.FLUJO_OWNER_AUTH_FILE));
+    const approvalFile = process.env.FLUJO_MCP_TRUSTED_HOST_FILE, ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
+    if (!approvalFile || !ownerFile) throw new Error();
+    const filenames = [approvalFile, ownerFile];
+    const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
+    const before = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filenames) : undefined;
+    const contents = filenames.map(filename => readPrivateApprovalContents(filename));
+    if (before !== undefined && windowsPrivateAuthorityStamp(filenames) !== before) throw new Error();
+    for (const [index, filename] of filenames.entries()) {
+      assertLinkFree(filename);
+      if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new Error();
+    }
+    if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
+    const approvals = approvalsSchema.parse(contents[0]);
+    const owner = ownerPolicySchema.parse(contents[1]);
     const grant = approvals.approvals.find(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name);
     if (owner.ownerId !== approvals.ownerId || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
     return { policy, digest, ownerId: owner.ownerId, workspace: getCurrentWorkspace(), expiresAt: grant.expiresAt };
+  } catch (error) {
+    if (error instanceof TrustedHostMcpError) throw error;
+    throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  }
+}
+
+export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal?: AbortSignal) {
+  try {
+    const captured = structuredClone(config);
+    const workspace = getCurrentWorkspace();
+    const policy = trustedHostMcpPolicySchema.parse(captured.trustedHost);
+    const digest = await trustedHostMcpPolicyDigestAsync(captured, signal);
+    const approvalFile = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
+    const ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
+    if (!approvalFile || !ownerFile) throw new Error();
+    // One fresh native snapshot covers BOTH chains before and after the held-FD
+    // reads. There is no gap where one private reader awaits another helper.
+    const results = await readPrivateApprovalPairAsync(approvalFile, ownerFile, signal);
+    if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
+    const approvals = approvalsSchema.parse(results[0]);
+    const owner = ownerPolicySchema.parse(results[1]);
+    const grant = approvals.approvals.find(item => item.workspace === workspace && item.serverName === captured.name);
+    if (signal?.aborted || workspace !== getCurrentWorkspace() || owner.ownerId !== approvals.ownerId
+        || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
+    return { policy, digest, ownerId: owner.ownerId, workspace, expiresAt: grant.expiresAt };
   } catch (error) {
     if (error instanceof TrustedHostMcpError) throw error;
     throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -308,7 +431,7 @@ async function hashStableFileAsync(filename: string, maximum: number, signal?: A
   } finally { await handle.close(); }
 }
 
-async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal): Promise<string> {
+async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, dependencyLinks: readonly { link: string; target: string }[] = []): Promise<string> {
   const root = path.resolve(sourceRoot);
   const relative = path.relative(path.resolve(getWorkspaceDataDir(), 'mcp-servers'), root);
   if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error();
@@ -326,6 +449,12 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal):
     for (const name of names) {
       const filename = path.join(directory, name);
       const stat = await fs.promises.lstat(filename, { bigint: true });
+      if (stat.isSymbolicLink()) {
+        const admitted = dependencyLinks.find(item => canonical(item.link) === canonical(filename));
+        if (!admitted || canonical(await fs.promises.realpath(filename)) !== canonical(admitted.target)) throw new Error();
+        tree.update(JSON.stringify(['approved-dependency-link', path.relative(root, filename).split(path.sep).join('/'), canonical(admitted.target)]));
+        continue;
+      }
       if (stat.isDirectory() && !stat.isSymbolicLink()) { await visit(filename); continue; }
       if (++members > MAX_MEMBERS || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== BigInt(1)) throw new Error();
       const admitted = await hashStableFileAsync(filename, MAX_SOURCE_BYTES - bytes, signal);
@@ -342,14 +471,24 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal):
 /** Production checks yield during source verification and reread authority afterward. */
 export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: AbortSignal) {
   const captured = structuredClone(config);
-  const before = trustedHostMcpApproval(captured);
+  const before = await trustedHostMcpApprovalAsync(captured, signal);
   try {
     const executable = await hashStableFileAsync(captured.command, MAX_EXECUTABLE_BYTES, signal);
-    const source = await fingerprintSourceAsync(before.policy.sourceRoot, signal);
+    const source = await fingerprintSourceAsync(before.policy.sourceRoot, signal, before.policy.bundledInstallation?.dependencyLinks);
+    if (before.policy.bundledInstallation) {
+      const bundle = before.policy.bundledInstallation;
+      const { inspectShippedWorkspaceProvenance } = await import('../mcp/shippedWorkspacePackages');
+      const inspected = await inspectShippedWorkspaceProvenance(getWorkspaceDataDir(), bundle.packageDirectory, bundle.installationRoot);
+      if (signal?.aborted || inspected.assetDigest !== bundle.assetDigest
+          || canonical(inspected.dependencyNamespaceRoot) !== canonical(bundle.dependencyNamespaceRoot)
+          || inspected.dependencyGraph.digest !== bundle.dependencyGraphDigest
+          || JSON.stringify(inspected.dependencyLinks) !== JSON.stringify(bundle.dependencyLinks)
+          || JSON.stringify(inspected.dependencies.map(item => item.directory)) !== JSON.stringify(bundle.dependencyDirectories)) throw new Error();
+    }
     if (executable.digest !== before.policy.executableDigest || source !== before.policy.sourceDigest) throw new Error();
   } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const after = trustedHostMcpApproval(captured);
+  const after = await trustedHostMcpApprovalAsync(captured, signal);
   if (after.ownerId !== before.ownerId || after.digest !== before.digest || after.workspace !== before.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   return after;
 }

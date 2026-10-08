@@ -800,6 +800,7 @@ export function resolveStdioLaunch(
     }
     // Fixed native/Node entries retain their approved source cwd. The private
     // runtime cwd is for package runners, which this profile never authorizes.
+    log.debug('Transformed environment variable names', Object.keys(launch.env));
     return launch;
   }
   // For Windows .bat files, we need to use cmd.exe to execute them

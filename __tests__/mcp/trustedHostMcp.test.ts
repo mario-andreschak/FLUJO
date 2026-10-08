@@ -10,6 +10,7 @@ import {
 } from '@/backend/services/security/trustedHostMcp';
 
 let root: string;
+let fixtureParent: string;
 let config: MCPStdioConfig;
 let saved: Record<string, string | undefined>;
 let approval: { schemaVersion: number; ownerId: string; approvals: Array<{ workspace: string; serverName: string; policyDigest: string; expiresAt: number }> };
@@ -20,7 +21,12 @@ function persist() {
 
 beforeEach(() => {
   saved = Object.fromEntries(['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE'].map(name => [name, process.env[name]]));
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-host-consent-'));
+  // Windows authority is checked against the native DACL, including parents.
+  // Use the existing private user tree; chmod does not make a public temp tree private.
+  const privateParent = process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir();
+  if (!privateParent || !path.isAbsolute(privateParent)) throw new Error('Private fixture parent unavailable');
+  fixtureParent = path.resolve(privateParent);
+  root = fs.mkdtempSync(path.join(fixtureParent, 'flujo-host-consent-'));
   process.env.FLUJO_DATA_DIR = path.join(root, 'data');
   delete process.env.FLUJO_PARENT_DATA_DIR;
   process.env.FLUJO_OWNER_AUTH_FILE = path.join(root, 'owner.json');
@@ -44,8 +50,8 @@ afterEach(() => {
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
-  const relative = path.relative(path.resolve(os.tmpdir()), root);
-  if (!/^flujo-host-consent-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe owned fixture cleanup');
+  const relative = path.relative(fixtureParent, root);
+  if (!/^flujo-host-consent-[A-Za-z0-9]+$/.test(relative) || fs.lstatSync(root).isSymbolicLink()) throw new Error('Unsafe owned fixture cleanup');
   fs.rmSync(root, { recursive: true, force: true });
 });
 

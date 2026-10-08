@@ -24,6 +24,7 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: jest.
 }) }));
 
 let directory: string;
+let fixtureParent: string;
 let config: MCPStdioConfig;
 let saved: Record<string, string | undefined>;
 let grant: { schemaVersion: number; ownerId: string; approvals: Array<{ workspace: string; serverName: string; policyDigest: string; expiresAt: number }> };
@@ -33,7 +34,10 @@ function approve(current = config) { grant.approvals[0].policyDigest = trustedHo
 
 beforeEach(() => {
   saved = Object.fromEntries(['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE'].map(name => [name, process.env[name]]));
-  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-trusted-transport-'));
+  const parent = process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir();
+  if (!parent || !path.isAbsolute(parent)) throw new Error('A private fixture parent is required.');
+  fixtureParent = path.resolve(parent);
+  directory = fs.mkdtempSync(path.join(fixtureParent, 'flujo-trusted-transport-'));
   process.env.FLUJO_DATA_DIR = path.join(directory, 'data');
   delete process.env.FLUJO_PARENT_DATA_DIR;
   delete process.env.FLUJO_MCP_ISOLATION_FILE;
@@ -63,7 +67,7 @@ afterEach(() => {
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
-  if (path.dirname(directory) !== path.resolve(os.tmpdir()) || !/^flujo-trusted-transport-[A-Za-z0-9]+$/.test(path.basename(directory)) || fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe owned fixture cleanup');
+  if (path.dirname(directory) !== fixtureParent || !/^flujo-trusted-transport-[A-Za-z0-9]+$/.test(path.basename(directory)) || fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe owned fixture cleanup');
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -138,14 +142,30 @@ test('a newly approved same-name revision cannot authorize the older client', as
   expect(close).toHaveBeenCalledTimes(1);
 });
 
-test('tool dispatch forwards literals, denies shared-secret references and redacts SDK errors', async () => {
+test('tool dispatch forwards literals without reading shared secrets', async () => {
   const transport = createStdioTransport(config);
   const sdkCall = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'synthetic result' }] });
   const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { literal: 'scoped input' }, 5)).toMatchObject({ success: true });
   expect(sdkCall.mock.calls[0][0].arguments).toEqual({ literal: 'scoped input' });
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+  await transport.close();
+});
+
+test('tool dispatch denies shared-secret references before calling the SDK', async () => {
+  const transport = createStdioTransport(config);
+  const sdkCall = jest.fn();
+  const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { secret: '${global:UNAPPROVED}' }, 5)).toMatchObject({ success: false, error: 'HOST_POLICY_INVALID', statusCode: 403 });
-  sdkCall.mockRejectedValue(new Error('synthetic private SDK diagnostic'));
+  expect(sdkCall).not.toHaveBeenCalled();
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+  await transport.close();
+});
+
+test('tool dispatch redacts SDK errors without reading shared secrets', async () => {
+  const transport = createStdioTransport(config);
+  const sdkCall = jest.fn().mockRejectedValue(new Error('synthetic private SDK diagnostic'));
+  const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   const failed = await callTool(client, config.name, 'probe', {}, 5);
   expect(failed).toMatchObject({ success: false, error: 'TRUSTED_HOST_TOOL_FAILED' });
   expect(JSON.stringify(failed)).not.toContain('synthetic private SDK diagnostic');
