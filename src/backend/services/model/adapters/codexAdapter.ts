@@ -6,6 +6,7 @@ import { promises as fs } from 'fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -21,8 +22,11 @@ import { CompletionAdapter, CompletionInput, CompletionResult, type SteeringDeli
 import { steeringSource, watchSteering } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
+import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createOwnedCodexThread, nativeCodexEnvironment } from './codexOwnedThread';
 import { paceToolCallArguments } from './toolArgumentPacing';
-import { resolveCodexModelCatalogPath } from './codexModelCatalog';
+import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { mapCodexUsage, subtractCodexUsage, type CodexUsageLike } from './codexUsage';
 import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
@@ -210,7 +214,20 @@ export class CodexAdapter implements CompletionAdapter {
       onCodexSessionChange,
       onSdkRequest,
       onSdkRequestResult,
+      onNativeSdkLive,
+      onNativeSdkFinished,
+      nativeToolPort,
+      nativeOriginalProcessHost,
     } = input;
+    if (nativeOriginalProcessHost) assertNativeOriginalProcessHost(nativeOriginalProcessHost);
+    if (nativeToolPort) {
+      assertNativeToolPort(nativeToolPort);
+      if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Codex broker requires a durable SDK dispatch receipt.');
+      if (executionExtensionContext || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
+        || input.steering || input.consumeSteeringMessages || codexSession || onCodexSessionChange) {
+        throw new Error('Native Codex broker cannot use host tool facilities or session resume.');
+      }
+    }
     let privateCodexPath: string | undefined;
     let privateCodexProfile: RestrictedCodexProfile | undefined;
     if (executionExtensionContext) {
@@ -325,7 +342,7 @@ export class CodexAdapter implements CompletionAdapter {
     };
 
     // Spawn-with-brief bookkeeping (issue #156), mirroring the Claude adapter.
-    const handoffCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const handoffCalls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
     let endSpawning = false;
 
     // Approval gate, applied inside every bridge handler before dispatch. The
@@ -507,6 +524,14 @@ export class CodexAdapter implements CompletionAdapter {
             if (denied) return denied;
             await beforeToolDispatch?.();
             await authorizePersonaCoreMcp?.(server, callerNodeId);
+            // Approval may outlive the MCP client that advertised this schema.
+            // Check after every asynchronous gate at the final dispatch
+            // boundary, before touching a re-registered tool.
+            const freshness = assertToolIdentityFresh(fnName, decoded!, mcpService);
+            if (!freshness.ok) {
+              recordToolResult({ id: callId, resultContent: freshness.reason });
+              return { content: [{ type: 'text', text: freshness.reason }], isError: true };
+            }
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
             const result = await mcpService.callTool(
@@ -623,12 +648,54 @@ export class CodexAdapter implements CompletionAdapter {
         };
       })
       .filter((t): t is BridgeTool => t !== null);
+    const recordedNativeCalls = new Set<string>();
+    const recordedNativeResults = new Set<string>();
+    const effectiveBridgeTools: BridgeTool[] = nativeToolPort
+      ? nativeToolPort.advertised.map(advertised => ({
+          name: advertised.name,
+          description: advertised.description,
+          inputSchema: advertised.inputSchema,
+          annotations: advertised.annotations,
+          handler: async (args, requestIdentity) => {
+            try {
+              if (!requestIdentity) throw new Error('Native Codex tool lacks a stable model callback identity.');
+              const capturedArgs = JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+              if (!recordedNativeCalls.has(requestIdentity)) {
+                recordToolCall({ id: requestIdentity, name: advertised.name, argsJson: JSON.stringify(capturedArgs) });
+                recordedNativeCalls.add(requestIdentity);
+              }
+              const dispatched = await nativeToolPort.dispatch({
+                toolInvocationId: requestIdentity, name: advertised.name, args: capturedArgs,
+                signal: abortController.signal,
+              });
+              if (!recordedNativeResults.has(requestIdentity)) {
+                if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
+                  handoffCalls.push({ id: requestIdentity, name: advertised.name, args: capturedArgs });
+                  if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
+                    endSpawning = true;
+                  }
+                }
+                recordToolResult({ id: requestIdentity, resultContent: dispatched.transcriptText });
+                recordedNativeResults.add(requestIdentity);
+                if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
+                  await nativeOriginalProcessHost!.requestHandoffTermination(nativeToolPort.invocationId);
+                }
+              }
+              return dispatched.result;
+            } catch (error) {
+              nativeToolPort.cancel();
+              abortController.abort();
+              throw error;
+            }
+          },
+        }))
+      : bridgeTools;
 
     // Full-history session reuse. Prefix drift, a shortened history, a scoped
     // input view (`sessionResume` false), or an empty delta all take the
     // always-correct fresh/full-flatten path.
     const sessionRegistryKey =
-      !executionExtensionContext && conversationId && nodeId ? codexSessionKey(conversationId, nodeId) : undefined;
+      !nativeToolPort && !executionExtensionContext && conversationId && nodeId ? codexSessionKey(conversationId, nodeId) : undefined;
     if (!sessionResume && sessionRegistryKey) {
       // Scoped/isolated history cannot be reconciled with a previously persisted
       // full-history thread. Drop it now so a later full-history turn never
@@ -647,7 +714,7 @@ export class CodexAdapter implements CompletionAdapter {
         ? {
             key: sessionRegistryKey!,
             configuration,
-            prefixHash: computeCodexPrefixHash(configuration, systemPrompt, bridgeTools),
+            prefixHash: computeCodexPrefixHash(configuration, systemPrompt, effectiveBridgeTools),
           }
         : undefined;
     let resumeThreadId: string | undefined;
@@ -741,13 +808,17 @@ export class CodexAdapter implements CompletionAdapter {
     let baselineSnapshot: CodexTokenSnapshot | undefined;
     let contextUsage: CompletionResult['contextUsage'] = null;
     let privateRuntimeCleanup: (() => Promise<void>) | undefined;
+    let modelCatalogCleanup: (() => Promise<void>) | undefined;
 
     try {
-      if (bridgeTools.length > 0) {
-        bridge = await startCodexToolBridge(bridgeTools, CODEX_FLUJO_INSTRUCTIONS);
+      if (effectiveBridgeTools.length > 0) {
+        bridge = await startCodexToolBridge(effectiveBridgeTools, CODEX_FLUJO_INSTRUCTIONS, Boolean(nativeToolPort), Boolean(nativeOriginalProcessHost));
       }
 
-      const ordinaryModelCatalogPath = executionExtensionContext ? undefined : await resolveCodexModelCatalogPath();
+      const ordinaryModelCatalog = executionExtensionContext
+        ? undefined
+        : await prepareCodexModelCatalogSnapshot(abortController.signal);
+      modelCatalogCleanup = ordinaryModelCatalog?.cleanup;
       const restrictedRuntime = executionExtensionContext
         ? await prepareRestrictedCodexRuntimeEnvironment(privateCodexProfile!)
         : undefined;
@@ -756,7 +827,7 @@ export class CodexAdapter implements CompletionAdapter {
       runtimeHome = runtime.home;
       const modelCatalogPath = executionExtensionContext
         ? restrictedRuntime?.modelCatalogPath
-        : ordinaryModelCatalogPath;
+        : ordinaryModelCatalog?.path;
       if (executionExtensionContext && !modelCatalogPath) {
         throw new ExecutionExtensionError('execution_model_catalog_required');
       }
@@ -776,7 +847,7 @@ export class CodexAdapter implements CompletionAdapter {
         features: {
           shell_tool: false,
         },
-        ...(executionExtensionContext ? RESTRICTED_CODEX_CONFIG : {}),
+        ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_CONFIG : {}),
         ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
         ...(bridge
           ? {
@@ -792,7 +863,8 @@ export class CodexAdapter implements CompletionAdapter {
             }
           : {}),
       };
-      const codex = new Codex({
+      if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
+      const codex = nativeOriginalProcessHost ? undefined : new Codex({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
         ...(privateCodexPath ? { codexPathOverride: privateCodexPath } : {}),
         ...(restrictedRuntime ? { configOverrides: restrictedRuntime.configOverrides } : {}),
@@ -810,15 +882,20 @@ export class CodexAdapter implements CompletionAdapter {
         workingDirectory: runtime.workingDirectory,
         skipGitRepoCheck: true,
         approvalPolicy: 'never',
-        ...(executionExtensionContext ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
+        ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
       } as const;
-      const thread = resumeThreadId
-        ? codex.resumeThread(resumeThreadId, threadOptions)
-        : codex.startThread(threadOptions);
+      const ownedThread = nativeOriginalProcessHost ? createOwnedCodexThread({
+        host: nativeOriginalProcessHost, env: nativeCodexEnvironment(runtime.env, apiKey),
+        config, options: threadOptions, maxTurns: input.maxTurns!, executable: privateCodexPath,
+        onThreadStarted: threadId => bridge?.bindNativeThread(threadId),
+      }) : undefined;
+      const thread = ownedThread ?? (resumeThreadId
+        ? codex!.resumeThread(resumeThreadId, threadOptions)
+        : codex!.startThread(threadOptions));
 
       log.debug('createCompletion via Codex SDK', {
         model: model.name,
-        toolCount: bridgeTools.length,
+        toolCount: effectiveBridgeTools.length,
         hasSystem: Boolean(systemPrompt),
         bridged: Boolean(bridge),
         resumed: Boolean(resumeThreadId),
@@ -841,6 +918,7 @@ export class CodexAdapter implements CompletionAdapter {
       let nextTurnWireMessages: OpenAI.ChatCompletionMessageParam[] | undefined;
       let connectionRetryUsed = false;
       let sdkTurnIndex = 0;
+      let nativeLiveObserved = false;
       let nextTurnDelivery: SteeringDelivery | undefined;
       let providerInputStarted = false;
       const source = steeringSource(input);
@@ -875,7 +953,7 @@ export class CodexAdapter implements CompletionAdapter {
           try {
             dispatchId = await onSdkRequest?.({
               adapter: 'codex-cli',
-              operation: 'thread.runStreamed',
+              operation: ownedThread ? 'app-server.turn/start' : 'thread.runStreamed',
               request: {
                 input: nextTurnInput,
                 options: { signal: '[AbortSignal]' },
@@ -889,20 +967,34 @@ export class CodexAdapter implements CompletionAdapter {
                 ? { wireMessages: structuredClone(nextTurnWireMessages) }
                 : {}),
             });
+            if (nativeToolPort && dispatchId !== nativeToolPort.invocationId) {
+              throw new Error('Native Codex SDK dispatch receipt differs from its broker origin.');
+            }
           } catch (archiveError) {
+            if (nativeToolPort) throw archiveError;
             rethrowFlowExecutionAuthorityError(archiveError);
             log.warn('Could not archive Codex SDK request', archiveError);
           }
           if (executionExtensionContext) {
             await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
           }
+          if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
           const { events } = await thread.runStreamed(nextTurnInput, {
             signal: turnAbortController.signal,
           });
 
           for await (const event of events) {
+            await nativeOriginalProcessHost?.assertOutputCurrent();
             if (signal?.aborted) break;
             if (turnSteering || steeringFailure) break;
+            const liveProgress = event.type === 'turn.started'
+              || ((event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed')
+                && (event.item.type === 'agent_message'
+                  || (event.item.type === 'mcp_tool_call' && event.item.status !== 'failed')));
+            if (nativeToolPort && !nativeLiveObserved && liveProgress) {
+              await onNativeSdkLive?.();
+              nativeLiveObserved = true;
+            }
             if (executionExtensionContext) {
               await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
             }
@@ -1011,6 +1103,7 @@ export class CodexAdapter implements CompletionAdapter {
               // handlers already record each call/result pair (with approval and
               // bounding applied), so mirroring the item would duplicate them.
             } else if (event.type === 'turn.completed') {
+              await nativeOriginalProcessHost?.observeSdkUsage(event);
               usage = event.usage as CodexUsageLike;
               completedTurn = true;
             } else if (event.type === 'turn.failed') {
@@ -1032,10 +1125,23 @@ export class CodexAdapter implements CompletionAdapter {
           // model requiring a newer CLI) instead of replacing it with stderr.
           attemptFailure ??= err instanceof Error ? err : new Error(String(err));
         } finally {
+          if (ownedThread?.closureConfirmed()) {
+            await nativeOriginalProcessHost!.waitForExit();
+            if (handoffCalls.length && nativeToolPort && !signal?.aborted) {
+              if (!nativeToolPort.confirmHandoffTermination) throw new Error('Native handoff terminal confirmation is unavailable.');
+              await nativeToolPort.confirmHandoffTermination(handoffCalls.map(call => call.id!));
+              // EOF is expected after this adapter's confirmed handoff termination.
+              attemptFailure = undefined;
+              completedTurn = true;
+            }
+          }
+          if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
           await watcher.stop();
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {
-            const outcome = endedByCaller || handoffCalls.length > 0
+            const outcome = nativeToolPort && (attemptFailure || abortController.signal.aborted)
+              ? (signal?.aborted || abortController.signal.aborted ? 'cancelled' : 'error')
+              : endedByCaller || handoffCalls.length > 0
               ? 'completed'
               : turnSteering || signal?.aborted
                 ? 'cancelled'
@@ -1045,6 +1151,7 @@ export class CodexAdapter implements CompletionAdapter {
             try {
               await onSdkRequestResult({ dispatchId, outcome });
             } catch (archiveError) {
+              if (nativeToolPort) throw archiveError;
               rethrowFlowExecutionAuthorityError(archiveError);
               log.warn('Could not update Codex SDK request archive', archiveError);
             }
@@ -1089,7 +1196,7 @@ export class CodexAdapter implements CompletionAdapter {
           continue;
         }
         if (endedByCaller || !attemptFailure || handoffCalls.length > 0) break;
-        if (!executionExtensionContext && !connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
+        if (!nativeToolPort && !executionExtensionContext && !connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
           connectionRetryUsed = true;
           nextTurnInput = continuationInput;
           nextTurnWireMessages = [{ role: 'user', content: continuationInput }];
@@ -1112,7 +1219,7 @@ export class CodexAdapter implements CompletionAdapter {
       // A stale/missing persisted thread must not lose the current user request.
       // Retry exactly once from the full flattened history on a new SDK thread.
       // Cancellation is terminal and must not start a replacement run.
-      if (resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller
+      if (!nativeToolPort && resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller
         && transcript.length === 0) {
         log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
           conversationId,
@@ -1128,7 +1235,7 @@ export class CodexAdapter implements CompletionAdapter {
       signal?.removeEventListener('abort', onExternalAbort);
       await bridge?.close().catch(() => undefined);
       try {
-        if (runtimeHome && capturedThreadId) {
+        if (runtimeHome && capturedThreadId && !nativeOriginalProcessHost) {
           const snapshot = await readCodexTokenSnapshot(runtimeHome, capturedThreadId);
           if (snapshot && snapshot.timestamp >= invocationStartedAt) {
             contextUsage = snapshot.contextUsage;
@@ -1143,7 +1250,11 @@ export class CodexAdapter implements CompletionAdapter {
         }
         if (scratchDir) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
       } finally {
-        await privateRuntimeCleanup?.();
+        try {
+          await privateRuntimeCleanup?.();
+        } finally {
+          await modelCatalogCleanup?.().catch(() => log.warn('Failed to remove Codex model catalog snapshot'));
+        }
       }
     }
 
@@ -1156,7 +1267,7 @@ export class CodexAdapter implements CompletionAdapter {
     let finalToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined;
     if (handoffCalls.length > 0) {
       finalToolCalls = handoffCalls.map((h) => ({
-        id: `call_${uuidv4()}`,
+        id: h.id ?? `call_${uuidv4()}`,
         type: 'function' as const,
         function: { name: h.name, arguments: JSON.stringify(h.args) },
       }));
@@ -1244,6 +1355,8 @@ export class CodexAdapter implements CompletionAdapter {
       },
     };
 
-    return { completion, transcript, contextUsage };
+    return { completion, transcript, contextUsage,
+      ...(nativeToolPort ? { nativeSdkTerminal: completedTurn && !abortController.signal.aborted
+        && !signal?.aborted && !failure } : {}) };
   }
 }

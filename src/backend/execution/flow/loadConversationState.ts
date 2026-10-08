@@ -23,7 +23,9 @@ const log = createLogger('backend/execution/flow/loadConversationState');
  */
 export async function loadConversationStateReadOnly(
   conversationId: string,
+  assertGuardEligibility?: (state?: unknown) => void,
 ): Promise<Readonly<SharedState> | undefined> {
+  assertGuardEligibility?.();
   await assertExecutionConversationAccess(conversationId);
   try {
     assertSafeCollectionId(conversationId);
@@ -34,17 +36,22 @@ export async function loadConversationStateReadOnly(
 
   const live = FlowExecutor.conversationStates.get(conversationId);
   if (live) {
+    assertGuardEligibility?.(live);
     await assertExecutionStateAccess(live, conversationId);
     log.debug('Read state from memory without cache mutation', { conversationId });
     return live;
   }
 
   const storageKey = `conversations/${conversationId}` as StorageKey;
+  let guardEligibilityFailed = false;
   try {
     const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
+    try { assertGuardEligibility?.(state); }
+    catch (error) { guardEligibilityFailed = true; throw error; }
     await assertExecutionStateAccess(state, conversationId);
     return state || undefined;
   } catch (error) {
+    if (guardEligibilityFailed) throw error;
     log.warn('Error reading conversation state without recovery', { conversationId, error });
     return undefined;
   }

@@ -60,6 +60,7 @@ function personaInstructionContext(
 // Records every state handed to persistConversationState, so we can assert that
 // an ephemeral run persists nothing while a conversation run does.
 const persistedStates: SharedState[] = [];
+const boundaryTrace: string[] = [];
 const mockLoadItem = jest.fn(async (..._args: unknown[]) => (
   undefined as SharedState | undefined
 ));
@@ -77,6 +78,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
       // start hands off to process; process produces a final answer.
       executeStep: jest.fn(async (sharedState: any) => {
         const nodeId = sharedState.currentNodeId ?? S;
+        boundaryTrace.push(`step:${nodeId}`);
         sharedState.currentNodeId = nodeId;
         if (nodeId === S) {
           return { sharedState, action: EDGE };
@@ -108,6 +110,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => mockLoadItem(...args),
   saveItem: jest.fn(async (_key: string, value: any) => {
+    boundaryTrace.push('persist');
     persistedStates.push(JSON.parse(JSON.stringify(value)));
   }),
   // issue #126: persist/load choke points now validate the conversation id.
@@ -162,6 +165,7 @@ const conversationStates = FlowExecutor.conversationStates as Map<string, Shared
 
 beforeEach(() => {
   persistedStates.length = 0;
+  boundaryTrace.length = 0;
   mockLoadItem.mockReset();
   mockLoadItem.mockResolvedValue(undefined);
   conversationStates.clear();
@@ -315,6 +319,120 @@ describe('saved execution definitions', () => {
 });
 
 describe('runFlow keystone', () => {
+  it('preserves authority, event, step and write ordering for a pinned Persona start and cold resume', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'boundary-trace');
+    const context = personaInstructionContext('activity-boundary-trace', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    const input: Omit<FlowRunInput, 'source'> = {
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-boundary-trace',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    };
+    const observe = async (phase: string) => {
+      boundaryTrace.length = 0;
+      const result = await runFlow(input);
+      expect(result.status).toBe('completed');
+      const start = boundaryTrace.indexOf('event:run:start');
+      const step = boundaryTrace.findIndex(entry => entry.startsWith('step:'));
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(step).toBeGreaterThan(start);
+      expect(boundaryTrace.indexOf('event:run:done')).toBeGreaterThan(step);
+      expect(boundaryTrace).toContain('persist');
+      for (const [index, entry] of boundaryTrace.entries()) {
+        if (entry === 'persist' || entry.startsWith('step:')) {
+          expect(boundaryTrace.slice(0, index)).toContain('authority');
+        }
+      }
+      expect(result.sharedState.personaInstructionContext).toEqual(context);
+      expect(result.sharedState.personaInstructionContext).not.toBe(context);
+      expect(persistedStates.at(-1)?.executionAuthority).toBeUndefined();
+      console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase, trace: boundaryTrace }));
+    };
+    await observe('fresh');
+    const coldSnapshot = structuredClone(persistedStates.at(-1));
+    conversationStates.clear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    await observe('cold-resume');
+  });
+
+  it('rejects a foreign Persona instruction triple before authority, events, steps or writes', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'foreign-triple');
+    const context = personaInstructionContext('activity-foreign-triple', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    await expect(runFlow({
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-foreign-triple',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: 'different-activity',
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    })).rejects.toThrow('Input Persona instruction context does not match its attribution triple.');
+    expect(boundaryTrace).toEqual([]);
+    expect(persistedStates).toEqual([]);
+    expect(conversationStates.size).toBe(0);
+    console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase: 'foreign-input', trace: boundaryTrace }));
+  });
+
+  it('rejects a corrupted cold Persona attribution before events, steps or writes', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'corrupt-cold-attribution');
+    const context = personaInstructionContext('activity-cold-attribution', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    const input: Omit<FlowRunInput, 'source'> = {
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-corrupt-cold',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    };
+    await runFlow(input);
+    const coldSnapshot = structuredClone(persistedStates.at(-1)!);
+    coldSnapshot.personaAttribution!.activityId = 'corrupt-activity';
+    conversationStates.clear();
+    persistedStates.length = 0;
+    boundaryTrace.length = 0;
+    (FlowExecutor.executeStep as jest.Mock).mockClear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    await expect(runFlow(input)).rejects.toThrow('Persisted Persona instruction context does not match its attribution triple.');
+    expect(boundaryTrace.filter(entry => entry !== 'authority')).toEqual([]);
+    expect(persistedStates).toEqual([]);
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase: 'corrupt-cold', trace: boundaryTrace }));
+  });
+
   it('accepts a validated legacy permissionRules hash for the same canonical Behavior', async () => {
     const flow = {
       ...behaviorFlow(FLOW_ID, 'legacy-policy-key'),
@@ -897,6 +1015,21 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 });
 
 describe('Persona execution authority', () => {
+  it.each(['hot', 'cold'] as const)('cannot resume an attributed %s snapshot by omitting request attribution', async cache => {
+    const conversationId = `persona-omitted-attribution-${cache}`;
+    const state = {
+      trackingInfo: { executionId: 'old-execution', startTime: 1, nodeExecutionTracker: [] },
+      messages: [], flowId: FLOW_ID, conversationId, title: 'Persona run',
+      status: 'completed', createdAt: 1, updatedAt: 1,
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    } as SharedState;
+    if (cache === 'hot') conversationStates.set(conversationId, state);
+    else mockLoadItem.mockResolvedValueOnce(state);
+    await expect(runFlow({ flowId: FLOW_ID, prompt: 'ordinary request', mode: 'conversation', conversationId }))
+      .rejects.toThrow('Persona-owned and must be resumed through the Persona dispatcher');
+    expect(persistedStates).toEqual([]);
+  });
+
   it('treats a Persona draft marker as immutable intent, then replaces it with trusted attribution', async () => {
     const conversationId = 'persona-draft-target';
     conversationStates.set(conversationId, {

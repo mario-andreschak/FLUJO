@@ -24,6 +24,7 @@ const RemoteTab: React.FC<TabProps> = ({
   onHandoff
 }) => {
   const { t } = useI18n();
+  const urlId = React.useId();
   const [url, setUrl] = useState<string>('');
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
@@ -58,7 +59,7 @@ const RemoteTab: React.FC<TabProps> = ({
     }
   };
 
-  const proceedToLocalTab = () => {
+  const proceedToLocalTab = (autoTestRun = true) => {
     // Extract server name from URL
     const serverName = extractServerName(url);
 
@@ -81,14 +82,13 @@ const RemoteTab: React.FC<TabProps> = ({
       ...(samplingPolicy ? { sampling: samplingPolicy } : {}),
     };
 
-    // The URL is already a complete runnable config. Use the same streamlined
-    // handoff as Marketplace: Configure collapses the prefilled sections, tests
-    // immediately, then leaves Save as the only action when the probe succeeds.
+    // Manual setup preserves the URL and waits for explicit connection testing,
+    // so local/custom-port OAuth client details can be entered first.
     if (onHandoff) {
       onHandoff({
         to: 'configure',
         config: remoteConfig as MCPServerConfig,
-        autoTestRun: true,
+        autoTestRun,
       });
     }
   };
@@ -169,11 +169,14 @@ const RemoteTab: React.FC<TabProps> = ({
           {t('mcp.remote.help')}
         </Typography>
 
+        <Alert severity="info">{t('mcp.remote.discoveryLimits')}</Alert>
+
         <Box>
-          <Typography variant="subtitle2" gutterBottom>
+          <Typography component="label" htmlFor={urlId} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
             {t('mcp.remote.url')}
           </Typography>
           <TextField
+            id={urlId}
             fullWidth
             size="small"
             value={url}
@@ -218,6 +221,13 @@ const RemoteTab: React.FC<TabProps> = ({
             disabled={isValidating}
           >
             {t('mcp.remote.cancel')}
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => proceedToLocalTab(false)}
+            disabled={!isUrlValid || isValidating}
+          >
+            {t('mcp.remote.manualSetup')}
           </Button>
           <Button
             variant="contained"

@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createLogger } from "@/utils/logger";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -28,6 +29,11 @@ import {
 } from "./externalAuthorization";
 import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
 import { stampMcpAppOwnerScope } from "@/shared/utils/mcpAppOwnerScope";
+import { listCompleteTools } from './toolDiscovery';
+import { assertMcpIsolationDispatch, getManagedMcpIsolation, assertIsolatedMcpArguments } from './isolation';
+import { McpIsolationError } from '../security/isolatedMcp';
+import { TrustedHostMcpError } from '../security/trustedHostMcp';
+import { getManagedTrustedHost } from './trustedHost';
 import {
   assertExecutionToolDispatch,
   assertExecutionExtensionCurrent,
@@ -63,11 +69,11 @@ function normalizeToolArguments(
 ): Record<string, unknown> {
   if (!args) return {};
 
-  const normalizedArgs: Record<string, unknown> = {};
-
-  // Process each argument
-  for (const key in args) {
-    const value = args[key];
+  // Only own parameters cross the tool boundary. fromEntries defines data
+  // properties, including __proto__, without invoking prototype setters.
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, value] of Object.entries(args)) {
+    let normalized: unknown = value;
 
     // Handle undefined or null values
     if (value === undefined || value === null) {
@@ -82,7 +88,7 @@ function normalizeToolArguments(
         key.endsWith("Id") ||
         key.endsWith("Limit")
       ) {
-        normalizedArgs[key] = 0;
+        normalized = 0;
         log.debug(`Using default value 0 for likely number parameter: ${key}`);
       } else if (
         key.includes("bool") ||
@@ -90,7 +96,7 @@ function normalizeToolArguments(
         key.startsWith("has") ||
         key.startsWith("should")
       ) {
-        normalizedArgs[key] = false;
+        normalized = false;
         log.debug(
           `Using default value false for likely boolean parameter: ${key}`,
         );
@@ -100,7 +106,7 @@ function normalizeToolArguments(
         key.endsWith("List") ||
         key.endsWith("Items")
       ) {
-        normalizedArgs[key] = [];
+        normalized = [];
         log.debug(`Using empty array for likely array parameter: ${key}`);
       } else if (
         key.includes("object") ||
@@ -108,20 +114,18 @@ function normalizeToolArguments(
         key.endsWith("Config") ||
         key.endsWith("Settings")
       ) {
-        normalizedArgs[key] = {};
+        normalized = {};
         log.debug(`Using empty object for likely object parameter: ${key}`);
       } else {
         // Default to empty string for unknown types
-        normalizedArgs[key] = "";
+        normalized = "";
         log.debug(`Using empty string for parameter with unknown type: ${key}`);
       }
-    } else {
-      // For non-undefined/null values, keep the original value
-      normalizedArgs[key] = value;
     }
+    entries.push([key, normalized]);
   }
 
-  return normalizedArgs;
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -140,10 +144,8 @@ export async function listServerTools(
 
   try {
     log.info(`Listing tools for server ${serverName}`);
-    const response = await client.listTools();
-    log.verbose("Raw response from MCP server:", response);
-
-    const tools = (response.tools || []).map((tool) => ({
+    const response = await listCompleteTools(client, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
+    const tools = response.tools.map((tool) => ({
       // Preserve the complete SDK-validated definition so newer standard
       // display and execution metadata (title, icons, outputSchema, execution)
       // reaches host UIs without requiring another lossy mapping update. The
@@ -157,6 +159,7 @@ export async function listServerTools(
     log.verbose(`Processed tools for ${audience} audience:`, visibleTools);
     return { tools: visibleTools };
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     log.warn(`Failed to list tools for server ${serverName}:`, error);
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
@@ -213,10 +216,15 @@ export async function callTool(
     timeout !== undefined && timeout > 0
       ? Math.min(timeout * 1000, MAX_TIMEOUT_MS)
       : MAX_TIMEOUT_MS;
+  const isolated = Boolean(getManagedMcpIsolation(client.transport));
+  const trustedHost = Boolean(getManagedTrustedHost(client.transport));
 
   try {
     const privateExecution = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
     if (privateExecution) await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
+    // Refuse revoked or untracked local clients before discovery or accessing
+    // the shared interpolation store. Recheck again at actual tool dispatch.
+    await assertMcpIsolationDispatch(client, serverName);
     // MCP Apps may call tools only on their own backing server, and only when
     // the server's definition grants the "app" audience. The service passes
     // the exact client belonging to the frame's server; listing and dispatch
@@ -250,9 +258,14 @@ export async function callTool(
     }
 
     // Resolve any global variable references in the arguments
-    if (!privateExecution) log.debug(`Original args for tool ${toolName}:`, args);
+    if (isolated) assertIsolatedMcpArguments(args);
+    if (trustedHost) {
+      try { assertIsolatedMcpArguments(args); }
+      catch { throw new TrustedHostMcpError('HOST_POLICY_INVALID'); }
+    }
+    if (!privateExecution && !isolated && !trustedHost) log.debug(`Original args for tool ${toolName}:`, args);
     // Private execution arguments do not read the shared interpolation/secret store.
-    const resolvedArgs = privateExecution ? args : await resolveGlobalVars(args);
+    const resolvedArgs = privateExecution || isolated || trustedHost ? args : await resolveGlobalVars(args);
 
     // Ensure resolvedArgs is a record before normalizing
     const argsRecord =
@@ -264,7 +277,7 @@ export async function callTool(
     // This ensures we don't pass undefined values to MCP servers
     const normalizedArgs = privateExecution ? normalizeExecutionToolArguments(executionExtensionContext!, toolName, argsRecord)
       : normalizeToolArguments(argsRecord, toolName);
-    if (!privateExecution) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
+    if (!privateExecution && !isolated && !trustedHost) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
 
     log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
     const callOptions = {
@@ -273,7 +286,7 @@ export async function callTool(
       ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
         if (!privateExecution) {
-          log.debug(
+          if (!isolated && !trustedHost) log.debug(
             `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
           );
           onProgress?.(progress);
@@ -318,6 +331,8 @@ export async function callTool(
           }
         : {}),
     };
+    await assertMcpIsolationDispatch(client, serverName);
+    await assertBundledFlujoWorkloadEffectCurrent();
     const response = isBetaClient(client)
       ? await (
           client.callTool as unknown as (
@@ -400,6 +415,13 @@ export async function callTool(
       data: stampMcpAppOwnerScope(response, ownerScope),
     };
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
+    if (error instanceof TrustedHostMcpError) return { success: false, error: error.code,
+      errorType: 'mcp-host-consent', statusCode: 403 };
+    if (error instanceof McpIsolationError) return { success: false, error: error.code,
+      errorType: 'mcp-isolation', statusCode: error.code === 'ISOLATION_UNAVAILABLE' ? 503 : 403 };
+    if (trustedHost) return { success: false, error: 'TRUSTED_HOST_TOOL_FAILED', errorType: 'mcp-host-consent', statusCode: 502 };
+    if (isolated) return { success: false, error: 'ISOLATED_TOOL_FAILED', errorType: 'mcp-isolation', statusCode: 502 };
     if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
       // SDK exceptions can contain request metadata. Never log or serialize them.
       return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_tool_unavailable',

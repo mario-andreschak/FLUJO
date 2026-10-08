@@ -35,6 +35,20 @@ describe('quickChatFlowId', () => {
   });
 });
 
+describe('optional quick-chat run output', () => {
+  it('uses compiler-authored resource produce edges and leaves ordinary chats unchanged', () => {
+    const plain = synthesizeQuickChatFlow({ conversationId: 'plain', modelId: 'model-1' }, context).flow!;
+    expect(plain.nodes.some(node => node.type === 'resource')).toBe(false);
+    const withOutput = synthesizeQuickChatFlow({ conversationId: 'world', modelId: 'model-1', runArtifactName: 'world-result' }, context).flow!;
+    const resource = withOutput.nodes.find(node => node.type === 'resource')!;
+    expect(resource.data.properties).toMatchObject({ scope: 'run', runName: 'world-result' });
+    expect(withOutput.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: chatNode(withOutput).id, target: resource.id, type: 'resourceEdge' })]));
+  });
+  it('rejects invalid artifact names before producing a graph', () => {
+    expect(synthesizeQuickChatFlow({ conversationId: 'world', modelId: 'model-1', runArtifactName: '../private' }, context).flow).toBeNull();
+  });
+});
+
 describe('synthesizeQuickChatFlow', () => {
   it('builds a start→process→finish flow bound to the model, with the namespaced id', () => {
     const { flow, error } = synthesizeQuickChatFlow(

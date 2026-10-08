@@ -103,7 +103,9 @@ export const ModelTestDialog = ({
   const { t } = useI18n();
   const sdkTitle = result?.provider === 'codex'
     ? t('models.test.codexSdk')
-    : t('models.test.openaiSdk');
+    : result?.provider === 'antigravity-cli'
+      ? t('models.test.antigravityCli')
+      : t('models.test.openaiSdk');
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>

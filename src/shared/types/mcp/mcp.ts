@@ -3,6 +3,7 @@ import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js
 import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { MCPShutdownReceipt } from './shutdown';
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
@@ -182,6 +183,10 @@ export type MCPManagerConfig = {
   toolParameterPresets?: MCPToolParameterPresets;
   /** Runtime-home policy for stdio servers. Missing means `inherit`. */
   runtimeHomeMode?: MCPRuntimeHomeMode;
+  /** Strict Linux container policy; approval lives in a separate private operator file. */
+  isolation?: unknown;
+  /** Explicit host trust request; authority lives in a separate private owner grant. */
+  trustedHost?: unknown;
 }
 
 export type MCPElicitationPolicy = {
@@ -235,6 +240,8 @@ export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   launch?: MCPLaunchSpec;
 };
 
+export type MCPEncryptedOAuthValue = { format: 'flujo-oauth-v1'; ciphertext: string };
+
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
   transport: 'streamable';
   serverUrl: string;
@@ -244,12 +251,14 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   // OAuth configuration fields
   oauthClientId?: string;
   oauthClientSecret?: string;
+  /** Trusted authorization issuer for a pre-registered client, supplied by the operator. */
+  oauthIssuer?: string;
   oauthScopes?: string[];
   // Stored OAuth data
   oauthClientMetadata?: OAuthClientMetadata;
-  oauthClientInformation?: OAuthClientInformation;
-  oauthTokens?: OAuthTokens;
-  oauthCodeVerifier?: string;
+  oauthClientInformation?: OAuthClientInformation | MCPEncryptedOAuthValue;
+  oauthTokens?: OAuthTokens | MCPEncryptedOAuthValue;
+  oauthCodeVerifier?: string | MCPEncryptedOAuthValue;
   /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
   oauthState?: string;
   /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */
@@ -306,6 +315,8 @@ export function isTaskCallResponse(r: unknown): r is MCPTaskCallResponse {
 
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
+    /** Shutdown observation only; success alone never confirms process exit. */
+    shutdownReceipt?: MCPShutdownReceipt;
   data?: T;
   error?: string;
   statusCode?: number;

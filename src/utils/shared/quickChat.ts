@@ -44,6 +44,8 @@ export interface QuickChatSelection {
   servers?: QuickChatServerSelection[];
   /** Optional system-level prompt (lands on the Start node). */
   systemPrompt?: string;
+  /** Optional named run artifact, exposed through the existing write_resource tool. */
+  runArtifactName?: string;
 }
 
 export interface QuickChatFlowIdentity {
@@ -111,6 +113,9 @@ export function synthesizeQuickChatFlow(
   if (!selection.modelId || typeof selection.modelId !== 'string') {
     return { flow: null, error: 'A model is required for a quick chat.' };
   }
+  if (selection.runArtifactName !== undefined && (typeof selection.runArtifactName !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(selection.runArtifactName))) {
+    return { flow: null, error: 'Use a bounded run artifact name.' };
+  }
 
   const resolvedModelId = resolveModelId(selection.modelId, context.models);
   if (!resolvedModelId) {
@@ -170,6 +175,10 @@ export function synthesizeQuickChatFlow(
     ],
   };
 
+  if (selection.runArtifactName) {
+    spec.nodes.push({ key: 'artifact', type: 'resource', label: selection.runArtifactName, runName: selection.runArtifactName });
+    spec.edges.push({ from: 'chat', to: 'artifact' });
+  }
   const compiled = compileFlowSpec(spec, {
     models: context.models,
     servers: context.servers,

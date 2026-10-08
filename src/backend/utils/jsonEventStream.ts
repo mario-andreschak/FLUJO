@@ -9,10 +9,14 @@ const STREAM_HEADERS: HeadersInit = {
   'X-Accel-Buffering': 'no',
 };
 
-/** Generic NDJSON response for typed, one-shot application event streams. */
+/**
+ * Generic NDJSON response for typed, one-shot application event streams.
+ * Callers construct a public failure event without receiving the thrown value:
+ * backend errors may include credentials, private paths, or provider responses.
+ */
 export function createJsonEventStreamResponse<T extends object>(
   producer: (emit: (event: T) => void, signal: AbortSignal) => Promise<void>,
-  errorEvent: (error: string) => T,
+  errorEvent: () => T,
   options?: { signal?: AbortSignal },
 ): Response {
   const encoder = new TextEncoder();
@@ -29,16 +33,16 @@ export function createJsonEventStreamResponse<T extends object>(
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(encodeNdjsonLine(event)));
-        } catch (error) {
+        } catch {
           closed = true;
-          log.debug(`Visual event enqueue after close ignored: ${error instanceof Error ? error.message : String(error)}`);
+          log.debug('JSON event enqueue failed; stream closed');
         }
       };
       try {
         await producer(emit, abortController.signal);
-      } catch (error) {
-        log.warn('JSON event producer failed', error);
-        emit(errorEvent(error instanceof Error ? error.message : String(error)));
+      } catch {
+        log.warn('JSON event producer failed');
+        emit(errorEvent());
       } finally {
         closed = true;
         try {

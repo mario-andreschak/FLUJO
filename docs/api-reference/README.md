@@ -4,7 +4,11 @@ The in-app **/docs** page is a curated reference with request examples. The [gen
 
 ## REST API
 
-For external chat clients, configure an OpenAI-compatible base URL of `http://localhost:4200/v1` and select a flow model returned by `GET /v1/models`. The ordinary local app accepts arbitrary client API-key values; that compatibility value is **not authentication**. Keep the service on localhost or put deliberately exposed deployments behind authenticating network controls. Worker deployments require their own bearer credential.
+For external chat clients, configure an OpenAI-compatible base URL of `http://localhost:4200/v1` and select a flow model returned by `GET /v1/models`. With no owner policy selected, the default local app accepts arbitrary client API-key values; that compatibility value is **not authentication**. Keep the service on localhost or put deliberate exposure behind authenticating network controls. Worker deployments require their own separate bearer credential.
+
+The source includes an opt-in [owner API bearer contract](../security/owner-access-v1.md), selected with `FLUJO_OWNER_AUTH_FILE`. In that profile, native clients send an issued opaque credential in `Authorization: Bearer <token>`: model discovery requires `openai:read`, flow execution requires `openai:execute`, and MCP access requires `mcp:access`, `control:admin` and `secrets:read`. Internal administration defaults to the control/secret requirement; there is no wildcard grant. A missing, expired or revoked credential cannot be replaced by a compatibility API key. Host/exposure, Origin, workspace unlock and worker checks remain separate.
+
+This source profile has no browser login or session lifecycle yet. Do not enable it on an existing browser-dependent installation or place an admin token in browser storage or an EventSource URL. Installed-client migration, handler coverage, ongoing stream revocation and independent security review remain open. It does not establish multi-user or public-hosting support. Record the actual source/artifact identity: an older installed release may not contain this policy.
 
 Select a workspace explicitly with `x-flujo-workspace` or the supported `workspace` query parameter when addressing workspace-owned resources. Workspace names identify logical data partitions, not users. The installation-wide workspace management endpoint is separate. Locked workspaces must be unlocked through the owner UI before secret-dependent execution.
 

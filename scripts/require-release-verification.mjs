@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { assertVerificationAttempt, assertVerificationJobs } from './verification-contract.mjs';
 
 const REPOSITORY = 'mario-andreschak/FLUJO';
 const WORKFLOW_PATH = '.github/workflows/verify.yml';
@@ -25,11 +26,19 @@ export function selectVerificationRun(runs, revision, workflowId) {
     .sort((left, right) => right.databaseId - left.databaseId)[0];
 }
 
-export async function requireSuccessfulVerification({ revision, workflowId, listRuns, watchRun, wait = setTimeout, attempts = 12 }) {
+export async function requireSuccessfulVerification({ revision, workflowId, listRuns, watchRun, readRunEvidence, wait = setTimeout, attempts = 12 }) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const run = selectVerificationRun(await listRuns(), revision, workflowId);
     if (run?.status === 'completed') {
       if (run.conclusion !== 'success') throw new Error(`Exact-commit verification ${run.databaseId} concluded ${run.conclusion}; publication refused.`);
+      if (typeof readRunEvidence !== 'function') throw new Error('Current-attempt verification job evidence is required; publication refused.');
+      const evidence = await readRunEvidence(run.databaseId);
+      assertVerificationAttempt(evidence?.run, { revision, workflowId, runId: run.databaseId });
+      assertVerificationJobs(evidence.jobs);
+      const latest = selectVerificationRun(await listRuns(), revision, workflowId);
+      if (latest?.databaseId !== run.databaseId || latest.status !== 'completed' || latest.conclusion !== 'success') {
+        throw new Error('Verification changed while reading job evidence; publication refused.');
+      }
       return run.databaseId;
     }
     if (run && ['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(run.status)) {
@@ -70,6 +79,19 @@ async function main() {
     listRuns: () => JSON.parse(exec('gh', ['run', 'list', '--repo', REPOSITORY,
       '--workflow', String(workflow.id), '--commit', revision, '--branch', 'main', '--event', 'push', '--limit', '10',
       '--json', 'databaseId,workflowDatabaseId,headSha,headBranch,event,status,conclusion'])),
+    readRunEvidence: (id) => {
+      const endpoint = `repos/${REPOSITORY}/actions/runs/${id}`;
+      const run = JSON.parse(exec('gh', ['api', endpoint]));
+      assertVerificationAttempt(run, { revision, workflowId: workflow.id, runId: id });
+      // Read this attempt explicitly. A previous successful attempt cannot
+      // supply jobs omitted or skipped by the current attempt.
+      const pages = JSON.parse(exec('gh', ['api', `${endpoint}/attempts/${run.run_attempt}/jobs?per_page=100`, '--paginate', '--slurp']));
+      if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page.jobs))) throw new Error('Invalid paginated job evidence.');
+      const current = JSON.parse(exec('gh', ['api', endpoint]));
+      assertVerificationAttempt(current, { revision, workflowId: workflow.id, runId: id });
+      if (current.run_attempt !== run.run_attempt) throw new Error('Verification was rerun while reading job evidence.');
+      return { run, jobs: pages.flatMap((page) => page.jobs) };
+    },
     watchRun: (id) => {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error('Verification wait exceeded two hours.');

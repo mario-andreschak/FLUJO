@@ -14,11 +14,12 @@ import {
   Chip,
 } from '@mui/material';
 import { Visibility, VisibilityOff, LockOutlined, LockOpenOutlined } from '@mui/icons-material';
+import CredentialMigrationSettings from './CredentialMigrationSettings';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export default function EncryptionSettings() {
-  const { setKey, changeKey, verifyKey, isEncryptionInitialized, isUserEncryptionEnabled } = useStorage();
+  const { setKey, changeKey, verifyKey } = useStorage();
   const { t } = useI18n();
   
   // State for new key setup
@@ -36,6 +37,8 @@ export default function EncryptionSettings() {
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
+  const [isOperatorEncryption, setIsOperatorEncryption] = useState(false);
+  const [statusReady, setStatusReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   // After setting or changing the custom password the encryption state changes
@@ -49,15 +52,24 @@ export default function EncryptionSettings() {
 
   useEffect(() => {
     const checkEncryption = async () => {
-      const initialized = await isEncryptionInitialized();
-      const userEnabled = await isUserEncryptionEnabled();
-      
-      setIsInitialized(initialized);
-      setIsUserEncryption(userEnabled);
+      try {
+        const response = await fetch('/api/encryption/secure', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'status' }) });
+        if (!response.ok) throw new Error('Encryption status unavailable');
+        const status = await response.json();
+        if (typeof status.initialized !== 'boolean'
+            || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file'].includes(status.protection)) {
+          throw new Error('Encryption status unavailable');
+        }
+        setIsInitialized(status.initialized);
+        setIsUserEncryption(status.protection === 'passphrase');
+        setIsOperatorEncryption(status.protection === 'operator-file');
+        setStatusReady(true);
+      } catch { setMessage({ type: 'error', text: t('encryption.unlock.error') }); }
     };
 
     checkEncryption();
-  }, [isEncryptionInitialized, isUserEncryptionEnabled]);
+  }, [t]);
 
   const handleInitialize = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,10 +192,10 @@ export default function EncryptionSettings() {
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
         <Typography variant="body1" sx={{ mr: 2 }}>{t('settings.encryption.status')}</Typography>
         {isInitialized ? (
-          isUserEncryption ? (
+          isUserEncryption || isOperatorEncryption ? (
             <Chip 
               icon={<LockOutlined />} 
-              label={t('settings.encryption.statusCustom')}
+              label={t(isOperatorEncryption ? 'settings.encryption.statusOperator' : 'settings.encryption.statusCustom')}
               color="success" 
               variant="outlined" 
             />
@@ -204,7 +216,9 @@ export default function EncryptionSettings() {
         )}
       </Box>
 
-      {!isInitialized || !isUserEncryption ? (
+      {!statusReady ? null : isOperatorEncryption ? <Alert severity="info">{t('settings.encryption.operatorHelp')}</Alert>
+        : isInitialized && !isUserEncryption ? <Alert severity="warning">{t('settings.encryption.migrationRequired')}</Alert>
+        : !isInitialized || !isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3, mb: 4 }}>
           <Typography variant="subtitle1" gutterBottom fontWeight="bold">
             {t('settings.encryption.setTitle')}
@@ -348,6 +362,7 @@ export default function EncryptionSettings() {
           )}
         </Alert>
       </Box>
+      {statusReady && isInitialized && <CredentialMigrationSettings />}
     </Box>
   );
 }

@@ -1,0 +1,44 @@
+{
+  "capturedAt": "2026-10-03T21:52:22.693Z",
+  "sourceSha": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+  "scope": "Static source observation only: capped ephemeral cleanup and HTTP-4xx rejection are present; legacy 30-second tool refresh and prefill dependencies remain. No runtime test or shipped-release acceptance.",
+  "commands": [
+    "git rev-parse HEAD",
+    "git show <sha>:<path> for each listed path"
+  ],
+  "environment": {
+    "node": "v22.13.1",
+    "git": "git version 2.47.1.windows.1",
+    "gh": "gh version 2.96.0 (2026-07-02)"
+  },
+  "files": [
+    {
+      "path": "src/backend/execution/flow/runFlow.ts",
+      "gitBlobSha256": "f72952f08275734b30e93785e932d7b88a8c5db7a065cd33133d860b48ddbbc5",
+      "start": 3397,
+      "end": 3409,
+      "excerpt": "  // An ephemeral run is transient: drop it from the in-memory map once it\n  // reaches a terminal state so isolated/subflow runs don't accumulate.\n  const cleanupEphemeral = () => {\n    if (\n      ephemeral &&\n      (sharedState.status === 'completed' ||\n        sharedState.status === 'error' ||\n        sharedState.status === 'capped')\n    ) {\n      FlowExecutor.conversationStates.delete(effectiveConvId);\n      forgetConversationCacheEntry(effectiveConvId);\n    }\n  };"
+    },
+    {
+      "path": "src/backend/utils/transientRetry.ts",
+      "gitBlobSha256": "0c971001e8a85abc82023d1cde045872f9a096a4986752856b1cc5b5c91fd677",
+      "start": 35,
+      "end": 47,
+      "excerpt": " */\nexport function isTransientTransportError(error: unknown): boolean {\n  if (!(error instanceof Error)) return false;\n  // Never retry a user-initiated abort or a client error. Generic provider\n  // wrappers may contain transient-sounding text even when the HTTP status is\n  // a definitive 4xx (issue #520).\n  if (error.name === 'AbortError') return false;\n  const status = (error as Error & { status?: unknown }).status;\n  if (typeof status === 'number' && status >= 400 && status < 500) return false;\n  const msg = error.message.toLowerCase();\n  return TRANSIENT_KEYWORDS.some((kw) => msg.includes(kw));\n}\n"
+    },
+    {
+      "path": "src/frontend/components/mcp/MCPToolManager/index.tsx",
+      "gitBlobSha256": "a25f933d18c4699af96cc36c624b1ff7fe5f9d904f331ff1516ca91679c288b1",
+      "start": 40,
+      "end": 53,
+      "excerpt": "  };\n\n  // Set up a periodic refresh for tools\n  useEffect(() => {\n    if (serverName) {\n      // Set up a periodic refresh every 30 seconds\n      const intervalId = setInterval(() => {\n        log.debug('Periodic tool refresh');\n        // Clear cache first to ensure we get fresh data\n        mcpService.clearToolsCache(serverName);\n        loadTools(true); // Force reload\n      }, 30000);\n      \n      // Clean up on unmount"
+    },
+    {
+      "path": "src/frontend/components/mcp/MCPToolManager/ToolTester.tsx",
+      "gitBlobSha256": "73c37414353c775f041024559cb8b6104b0b4bea259a29fdd1ae804b0fa4fafd",
+      "start": 88,
+      "end": 97,
+      "excerpt": "\n  useEffect(() => {\n    if (!prefill || !toolsArray.some((tool) => tool.name === prefill.toolName)) return;\n    setSelectedTool(prefill.toolName);\n    setParams({ ...prefill.arguments });\n    setResult(null);\n    setProgress(null);\n    setActiveProgressToken(null);\n    setErrorNotification(null);\n  }, [prefill, tools]);"
+    }
+  ]
+}

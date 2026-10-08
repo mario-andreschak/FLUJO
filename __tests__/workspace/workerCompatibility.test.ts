@@ -1,3 +1,4 @@
+import contract from '@/shared/snapshotTransfer.json';
 import applicationPackage from '../../package.json';
 import { getWorkerCompatibility } from '@/backend/services/workspace/workerCompatibility';
 
@@ -12,10 +13,12 @@ describe('worker image compatibility metadata', () => {
   it('reports the implemented contract without claiming a checkout/build revision', () => {
     delete process.env.FLUJO_BUILD_REVISION;
     expect(getWorkerCompatibility()).toEqual({
+      ...contract,
       applicationVersion: applicationPackage.version,
       snapshotFormatVersion: 2,
       layoutVersion: 2,
       workerProtocolVersion: 1,
+      workerSnapshotSourceVersion: 1,
     });
   });
 

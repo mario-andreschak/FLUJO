@@ -15,10 +15,11 @@
 import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 
 const loadItemMock = jest.fn();
 jest.mock('@/utils/storage/backend', () => ({
+  ...jest.requireActual<typeof import('@/utils/storage/backend')>('@/utils/storage/backend'),
   loadItem: (...args: unknown[]) => loadItemMock(...args),
 }));
 

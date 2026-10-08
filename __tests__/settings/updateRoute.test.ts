@@ -1,9 +1,13 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 /** Update preflight must finish before any fetch, code mutation, or server stop. */
 jest.mock('simple-git', () => {
   const git = {
     checkIsRepo: jest.fn(), fetch: jest.fn(), status: jest.fn(), pull: jest.fn(), raw: jest.fn(),
   };
-  return { __esModule: true, default: jest.fn(() => git), __git: git };
+  return { __esModule: true, simpleGit: jest.fn(() => git), __git: git };
 });
 
 jest.mock('child_process', () => ({
@@ -14,9 +18,11 @@ jest.mock('child_process', () => ({
 
 import { GET, POST } from '@/app/api/update/route';
 import { makeLocalRequest } from '../utils/localRequest';
+import fs from 'fs/promises';
+import path from 'path';
 
-const { __git: mockGit, default: simpleGitFactory } = jest.requireMock('simple-git') as {
-  __git: Record<string, jest.Mock>; default: jest.Mock;
+const { __git: mockGit, simpleGit: simpleGitFactory } = jest.requireMock('simple-git') as {
+  __git: Record<string, jest.Mock>; simpleGit: jest.Mock;
 };
 const { execSync: mockExecSync, spawn: mockSpawn } = jest.requireMock('child_process') as {
   execSync: jest.Mock; spawn: jest.Mock;
@@ -120,6 +126,49 @@ describe('safe branch checks', () => {
     expect(await response.json()).toMatchObject({ success: true, restarting: true });
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockSpawn.mock.invocationCallOrder[0]).toBeGreaterThan(mockGit.status.mock.invocationCallOrder[1]);
+  });
+
+  it.each([
+    'C:\\FLUJO & echo marker & rem',
+    'C:\\FLUJO%USERNAME%!USERNAME!^(copy)',
+    "C:\\Moe's FLUJO; $marker `literal`",
+  ])('carries checkout %s as literal PowerShell data through cmd/start', async cwd => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
+    const realReadFile = fs.readFile.bind(fs);
+    const realAccess = fs.access.bind(fs);
+    const readSpy = jest.spyOn(fs, 'readFile').mockImplementation((file, options) =>
+      file === path.join(cwd, 'package.json')
+        ? Promise.resolve('{"name":"flujo-ai","version":"test"}')
+        : realReadFile(file, options)
+    );
+    const accessSpy = jest.spyOn(fs, 'access').mockImplementation((file, mode) =>
+      file === path.join(cwd, 'scripts', 'update.ps1')
+        ? Promise.resolve(undefined)
+        : realAccess(file, mode)
+    );
+    mockGit.status.mockResolvedValue(cleanStatus({ behind: 1 }));
+    try {
+      expect(await (await POST(postReq())).json()).toMatchObject({ success: true, restarting: true });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], Record<string, unknown>];
+      expect(command).toBe('cmd.exe');
+      expect(args.slice(0, -1)).toEqual([
+        '/c', 'start', '""', 'powershell.exe',
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand',
+      ]);
+      const encoded = args.at(-1)!;
+      expect(encoded).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+      const script = path.join(cwd, 'scripts', 'update.ps1');
+      const decoded = Buffer.from(encoded, 'base64').toString('utf16le');
+      expect(decoded).toBe(`& '${script.replaceAll("'", "''")}' -Dir '${cwd.replaceAll("'", "''")}'`);
+      expect(options).toMatchObject({ detached: true, stdio: 'ignore', windowsHide: true });
+      expect(mockSpawn.mock.invocationCallOrder[0]).toBeGreaterThan(mockGit.status.mock.invocationCallOrder[1]);
+    } finally {
+      accessSpy.mockRestore();
+      readSpy.mockRestore();
+      cwdSpy.mockRestore();
+    }
   });
 });
 

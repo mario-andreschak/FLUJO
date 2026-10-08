@@ -63,11 +63,10 @@ async function POST_handler(request: NextRequest) {
     // stored encrypted key. An unauthenticated request remains valid for public
     // OpenAI-compatible catalogues.
     log.debug('Processing provider models request', {
-      baseUrl,
-      modelId,
+      hasModelId: Boolean(modelId),
       profileId,
       hasApiKey: Boolean(apiKey),
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      hasSearch: Boolean(searchTerm),
     });
 
     const models = await fetchProviderModels(
@@ -79,18 +78,17 @@ async function POST_handler(request: NextRequest) {
     );
 
     log.debug('Provider models request completed', {
-      baseUrl,
       profileId,
       modelCount: models.length,
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      hasSearch: Boolean(searchTerm),
     });
 
     return new Response(JSON.stringify({ models }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (error) {
-    log.error('Error handling provider models request', error);
+  } catch {
+    log.error('Error handling provider models request');
     return new Response(JSON.stringify({ error: 'Internal server error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

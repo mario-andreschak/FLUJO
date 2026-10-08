@@ -32,6 +32,10 @@
 - Fix detached child IDs, cancellation propagation, concurrent launch admission and late completion races. Keep communication scoped to the current parent/child run and workspace.
 - Deliver steering during quiet Claude and Codex SDK turns, preserve pending input on delivery failures, and keep tool-call/result pairs intact. See [Subflow communication](docs/SUBFLOW_COMMUNICATION.md).
 
+### Models
+
+- Discover the context window of vLLM-served models: model listing now reads `max_model_len` when an OpenAI-compatible catalogue has no `context_length`.
+
 ## [3.46.1] — 2026-09-28
 
 - Use the browser-facing host and protocol for MCP OAuth callbacks and completion redirects when FLUJO runs behind a Docker or TLS proxy.

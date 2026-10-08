@@ -36,6 +36,8 @@ export const sharedMessageRows = {
   'references.temporaryData': ['Temporary data', 'Datos temporales', 'Temporäre Daten', 'Données temporaires', 'Dati temporanei', 'Dados temporários', '临时数据'],
   'schema.noParameters': ['This tool takes no parameters.', 'Esta herramienta no usa parámetros.', 'Dieses Tool benötigt keine Parameter.', 'Cet outil ne prend aucun paramètre.', 'Questo strumento non richiede parametri.', 'Esta ferramenta não usa parâmetros.', '此工具不需要参数。'],
   'schema.invalidJson': ['Not valid JSON yet', 'El JSON aún no es válido', 'Noch kein gültiges JSON', 'Le JSON n’est pas encore valide', 'Il JSON non è ancora valido', 'O JSON ainda não é válido', 'JSON 尚无效'],
+  'schema.expectedObject': ['Enter a JSON object.', 'Introduce un objeto JSON.', 'Gib ein JSON-Objekt ein.', 'Saisissez un objet JSON.', 'Inserisci un oggetto JSON.', 'Insira um objeto JSON.', '请输入 JSON 对象。'],
+  'schema.expectedArray': ['Enter a JSON array.', 'Introduce un arreglo JSON.', 'Gib ein JSON-Array ein.', 'Saisissez un tableau JSON.', 'Inserisci un array JSON.', 'Insira uma matriz JSON.', '请输入 JSON 数组。'],
   'magicLink.copy': ['Copy link', 'Copiar enlace', 'Link kopieren', 'Copier le lien', 'Copia link', 'Copiar link', '复制链接'],
   'magicLink.copied': ['Link copied', 'Enlace copiado', 'Link kopiert', 'Lien copié', 'Link copiato', 'Link copiado', '链接已复制'],
   'magicLink.copyFailed': ['Could not copy link', 'No se pudo copiar el enlace', 'Link konnte nicht kopiert werden', 'Impossible de copier le lien', 'Impossibile copiare il link', 'Não foi possível copiar o link', '无法复制链接'],

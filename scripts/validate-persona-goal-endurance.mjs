@@ -349,6 +349,9 @@ export async function validatePersonaGoalEndurance({
       && turn.adapter === model.adapter
       && turn.source === 'runtime-model-turn-archive'
       && /^[a-f0-9]{64}$/.test(turn.sourceFileSha256 ?? '')
+      && (turn.archiveVersion === undefined || [1, 2].includes(turn.archiveVersion))
+      && (turn.archiveVersion !== 2 || turn.outcome === 'running'
+        || /^[a-f0-9]{64}$/.test(turn.sourceOutcomeSha256 ?? ''))
       && expectedEpochIds.has(turn.processEpochId)
       && epochs.some(epoch => epoch.epochId === turn.processEpochId
         && epoch.pid === turn.processPid

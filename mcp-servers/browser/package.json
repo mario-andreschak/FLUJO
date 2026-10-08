@@ -1,6 +1,7 @@
 {
   "name": "@mario.andreschak/mcp-browser",
-  "version": "3.46.2",
+  "version": "3.46.3",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mario-andreschak/FLUJO.git",
@@ -14,20 +15,21 @@
     "flujo-mcp-browser": "dist/index.js"
   },
   "files": [
+    "LICENSE",
     "dist/**/*",
     "scripts/install-browser.mjs"
   ],
   "scripts": {
     "install": "node scripts/install-browser.mjs",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../embed-runtime.mjs browser",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^22.17.0 || ^24.2.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "patchright": "1.61.1"
   },
   "devDependencies": {

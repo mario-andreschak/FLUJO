@@ -53,6 +53,22 @@ function fixture(t) {
   return { directory, upstream, checkout, before, after: git(upstream, 'rev-parse', 'HEAD') };
 }
 
+function assertUpdaterProcessExited(result) {
+  const diagnostic = `Updater process: status=${result.status}, signal=${result.signal}, error=${result.error?.code ?? 'none'}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+  assert.equal(result.error, undefined, diagnostic);
+  assert.equal(result.signal, null, diagnostic);
+  assert.ok(Number.isInteger(result.status), diagnostic);
+}
+
+test('a real child deadline cannot count as a safe checkout refusal', () => {
+  const result = spawnSync(process.execPath, ['-e', 'process.stdout.write("deadline-control-entered\\n"); setTimeout(() => {}, 60_000);'],
+    { encoding: 'utf8', windowsHide: true, timeout: 1_000 });
+  assert.equal(result.error?.code, 'ETIMEDOUT');
+  assert.match(result.stdout, /deadline-control-entered/);
+  assert.notEqual(result.status, 0); // The previous refusal check accepted this result.
+  assert.throws(() => assertUpdaterProcessExited(result), /error=ETIMEDOUT/);
+});
+
 function update(f, shell, ref = 'main', revision = '', updaterPreflight = false) {
   const env = { ...process.env, FLUJO_FIXTURE_DIR: f.checkout, FLUJO_FIXTURE_REMOTE: f.upstream.replaceAll('\\', '/'), FLUJO_FIXTURE_GIT: gitBinary, FLUJO_FIXTURE_REF: ref, FLUJO_REVISION: revision };
   let content;
@@ -99,9 +115,12 @@ update_existing_repository
   }
   const script = path.join(f.directory, shell === 'powershell' ? 'update.ps1' : 'update.sh');
   writeFileSync(script, content);
-  return spawnSync(shell === 'powershell' ? ps : bash, shell === 'powershell'
+  const result = spawnSync(shell === 'powershell' ? ps : bash, shell === 'powershell'
     ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script] : [script],
   { env, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  // A deadline or launch failure is not evidence that the updater refused an unsafe checkout.
+  assertUpdaterProcessExited(result);
+  return result;
 }
 
 for (const shell of ['bash', ...(ps ? ['powershell'] : [])]) {

@@ -900,6 +900,8 @@ export interface PersonaWorkItem {
   description?: string;
   parentGoalId?: string;
   goal?: PersonaGoalState;
+  /** Immutable request digest for idempotent native Goal creation. */
+  goalCreateRequestDigest?: string;
   status: PersonaWorkItemStatus;
   priority: PersonaPriority;
   dependencyIds: string[];
@@ -959,6 +961,8 @@ export type PersonaWorkItemAdmission = 'queued' | 'already_queued';
 export interface AssignPersonaWorkItemResult {
   workItem: PersonaWorkItem;
   admission: PersonaWorkItemAdmission;
+  /** Durable dispatch receipt for a plain Task assignment. */
+  dispatchId?: string;
 }
 
 export const PERSONA_TASK_DISPLAY_STATES = [

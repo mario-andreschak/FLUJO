@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Regression test for the Model REST API.
  *
@@ -53,8 +56,9 @@ const modelFixture = (over: Partial<Model> = {}): Model => ({
   ...over,
 } as unknown as Model);
 
-beforeEach(() => {
+beforeEach(async () => {
   for (const k of Object.keys(store)) delete store[k];
+    privateFixture = await installPrivateProfileFixture(metadata => { store['encryption_key'] = metadata; });
 });
 
 describe('Model REST API', () => {

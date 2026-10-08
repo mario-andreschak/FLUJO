@@ -20,7 +20,7 @@ import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
-import { SharedState, DebugStep } from '@/backend/execution/flow/types'; // Import backend types
+import type { DebuggerStateView, DebuggerStepView } from '@/shared/types/execution/debuggerState';
 import { Flow } from '@/shared/types/flow'; // Import shared Flow type
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { flowService } from '@/frontend/services/flow'; // Import flow service
@@ -54,7 +54,7 @@ const log = createLogger('frontend/components/Chat/DebuggerCanvas');
 
 // Define props for the DebuggerCanvas
 interface DebuggerCanvasProps {
-  debugState: SharedState;
+  debugState: DebuggerStateView;
   conversationId: string;
   onStep: () => void; // Callback for Next Step button
   onStepOver?: () => void; // Callback for Step Over (skip a node's internal iterations)
@@ -438,7 +438,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   }, [currentStepIndex, debugState.executionTrace, onStep]); // Added dependencies
 
   // Derive the current step data for the inspector
-  const currentStepData: DebugStep | undefined = useMemo(() => {
+  const currentStepData: DebuggerStepView | undefined = useMemo(() => {
     if (debugState.executionTrace && currentStepIndex >= 0 && currentStepIndex < debugState.executionTrace.length) {
       return debugState.executionTrace[currentStepIndex];
     }

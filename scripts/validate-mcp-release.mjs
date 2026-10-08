@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { SUPPORTED_NODE_RANGE } from '../bin/node-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -27,6 +28,14 @@ function fail(message) {
 
 if (rootLock.version !== rootPackage.version || rootLock.packages?.['']?.version !== rootPackage.version) {
   fail(`package-lock root version does not match flujo-ai ${rootPackage.version}`);
+}
+if (rootPackage.engines?.node !== SUPPORTED_NODE_RANGE || rootLock.packages?.['']?.engines?.node !== SUPPORTED_NODE_RANGE) {
+  fail('root app runtime policy does not match its lockfile and launcher');
+}
+const sharedPackage = readJson(path.join(root, 'mcp-servers/shared/package.json'));
+if (sharedPackage.private !== true || sharedPackage.engines?.node !== SUPPORTED_NODE_RANGE
+    || rootLock.packages?.['mcp-servers/shared']?.engines?.node !== SUPPORTED_NODE_RANGE) {
+  fail('internal shared workspace must retain the same engine policy without joining the public release set');
 }
 
 function packedFiles(target) {
@@ -53,6 +62,9 @@ for (const entry of packages) {
   const binTarget = packageJson.bin?.[entry.bin];
 
   if (packageJson.name !== entry.name) fail(`${entry.directory} has package name ${packageJson.name}`);
+  if (packageJson.engines?.node !== SUPPORTED_NODE_RANGE || rootLock.packages?.[`mcp-servers/${entry.directory}`]?.engines?.node !== SUPPORTED_NODE_RANGE) {
+    fail(`${entry.name} runtime policy does not match its lockfile and launcher`);
+  }
   if (packageJson.version !== rootPackage.version) {
     fail(`${entry.name} is ${packageJson.version}; flujo-ai is ${rootPackage.version}`);
   }
@@ -76,6 +88,15 @@ for (const entry of packages) {
   }
 
   const childFiles = packedFiles(`./mcp-servers/${entry.directory}`);
+  for (const file of ['node-runtime.mjs', 'node-runtime-preflight.mjs', 'node-runtime-preflight.d.mts']) {
+    if (!childFiles.has(`dist/${file}`) || !readFileSync(path.join(packageDirectory, 'dist', file)).equals(readFileSync(path.join(root, 'bin', file)))) {
+      fail(`${entry.name} omits or changes the canonical runtime preflight`);
+    }
+  }
+  const builtEntry = readFileSync(path.join(packageDirectory, 'dist/index.js'), 'utf8').replace(/^#![^\n]*\n/, '').trimStart();
+  if (!builtEntry.startsWith("import './node-runtime-preflight.mjs';")) fail(`${entry.name} must check its runtime before dependency initialization`);
+  const builtDeclaration = readFileSync(path.join(packageDirectory, 'dist/index.d.ts'), 'utf8').replace(/^#![^\n]*\n/, '').trimStart();
+  if (!builtDeclaration.startsWith("import './node-runtime-preflight.mjs';")) fail(`${entry.name} declaration must use its embedded preflight`);
   if (!childFiles.has('dist/index.js') || !childFiles.has('package.json')) {
     fail(`${entry.name} tarball omits its binary or manifest`);
   }
@@ -94,7 +115,10 @@ for (const forbiddenPrefix of ['.next/cache/', '.next/dev/']) {
 for (const required of [
   'package.json',
   'bin/flujo.mjs',
+  'bin/node-runtime.mjs',
+  'bin/node-runtime-preflight.mjs',
   'scripts/launch-next.mjs',
+  'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',
   'mcp-servers/browser/scripts/install-browser.mjs',
   '.next/BUILD_ID',
@@ -106,6 +130,9 @@ for (const required of [
 for (const entry of packages) {
   for (const required of [
     `mcp-servers/${entry.directory}/dist/index.js`,
+    `mcp-servers/${entry.directory}/dist/node-runtime.mjs`,
+    `mcp-servers/${entry.directory}/dist/node-runtime-preflight.mjs`,
+    `mcp-servers/${entry.directory}/dist/node-runtime-preflight.d.mts`,
     `mcp-servers/${entry.directory}/package.json`,
   ]) {
     if (!rootFiles.has(required)) fail(`flujo-ai tarball omits ${required}`);

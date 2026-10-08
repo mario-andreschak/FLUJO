@@ -19,6 +19,7 @@ import type {
   McpTroubleshootResult,
 } from '@/shared/types/mcp/assistant';
 import { normalizeMaxTokens } from '@/shared/types/model';
+import { resolveModelAdapter, supportsLocalModelAuth } from '@/shared/types/model/provider';
 import type { MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
 import {
   buildConfigFromOption,
@@ -35,6 +36,7 @@ import {
 } from '@/utils/mcp/registry';
 import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
 import { createLogger } from '@/utils/logger';
+import { readUtf8TextPrefix } from '@/utils/http/readUtf8TextPrefix';
 
 const log = createLogger('backend/services/mcp/assistedInstall');
 const FETCH_TIMEOUT_MS = 12_000;
@@ -90,7 +92,7 @@ async function aiCompletion(modelId: string, messages: OpenAI.ChatCompletionMess
   const model = await modelService.getModel(modelId);
   if (!model) throw new Error(`AI model not found: ${modelId}`);
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the selected AI model credentials.');
   const adapter = getCompletionAdapter(model);
   const { completion } = await adapter.createCompletion({
@@ -258,17 +260,31 @@ const AWESOME_LISTS = [
   { label: 'appcypher/awesome-mcp-servers', page: 'https://github.com/appcypher/awesome-mcp-servers', raw: 'https://raw.githubusercontent.com/appcypher/awesome-mcp-servers/main/README.md' },
 ] as const;
 
+function discoverySnippet(line: string): string {
+  // Collect bounded plain text in one pass. Nested or unmatched delimiters
+  // cannot reveal another tag when an inner fragment is removed.
+  let text = '';
+  let depth = 0;
+  for (const character of line) {
+    if (character === '<') depth++;
+    else if (character === '>') depth = Math.max(0, depth - 1);
+    else if (depth === 0) text += character;
+    if (text.length >= 500) break;
+  }
+  return text.slice(0, 500);
+}
+
 async function discoverAwesome(query: string): Promise<WebDiscovery['awesome']> {
   const queryWords = words(query);
   const results = await Promise.all(AWESOME_LISTS.map(async (list) => {
     try {
       const response = await fetch(list.raw, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!response.ok) return [];
-      const text = (await response.text()).slice(0, 2_000_000);
+      const text = await readUtf8TextPrefix(response, 2_000_000);
       return text.split(/\r?\n/).flatMap((line) => {
         if (!line.includes('](') || !queryWords.some((word) => line.toLocaleLowerCase().includes(word))) return [];
         const match = line.match(/\[([^\]]+)]\((https?:\/\/[^)]+)\)/);
-        return match ? [{ label: match[1].slice(0, 120), url: match[2], line: line.replace(/<[^>]+>/g, '').slice(0, 500) }] : [];
+        return match ? [{ label: match[1].slice(0, 120), url: match[2], line: discoverySnippet(line) }] : [];
       }).slice(0, 10);
     } catch {
       return [];

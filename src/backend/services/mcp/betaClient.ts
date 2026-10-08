@@ -1,3 +1,5 @@
+import { getCurrentWorkspace } from '@/utils/workspace';
+import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   Client as BetaClient,
@@ -9,6 +11,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport as BetaStdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { createLogger } from "@/utils/logger";
+import { assertMcpTransport } from './transportAdmission';
 import { loadItem } from "@/utils/storage/backend";
 import { StorageKey } from "@/shared/types/storage";
 import { Settings } from "@/shared/types/storage/storage";
@@ -18,7 +21,9 @@ import {
   flattenCustomHeaders,
   httpConfigKey,
   resolveStdioLaunch,
-  attachShippedWorkspaceReadiness,
+  McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired,
+  retireMcpRuntimeAuthority,
   stdioConfigKey,
   capabilityKey,
   ClientWithBetaMarker,
@@ -26,6 +31,9 @@ import {
   type TransportCreationOptions,
 } from "./connection";
 import { createOAuthClientProvider } from "./oauth";
+import { McpIsolationError } from '../security/isolatedMcp';
+import { attachMcpIsolation } from './isolation';
+import { attachTrustedHost, trustedHostBrokerEnvironment } from './trustedHost';
 import { createRootsListHandler } from "./roots";
 import { samplingEnabled, createSamplingHandler } from "./sampling";
 import { elicitationEnabled, createElicitationHandler } from "./elicitation";
@@ -112,11 +120,11 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
-  const serverHasStdioOAuth = config.transport === "stdio";
+  const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.46.2",
+      version: "3.46.3",
     },
     {
       capabilities: {
@@ -146,11 +154,15 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
       // 'auto': probe for a 2026-07-28 server, fall back to the classic
       // initialize handshake on anything else. Never 'pin' — FLUJO must keep
       // working against every existing server.
-      versionNegotiation: { mode: "auto" },
+      // An isolated v1 image uses the classic handshake. The SDK's auto mode
+      // clones stdio spawn parameters for a sibling; that cannot share one CID.
+      // Auto negotiation may clone a stdio transport and spawn an untracked
+      // sibling. Every local process must use the profile-owned generation.
+      versionNegotiation: { mode: config.transport === 'stdio' ? "legacy" : "auto" },
     },
   );
 
-  client.setRequestHandler("roots/list", createRootsListHandler(config));
+  client.setRequestHandler("roots/list", createRootsListHandler(config, client));
   if (serverHasSampling) {
     const handler = createSamplingHandler(config);
     client.setRequestHandler("sampling/createMessage", async (request) =>
@@ -217,6 +229,8 @@ export function createBetaTransport(
   | BetaStdioClientTransport
   | BetaStreamableHTTPClientTransport
   | BetaSSEClientTransport {
+  assertMcpTransport(config);
+  if ((config.isolation !== undefined || config.trustedHost !== undefined) && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (config.transport === "websocket") {
     throw new Error(
       "The v2-beta MCP SDK has no websocket transport; use the v1 path",
@@ -244,15 +258,10 @@ export function createBetaTransport(
       streamableConfig.oauthClientId ||
       streamableConfig.oauthClientInformation
     ) {
-      // FLUJO's provider implements the v1 OAuthClientProvider interface; the v2
-      // interface matches it member-for-member on everything the SDK calls
-      // (clientMetadata/state/clientInformation/saveClientInformation/tokens/
-      // saveTokens/redirectToAuthorization/saveCodeVerifier/codeVerifier/
-      // invalidateCredentials), with near-identical structural types — an
-      // acceptable cast for the experimental path.
-      options.authProvider = createOAuthClientProvider(
-        streamableConfig,
-      ) as unknown as BetaOAuthClientProvider;
+      // Both patched SDKs carry issuer on saved credentials. This provider keeps
+      // one credential set and deliberately ignores v2's optional issuer context.
+      const provider: BetaOAuthClientProvider = createOAuthClientProvider(streamableConfig);
+      options.authProvider = provider;
     }
     const transport = new BetaStreamableHTTPClientTransport(
       new URL(streamableConfig.serverUrl),
@@ -287,27 +296,46 @@ export function createBetaTransport(
     return transport;
   }
 
-  // Default: stdio, spawned from the SAME resolved parameters as the v1 path.
-  const { command, args, env, cwd } = resolveStdioLaunch(config, options);
-  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
-    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
-    : undefined;
+  // Admission above leaves only explicit stdio after the remote branches.
+  const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
+  let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
+  let workload: PendingBundledFlujoWorkload | undefined;
+  const workloadWorkspace = getCurrentWorkspace();
+  const retireRuntimeAuthority = () => retireMcpRuntimeAuthority(config.name, workloadWorkspace, workload, runtimeBroker);
   let transport: BetaStdioClientTransport;
   try {
-    transport = new BetaStdioClientTransport({
+    assertMcpRuntimeAuthorityRetired(config.name);
+    workload = prepareBundledFlujoWorkload(config);
+    runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+      ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
+    const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
+    const parameters = {
       command,
       args,
-      env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
+      env: { ...env, ...(runtimeBroker ? (isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) : {}), ...workloadEnv },
       cwd,
-      stderr: "pipe",
-    });
-    attachShippedWorkspaceReadiness(transport, config, cwd);
+      stderr: isolation ? 'ignore' as const : 'pipe' as const,
+      ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
+    };
+    if (!isolation) {
+      Object.freeze(parameters.args);
+      Object.freeze(parameters.env);
+      Object.freeze(parameters);
+    }
+    transport = new BetaStdioClientTransport(parameters);
+    if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
+    else attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
   } catch (error) {
-    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    const cleanupErrors: unknown[] = [];
+    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
   const keyed = transport as unknown as TransportWithConfigKey;
   keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
+  keyed.__flujoBundledWorkload = workload;
+  keyed.__flujoRetireRuntimeAuthority = retireRuntimeAuthority;
   keyed.__flujoStdioKey = stdioConfigKey(
     config,
     options?.isolateRuntimeHome === true,

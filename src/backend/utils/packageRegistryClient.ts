@@ -22,18 +22,28 @@
  * Node-only: never import from client code. Never logs passwords, tokens, or
  * full response bodies that may contain secrets.
  */
+import type {
+  RegistryPackageSearchResult,
+  RegistryPackageDetail,
+} from '@/shared/types/package/registry';
+export type {
+  RegistryPackageSummary,
+  RegistryPackageSearchResult,
+  RegistryPackageDetail,
+} from '@/shared/types/package/registry';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { DEFAULT_REGISTRY_URL, type RegistrySettings } from '@/shared/types/registry';
+import { requireRegistryBaseUrl } from './registryDestination';
 
 const log = createLogger('backend/utils/packageRegistryClient');
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
-/** Strip a trailing slash so path joins stay clean. */
+/** Canonicalize the complete HTTP(S) base address so endpoint joins stay stable. */
 function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '');
+  return requireRegistryBaseUrl(url);
 }
 
 /**
@@ -63,8 +73,10 @@ async function postJson<T = unknown>(
   pathname: string,
   payload: unknown,
   accessToken?: string,
+  registryBaseUrl?: string,
 ): Promise<RegistryHttpResponse<T>> {
-  const baseUrl = await resolveRegistryBaseUrl();
+  const baseUrl = registryBaseUrl === undefined
+    ? await resolveRegistryBaseUrl() : requireRegistryBaseUrl(registryBaseUrl);
   const url = `${baseUrl}${pathname}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -78,6 +90,7 @@ async function postJson<T = unknown>(
     log.info(`POST ${pathname}`);
     const response = await fetch(url, {
       method: 'POST',
+      redirect: registryBaseUrl === undefined ? 'follow' : 'error',
       headers,
       body: JSON.stringify(payload ?? {}),
       signal: controller.signal,
@@ -138,8 +151,9 @@ async function getJson<T = unknown>(pathname: string): Promise<RegistryHttpRespo
 async function deleteJson<T = unknown>(
   pathname: string,
   accessToken: string,
+  registryBaseUrl: string,
 ): Promise<RegistryHttpResponse<T>> {
-  const baseUrl = await resolveRegistryBaseUrl();
+  const baseUrl = requireRegistryBaseUrl(registryBaseUrl);
   const url = `${baseUrl}${pathname}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -147,6 +161,7 @@ async function deleteJson<T = unknown>(
     log.info(`DELETE ${pathname}`);
     const response = await fetch(url, {
       method: 'DELETE',
+      redirect: 'error',
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${accessToken}`,
@@ -170,31 +185,6 @@ async function deleteJson<T = unknown>(
   } finally {
     clearTimeout(timeout);
   }
-}
-
-export interface RegistryPackageSummary {
-  id: string;
-  handle: string;
-  name: string;
-  description: string;
-  tags: string[];
-  downloads: number;
-  latestVersion: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface RegistryPackageSearchResult {
-  items: RegistryPackageSummary[];
-  page: number;
-  pageSize: number;
-  total: number;
-  error?: string;
-}
-
-export interface RegistryPackageDetail extends RegistryPackageSummary {
-  versions?: Array<{ version: string; manifestSize: number; publishedAt: string }>;
-  error?: string;
 }
 
 /** Search/browse published packages (anonymous, no auth required). */
@@ -242,20 +232,20 @@ export interface RegistryPublishPayload {
   error?: string;
 }
 
-export function signup(email: string, password: string, handle: string) {
-  return postJson<RegistryAuthPayload>('/v1/auth/signup', { email, password, handle });
+export function signup(email: string, password: string, handle: string, registryBaseUrl: string) {
+  return postJson<RegistryAuthPayload>('/v1/auth/signup', { email, password, handle }, undefined, requireRegistryBaseUrl(registryBaseUrl));
 }
 
-export function login(email: string, password: string) {
-  return postJson<RegistryAuthPayload>('/v1/auth/login', { email, password });
+export function login(email: string, password: string, registryBaseUrl: string) {
+  return postJson<RegistryAuthPayload>('/v1/auth/login', { email, password }, undefined, requireRegistryBaseUrl(registryBaseUrl));
 }
 
-export function refresh(refreshToken: string) {
-  return postJson<RegistryAuthPayload>('/v1/auth/refresh', { refresh_token: refreshToken });
+export function refresh(refreshToken: string, registryBaseUrl: string) {
+  return postJson<RegistryAuthPayload>('/v1/auth/refresh', { refresh_token: refreshToken }, undefined, requireRegistryBaseUrl(registryBaseUrl));
 }
 
-export function resendConfirmation(email: string) {
-  return postJson<RegistryAuthPayload>('/v1/auth/resend-confirmation', { email });
+export function resendConfirmation(email: string, registryBaseUrl: string) {
+  return postJson<RegistryAuthPayload>('/v1/auth/resend-confirmation', { email }, undefined, requireRegistryBaseUrl(registryBaseUrl));
 }
 
 /**
@@ -273,15 +263,16 @@ export function requestPasswordReset(email: string) {
 }
 
 /** Publish a package manifest. `manifest` is the canonical JSON object (#192). */
-export function publishPackage(manifest: unknown, accessToken: string) {
-  return postJson<RegistryPublishPayload>('/v1/packages', manifest, accessToken);
+export function publishPackage(manifest: unknown, accessToken: string, registryBaseUrl: string) {
+  return postJson<RegistryPublishPayload>('/v1/packages', manifest, accessToken, requireRegistryBaseUrl(registryBaseUrl));
 }
 
 /** Delete a published package and all of its versions. Ownership is enforced by the registry. */
-export function deletePackage(packageId: string, accessToken: string) {
+export function deletePackage(packageId: string, accessToken: string, registryBaseUrl: string) {
   return deleteJson<{ message?: string; error?: string }>(
     `/v1/packages/${encodeURIComponent(packageId)}`,
     accessToken,
+    registryBaseUrl,
   );
 }
 
@@ -307,11 +298,11 @@ export function oauthExchange(params: {
   codeVerifier: string;
   redirectUri: string;
   provider: string;
-}) {
+}, registryBaseUrl: string) {
   return postJson<RegistryAuthPayload>('/v1/auth/oauth/token', {
     code: params.code,
     code_verifier: params.codeVerifier,
     redirect_uri: params.redirectUri,
     provider: params.provider,
-  });
+  }, undefined, requireRegistryBaseUrl(registryBaseUrl));
 }

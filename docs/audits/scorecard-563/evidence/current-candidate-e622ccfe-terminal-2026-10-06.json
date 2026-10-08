@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-06T13:21:52.987Z",
+  "kind": "derived-terminal-api-and-original-audit-observation",
+  "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+  "sourceTree": "dd5f5c47c8c17e45f7fe3bb690bb8352959fb413",
+  "verify": {
+    "id": 37369397033,
+    "attempt": 2,
+    "status": "completed",
+    "conclusion": "failure",
+    "jobConclusionCounts": {
+      "success": 11,
+      "failure": 2,
+      "skipped": 1
+    }
+  },
+  "installer": {
+    "id": 37369397040,
+    "attempt": 2,
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "correctionToFixedObservation": {
+    "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json",
+    "sha256": "dc61f2e3acdbe1dfde44bacf1707ebc1f4cbac429f6c5d994cd57526766b4d30",
+    "fixedObservedAt": "2026-10-06T12:48:53.229Z",
+    "rewritten": false,
+    "limit": "Its empty reuse list and false flags came only from job-ID comparison. They were not proof of fresh execution. Later terminal metadata establishes retained executions under newly assigned IDs."
+  },
+  "retainedExecutions": {
+    "verifyCount": 5,
+    "installerCount": 1,
+    "verify": [
+      {
+        "name": "typecheck",
+        "originalJobId": 111962473955,
+        "attempt2JobId": 112275492725,
+        "idsChanged": true,
+        "startedAt": "2026-10-05T20:28:22Z",
+        "completedAt": "2026-10-05T20:30:15Z",
+        "identicalOriginalTimestamps": true,
+        "identicalRunnerMetadata": false,
+        "runnerMetadata": {
+          "original": [
+            1000012967,
+            "GitHub Actions 1000012967",
+            0,
+            "GitHub Actions"
+          ],
+          "later": [
+            1000012967,
+            "GitHub Actions 1000012967",
+            null,
+            "GitHub Actions"
+          ]
+        },
+        "identicalFullSteps": true,
+        "stepCount": 11,
+        "execution": "original attempt1 retained; not fresh attempt2 execution"
+      },
+      {
+        "name": "Production build (windows-latest)",
+        "originalJobId": 111962474368,
+        "attempt2JobId": 112275539497,
+        "idsChanged": true,
+        "startedAt": "2026-10-05T20:23:15Z",
+        "completedAt": "2026-10-05T21:06:21Z",
+        "identicalOriginalTimestamps": true,
+        "identicalRunnerMetadata": false,
+        "runnerMetadata": {
+          "original": [
+            1000012952,
+            "GitHub Actions 1000012952",
+            0,
+            "GitHub Actions"
+          ],
+          "later": [
+            1000012952,
+            "GitHub Actions 1000012952",
+            null,
+            "GitHub Actions"
+          ]
+        },
+        "identicalFullSteps": true,
+        "stepCount": 27,
+        "execution": "original attempt1 retained; not fresh attempt2 execution"
+      },
+      {
+        "name": "lint",
+        "originalJobId": 111962474385,
+        "attempt2JobId": 112275552427,
+        "idsChanged": true,
+        "startedAt": "2026-10-05T20:28:21Z",
+        "completedAt": "2026-10-05T20:30:48Z",
+        "identicalOriginalTimestamps": true,
+        "identicalRunnerMetadata": false,
+        "runnerMetadata": {
+          "original": [
+            1000012964,
+            "GitHub Actions 1000012964",
+            0,
+            "GitHub Actions"
+          ],
+          "later": [
+            1000012964,
+            "GitHub Actions 1000012964",
+            null,
+            "GitHub Actions"
+          ]
+        },
+        "identicalFullSteps": true,
+        "stepCount": 10,
+        "execution": "original attempt1 retained; not fresh attempt2 execution"
+      },
+      {
+        "name": "test-isolated",
+        "originalJobId": 111962474553,
+        "attempt2JobId": 112275493323,
+        "idsChanged": true,
+        "startedAt": "2026-10-05T20:33:26Z",
+        "completedAt": "2026-10-05T20:36:27Z",
+        "identicalOriginalTimestamps": true,
+        "identicalRunnerMetadata": false,
+        "runnerMetadata": {
+          "original": [
+            1000012982,
+            "GitHub Actions 1000012982",
+            0,
+            "GitHub Actions"
+          ],
+          "later": [
+            1000012982,
+            "GitHub Actions 1000012982",
+            null,
+            "GitHub Actions"
+          ]
+        },
+        "identicalFullSteps": true,
+        "stepCount": 13,
+        "execution": "original attempt1 retained; not fresh attempt2 execution"
+      },
+      {
+        "name": "Release safety (windows-latest)",
+        "originalJobId": 111962474570,
+        "attempt2JobId": 112275493640,
+        "idsChanged": true,
+        "startedAt": "2026-10-05T20:23:22Z",
+        "completedAt": "2026-10-05T20:26:06Z",
+        "identicalOriginalTimestamps": true,
+        "identicalRunnerMetadata": false,
+        "runnerMetadata": {
+          "original": [
+            1000012958,
+            "GitHub Actions 1000012958",
+            0,
+            "GitHub Actions"
+          ],
+          "later": [
+            1000012958,
+            "GitHub Actions 1000012958",
+            null,
+            "GitHub Actions"
+          ]
+        },
+        "identicalFullSteps": true,
+        "stepCount": 18,
+        "execution": "original attempt1 retained; not fresh attempt2 execution"
+      }
+    ],
+    "installer": [
+      {
+        "name": "Installer decisions (Pester)",
+        "originalJobId": 111962473066,
+        "attempt2JobId": 112275761318,
+        "idsChanged": true,
+        "startedAt": "2026-10-05T20:23:20Z",
+        "completedAt": "2026-10-05T20:25:25Z",
+        "identicalOriginalTimestamps": true,
+        "identicalRunnerMetadata": false,
+        "runnerMetadata": {
+          "original": [
+            1000012941,
+            "GitHub Actions 1000012941",
+            0,
+            "GitHub Actions"
+          ],
+          "later": [
+            1000012941,
+            "GitHub Actions 1000012941",
+            null,
+            "GitHub Actions"
+          ]
+        },
+        "identicalFullSteps": true,
+        "stepCount": 6,
+        "execution": "original attempt1 retained; not fresh attempt2 execution"
+      }
+    ],
+    "proof": "Original and terminal started/completed timestamps and every API step match despite changed job IDs. Current runner wrapper fields differ and are retained explicitly; original runner/log review remains in the separately checksummed Queue receipt.",
+    "freshExecutionInferred": false
+  },
+  "dependencyAudit": {
+    "originalArtifactId": 11413899334,
+    "originalArchiveSha256": "663bc28a6df162c893ca831ad5210acbf9809d7e5d562472c161e835427dfa09",
+    "memberSha256": "6fecb51926241ce147815114e0a5779fdd49dc9edcc6207f2fe0f056388fe53b",
+    "memberBytes": 15594,
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 21,
+      "high": 1,
+      "critical": 3,
+      "total": 25
+    },
+    "originalServerDigestJoined": true,
+    "archiveMemberBytesJoined": true,
+    "countsMeaning": "npm metadata affected-package counts, not unique advisories or independently scored threat severities"
+  },
+  "codeql": {
+    "jobs": [
+      {
+        "id": 112275491255,
+        "name": "CodeQL (actions)",
+        "conclusion": "success"
+      },
+      {
+        "id": 112275491275,
+        "name": "CodeQL (javascript-typescript)",
+        "conclusion": "success"
+      }
+    ],
+    "completedAnalysisJobIsNotFindingsClearance": true,
+    "nativeClearance": false
+  },
+  "snapshots": [
+    {
+      "name": "verify-attempt2",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/verify-attempt2.json",
+      "bytes": 13822,
+      "sha256": "d602fda1f0e2693a20f14ff9c9bf67fb9e9ba8653e712b14eedfb3d7fb744ad9",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2"
+      ]
+    },
+    {
+      "name": "verify-jobs-attempt2",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/verify-jobs-attempt2.json",
+      "bytes": 48078,
+      "sha256": "08139b4bd8f157b32de4e7df72dd4e40f9366784e1f8dc580005e96bad3d0ae0",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2/jobs?per_page=100"
+      ]
+    },
+    {
+      "name": "installer-original-jobs",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-original-jobs.json",
+      "bytes": 4859,
+      "sha256": "422901237ac1102396cfd02ba92b7e1eddeec181c8db0385c6731c2836e04f86",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/1/jobs?per_page=100"
+      ]
+    },
+    {
+      "name": "installer-attempt2",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-attempt2.json",
+      "bytes": 13845,
+      "sha256": "ab8b1641bfff4e426e9b7fb62ebae02f861595e3cafcba418e996cd12f530fc7",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2"
+      ]
+    },
+    {
+      "name": "installer-jobs-attempt2",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-jobs-attempt2.json",
+      "bytes": 10662,
+      "sha256": "1db8a4857329bb038f1063f56aa0d3e31e529264f7a273daecba32319cea9190",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2/jobs?per_page=100"
+      ]
+    },
+    {
+      "name": "dependency-audit-artifact",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/dependency-audit-artifact.json",
+      "bytes": 786,
+      "sha256": "9780ec4fee553aaa0da987bc68dcfcfcaf41b2cef83c3c5e7d150c5edc0be44a",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/artifacts/11413899334"
+      ]
+    },
+    {
+      "name": "head-check-runs",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/head-check-runs.json",
+      "bytes": 78131,
+      "sha256": "f643aa56d2086ca2e5f86fdb1e44a84daf56fa4f86876f23abf6e2630637f543",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100"
+      ]
+    },
+    {
+      "name": "dependency-audit-member",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/dependency-audit.json",
+      "bytes": 15594,
+      "sha256": "6fecb51926241ce147815114e0a5779fdd49dc9edcc6207f2fe0f056388fe53b",
+      "command": [
+        "Read retained original artifact 11413899334; server digest and archive member bytes independently joined without an audit rerun"
+      ]
+    }
+  ],
+  "privateReceiptPins": [
+    {
+      "receipt": "terminal-retained-successful-evidence-and-recovery-v3.json",
+      "bytes": 208953,
+      "sha256": "b8b37deb540223d062df817d2e672a670b067258fa08b7467ede245129ad6310",
+      "availability": "Retained by Root/Queue; independent reviewers need access to the named original files."
+    },
+    {
+      "receipt": "docs-805-d8e714-root-source-review-20261006.json",
+      "bytes": 1210,
+      "sha256": "e1886df2ab801886c0dcbfc0e66583a4b720558f1d96557a0cc577132bccdc1c",
+      "availability": "Retained by Root/Queue; independent reviewers need access to the named original files."
+    }
+  ],
+  "acceptance": {
+    "ordinaryVerificationAccepted": false,
+    "fullRuntimeProfileQualification": false,
+    "selectedInstallerArtifactAccepted": false,
+    "installedReleaseAccepted": false,
+    "humanOwnersRubricBudgetsProfilesGatesClaimsAssessmentChanged": false,
+    "independentAMinusAccepted": false
+  },
+  "limits": [
+    "Reuse is independently joined here from original and later exact timestamps and complete API steps despite changed job IDs. Later runner wrapper metadata differs and is retained explicitly; it is not evidence of fresh execution. Queue retains the separate original runner/log joins.",
+    "The dependency audit alone is downloaded original producer data. Other raw CI artifacts, installer EXE identity/signature/installation and full runtime profiles were not requalified by Docs.",
+    "Analysis-job completion and individual success do not supply native findings disposition, complete release acceptance or human/grade acceptance.",
+    "Attempt2 ordinary verification is failed: dependency-security and aggregate verification failed. Eleven successful job records include five retained original executions; the diagnostic skip is excluded.",
+    "The installer workflow success includes a retained original Pester execution. Docs does not qualify the new EXE digest, signature or installation by reading workflow metadata.",
+    "npm reports 25 affected packages: three critical, one high and 21 moderate. These are metadata affected-package counts, not unique advisory counts or new independently scored threat severities.",
+    "The original failed attempt1, fixed 12:48 attempt2 snapshot, v25/v33 cuts, all previous failures and accepted #791/#805 components remain unchanged.",
+    "No new recovery, audit, model call, target workload or multi-thousand-pin inventory was entered for this record."
+  ]
+}

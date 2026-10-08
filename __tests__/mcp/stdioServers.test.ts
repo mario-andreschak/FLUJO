@@ -106,30 +106,39 @@ describe('standalone stdio MCP packages', () => {
         '$nested = \'literal "-c" value\'',
         'Write-Output "$($here.Trim())|$nested"',
       ].join('\n');
+      const startedAt = Date.now();
+      // This checks encoding and quoting, not shell startup latency. Hosted
+      // Windows runners can take more than 10 seconds to start PowerShell 5.1.
       const called = await client.callTool({
         name: 'run',
-        arguments: { command, cwd: root, shell: 'powershell', timeout: 10 },
+        arguments: { command, cwd: root, shell: 'powershell', timeout: 30 },
       });
-      expect(called.isError).not.toBe(true);
-      const resultText = (called as { content?: Array<{ text?: unknown }> }).content?.[0]?.text;
-      expect(typeof resultText).toBe('string');
-      const payload = JSON.parse(String(resultText)) as {
-        shell?: string;
-        shellPath?: string;
-        exitCode?: number;
-        output?: string;
-      };
-      expect(payload).toEqual(expect.objectContaining({
-        shell: 'powershell',
-        exitCode: 0,
-        shellPath: expect.stringMatching(/powershell\.exe$/i),
-      }));
-      expect(payload.output?.trim()).toBe('héllo|literal "-c" value');
+      try {
+        expect(called.isError).not.toBe(true);
+        const resultText = (called as { content?: Array<{ text?: unknown }> }).content?.[0]?.text;
+        expect(typeof resultText).toBe('string');
+        const payload = JSON.parse(String(resultText)) as {
+          shell?: string;
+          shellPath?: string;
+          exitCode?: number;
+          output?: string;
+        };
+        expect(payload).toEqual(expect.objectContaining({
+          shell: 'powershell',
+          exitCode: 0,
+          shellPath: expect.stringMatching(/powershell\.exe$/i),
+        }));
+        expect(payload.output?.trim()).toBe('héllo|literal "-c" value');
+      } catch (error) {
+        const assertion = (error instanceof Error ? error.message : String(error)).slice(0, 4_096);
+        const receipt = JSON.stringify({ elapsedMs: Date.now() - startedAt, result: called }).slice(0, 8_192);
+        throw new Error(`Windows PowerShell 5.1 encoding/quoting assertion failed: ${assertion}\nBounded MCP receipt: ${receipt}`);
+      }
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, 45_000);
 
   itWithRealShell('executes bash commands from an independent child process', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-bash-'));

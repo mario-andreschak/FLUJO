@@ -31,8 +31,7 @@ import {
   proxyListResources,
   proxyListResourceTemplates,
   proxyReadResource,
-  getProxyAppsCapability,
-  getProxySkillsCapability,
+  getProxyCapabilities,
   proxyGetSkill,
   proxyListSkills,
   proxyReadSkillDirectory,
@@ -52,7 +51,7 @@ import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-proxy/[server]/route');
-const PROXY_VERSION = '3.46.2';
+const PROXY_VERSION = '3.46.3';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -138,11 +137,8 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
-  // Keep downstream connection establishment serialized. On the first proxy
-  // request, racing two connectServer calls can launch duplicate stdio
-  // processes for the same configured server.
-  const skillsCapability = await getProxySkillsCapability(serverName);
-  const appsCapability = await getProxyAppsCapability(serverName);
+  // One freshly authorized connection supplies both negotiated extensions.
+  const { skillsCapability, appsCapability } = await getProxyCapabilities(serverName);
   const server = buildProxyServer(serverName, skillsCapability, appsCapability);
 
   try {

@@ -1,0 +1,2214 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "2c02fd0d3e4c36e702537a2e67bdd3d240101533",
+  "method": "rg lexical survey: declare global, global.__, globalThis., new Map(, getInstance(; route.ts paths",
+  "completenessVerified": false,
+  "reviewAccepted": false,
+  "state": [
+    {
+      "file": "src/utils/workspace.ts",
+      "line": 251,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/utils/workspace.ts",
+      "line": 256,
+      "state": "if (!global.__flujo_workspace_als) {"
+    },
+    {
+      "file": "src/utils/workspace.ts",
+      "line": 257,
+      "state": "global.__flujo_workspace_als = new AsyncLocalStorage<string>();"
+    },
+    {
+      "file": "src/utils/workspace.ts",
+      "line": 259,
+      "state": "return global.__flujo_workspace_als;"
+    },
+    {
+      "file": "src/utils/shared/conversationPins.ts",
+      "line": 14,
+      "state": "const byId = new Map(conversations.map((conversation) => [conversation.id, conversation]));"
+    },
+    {
+      "file": "src/utils/shared/conversationChainTree.ts",
+      "line": 56,
+      "state": "const byId = new Map(nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/flowSpecCompiler.ts",
+      "line": 1788,
+      "state": "const nodeById = new Map(allSpecNodes.map((n) => [n.id, n]));"
+    },
+    {
+      "file": "src/utils/shared/flowModelReplacement.ts",
+      "line": 96,
+      "state": "const modelById = new Map(models.map((model) => [model.id, model]));"
+    },
+    {
+      "file": "src/utils/shared/flowCardMetrics.ts",
+      "line": 31,
+      "state": "const nodesById = new Map(nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/flowAutoRepair.ts",
+      "line": 102,
+      "state": "const byId = new Map(controlNodes.map((n) => [n.id, n]));"
+    },
+    {
+      "file": "src/utils/shared/flowAutoRepair.ts",
+      "line": 377,
+      "state": "const byId = new Map(nodes.map((n) => [n.id, n]));"
+    },
+    {
+      "file": "src/utils/shared/flowAuthoringProfile.ts",
+      "line": 45,
+      "state": "const nodeById = new Map((flow.nodes ?? []).map(node => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/flowAssistance.ts",
+      "line": 43,
+      "state": "const byId = new Map(updated.map((flow) => [flow.id, flow]));"
+    },
+    {
+      "file": "src/utils/shared/flowAssistance.ts",
+      "line": 190,
+      "state": "const availableById = new Map("
+    },
+    {
+      "file": "src/utils/shared/flowAssistance.ts",
+      "line": 195,
+      "state": "const nodeById = new Map(next.nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/flowAssistance.ts",
+      "line": 240,
+      "state": "const currentNodeById = new Map(next.nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/flowAssistance.ts",
+      "line": 280,
+      "state": "const byId = new Map(allFlows.map((flow) => [flow.id, flow]));"
+    },
+    {
+      "file": "src/utils/shared/handoffPrompt.ts",
+      "line": 39,
+      "state": "const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/handoffPrompt.ts",
+      "line": 114,
+      "state": "const targetByTool = new Map(previous.map((handoff) => [handoff.toolName, handoff.targetId]));"
+    },
+    {
+      "file": "src/utils/shared/handoffPrompt.ts",
+      "line": 155,
+      "state": "const previousById = new Map(previous.map((handoff) => [handoff.targetId, handoff]));"
+    },
+    {
+      "file": "src/utils/shared/handoffPrompt.ts",
+      "line": 156,
+      "state": "const nextById = new Map(next.map((handoff) => [handoff.targetId, handoff]));"
+    },
+    {
+      "file": "src/utils/shared/handoffPrompt.ts",
+      "line": 160,
+      "state": "? new Map([[added[0].targetId, removed[0].targetId]])"
+    },
+    {
+      "file": "src/utils/shared/guidedSubagents.ts",
+      "line": 16,
+      "state": "const byId = new Map(nodes.map(node => [node.id, node]));"
+    },
+    {
+      "file": "src/utils/shared/packageRename.ts",
+      "line": 209,
+      "state": "const byKey = new Map(candidates.map((c) => [c.key, c]));"
+    },
+    {
+      "file": "src/utils/shared/flowValidation.ts",
+      "line": 149,
+      "state": "const nodesById = new Map(nodes.map((n) => [n.id, n]));"
+    },
+    {
+      "file": "src/utils/shared/flowValidation.ts",
+      "line": 179,
+      "state": "const nodesById = new Map(nodes.map((n) => [n.id, n]));"
+    },
+    {
+      "file": "src/utils/shared/flowValidation.ts",
+      "line": 341,
+      "state": "const modelById = new Map((context.models ?? []).map((m) => [m.id, m]));"
+    },
+    {
+      "file": "src/utils/shared/flowValidation.ts",
+      "line": 342,
+      "state": "const serverByName = new Map((context.servers ?? []).map((s) => [s.name, s]));"
+    },
+    {
+      "file": "src/utils/shared/flowValidation.ts",
+      "line": 884,
+      "state": "const nodesById = new Map(nodes.map((n) => [n.id, n]));"
+    },
+    {
+      "file": "src/backend/mcpApps/sandboxServer.ts",
+      "line": 184,
+      "state": "entries: new Map(),"
+    },
+    {
+      "file": "src/backend/mcpApps/runtimeBroker.ts",
+      "line": 122,
+      "state": "shared = { capabilities: new Map(), registrations: new Map() };"
+    },
+    {
+      "file": "src/backend/execution/meeting/MeetingEngine.ts",
+      "line": 118,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/execution/meeting/MeetingEngine.ts",
+      "line": 199,
+      "state": "const runtimes = global.__flujo_meeting_runtimes"
+    },
+    {
+      "file": "src/backend/execution/meeting/MeetingEngine.ts",
+      "line": 200,
+      "state": "?? (global.__flujo_meeting_runtimes = new Map());"
+    },
+    {
+      "file": "src/backend/execution/meeting/MeetingEngine.ts",
+      "line": 1136,
+      "state": "this.runtimeRegistry = options.isolateProcessRuntime ? new Map() : runtimes;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 43,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 105,
+      "state": "if (global.__flujo_shutdown_promise) return global.__flujo_shutdown_promise;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 125,
+      "state": "global.__flujo_shutdown_promise = promise;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 139,
+      "state": "if (global.__flujo_shutdown_hooks_registered) return;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 140,
+      "state": "global.__flujo_shutdown_hooks_registered = true;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 172,
+      "state": "// `global.__flujo_init_promise = undefined` still resets it) while giving any"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 179,
+      "state": "? global.__flujo_init_promise"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 180,
+      "state": ": global.__flujo_secret_services_promise;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 184,
+      "state": "? global.__flujo_workspace_init_promises"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 185,
+      "state": ": global.__flujo_workspace_secret_promises;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 192,
+      "state": "if (kind === 'init') global.__flujo_init_promise = promise;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 193,
+      "state": "else global.__flujo_secret_services_promise = promise;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 198,
+      "state": "? (global.__flujo_workspace_init_promises ??= new Map())"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 199,
+      "state": ": (global.__flujo_workspace_secret_promises ??= new Map());"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 212,
+      "state": "if (!global.__flujo_retention_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 213,
+      "state": "global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 218,
+      "state": "if (!global.__flujo_subflow_task_retention_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 219,
+      "state": "global.__flujo_subflow_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 225,
+      "state": "if (!global.__flujo_mcp_remote_task_retention_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 226,
+      "state": "global.__flujo_mcp_remote_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 233,
+      "state": "if (!global.__flujo_snapshot_cleanup_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 234,
+      "state": "global.__flujo_snapshot_cleanup_cron = new Cron('0 * * * *', { unref: true }, () => {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 240,
+      "state": "if (!global.__flujo_memory_lifecycle_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 241,
+      "state": "global.__flujo_memory_lifecycle_cron = new Cron('0 * * * *', { unref: true }, () => {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 251,
+      "state": "&& !global.__flujo_persona_lease_history_pruning_cron"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 253,
+      "state": "global.__flujo_persona_lease_history_pruning_cron = new Cron("
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 269,
+      "state": "if (!global.__flujo_persona_runtime_retention_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 270,
+      "state": "global.__flujo_persona_runtime_retention_cron = new Cron("
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 284,
+      "state": "if (!global.__flujo_persona_runtime_event_retention_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 285,
+      "state": "global.__flujo_persona_runtime_event_retention_cron = new Cron("
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 300,
+      "state": "if (!global.__flujo_memory_backfill_cron) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 301,
+      "state": "global.__flujo_memory_backfill_cron = new Cron('17 * * * *', { unref: true }, () => {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 302,
+      "state": "if (global.__flujo_memory_backfill_in_flight) return;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 310,
+      "state": "if (global.__flujo_memory_backfill_in_flight === sweep) {"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 311,
+      "state": "global.__flujo_memory_backfill_in_flight = undefined;"
+    },
+    {
+      "file": "src/backend/init.ts",
+      "line": 314,
+      "state": "global.__flujo_memory_backfill_in_flight = sweep;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/workItems.ts",
+      "line": 113,
+      "state": "const graph = new Map(records.map((item) => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/workItems.ts",
+      "line": 353,
+      "state": "const byId = new Map(records.map((record) => [record.id, record]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/workItems.ts",
+      "line": 922,
+      "state": "const byId = new Map(dependencyRecords.map((item) => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 22,
+      "state": "const systemLockTime = globalThis.__flujo_filesystem_lock_system_time"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 67,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 85,
+      "state": "const PROCESS_INSTANCE_ID = global.__flujo_enduring_agent_process_instance_id ??= randomUUID();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 86,
+      "state": "const ACTIVE_OWNER_IDS = global.__flujo_enduring_agent_active_lock_owners ??= new Set<string>();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 87,
+      "state": "const ISSUED_RUNTIME_LOCKS = global.__flujo_enduring_agent_issued_runtime_lock_scopes_v2"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 89,
+      "state": "const DEFERRED_CLEANUP_KEYS = global.__flujo_enduring_agent_deferred_lock_cleanups"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 353,
+      "state": "const lookup = global.__flujo_enduring_agent_linux_boot_id"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 358,
+      "state": "if (!bootId && global.__flujo_enduring_agent_linux_boot_id === lookup) {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 359,
+      "state": "global.__flujo_enduring_agent_linux_boot_id = undefined;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 481,
+      "state": "const lookup = global.__flujo_enduring_agent_process_birth_marker_v2"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 494,
+      "state": "if (!marker && global.__flujo_enduring_agent_process_birth_marker_v2 === lookup) {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 495,
+      "state": "global.__flujo_enduring_agent_process_birth_marker_v2 = undefined;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 501,
+      "state": "if (global.__flujo_enduring_agent_process_birth_marker_v2 === lookup) {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 502,
+      "state": "global.__flujo_enduring_agent_process_birth_marker_v2 = undefined;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "line": 1137,
+      "state": "const workspaceWriterAdmissionChains = globalThis.__flujo_workspace_writer_admission_chains"
+    },
+    {
+      "file": "src/backend/execution/flow/engine/PocketflowEngine.ts",
+      "line": 44,
+      "state": ") return new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/validateFlowForRun.ts",
+      "line": 46,
+      "state": "const disabledByName = new Map("
+    },
+    {
+      "file": "src/backend/execution/flow/conversationSummaryStore.ts",
+      "line": 246,
+      "state": "if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 78,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 86,
+      "state": "if (!global.__flujo_conversation_cache_meta) {"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 87,
+      "state": "global.__flujo_conversation_cache_meta = new Map<string, CacheEntry>();"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 89,
+      "state": "return global.__flujo_conversation_cache_meta;"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 103,
+      "state": "if (!global.__flujo_conversation_cache_counters) {"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 104,
+      "state": "global.__flujo_conversation_cache_counters = create();"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 106,
+      "state": "return global.__flujo_conversation_cache_counters;"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 108,
+      "state": "const byWorkspace = global.__flujo_conversation_cache_counters_by_workspace ??"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 109,
+      "state": "(global.__flujo_conversation_cache_counters_by_workspace = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 119,
+      "state": "if (!global.__flujo_conversation_cache_loads) {"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 120,
+      "state": "global.__flujo_conversation_cache_loads = new Map<string, Promise<SharedState | undefined>>();"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 122,
+      "state": "return global.__flujo_conversation_cache_loads;"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 375,
+      "state": "global.__flujo_conversation_cache_meta = undefined;"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 376,
+      "state": "global.__flujo_conversation_cache_counters = undefined;"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 377,
+      "state": "global.__flujo_conversation_cache_counters_by_workspace = undefined;"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationStateCache.ts",
+      "line": 378,
+      "state": "global.__flujo_conversation_cache_loads = undefined;"
+    },
+    {
+      "file": "src/backend/execution/flow/cancellationCoordinator.ts",
+      "line": 32,
+      "state": "?? (globalCoordinator.__flujoCancellableRuns = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/cancellationCoordinator.ts",
+      "line": 34,
+      "state": "?? (globalCoordinator.__flujoAdmissionBarriers = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/cancellationCoordinator.ts",
+      "line": 48,
+      "state": "runs = new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/cancellationCoordinator.ts",
+      "line": 81,
+      "state": "runs = new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/toolCancelRegistry.ts",
+      "line": 19,
+      "state": "globalForRegistry.__flujoToolCancels ?? (globalForRegistry.__flujoToolCancels = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/toolCancelRegistry.ts",
+      "line": 31,
+      "state": "perScope = new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/nodes/ProcessNode.ts",
+      "line": 159,
+      "state": "flowNodesById = new Map(flow.nodes.map(n => [n.id, n]));"
+    },
+    {
+      "file": "src/backend/execution/flow/nodes/ProcessNode.ts",
+      "line": 174,
+      "state": "const detachedNameMap = new Map([...buildSubflowToolNameMap(targets.filter(t => t.type === 'subflow'))]"
+    },
+    {
+      "file": "src/backend/execution/flow/toolApprovalRegistry.ts",
+      "line": 24,
+      "state": "globalForRegistry.__flujoToolApprovals ?? (globalForRegistry.__flujoToolApprovals = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/toolApprovalRegistry.ts",
+      "line": 35,
+      "state": "perConv = new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationLog.ts",
+      "line": 116,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationLog.ts",
+      "line": 127,
+      "state": "const processLogState = globalThis.__flujo_conversation_log_state_v1"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationLog.ts",
+      "line": 128,
+      "state": "??= { appendChains: new Map(), nextSeq: new Map(), pendingCommits: new Map() };"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationLog.ts",
+      "line": 609,
+      "state": "const baselineById = new Map(baseline.map((m) => [m.id, m]));"
+    },
+    {
+      "file": "src/backend/execution/flow/buildHandoffDescription.ts",
+      "line": 52,
+      "state": "return { modelNames: new Map(), serverConnected: new Map(), flows, immutableFlows: Boolean(pinnedParent) };"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 20,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 25,
+      "state": "if (!global.__flujo_subflow_parent_resume_leases) {"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 26,
+      "state": "global.__flujo_subflow_parent_resume_leases = new Set<string>();"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 28,
+      "state": "return global.__flujo_subflow_parent_resume_leases;"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 316,
+      "state": "const byId = new Map(states.flatMap((state) =>"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 373,
+      "state": "const byId = new Map(states.flatMap((state) =>"
+    },
+    {
+      "file": "src/backend/execution/flow/subflowRecovery.ts",
+      "line": 451,
+      "state": "const byId = new Map(states.flatMap((state) =>"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationExecutionLock.ts",
+      "line": 9,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationExecutionLock.ts",
+      "line": 16,
+      "state": "const locks = globalThis.__flujoConversationExecutionLocks"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationExecutionLock.ts",
+      "line": 17,
+      "state": "?? (globalThis.__flujoConversationExecutionLocks = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationExecutionLock.ts",
+      "line": 18,
+      "state": "const context = globalThis.__flujoConversationExecutionContext"
+    },
+    {
+      "file": "src/backend/execution/flow/conversationExecutionLock.ts",
+      "line": 19,
+      "state": "?? (globalThis.__flujoConversationExecutionContext = new AsyncLocalStorage());"
+    },
+    {
+      "file": "src/backend/execution/flow/lazyToolPayloads.ts",
+      "line": 164,
+      "state": "const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]));"
+    },
+    {
+      "file": "src/backend/execution/flow/lazyToolPayloads.ts",
+      "line": 175,
+      "state": "? new Map((canonical.tool_calls as FlujoFunctionToolCall[]).map((call) => [call.id, call]))"
+    },
+    {
+      "file": "src/backend/execution/flow/modelTurnArchive.ts",
+      "line": 314,
+      "state": "writes: new Map(),"
+    },
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "line": 21,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "line": 28,
+      "state": "const gates = globalThis.__flujoWorkspaceMutationGates"
+    },
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "line": 29,
+      "state": "?? (globalThis.__flujoWorkspaceMutationGates = new Map());"
+    },
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "line": 30,
+      "state": "const mutationContext = globalThis.__flujoWorkspaceMutationContext"
+    },
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "line": 31,
+      "state": "?? (globalThis.__flujoWorkspaceMutationContext = new AsyncLocalStorage());"
+    },
+    {
+      "file": "src/backend/execution/flow/steeringInbox.ts",
+      "line": 33,
+      "state": "globalForInbox.__flujoSteeringInbox ?? (globalForInbox.__flujoSteeringInbox = new Map());"
+    },
+    {
+      "file": "src/backend/services/workspace/workerMode.ts",
+      "line": 11,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/workspace/workerMode.ts",
+      "line": 21,
+      "state": "return global.__flujo_worker_bootstrap_status ?? { mode: 'worker', state: 'not-started' };"
+    },
+    {
+      "file": "src/backend/services/workspace/workerMode.ts",
+      "line": 26,
+      "state": "global.__flujo_worker_bootstrap_status = {"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 26,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 34,
+      "state": "return global.__flujo_flow_engines_by_workspace ??"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 35,
+      "state": "(global.__flujo_flow_engines_by_workspace = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 39,
+      "state": "return global.__flujo_conversation_states_by_workspace ??"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 40,
+      "state": "(global.__flujo_conversation_states_by_workspace = new Map());"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 108,
+      "state": "if (!global.__flujo_conversation_states) {"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 109,
+      "state": "global.__flujo_conversation_states = new Map<string, SharedState>();"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 111,
+      "state": "return global.__flujo_conversation_states;"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 122,
+      "state": "// frameworks. Global-backed (see the declare global above) so its compiled"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 128,
+      "state": "if (!global.__flujo_flow_engine) {"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 129,
+      "state": "global.__flujo_flow_engine = new PocketflowEngine();"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 131,
+      "state": "return global.__flujo_flow_engine;"
+    },
+    {
+      "file": "src/backend/execution/flow/FlowExecutor.ts",
+      "line": 145,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_flow_engine = value;"
+    },
+    {
+      "file": "src/backend/execution/flow/pocketflow.ts",
+      "line": 29,
+      "state": "this.successors = new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/pocketflow.ts",
+      "line": 64,
+      "state": "newNode.successors = new Map(this.successors);"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotRestore.ts",
+      "line": 45,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotRestore.ts",
+      "line": 397,
+      "state": "if (global.__flujo_worker_snapshot_restore?.key === key) return global.__flujo_worker_snapshot_restore.promise;"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotRestore.ts",
+      "line": 400,
+      "state": "if (global.__flujo_worker_snapshot_restore?.promise === promise) global.__flujo_worker_snapshot_restore = undefined;"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotRestore.ts",
+      "line": 403,
+      "state": "global.__flujo_worker_snapshot_restore = { key, promise };"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotCoordinator.ts",
+      "line": 88,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotCoordinator.ts",
+      "line": 94,
+      "state": "const sessions = globalThis.__flujoWorkspaceSnapshotSessions"
+    },
+    {
+      "file": "src/backend/services/workspace/snapshotCoordinator.ts",
+      "line": 95,
+      "state": "?? (globalThis.__flujoWorkspaceSnapshotSessions = new Map());"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/goalRuntime.ts",
+      "line": 209,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/goalRuntime.ts",
+      "line": 212,
+      "state": "const runtimes = global.__flujo_persona_goal_runtimes_v1 ??= new Map<string, GoalWorkspaceRuntime>();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memorySettings.ts",
+      "line": 22,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memorySettings.ts",
+      "line": 26,
+      "state": "global.__flujo_memory_settings_cache ??"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memorySettings.ts",
+      "line": 27,
+      "state": "(global.__flujo_memory_settings_cache = new Map());"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/factory.ts",
+      "line": 758,
+      "state": "const existingBindings = new Map("
+    },
+    {
+      "file": "src/backend/services/enduringAgents/factory.ts",
+      "line": 796,
+      "state": "const refreshedBindings = new Map("
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryMaintenance.ts",
+      "line": 313,
+      "state": "const evidenceById = new Map(input.plan.evidence.map((item) => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryKernel.ts",
+      "line": 295,
+      "state": "const targetsById = new Map("
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryKernel.ts",
+      "line": 583,
+      "state": "scores: new Map(),"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryKernel.ts",
+      "line": 774,
+      "state": "const conflictsById = new Map(conflicts.map(item => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryKernel.ts",
+      "line": 968,
+      "state": "const byId = new Map((await listMemoryItems(personaId, { ids })).map((memory) => [memory.id, memory]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryKernel.ts",
+      "line": 989,
+      "state": "const byId = new Map((await listMemoryItems(personaId, { ids })).map((memory) => [memory.id, memory]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryKernel.ts",
+      "line": 1000,
+      "state": "const byId = new Map((await listMemoryItems(personaId, { ids: coreMemoryItemIds })).map((memory) => [memory.id, memory]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryExperimentHarness.ts",
+      "line": 280,
+      "state": "const itemById = new Map(dataset.items.map((item) => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryExperimentHarness.ts",
+      "line": 342,
+      "state": "const itemById = new Map(dataset.items.map((item) => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 10,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 29,
+      "state": "return global.__flujo_workspace_migration_promise as Promise<T> | undefined;"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 33,
+      "state": "return global.__flujo_workspace_layout_status ?? 'not-started';"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 37,
+      "state": "global.__flujo_workspace_migration_promise = promise;"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 38,
+      "state": "global.__flujo_workspace_layout_status = promise ? 'preparing' : 'not-started';"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 46,
+      "state": "if (global.__flujo_workspace_migration_promise === promise) {"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 47,
+      "state": "global.__flujo_workspace_layout_status = 'ready';"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 51,
+      "state": "if (global.__flujo_workspace_migration_promise === promise) {"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 52,
+      "state": "global.__flujo_workspace_layout_status = 'failed';"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 60,
+      "state": "if (global.__flujo_workspace_migration_promise !== promise) return;"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 61,
+      "state": "global.__flujo_workspace_migration_promise = undefined;"
+    },
+    {
+      "file": "src/backend/services/workspace/layoutReadiness.ts",
+      "line": 62,
+      "state": "global.__flujo_workspace_layout_status = 'failed';"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryEmbeddingStore.ts",
+      "line": 37,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryEmbeddingStore.ts",
+      "line": 42,
+      "state": "global.__flujo_persona_embedding_cache ??= new Map();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryEmbeddingStore.ts",
+      "line": 43,
+      "state": "return global.__flujo_persona_embedding_cache;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/memoryEmbeddingStore.ts",
+      "line": 279,
+      "state": "if (queryVector.length === 0 || !queryVector.every(finite)) return new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
+      "line": 827,
+      "state": "if (!markers) markers = new Map();"
+    },
+    {
+      "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
+      "line": 985,
+      "state": "let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;"
+    },
+    {
+      "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
+      "line": 1005,
+      "state": "if (!markers) markers = new Map();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/activityRuntime.ts",
+      "line": 3304,
+      "state": "const activityById = new Map(activities.map((activity) => [activity.id, activity]));"
+    },
+    {
+      "file": "src/backend/execution/flow/handlers/promptCacheMetrics.ts",
+      "line": 185,
+      "state": "value = new Map();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/indexing.ts",
+      "line": 106,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/indexing.ts",
+      "line": 111,
+      "state": "global.__flujo_persona_record_index_cache ??= new Map();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/indexing.ts",
+      "line": 112,
+      "state": "return global.__flujo_persona_record_index_cache;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecordCache.ts",
+      "line": 23,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecordCache.ts",
+      "line": 28,
+      "state": "global.__flujo_persona_record_cache_v2 ??= new Map();"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecordCache.ts",
+      "line": 29,
+      "state": "return global.__flujo_persona_record_cache_v2;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecordCache.ts",
+      "line": 70,
+      "state": "bucket = { revision: options.revision, records: new Map(), touchedAt: Date.now(), pendingReads: 0 };"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecordCache.ts",
+      "line": 149,
+      "state": "const records = bucket.pendingReads > 0 ? new Map(bucket.records) : bucket.records;"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaPresentation.ts",
+      "line": 164,
+      "state": "const byWorkItemId = new Map(bundle.workItems.map((item) => [item.id, item]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaPresentation.ts",
+      "line": 173,
+      "state": "const queuedAssignmentRank = new Map("
+    },
+    {
+      "file": "src/backend/services/waves/automationMapResolver.ts",
+      "line": 315,
+      "state": "const flowsById = new Map(definitions.map((flow) => [flow.id, flow]));"
+    },
+    {
+      "file": "src/backend/services/waves/automationMapResolver.ts",
+      "line": 316,
+      "state": "const entriesById = new Map(entries.map((entry) => [entry.execution.id, entry]));"
+    },
+    {
+      "file": "src/backend/services/waves/automationMapResolver.ts",
+      "line": 380,
+      "state": "const executionById = new Map(executions.map((execution) => [execution.executionId, execution]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecoveryPlan.ts",
+      "line": 38,
+      "state": "const sourceFiles = new Map(recovery.files.map((file) => [file.path, file.bytes]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecoveryGraph.ts",
+      "line": 59,
+      "state": "tables.set(collection, new Map());"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecoveryArchive.ts",
+      "line": 142,
+      "state": "const activities = new Map(graph.records.filter((record) => record.collection === c.activities)"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaSummary.ts",
+      "line": 154,
+      "state": "const rolesById = new Map(records.roleVersions.map((role) => [role.id, role]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaCoreResolver.ts",
+      "line": 64,
+      "state": "const revisionsById = new Map(revisions.map((revision) => [revision.id, revision]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaSettingsOptions.ts",
+      "line": 29,
+      "state": "const versionById = new Map(versions.map((version) => [version.id, version]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaCoreApps.ts",
+      "line": 128,
+      "state": "const byNodeId = new Map(source.nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaCoreApps.ts",
+      "line": 166,
+      "state": "const grantsByServer = new Map("
+    },
+    {
+      "file": "src/backend/services/enduringAgents/recordMigrations.ts",
+      "line": 230,
+      "state": "const migrations = new Map("
+    },
+    {
+      "file": "src/backend/services/questionRegistry.ts",
+      "line": 59,
+      "state": "(globalForRegistry.__flujoQuestionRegistry = new Map());"
+    },
+    {
+      "file": "src/backend/services/statistics/aggregation.ts",
+      "line": 1284,
+      "state": "const daily = new Map(days.map(day => [day, emptyMutableSummary()]));"
+    },
+    {
+      "file": "src/backend/services/packages/workspaceMcpTransfer.ts",
+      "line": 466,
+      "state": "const byName = new Map(loaded.map(config => [config.name, config]));"
+    },
+    {
+      "file": "src/backend/services/spotlight/index.ts",
+      "line": 34,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/spotlight/index.ts",
+      "line": 55,
+      "state": "const refreshes = global.__flujo_spotlight_refresh_by_workspace ??"
+    },
+    {
+      "file": "src/backend/services/spotlight/index.ts",
+      "line": 56,
+      "state": "(global.__flujo_spotlight_refresh_by_workspace = new Map());"
+    },
+    {
+      "file": "src/backend/services/spotlight/index.ts",
+      "line": 58,
+      "state": "? global.__flujo_spotlight_refresh"
+    },
+    {
+      "file": "src/backend/services/spotlight/index.ts",
+      "line": 64,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_spotlight_refresh = undefined;"
+    },
+    {
+      "file": "src/backend/services/spotlight/index.ts",
+      "line": 68,
+      "state": "global.__flujo_spotlight_refresh = guarded;"
+    },
+    {
+      "file": "src/backend/services/runResources/index.ts",
+      "line": 158,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/runResources/index.ts",
+      "line": 162,
+      "state": "global.__flujo_run_resources ?? (global.__flujo_run_resources = new Map());"
+    },
+    {
+      "file": "src/backend/services/model/openaiClient.ts",
+      "line": 28,
+      "state": "const openAIFetch = undiciFetch as unknown as typeof globalThis.fetch;"
+    },
+    {
+      "file": "src/backend/services/packages/installPackage.ts",
+      "line": 811,
+      "state": "const installedModelsById = new Map(installedModels.map((model) => [model.id, model]));"
+    },
+    {
+      "file": "src/backend/services/packages/installPackage.ts",
+      "line": 1377,
+      "state": "const flowNames = new Map("
+    },
+    {
+      "file": "src/backend/services/scheduler/index.ts",
+      "line": 238,
+      "state": "* `global.__flujo_scheduler` (same reasoning as the MCP service's global maps:"
+    },
+    {
+      "file": "src/backend/services/scheduler/index.ts",
+      "line": 354,
+      "state": "const configurations = new Map(file.executions"
+    },
+    {
+      "file": "src/backend/services/scheduler/index.ts",
+      "line": 3229,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/scheduler/index.ts",
+      "line": 3241,
+      "state": "return global.__flujo_scheduler ?? (global.__flujo_scheduler = new SchedulerService());"
+    },
+    {
+      "file": "src/backend/services/scheduler/index.ts",
+      "line": 3243,
+      "state": "const byWorkspace = (global.__flujo_workspace_schedulers ??= new Map());"
+    },
+    {
+      "file": "src/backend/services/scheduler/flowRunEventBus.ts",
+      "line": 173,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/scheduler/flowRunEventBus.ts",
+      "line": 181,
+      "state": "if (!global.__flujo_flow_run_event_bus) {"
+    },
+    {
+      "file": "src/backend/services/scheduler/flowRunEventBus.ts",
+      "line": 182,
+      "state": "global.__flujo_flow_run_event_bus = new FlowRunEventBus();"
+    },
+    {
+      "file": "src/backend/services/scheduler/flowRunEventBus.ts",
+      "line": 184,
+      "state": "return global.__flujo_flow_run_event_bus;"
+    },
+    {
+      "file": "src/backend/services/scheduler/flowRunEventBus.ts",
+      "line": 186,
+      "state": "const buses = global.__flujo_flow_run_event_buses_by_workspace ??"
+    },
+    {
+      "file": "src/backend/services/scheduler/flowRunEventBus.ts",
+      "line": 187,
+      "state": "(global.__flujo_flow_run_event_buses_by_workspace = new Map());"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 123,
+      "state": "const suppliedByName = new Map(supplied.map((entry) => [entry.name, entry]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 242,
+      "state": "const flowById = new Map(entities.flows.map((f) => [f.id, f]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 243,
+      "state": "const modelById = new Map(entities.models.map((m) => [m.id, m]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 244,
+      "state": "const serverByName = new Map(entities.mcpServers.map((s) => [s.name, s]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 245,
+      "state": "const peById = new Map(entities.plannedExecutions.map((p) => [p.id, p]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 431,
+      "state": "const byName = new Map(servers.map((s) => [s.name, s]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 592,
+      "state": "const flowById = new Map(entities.flows.map((flow) => [flow.id, flow]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 593,
+      "state": "const modelById = new Map(entities.models.map((m) => [m.id, m]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 594,
+      "state": "const plannedById = new Map(entities.plannedExecutions.map((execution) => [execution.id, execution]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 650,
+      "state": "const flowById = new Map(entities.flows.map((f) => [f.id, f]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 651,
+      "state": "const modelById = new Map(entities.models.map((m) => [m.id, m]));"
+    },
+    {
+      "file": "src/backend/services/packages/buildPackage.ts",
+      "line": 652,
+      "state": "const peById = new Map(entities.plannedExecutions.map((p) => [p.id, p]));"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 17,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 23,
+      "state": "const tails = globalThis.__flujoSnapshotOperationTails"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 24,
+      "state": "?? (globalThis.__flujoSnapshotOperationTails = new Map());"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 25,
+      "state": "const context = globalThis.__flujoSnapshotOperationContext"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 26,
+      "state": "?? (globalThis.__flujoSnapshotOperationContext = new AsyncLocalStorage());"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 27,
+      "state": "const activity = globalThis.__flujoSnapshotOperationActivity"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotLock.ts",
+      "line": 28,
+      "state": "?? (globalThis.__flujoSnapshotOperationActivity = new Map());"
+    },
+    {
+      "file": "src/backend/services/snapshot/snapshotHook.ts",
+      "line": 89,
+      "state": "const configs = new Map(loaded.map((config) => [config.name, config]));"
+    },
+    {
+      "file": "src/backend/services/model/cache.ts",
+      "line": 37,
+      "state": "cache = new Map();"
+    },
+    {
+      "file": "src/backend/services/kvStore/index.ts",
+      "line": 108,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/kvStore/index.ts",
+      "line": 112,
+      "state": "global.__flujo_kv_store ?? (global.__flujo_kv_store = new Map());"
+    },
+    {
+      "file": "src/backend/services/mcp/assistedInstall.ts",
+      "line": 531,
+      "state": "const remoteAuth = new Map(authResults);"
+    },
+    {
+      "file": "src/backend/services/model/adapters/claudeSessionStore.ts",
+      "line": 73,
+      "state": "value = new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/elicitationRegistry.ts",
+      "line": 31,
+      "state": "(globalForRegistry.__flujoElicitationRegistry = new Map());"
+    },
+    {
+      "file": "src/backend/services/mcp/elicitationContext.ts",
+      "line": 29,
+      "state": "(globalForCtx.__flujoElicitationContexts = new Map());"
+    },
+    {
+      "file": "src/backend/services/meetings/store.ts",
+      "line": 522,
+      "state": "personaBehaviorRevisionPins: ReadonlyMap<string, string> = new Map(),"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 77,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 86,
+      "state": "global.__mcp_external_authorization_status ??"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 87,
+      "state": "(global.__mcp_external_authorization_status = new Map());"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 89,
+      "state": "global.__mcp_external_authorization_sessions ??"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 90,
+      "state": "(global.__mcp_external_authorization_sessions = new Map());"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 92,
+      "state": "global.__mcp_stdio_oauth_clients ??"
+    },
+    {
+      "file": "src/backend/services/mcp/externalAuthorization.ts",
+      "line": 93,
+      "state": "(global.__mcp_stdio_oauth_clients = new WeakMap());"
+    },
+    {
+      "file": "src/backend/services/meetings/MeetingEventBus.ts",
+      "line": 253,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/meetings/MeetingEventBus.ts",
+      "line": 258,
+      "state": "globalThis.__flujoMeetingEventBus"
+    },
+    {
+      "file": "src/backend/services/meetings/MeetingEventBus.ts",
+      "line": 259,
+      "state": "?? (globalThis.__flujoMeetingEventBus = new MeetingEventBus());"
+    },
+    {
+      "file": "src/backend/services/meetings/controlLock.ts",
+      "line": 6,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/meetings/controlLock.ts",
+      "line": 12,
+      "state": "const controlLocks = global.__flujo_meeting_control_locks"
+    },
+    {
+      "file": "src/backend/services/meetings/controlLock.ts",
+      "line": 13,
+      "state": "?? (global.__flujo_meeting_control_locks = new Map());"
+    },
+    {
+      "file": "src/backend/services/mcp/internalTools.ts",
+      "line": 111,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/internalTools.ts",
+      "line": 118,
+      "state": "return global.__flujo_internal_flow_depth_als ??"
+    },
+    {
+      "file": "src/backend/services/mcp/internalTools.ts",
+      "line": 119,
+      "state": "(global.__flujo_internal_flow_depth_als = new AsyncLocalStorage<number>());"
+    },
+    {
+      "file": "src/backend/services/mcp/internalTools.ts",
+      "line": 650,
+      "state": "const depth = inheritedDepth ?? global.__flujo_internal_flow_depth ?? 0;"
+    },
+    {
+      "file": "src/backend/services/mcp/internalTools.ts",
+      "line": 678,
+      "state": "if (inheritedDepth === undefined) global.__flujo_internal_flow_depth = 0;"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 26,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 67,
+      "state": "if (typeof global.__mcp_clients === \"undefined\") {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 68,
+      "state": "global.__mcp_clients = new Map<string, Client>();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 70,
+      "state": "if (typeof global.__mcp_connecting === \"undefined\") {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 71,
+      "state": "global.__mcp_connecting = new Set<string>();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 73,
+      "state": "if (typeof global.__mcp_starting_up === \"undefined\") {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 74,
+      "state": "global.__mcp_starting_up = true;"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 76,
+      "state": "if (typeof global.__mcp_active_transports === \"undefined\") {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 77,
+      "state": "global.__mcp_active_transports = new Map<string, Transport>();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 79,
+      "state": "if (typeof global.__mcp_client_generation === \"undefined\") {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 80,
+      "state": "global.__mcp_client_generation = new Map<string, number>();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 82,
+      "state": "if (typeof global.__mcp_tool_schema_hash === \"undefined\") {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 83,
+      "state": "global.__mcp_tool_schema_hash = new Map<string, string>();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 89,
+      "state": "// manipulate global.__mcp_clients directly) is completely unaffected."
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 90,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 110,
+      "state": "const all = (global.__mcp_workspace_registries ??= new Map<"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 121,
+      "state": "registry = base instanceof Set ? new Set() : new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 335,
+      "state": "// keeps every existing caller (and test that pokes global.__mcp_clients"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 337,
+      "state": "private stderrLogsBase: Map<string, string[]> = new Map(); // Store stderr logs for each server"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 345,
+      "state": "private lastConnectionErrorBase: Map<string, string> = new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 351,
+      "state": "new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 355,
+      "state": "private connectionRetryTimersBase: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 359,
+      "state": "private connectionRetryAttemptsBase: Map<string, number> = new Map(); // Track retry attempts for each server"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 367,
+      "state": "private resourceListVersionBase: Map<string, number> = new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 374,
+      "state": "private pendingResourceUpdatesBase: Map<string, Set<string>> = new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 404,
+      "state": "const result = await saveConfig(new Map(configs.map((c) => [c.name, c])));"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 429,
+      "state": "return scopedRegistry(\"clients\", global.__mcp_clients!);"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 435,
+      "state": "return scopedRegistry(\"connectingServers\", global.__mcp_connecting!);"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 442,
+      "state": "return scopedRegistry(\"activeTransports\", global.__mcp_active_transports!);"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 448,
+      "state": "return scopedRegistry(\"clientGenerations\", global.__mcp_client_generation!);"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 453,
+      "state": "return scopedRegistry(\"toolSchemaHashes\", global.__mcp_tool_schema_hash!);"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 678,
+      "state": "? global.__mcp_starting_up === true"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 679,
+      "state": ": global.__mcp_starting_up_by_workspace?.get(workspace) === true;"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 688,
+      "state": "global.__mcp_starting_up = value;"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 690,
+      "state": "const states = global.__mcp_starting_up_by_workspace ??="
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 1397,
+      "state": "await saveConfig(new Map(configs.map((c) => [c.name, c])));"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 2994,
+      "state": "new Map(configs.map((c) => [c.name, c])),"
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "line": 3220,
+      "state": "new Map(configs.map((c) => [c.name, c])),"
+    },
+    {
+      "file": "src/backend/services/mcp/oauth.ts",
+      "line": 122,
+      "state": "const configMap = new Map(configs.map(c => [c.name, c]));"
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 95,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 111,
+      "state": "if (!global.__flujo_mcp_pool_counters) {"
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 112,
+      "state": "global.__flujo_mcp_pool_counters = create();"
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 114,
+      "state": "return global.__flujo_mcp_pool_counters;"
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 116,
+      "state": "const byWorkspace = global.__flujo_mcp_pool_counters_by_workspace ??="
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 316,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_mcp_pool_counters = undefined;"
+    },
+    {
+      "file": "src/backend/services/mcp/mcpLeasePool.ts",
+      "line": 317,
+      "state": "else global.__flujo_mcp_pool_counters_by_workspace?.delete(workspace);"
+    },
+    {
+      "file": "src/backend/services/model/adapters/openaiResponsesAdapter.ts",
+      "line": 89,
+      "state": "value = new Map();"
+    },
+    {
+      "file": "src/backend/services/model/adapters/openaiResponsesAdapter.ts",
+      "line": 107,
+      "state": "forSession = new Map();"
+    },
+    {
+      "file": "src/backend/services/model/adapters/codexSessionStore.ts",
+      "line": 24,
+      "state": "value = new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/remoteTaskStore.ts",
+      "line": 424,
+      "state": "(globalForSlots.__flujoMcpTaskPollSlots = { total: 0, perServer: new Map() });"
+    },
+    {
+      "file": "src/backend/services/mcp/registryInstall.ts",
+      "line": 170,
+      "state": "const byName = new Map(results.map((r) => [r.server.name, r]));"
+    },
+    {
+      "file": "src/backend/services/mcp/roots.ts",
+      "line": 95,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/roots.ts",
+      "line": 98,
+      "state": "if (typeof global.__mcp_node_roots === 'undefined') {"
+    },
+    {
+      "file": "src/backend/services/mcp/roots.ts",
+      "line": 99,
+      "state": "global.__mcp_node_roots = new Map();"
+    },
+    {
+      "file": "src/backend/services/mcp/roots.ts",
+      "line": 103,
+      "state": "return global.__mcp_node_roots!;"
+    },
+    {
+      "file": "src/backend/services/mcp/skillApprovalRegistry.ts",
+      "line": 12,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/mcp/skillApprovalRegistry.ts",
+      "line": 17,
+      "state": "global.__mcp_skill_approvals ??= new Map<string, McpSkillApproval>();"
+    },
+    {
+      "file": "src/backend/services/mcp/skillApprovalRegistry.ts",
+      "line": 18,
+      "state": "return global.__mcp_skill_approvals;"
+    },
+    {
+      "file": "src/backend/services/mcp/quality/orchestrator.ts",
+      "line": 141,
+      "state": "const byId = new Map(signals.map((s) => [s.providerId, s]));"
+    },
+    {
+      "file": "src/backend/services/mcp/taskInputRegistry.ts",
+      "line": 43,
+      "state": "(globalForRegistry.__flujoMcpTaskInputRegistry = new Map());"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 20,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 39,
+      "state": "return global.__flujo_encryption_sessions ??"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 40,
+      "state": "(global.__flujo_encryption_sessions = new Map());"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 42,
+      "state": "const stores = global.__flujo_encryption_sessions_by_workspace ??"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 43,
+      "state": "(global.__flujo_encryption_sessions_by_workspace = new Map());"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 46,
+      "state": "sessions = new Map();"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 53,
+      "state": "return global.__flujo_server_deks_by_workspace ??"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 54,
+      "state": "(global.__flujo_server_deks_by_workspace = new Map());"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 143,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_server_dek = dek;"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 153,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_server_dek = null;"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 171,
+      "state": "? global.__flujo_server_dek ?? null"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 183,
+      "state": "global.__flujo_encryption_sessions,"
+    },
+    {
+      "file": "src/utils/encryption/session.ts",
+      "line": 184,
+      "state": "...Array.from(global.__flujo_encryption_sessions_by_workspace?.values() ?? []),"
+    },
+    {
+      "file": "src/utils/encryption/secure.ts",
+      "line": 26,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/utils/encryption/secure.ts",
+      "line": 32,
+      "state": "const locks = global.__flujo_encryption_metadata_locks ??= new Map();"
+    },
+    {
+      "file": "src/backend/services/flow/visualGeneration.ts",
+      "line": 673,
+      "state": "pending: new Map(),"
+    },
+    {
+      "file": "src/backend/services/flow/visualGeneration.ts",
+      "line": 994,
+      "state": "agents: new Map(),"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 38,
+      "state": "const byId = new Map(executable.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 40,
+      "state": "const incomingCount = new Map(executable.map((node) => [node.id, 0]));"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 124,
+      "state": "const byId = new Map(flow.nodes.map((candidate) => [candidate.id, candidate]));"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 174,
+      "state": "const byId = new Map(flow.nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 214,
+      "state": "const flowsById = new Map(allFlows.map((candidate) => [candidate.id, candidate]));"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 220,
+      "state": "const byExecution = new Map(wave.nodes.map((node) => [node.executionId, node]));"
+    },
+    {
+      "file": "src/backend/services/flow/explainFlow.ts",
+      "line": 267,
+      "state": "const flowsById = new Map(allFlows.map((candidate) => [candidate.id, candidate]));"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 86,
+      "state": "// worked. Same reasoning as SchedulerService's `global.__flujo_scheduler` and the"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 88,
+      "state": "declare global {"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 98,
+      "state": "return global.__flujo_flowsCacheByWorkspace ??"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 99,
+      "state": "(global.__flujo_flowsCacheByWorkspace = new Map());"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 103,
+      "state": "return global.__flujo_flowsMigrationByWorkspace ??"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 104,
+      "state": "(global.__flujo_flowsMigrationByWorkspace = new Map());"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 136,
+      "state": "? global.__flujo_flowsMigration"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 145,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = undefined;"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 152,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = migration;"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 176,
+      "state": "? global.__flujo_flowsCache ?? null"
+    },
+    {
+      "file": "src/backend/services/flow/index.ts",
+      "line": 181,
+      "state": "if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsCache = value;"
+    },
+    {
+      "file": "src/backend/services/flow/generateFlow.ts",
+      "line": 751,
+      "state": "const references = new Map("
+    },
+    {
+      "file": "src/backend/services/flow/defaultAgent.ts",
+      "line": 138,
+      "state": "const byServer = new Map(mcpNodes.map((node) => ["
+    },
+    {
+      "file": "src/backend/services/flow/assistedAuthoring.ts",
+      "line": 246,
+      "state": "const available = new Map(connected.map((server) => [server.name, new Set((server.tools ?? []).map((tool) => tool.name))]));"
+    },
+    {
+      "file": "src/backend/services/flow/assistedAuthoring.ts",
+      "line": 358,
+      "state": "const availableById = new Map(availableAgents.map((agent) => [agent.id, agent]));"
+    },
+    {
+      "file": "src/backend/services/flow/assistedAuthoring.ts",
+      "line": 406,
+      "state": "const nodesById = new Map(flow.nodes.map((node) => [node.id, node]));"
+    },
+    {
+      "file": "src/backend/services/flow/assistedAuthoring.ts",
+      "line": 616,
+      "state": "const validNodeIds = new Map(flows.map(({ flow }) => [flow.id, new Set(flow.nodes.map((node) => node.id))]));"
+    }
+  ],
+  "routes": [
+    "src/app/mcp-flows/route.ts",
+    "src/app/mcp-proxy/[server]/route.ts",
+    "src/app/api/workspaces/route.ts",
+    "src/app/v1/tasks/[taskId]/route.ts",
+    "src/app/api/worker/status/route.ts",
+    "src/app/api/browse/route.ts",
+    "src/app/api/backup/route.ts",
+    "src/app/v1/roles/[roleId]/versions/route.ts",
+    "src/app/v1/roles/[roleId]/route.ts",
+    "src/app/api/packages/uninstall/route.ts",
+    "src/app/api/webhooks/[id]/route.ts",
+    "src/app/api/automation-map/route.ts",
+    "src/app/v1/roles/[roleId]/rollback/route.ts",
+    "src/app/api/waves/route.ts",
+    "src/app/api/packages/search/route.ts",
+    "src/app/v1/roles/[roleId]/restore/route.ts",
+    "src/app/api/update/route.ts",
+    "src/app/api/approvals/[id]/route.ts",
+    "src/app/api/approvals/route.ts",
+    "src/app/api/packages/scan-targets/route.ts",
+    "src/app/v1/roles/[roleId]/impact/route.ts",
+    "src/app/api/cwd/route.ts",
+    "src/app/v1/roles/[roleId]/duplicate/route.ts",
+    "src/app/v1/roles/route.ts",
+    "src/app/api/cloud/instance/route.ts",
+    "src/app/api/bugs/enhance/route.ts",
+    "src/app/api/transcription/route.ts",
+    "src/app/api/packages/resolve/route.ts",
+    "src/app/api/init/route.ts",
+    "src/app/api/model/[id]/route.ts",
+    "src/app/api/packages/installed/route.ts",
+    "src/app/api/git/route.ts",
+    "src/app/api/tickets/[id]/route.ts",
+    "src/app/api/tickets/route.ts",
+    "src/app/api/model/test/route.ts",
+    "src/app/api/model/route.ts",
+    "src/app/api/model/provider/route.ts",
+    "src/app/api/telemetry/daily-active/route.ts",
+    "src/app/v1/personas/[personaId]/work-items/[workItemId]/route.ts",
+    "src/app/api/flow/[id]/versions/[versionId]/route.ts",
+    "src/app/api/flow/[id]/versions/route.ts",
+    "src/app/api/flow/[id]/route.ts",
+    "src/app/api/storage/route.ts",
+    "src/app/api/oauth/reset/route.ts",
+    "src/app/api/encryption/secure/route.ts",
+    "src/app/api/oauth/initiate/route.ts",
+    "src/app/api/statistics/route.ts",
+    "src/app/api/env/route.ts",
+    "src/app/v1/personas/[personaId]/work-items/[workItemId]/control/route.ts",
+    "src/app/api/flow/improve/route.ts",
+    "src/app/api/oauth/callback/route.ts",
+    "src/app/v1/personas/[personaId]/work-items/[workItemId]/assign/route.ts",
+    "src/app/v1/personas/[personaId]/work-items/route.ts",
+    "src/app/api/network-exposure/route.ts",
+    "src/app/api/snapshots/route.ts",
+    "src/app/api/flow/generator/route.ts",
+    "src/app/api/packages/build/route.ts",
+    "src/app/v1/personas/[personaId]/work-items/promote-todo/route.ts",
+    "src/app/api/packages/derive-secrets/route.ts",
+    "src/app/api/snapshots/open-folder/route.ts",
+    "src/app/v1/personas/[personaId]/storage-stats/route.ts",
+    "src/app/api/runs/active/route.ts",
+    "src/app/v1/personas/[personaId]/runtime-recovery/route.ts",
+    "src/app/v1/personas/[personaId]/route.ts",
+    "src/app/api/reference-search/files/route.ts",
+    "src/app/api/snapshots/cleanup/route.ts",
+    "src/app/api/restore/route.ts",
+    "src/app/api/flow/generate/visual/route.ts",
+    "src/app/api/flow/generate/route.ts",
+    "src/app/v1/personas/[personaId]/memories/[memoryId]/route.ts",
+    "src/app/api/flow/compile/route.ts",
+    "src/app/api/registry/settings/route.ts",
+    "src/app/v1/personas/[personaId]/memories/[memoryId]/resolve-conflict/route.ts",
+    "src/app/api/flow/assist/route.ts",
+    "src/app/api/registry/publish/route.ts",
+    "src/app/v1/personas/[personaId]/memories/[memoryId]/pin/route.ts",
+    "src/app/api/registry/packages/route.ts",
+    "src/app/v1/personas/[personaId]/memories/[memoryId]/correct/route.ts",
+    "src/app/v1/personas/[personaId]/memories/[memoryId]/activate/route.ts",
+    "src/app/v1/personas/[personaId]/memories/route.ts",
+    "src/app/api/flow/quick-chat/route.ts",
+    "src/app/api/snapshot/status/route.ts",
+    "src/app/api/flow/prompt-renderer/route.ts",
+    "src/app/api/registry/oauth/initiate/route.ts",
+    "src/app/api/registry/oauth/callback/route.ts",
+    "src/app/api/registry/feedback/route.ts",
+    "src/app/api/flow/model-agent/route.ts",
+    "src/app/api/planned-executions/[id]/runs/route.ts",
+    "src/app/api/snapshot/info/route.ts",
+    "src/app/api/registry/auth/route.ts",
+    "src/app/api/snapshot/finalize/route.ts",
+    "src/app/api/registry/auth/reset/route.ts",
+    "src/app/api/snapshot/download/route.ts",
+    "src/app/api/registry/auth/resend/route.ts",
+    "src/app/api/snapshot/begin/route.ts",
+    "src/app/api/flow/repair/route.ts",
+    "src/app/api/flow/route.ts",
+    "src/app/api/setup/ai-cli/route.ts",
+    "src/app/api/flow/[id]/convert-process-to-subflow/route.ts",
+    "src/app/api/runtime-environment/route.ts",
+    "src/app/api/planned-executions/[id]/run/route.ts",
+    "src/app/api/planned-executions/[id]/route.ts",
+    "src/app/api/planned-executions/route.ts",
+    "src/app/v1/personas/settings-options/route.ts",
+    "src/app/v1/personas/route.ts",
+    "src/app/api/snapshot/abort/route.ts",
+    "src/app/api/planned-executions/reconcile/route.ts",
+    "src/app/v1/personas/readiness/route.ts",
+    "src/app/v1/personas/[personaId]/composition/route.ts",
+    "src/app/api/planned-executions/preview-schedule/route.ts",
+    "src/app/v1/persona-drafts/[draftId]/route.ts",
+    "src/app/v1/persona-drafts/route.ts",
+    "src/app/v1/personas/[personaId]/composition/copy/route.ts",
+    "src/app/api/persona-recovery/route.ts",
+    "src/app/v1/models/route.ts",
+    "src/app/v1/personas/[personaId]/composition/behaviors/route.ts",
+    "src/app/api/local-models/suggest/route.ts",
+    "src/app/api/packages/install/status/route.ts",
+    "src/app/api/packages/install/route.ts",
+    "src/app/v1/meetings/[meetingId]/start/route.ts",
+    "src/app/v1/meetings/[meetingId]/route.ts",
+    "src/app/api/local-models/pull/route.ts",
+    "src/app/v1/personas/summary/route.ts",
+    "src/app/v1/flows/[flowRef]/readiness/route.ts",
+    "src/app/v1/meetings/[meetingId]/resume/route.ts",
+    "src/app/api/local-models/capability/route.ts",
+    "src/app/v1/personas/[personaId]/behaviors/[behaviorId]/activate/route.ts",
+    "src/app/v1/meetings/[meetingId]/private-notes/route.ts",
+    "src/app/v1/meetings/[meetingId]/cancel/route.ts",
+    "src/app/v1/meetings/route.ts",
+    "src/app/v1/personas/[personaId]/execution-preview/route.ts",
+    "src/app/v1/meetings/[meetingId]/interventions/route.ts",
+    "src/app/v1/chat/conversation-chains/route.ts",
+    "src/app/v1/personas/[personaId]/app-grants/[grantId]/route.ts",
+    "src/app/v1/personas/[personaId]/deletion-preview/route.ts",
+    "src/app/v1/meetings/[meetingId]/events/route.ts",
+    "src/app/v1/personas/[personaId]/app-grants/route.ts",
+    "src/app/api/mcp-registry/spotlight/route.ts",
+    "src/app/api/mcp-registry/route.ts",
+    "src/app/v1/personas/[personaId]/app-grants/[grantId]/launch/route.ts",
+    "src/app/v1/chat/completions/route.ts",
+    "src/app/v1/chat/events/route.ts",
+    "src/app/v1/personas/[personaId]/improvements/route.ts",
+    "src/app/v1/personas/[personaId]/export-preview/route.ts",
+    "src/app/v1/personas/[personaId]/export/route.ts",
+    "src/app/v1/chat/conversations/route.ts",
+    "src/app/v1/personas/[personaId]/improvements/[proposalId]/undo/route.ts",
+    "src/app/v1/personas/[personaId]/improvements/[proposalId]/reject/route.ts",
+    "src/app/v1/personas/[personaId]/improvements/[proposalId]/promote/route.ts",
+    "src/app/v1/personas/[personaId]/improvements/[proposalId]/apply/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/wire-preview/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/route.ts",
+    "src/app/api/mcp/cancel/route.ts",
+    "src/app/api/mcp/test-connection/stream/route.ts",
+    "src/app/api/mcp/test-connection/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/revert/route.ts",
+    "src/app/api/mcp/assistant/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/respond/route.ts",
+    "src/app/api/mcp/app-sandbox/route.ts",
+    "src/app/api/mcp/app-consent/route.ts",
+    "src/app/api/mcp/servers/[name]/resources/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/resources/[resourceId]/content/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/resources/route.ts",
+    "src/app/api/mcp/servers/[name]/resources/read/route.ts",
+    "src/app/api/mcp/servers/[name]/tools/[toolName]/stream/route.ts",
+    "src/app/api/mcp/servers/[name]/tools/[toolName]/route.ts",
+    "src/app/api/mcp/servers/[name]/tools/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/recovery/route.ts",
+    "src/app/api/mcp/servers/[name]/prompts/route.ts",
+    "src/app/api/mcp/servers/[name]/prompts/get/route.ts",
+    "src/app/api/mcp/servers/route.ts",
+    "src/app/api/mcp/servers/[name]/stdio-oauth/start/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/route.ts",
+    "src/app/api/mcp/oauth-capability/route.ts",
+    "src/app/api/mcp/servers/[name]/stdio-oauth/confirm/route.ts",
+    "src/app/api/mcp/servers/[name]/route.ts",
+    "src/app/api/mcp/servers/[name]/status/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/edit-state/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/media/[mediaId]/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/model-turns/route.ts",
+    "src/app/api/mcp/flujo/tools/route.ts",
+    "src/app/api/mcp/servers/[name]/skills/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/inject/route.ts",
+    "src/app/api/mcp/servers/[name]/skills/load/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/cancel/route.ts",
+    "src/app/api/mcp/flujo/flows/route.ts",
+    "src/app/api/mcp/servers/[name]/skills/get/route.ts",
+    "src/app/api/mcp/flujo/authoring/route.ts",
+    "src/app/api/mcp/flujo/automation/route.ts",
+    "src/app/api/mcp/servers/[name]/skills/approve/route.ts",
+    "src/app/api/mcp/flujo/servers/route.ts",
+    "src/app/api/mcp/flujo/skills/route.ts",
+    "src/app/api/mcp/flujo/state/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/events/route.ts",
+    "src/app/api/mcp/flujo/resources/route.ts",
+    "src/app/api/mcp/flujo/resources/read/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/debug/step/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/debug/state/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/debug/attach/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/breakpoints/route.ts",
+    "src/app/v1/chat/conversations/[conversationId]/debug/continue/route.ts"
+  ],
+  "stateBoundary": "Every listed state occurrence stays in a dedicated owner runtime; must never load in a shared controller. Semantic and OS/runtime qualification pending #574.",
+  "routeBoundary": "Every listed route requires initiating principal/current resource grants before private runtime dispatch. Unknown methods deny. Implementation not verified."
+}

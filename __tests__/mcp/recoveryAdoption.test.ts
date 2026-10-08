@@ -30,6 +30,8 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 }));
 
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: jest.fn(),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),

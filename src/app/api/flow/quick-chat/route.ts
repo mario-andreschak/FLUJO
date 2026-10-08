@@ -39,6 +39,7 @@ async function POST_handler(request: NextRequest) {
       modelId?: string;
       servers?: Array<{ name?: string; enabledTools?: string[] }>;
       systemPrompt?: string;
+      runArtifactName?: string;
       conversationId?: string;
     } | null;
 
@@ -58,6 +59,7 @@ async function POST_handler(request: NextRequest) {
         .filter((s): s is { name: string; enabledTools?: string[] } => typeof s?.name === 'string')
         .map((s) => ({ name: s.name, enabledTools: s.enabledTools })),
       systemPrompt: body.systemPrompt,
+      runArtifactName: body.runArtifactName,
     });
 
     if (!built.success) {
