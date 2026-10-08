@@ -36,6 +36,7 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createPersonaNativeOriginalHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { flowService } from '@/backend/services/flow';
 
 let directory: string;
 let previousData: string | undefined;
@@ -121,11 +122,11 @@ afterEach(async () => {
 });
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
-  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' = false) {
+  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
-    if (production === 'no-handoff') {
+    if (production === 'no-handoff' || production === 'child') {
       await ensureTestRole();
       const version = buildTestRoleVersion();
       version.id = 'rolever_native_no_handoff_v2';
@@ -135,6 +136,17 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       const core = version.coreFlowTemplate!;
       core.nodes = core.nodes.filter(node => node.data.type !== 'finish');
       core.edges = core.edges.filter(edge => edge.target !== 'test_core_finish');
+      if (production === 'child') {
+        const child = structuredClone(core);
+        child.id = 'native_pinned_child';
+        child.name = 'Pinned native child';
+        child.nodes.find(node => node.data.type === 'process')!.data.properties!.boundModel = 'model-test';
+        expect((await flowService.saveFlow(child)).success).toBe(true);
+        const call = core.nodes.find(node => node.data.type === 'process')!;
+        call.type = 'subflow';
+        call.data.type = 'subflow';
+        call.data.properties = { subflowId: child.id, inputMode: 'isolated', promptTemplate: 'Offline child task' };
+      }
       roleVersionId = (await createRoleVersion(version)).id;
     }
     const { persona } = await createPersonaFromRole({ name: 'Native host fixture', idempotencyKey: 'native-host-persona', autonomyLevel: 'locked', roleVersionId });
@@ -204,6 +216,32 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
+    let rootConversation: string | undefined;
+    let rootRun: string | undefined;
+    await withClaim(async input => {
+      rootConversation = input.conversationId;
+      rootRun = input.runId;
+      expect(input.flowDefinition!.executionDependencies!.flows.map(entry => entry.flowId)).toContain('native_pinned_child');
+    }, async (_personaId, goalId) => {
+      expect(promptCount).toBe(1);
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(children).toHaveLength(1);
+      expect(children[0].exitCode).toBe(0);
+      const saved = await ledger();
+      expect(saved.goalId).toBe(goalId);
+      expect(saved.reservations).toHaveLength(1);
+      const reservation = saved.reservations[0];
+      expect(reservation.owner.conversationId).not.toBe(rootConversation);
+      expect(reservation.owner.runId).not.toBe(rootRun);
+      expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+        sdkUsage: { source: 'claude-sdk-result', inputTokens: 7, outputTokens: 4 }, exit: { code: 0, signal: null } });
+      expect(reservation.identity.processBirthMarkerV2).toBeTruthy();
+      const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+      expect(child).toMatchObject({ parentConversationId: rootConversation, parentLogicalRunId: rootRun,
+        rootConversationId: rootConversation, flowId: 'native_pinned_child', runDepth: 1 });
+    }, 'child');
+  }, 30000);
   it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
     await withClaim(async input => {
       const { invoke, state } = await prepare(input);
