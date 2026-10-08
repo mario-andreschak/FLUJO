@@ -99,6 +99,12 @@ async function command(message) {
   let result;
   switch (message.action) {
     case 'list': result = await scheduler.list(); break;
+    case 'diagnose': {
+      try {
+        result = require('./workerFailureEvidence.cjs').projectWorkerFailureEvidence(await scheduler.list(), message.planId);
+      } catch { result = { plan: 'unavailable' }; }
+      break;
+    }
     case 'create': {
       // A real persisted Flow is required. The parent cannot submit executable
       // code through this protocol; it chooses a flow captured in its snapshot.

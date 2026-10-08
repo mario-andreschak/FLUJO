@@ -37,3 +37,14 @@ have exited. That requires actual descendant ownership/exit evidence in the
 separate watchdog acceptance fixture, not a simulated ACK or readiness flag.
 These remain separate #553 acceptance gaps. Package-runner review commitments
 also remain separate from actual protected resolver/launch enforcement.
+# Failure diagnostics (Source only)
+
+The unchanged 75-second effect wait requests at most three actual scheduler
+list/lastRun observations, with each diagnostic wait capped at 500 milliseconds
+inside the original deadline. Output contains only fixed categories: arming,
+running, local-recovery reason/pending state, last-run status/terminal presence,
+and bounded trigger/Static MCP failure classifications. It emits no raw error,
+tool arguments, result, credentials, paths or run identifiers. Unavailable
+diagnostics do not replace the primary missing-effect failure. These observations
+do not identify an active engine's internal stage or prove a causal diagnosis.
+

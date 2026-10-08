@@ -117,14 +117,14 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
     }
     throw new Error(`Worker witness timed out: ${diagnostic}`);
   }
-  async function request(action: string, fields: Reply = {}) {
+  async function request(action: string, fields: Reply = {}, timeout = 60_000) {
     context.controller.signal.throwIfAborted();
     const id = randomUUID();
-    if (action !== 'list') phaseDiagnostic(`request-${action}-enter`);
-    child.send({ id, action, ...fields }, error => { if (error) observed.error = error; });
-    const reply = await wait(message => message.id === id);
+    if (action !== 'list' && action !== 'diagnose') phaseDiagnostic(`request-${action}-enter`);
+    child.send({ id, action, ...fields }, error => { if (error && action !== 'diagnose') observed.error = error; });
+    const reply = await wait(message => message.id === id, timeout);
     if (reply.error) throw new Error(reply.error);
-    if (action !== 'list') phaseDiagnostic(`request-${action}-ready`);
+    if (action !== 'list' && action !== 'diagnose') phaseDiagnostic(`request-${action}-ready`);
     return reply.result;
   }
   async function exit(timeout = 15_000) {
@@ -151,12 +151,26 @@ async function effects(journal: string) {
   try { return (await fs.readFile(journal, { encoding: 'utf8', signal })).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
 }
-async function waitEffect(journal: string, count: number) {
+async function waitEffect(journal: string, count: number, worker: ReturnType<typeof launch>, planId: string) {
   phase('effect-enter');
   const deadline = Date.now() + 75_000;
+  const checkpoints = [0, 25_000, 65_000];
+  const entered = Date.now();
   while (Date.now() < deadline) {
     const observed = await effects(journal);
     if (observed.length >= count) { expect(observed).toHaveLength(count); phase('effect-ready'); return; }
+    if (checkpoints.length && Date.now() - entered >= checkpoints[0]) {
+      checkpoints.shift();
+      try {
+        const evidence = await worker.request('diagnose', { planId }, Math.max(1, Math.min(500, deadline - Date.now())));
+        // The child projects actual scheduler/lastRun observations to closed
+        // categories. Diagnostic formatting/console failures cannot fail case.
+        try { console.info(JSON.stringify({ workerFailureEvidence: evidence, elapsedMs: Date.now() - entered })); } catch {}
+      } catch {
+        currentCase().controller.signal.throwIfAborted();
+        phase('failure-evidence-unavailable');
+      }
+    }
     await delay(100);
   }
   throw new Error('Actual scheduled Bash effect was not observed');
@@ -251,7 +265,7 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   expect(boot.plans.find((row: Reply) => row.execution.id === 'copied-plan').status.workerRecovery.eligible).toBe(false);
   const planId = randomUUID();
   await worker.request('create', { planId, flowId: snapshot.flowId });
-  await waitEffect(snapshot.journal, 1);
+  await waitEffect(snapshot.journal, 1, worker, planId);
   const firstRun = await waitTerminal(worker, planId);
   await worker.request('start-again'); await worker.request('start-again');
   expect(await effects(snapshot.journal)).toHaveLength(1);
@@ -264,7 +278,7 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   await crossMinute();
   worker = launch(data, workerEnv);
   await worker.wait(message => message.phase === 'bootstrapped');
-  await waitEffect(snapshot.journal, 2);
+  await waitEffect(snapshot.journal, 2, worker, planId);
   await waitTerminal(worker, planId, firstRun);
   await worker.request('pause', { paused: true });
   await worker.request('stop'); await worker.exit();
