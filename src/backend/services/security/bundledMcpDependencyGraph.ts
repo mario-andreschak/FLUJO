@@ -42,10 +42,12 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
   const identities = new Map<string, fs.BigIntStats>();
   let members = 0, bytes = 0;
   const live = () => { if (signal?.aborted) throw new Error('Dependency inspection cancelled.'); };
-  const read = async (filename: string, maximum: number): Promise<Buffer> => {
+  const read = async (filename: string, maximum: number, hashOnly = false): Promise<{ content?: Buffer; digest: string }> => {
     live();
     const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     const chunks: Buffer[] = [];
+    const buffer = Buffer.alloc(64 * 1024);
+    const hash = createHash('sha256');
     try {
       const before = await handle.stat({ bigint: true });
       if (!before.isFile() || before.nlink !== BigInt(1) || before.size > BigInt(maximum)) throw new Error('Dependency asset exceeds its bounds.');
@@ -56,19 +58,19 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
       let length = 0;
       while (true) {
         live();
-        const chunk = Buffer.allocUnsafe(64 * 1024);
-        const result = await handle.read(chunk, 0, chunk.length, null);
+        const result = await handle.read(buffer, 0, buffer.length, null);
         if (!result.bytesRead) break;
         length += result.bytesRead;
         if (length > maximum) throw new Error('Dependency asset exceeds its bounds.');
-        chunks.push(chunk.subarray(0, result.bytesRead));
+        hash.update(buffer.subarray(0, result.bytesRead));
+        if (!hashOnly) chunks.push(Buffer.from(buffer.subarray(0, result.bytesRead)));
       }
       await linkFree(filename);
       if (BigInt(length) !== before.size || !same(before, await handle.stat({ bigint: true }))
           || !same(before, await fs.promises.lstat(filename, { bigint: true }))) throw new Error('Dependency asset changed.');
       identities.set(filename, before);
-      return Buffer.concat(chunks);
-    } finally { for (const chunk of chunks) chunk.fill(0); await handle.close(); }
+      return { content: hashOnly ? undefined : Buffer.concat(chunks), digest: hash.digest('hex') };
+    } finally { buffer.fill(0); for (const chunk of chunks) chunk.fill(0); await handle.close(); }
   };
   while (pending.length) {
     live();
@@ -79,8 +81,9 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
     if (visited.size > 256) throw new Error('Dependency graph exceeds its package bound.');
     await linkFree(directory);
     const manifestFile = path.join(directory, 'package.json');
-    const manifestBytes = await read(manifestFile, 64 * 1024);
-    const manifestDigest = createHash('sha256').update(manifestBytes).digest('hex');
+    const manifestRead = await read(manifestFile, 64 * 1024);
+    const manifestBytes = manifestRead.content!;
+    const manifestDigest = manifestRead.digest;
     let manifest: { dependencies?: Record<string, unknown>; optionalDependencies?: Record<string, unknown>; peerDependencies?: Record<string, unknown> };
     try { manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes)); }
     finally { manifestBytes.fill(0); }
@@ -111,13 +114,10 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
           const length = Number(stat.size);
           bytes += length;
           if (bytes > MAX_BYTES) throw new Error('Dependency graph exceeds its byte bound.');
-          const content = await read(filename, length);
-          try {
-            if (!same(stat, identities.get(filename)!)) throw new Error('Dependency member changed before reading.');
-            const digest = createHash('sha256').update(content).digest('hex');
-            if (filename === manifestFile && digest !== manifestDigest) throw new Error('Parsed dependency manifest differs from the fingerprinted manifest.');
-            return { filename, stat, digest };
-          } finally { content.fill(0); }
+          const { digest } = await read(filename, length, true);
+          if (!same(stat, identities.get(filename)!)) throw new Error('Dependency member changed before reading.');
+          if (filename === manifestFile && digest !== manifestDigest) throw new Error('Parsed dependency manifest differs from the fingerprinted manifest.');
+          return { filename, stat, digest };
         }));
         for (const entry of entries) {
           if (entry.digest === undefined) await walk(entry.filename);
