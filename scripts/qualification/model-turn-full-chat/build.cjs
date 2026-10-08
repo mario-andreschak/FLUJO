@@ -10,7 +10,7 @@ const head = cp.execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8
 webpack({ mode: 'production', target: 'web', context: root,
   entry: path.join(__dirname, 'entry.tsx'), output: { path: base, filename: 'bundle.js' },
   resolve: { extensions: ['.tsx','.ts','.js','.json'], alias: { '@': path.join(root,'src') }, modules: [path.join(root,'node_modules')] },
-  module: { rules: [{ test: /\.tsx?$/, use: path.join(__dirname,'loader.cjs') }] },
+  module: { rules: [{ test: /\.tsx?$/, use: path.join(__dirname,'loader.cjs') }, { test: /\.css$/, use: path.join(__dirname,'css-loader.cjs') }] },
   optimization: { minimize: false },
   plugins: [new webpack.DefinePlugin({ 'process.env.NODE_ENV': JSON.stringify('production'), 'process.env': '{}' })],
 }, (error, stats) => {
