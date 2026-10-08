@@ -9,7 +9,14 @@ const inspect = String.raw`
 $ErrorActionPreference = 'Stop'
 $phase = 'input'
 try {
-$request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+# Avoid PowerShell utility-module autoload for JSON on every fresh inspection.
+# Bind the system framework assembly by its complete strong name; no user path,
+# profile, module, or request-selected assembly participates in resolution.
+[void][Reflection.Assembly]::Load('System.Web.Extensions, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')
+$json = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+$json.MaxJsonLength = 65536
+$json.RecursionLimit = 16
+$request = $json.DeserializeObject([Console]::In.ReadToEnd())
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $allowed = @($identity.User.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 $records = [Collections.Generic.List[string]]::new()
@@ -47,7 +54,7 @@ while ($null -ne $current) {
   $file = $false
 }
 }
-[pscustomobject]@{schemaVersion=1; records=$records.ToArray()} | ConvertTo-Json -Compress
+[Console]::Out.WriteLine($json.Serialize(@{schemaVersion=1; records=$records.ToArray()}))
 } catch {
   [Console]::Error.WriteLine('FLUJO_AUTHORITY_REFUSED:' + $phase)
   exit 1
