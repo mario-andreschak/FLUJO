@@ -44,8 +44,10 @@ async function shutdown() {
   }
   if (failures.length) {
     stopping = false; // Disconnect may retry actual cleanup; an ACK is withheld.
+    send({ phase: 'cleanup-failed', error: failures.map(error => String(error.stack || error)).join('\n') });
     throw new AggregateError(failures, 'Worker fixture shutdown/owner cleanup failed');
   }
+  send({ phase: 'cleanup-completed' });
 }
 
 async function command(message) {
@@ -156,6 +158,7 @@ async function command(message) {
     finally { if (captured.dispose) await captured.dispose(); }
     send({ phase: 'seeded', archivePath: written.archivePath, stagingDir: written.stagingDir,
       sha256: written.sha256, key, workspace, flowId: compiled.flow.id, journal });
+    send({ phase: 'cleanup-completed' }); // Captured owned descriptors were disposed above; no worker was started.
     stopping = true;
     if (process.connected) process.disconnect();
     return;

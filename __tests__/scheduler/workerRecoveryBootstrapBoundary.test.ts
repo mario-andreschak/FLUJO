@@ -10,7 +10,8 @@ jest.setTimeout(420_000);
 type Reply = Record<string, any>;
 const children: ChildProcess[] = [];
 const lifecycle = new WeakMap<ChildProcess, {
-  exited: boolean; closed: boolean; stdoutEnded: boolean; stderrEnded: boolean; error?: Error;
+  exited: boolean; closed: boolean; stdoutEnded: boolean; stderrEnded: boolean;
+  cleanupConfirmed: boolean; cleanupUncertain: boolean; error?: Error;
 }>();
 let sandbox: string;
 let stagingDir: string | undefined;
@@ -25,6 +26,7 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
       FLUJO_EXPOSURE_MODE: 'localhost', FLUJO_DATA_DIR: data, ...env } });
   children.push(child);
   const observed = { exited: false, closed: false, stdoutEnded: false, stderrEnded: false,
+    cleanupConfirmed: false, cleanupUncertain: false,
     error: undefined as Error | undefined };
   lifecycle.set(child, observed);
   // Install all lifecycle/error observers immediately, before protocol waits.
@@ -40,7 +42,15 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   child.stderr!.on('data', chunk => { diagnostic = (diagnostic + String(chunk)).slice(-16_384); });
   // Application stdout is deliberately not parsed as a protocol or readiness.
   child.stdout!.resume();
-  child.on('message', message => messages.push(message as Reply));
+  child.on('message', message => {
+    const reply = message as Reply;
+    if (reply.phase === 'cleanup-failed') { observed.cleanupUncertain = true; observed.cleanupConfirmed = false; }
+    if (reply.phase === 'cleanup-completed') {
+      // Only a successful actual backend/owner cleanup attempt emits this.
+      observed.cleanupUncertain = false; observed.cleanupConfirmed = true;
+    }
+    messages.push(reply);
+  });
   async function wait(predicate: (reply: Reply) => boolean, timeout = 60_000): Promise<Reply> {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
@@ -126,6 +136,13 @@ afterEach(async () => {
   }
   if (children.some(incomplete)) {
     throw new Error(`Owned child exit/close/stdio unresolved; preserving fixture at ${sandbox}`);
+  }
+  if (children.some(child => {
+    const observed = lifecycle.get(child)!;
+    const failedSpawn = observed.error && child.pid === undefined;
+    return !failedSpawn && (observed.error || observed.cleanupUncertain || !observed.cleanupConfirmed);
+  })) {
+    throw new Error(`Owned cleanup uncertain despite child close; preserving fixture/staging at ${sandbox}`);
   }
   children.length = 0;
   for (const [directory, prefix] of [[sandbox, 'flujo-worker-bootstrap-'], [stagingDir, 'flujo-hot-clone-'],
