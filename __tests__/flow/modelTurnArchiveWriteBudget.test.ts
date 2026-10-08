@@ -123,16 +123,16 @@ describe('archive write allocation ownership', () => {
     expect(called).not.toHaveBeenCalled();
   });
 
-  it('keeps a failed close quarantined until the original descriptor actually closes', async () => {
-    jest.useFakeTimers();
-    const close = jest.fn().mockRejectedValueOnce(new Error('close failed')).mockResolvedValue(undefined);
-    await expect(withArchiveWriteMemory('history', async () => {
-      await closeArchiveWriteHandle({ close } as unknown as FileHandle);
-    })).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP' });
-    expect(getArchiveWritePressure()).toMatchObject({ writers: 1, quarantined: 1 });
-    await jest.advanceTimersByTimeAsync(500);
-    expect(close).toHaveBeenCalledTimes(2);
-    expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
+  it('surfaces unscoped ambiguous close as typed uncertainty without retrying a cached close promise', async () => {
+    const close = jest.fn().mockRejectedValue(new Error('close failed'));
+    await expect(closeArchiveWriteHandle({ close } as unknown as FileHandle))
+      .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP' });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('charges repeated references for each serialization occurrence', () => {
+    const shared = { text: 'retained'.repeat(100) };
+    expect(estimateArchivePayload([shared, shared])).toBeGreaterThan(estimateArchivePayload([shared]) * 1.8);
   });
 
   it('propagates typed refusal through the SDK boundary with zero provider calls', async () => {

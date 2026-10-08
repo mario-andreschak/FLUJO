@@ -2,6 +2,18 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants, promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { types } from 'node:util';
+import { z } from 'zod';
+
+export function archiveOmission(key: string): string | undefined {
+  if (/(api[_-]?key|authorization|cookie|(?:^|[_-])(?:access[_-]?|refresh[_-]?|oauth[_-]?)?token$|secret|password|signature)/i.test(key)) return '[redacted]';
+  if (key === 'env') return '[environment omitted]';
+  if (key === 'abortController') return '[AbortController]';
+  if (key === 'signal' || key === 'abortSignal') return '[AbortSignal]';
+}
+
+export function isArchiveSchema(value: object): value is z.ZodType {
+  return !types.isProxy(value) && value instanceof z.ZodType;
+}
 
 /** Proposed allocation reservations, not measured V8 heap or an OOM guarantee. */
 export const MODEL_TURN_ARCHIVE_WRITE_LIMITS = Object.freeze({
@@ -38,7 +50,7 @@ function refuse(code: ModelTurnArchiveMemoryError['code']): never {
 }
 
 /** Bounded descriptor walk: no stringify, getters, JSON hooks, or full clones. */
-export function estimateArchivePayload(value: unknown): number {
+export function estimateArchivePayload(value: unknown, schemaFound?: () => void, archiveProjection = false): number {
   let bytes = 0;
   let inspected = 0;
   const seen = new WeakSet<object>();
@@ -69,15 +81,17 @@ export function estimateArchivePayload(value: unknown): number {
     }
     if (!item || typeof item !== 'object') { add(32); return; }
     if (types.isProxy(item)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
-    if (seen.has(item)) return;
+    if (seen.has(item)) { add(32); return; }
     seen.add(item);
     add(128);
-    if (ArrayBuffer.isView(item)) { add(item.buffer.byteLength); return; }
-    if (item instanceof ArrayBuffer) { add(item.byteLength); return; }
+    if (archiveProjection && isArchiveSchema(item)) { schemaFound?.(); seen.delete(item); return; }
+    if (ArrayBuffer.isView(item)) { add(item.buffer.byteLength); seen.delete(item); return; }
+    if (item instanceof ArrayBuffer) { add(item.byteLength); seen.delete(item); return; }
     // Map/Set and arbitrary private graphs are not an admitted archive format.
     const prototype = Object.getPrototypeOf(item);
     if (prototype !== Object.prototype && prototype !== null && prototype !== Array.prototype) {
-      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      if (!archiveProjection) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      seen.delete(item); return; // Sanitizer omits private graphs without traversal.
     }
     if (Array.isArray(item) && item.length > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues) {
       refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
@@ -87,10 +101,13 @@ export function estimateArchivePayload(value: unknown): number {
       if (++inspected > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
       const descriptor = Object.getOwnPropertyDescriptor(item, key);
       if (!descriptor) continue;
+      const omitted = archiveProjection ? archiveOmission(key) : undefined;
+      if (omitted !== undefined) { add(key.length * 2 + 128); continue; }
       if (!('value' in descriptor)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
       add(key.length * 2 + 32);
       visit(descriptor.value, depth + 1);
     }
+    seen.delete(item); // Count each serialization occurrence, not just identity.
   };
   visit(value, 0);
   return bytes;
@@ -137,7 +154,9 @@ export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Pr
   // Re-entrant or escaped AsyncLocalStorage work cannot borrow a spent permit.
   if (scopes.getStore()) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
   // Covers copied object/string views, serialization, UTF8 and compression work.
-  const reservedEstimate = estimateArchivePayload(payload) * 4;
+  let schema = false;
+  const estimate = estimateArchivePayload(payload, () => { schema = true; }, true) * 4;
+  const reservedEstimate = schema ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
   const reservation = reserve(reservedEstimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true);
   const scope: WriteScope = { reservation, reservedEstimate, pendingCloses: 0, settled: false };
   try { return await scopes.run(scope, task); }
@@ -151,7 +170,9 @@ export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Pr
 export function recheckArchiveWriteMemory(payload: unknown): void {
   const scope = scopes.getStore();
   if (!scope || scope.settled) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
-  const required = estimateArchivePayload(payload) * 4;
+  let schema = false;
+  const estimate = estimateArchivePayload(payload, () => { schema = true; }, true) * 4;
+  const required = schema ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
   if (required > scope.reservedEstimate) {
     scope.reservation.grow(required - scope.reservedEstimate);
     scope.reservedEstimate = required;
@@ -163,22 +184,13 @@ export async function closeArchiveWriteHandle(handle: FileHandle, primary?: unkn
   try { await handle.close(); }
   catch (error) {
     const scope = scopes.getStore();
-    if (!scope) throw error;
-    scope.pendingCloses++;
-    ledger.quarantined++;
-    let attempts = 0;
-    const retry = async () => {
-      try {
-        await handle.close();
-        scope.pendingCloses--;
-        ledger.quarantined--;
-        if (scope.settled && !scope.pendingCloses) scope.reservation.release();
-      } catch {
-        if (++attempts < 8) setTimeout(retry, 500).unref();
-        // Original bounded admission remains quarantined after final failure.
-      }
-    };
-    setTimeout(retry, 500).unref();
+    if (scope) {
+      scope.pendingCloses++;
+      ledger.quarantined++;
+    }
+    // FileHandle may cache a rejected close promise. Repeating close is not
+    // proof of descriptor drainage; keep scoped admission until process exit.
+    // Outside a scope the same typed error preserves the uncertain temp file.
     throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_WRITE_CLEANUP',
       primary === undefined ? error : new AggregateError([primary, error], 'Archive operation and close failed'));
   }
