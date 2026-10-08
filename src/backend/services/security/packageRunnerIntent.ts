@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, scryptSync } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
@@ -63,8 +63,11 @@ export async function preparePackageRunnerIntent(config: MCPStdioConfig, input: 
   const request = requestIdentity(config);
   const evidence = await collect(config, preparation, signal);
   if (requestIdentity(config) !== request) throw new Error('Original package request changed during inspection');
-  const digest = createHash('sha256').update(JSON.stringify({ domain: 'flujo:package-runner-intent:v1',
-    request, preparation, evidence })).digest('hex');
+  // The request includes reviewed environment secrets. Preserve the slow-hash
+  // contract of consent review rather than expose a cheap dictionary oracle.
+  const digest = scryptSync(JSON.stringify({ domain: 'flujo:package-runner-intent:v1',
+    request, preparation, evidence }), JSON.stringify([getCurrentWorkspace(), config.name, preparation.revision]),
+  32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex');
   const intent = Object.freeze({ digest });
   intents.set(intent, { request, preparation, evidence });
   return intent;
