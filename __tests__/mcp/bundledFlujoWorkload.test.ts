@@ -287,7 +287,9 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       let acquired: number | undefined, failedStat = false;
       const opened = jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
         const fd = actualOpen(...args);
-        if (String(args[0]) === recordName && typeof args[1] === 'number' && (args[1] & fs.constants.O_RDWR) === 0 && acquired === undefined) acquired = fd;
+        const stack = new Error().stack ?? '';
+        if (String(args[0]) === recordName && typeof args[1] === 'number' && (args[1] & fs.constants.O_RDWR) === 0
+            && acquired === undefined && stack.includes('closeOwnedFile') && !stack.includes('readStableFile')) acquired = fd;
         return fd;
       });
       const stat = jest.spyOn(fs, 'fstatSync').mockImplementation((...args: Parameters<typeof fs.fstatSync>) => {
@@ -308,15 +310,27 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       foreignDescriptors.push(acquired!);
       expect(actualStat(acquired!).isFile()).toBe(true);
       const retryOpen = jest.spyOn(fs, 'openSync');
-      try { await expect(transport.close()).rejects.toThrow(); }
+      let retryRecordOpens = 0;
+      try { await expect(transport.close()).rejects.toThrow(); retryRecordOpens = retryOpen.mock.calls.filter(args => String(args[0]) === recordName).length; }
       finally { retryOpen.mockRestore(); }
-      expect(retryOpen.mock.calls.filter(args => String(args[0]) === recordName)).toEqual([]);
+      expect(retryRecordOpens).toBe(0);
       expect(actualStat(acquired!).isFile()).toBe(true);
       expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
       // The fixture owns this genuinely acquired handle. Closing it establishes
       // authoritative EBADF; no production clear or authority mock is involved.
       actualClose(acquired!); foreignDescriptors.pop();
-      expectedCloseCount = 3;
+      const unrelated = path.join(fixture, 'ambiguous-acquisition-foreign.json');
+      fs.writeFileSync(unrelated, '{"unrelated":"preserve"}');
+      for (let count = 0; count < 64; count++) {
+        const fd = actualOpen(unrelated, 'r'); foreignDescriptors.push(fd);
+        if (fd === acquired) break;
+      }
+      expect(foreignDescriptors).toContain(acquired);
+      await expect(transport.close()).rejects.toThrow();
+      for (const fd of foreignDescriptors) expect(actualStat(fd).isFile()).toBe(true);
+      for (const fd of foreignDescriptors) actualClose(fd);
+      foreignDescriptors.length = 0;
+      expectedCloseCount = 4;
     }
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
       const actualUnlink = fs.unlinkSync;
