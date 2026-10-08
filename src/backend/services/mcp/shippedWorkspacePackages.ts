@@ -5,6 +5,7 @@ import { constants, type BigIntStats } from 'node:fs';
 import * as nodeModule from 'node:module';
 import { SHIPPED_MCP_SERVERS, shippedMcpAppRoot } from './shippedServers';
 import { inspectBundledMcpDependencyGraph } from '../security/bundledMcpDependencyGraph';
+import { consentDiagnosticStage } from '../security/bundledConsentDiagnostic';
 
 // Application packages are templates. Copy only distributed code/build inputs,
 // never a developer's node_modules, Git checkout, profile, or runtime userdata.
@@ -154,6 +155,7 @@ async function dependencyLayout(appRoot: string, name: string) {
 
 /** Inspection only. Returned data is not consent or permission to execute. */
 export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, packageDirectory: string, appRoot = shippedMcpAppRoot()) {
+  return consentDiagnosticStage('ASSETS', async () => {
   if (!SHIPPED_MCP_SERVERS.some(item => item.packageDirectory === packageDirectory)) throw new Error('Unknown shipped package.');
   const installation = await fs.realpath(appRoot);
   await realDirectory(installation);
@@ -165,7 +167,8 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
   // userdata is excluded from that copy; snapshot edit detection stays broader.
   const [installed, copied] = await Promise.all([packageDigests(source, true), packageDigests(destination, true)]);
   if (installed.assetSha256 !== copied.assetSha256) throw new Error('Copied package differs from the installed revision.');
-  const layout = await dependencyLayout(installation, packageDirectory);
+  const layout = await consentDiagnosticStage('DEP_LAYOUT', () => dependencyLayout(installation, packageDirectory));
+  const { runtimeDependencies, dependencyNamespaceRoot } = await consentDiagnosticStage('DEP_LAYOUT', async () => {
   const runtimeManifest = JSON.parse(await fs.readFile(path.join(source, 'package.json'), 'utf8'));
   const runtimeNames = new Set(Object.keys({ ...runtimeManifest.dependencies, ...runtimeManifest.optionalDependencies }));
   const runtimeDependencies = layout.packages.filter(item => runtimeNames.has(item.name));
@@ -175,7 +178,10 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
     if (application.name !== 'flujo-ai') throw new Error('Unrecognized flattened application installation.');
     dependencyNamespaceRoot = await fs.realpath(path.dirname(installation));
   }
-  const dependencyGraph = await inspectBundledMcpDependencyGraph(dependencyNamespaceRoot, runtimeDependencies.map(item => item.directory));
+  return { runtimeDependencies, dependencyNamespaceRoot };
+  });
+  const dependencyGraph = await consentDiagnosticStage('DEP_GRAPH', () => inspectBundledMcpDependencyGraph(dependencyNamespaceRoot, runtimeDependencies.map(item => item.directory)));
+  const links = await consentDiagnosticStage('DEP_LINKS', async () => {
   const target = path.join(destination, 'node_modules');
   const links: Array<{ link: string; target: string }> = [];
   if (layout.sharedRoot) {
@@ -189,10 +195,13 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
       links.push({ link, target: dependency.directory });
     }
   }
+  return links;
+  });
   // Neither a workspace marker nor a source/name flag proves this comparison.
   return { installation, packageDirectory, sourceRoot: destination, assetDigest: copied.assetSha256,
     runtimeDigest: copied.runtimeSha256, dependencyLinks: links,
     dependencies: runtimeDependencies.map(item => ({ name: item.name, directory: item.directory })), dependencyNamespaceRoot, dependencyGraph };
+  });
 }
 
 async function ensureDependencies(root: string, appRoot: string, name: string): Promise<void> {
