@@ -7,6 +7,7 @@ import { readPlainFile } from '@/utils/readPlainFile';
 import { trustedHostEnvironment } from './trustedHostMcp';
 import { prepareResolvedPackageTree, revalidateResolvedPackageTree } from './packageRunnerResolution';
 import { preparePackageRunnerLookup, revalidatePackageRunnerLookup, type PackageRunnerLookupRequest } from './packageRunnerLookup';
+import { inspectPackageRunnerNativeStage } from './packageRunnerNativeStage';
 
 export interface PackageRunnerPreparation {
   revision: string;
@@ -48,6 +49,14 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
     createHash('sha256').update(config.name, 'utf8').digest('hex').slice(0, 24));
   if (path.resolve(preparation.lookup.cwd) !== path.join(runtime, 'cwd')
       || path.resolve(preparation.lookup.home) !== path.join(runtime, 'home')) throw new Error('Package runtime binding changed');
+  for (const filename of [preparation.lookup.npmRoot, preparation.lookup.cache, preparation.lookup.globalBin,
+    preparation.launcher, preparation.node, preparation.shell, ...preparation.lookup.configFiles]) {
+    const relative = path.relative(runtime, path.resolve(filename));
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Runner resolution/effect dependency is outside the protected private stage');
+    }
+  }
+  const nativeStage = await inspectPackageRunnerNativeStage(runtime, signal);
   // Sequential real observations; no submitted digest becomes evidence.
   if (!preparation.artifactFiles) throw new Error('Actual dependency archives are required for a runner intent');
   const tree = await prepareResolvedPackageTree(preparation.lookup.cwd, config.args[1], signal, preparation.artifactFiles);
@@ -55,7 +64,8 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
   const launcher = await executable(preparation.launcher, signal);
   const node = await executable(preparation.node, signal);
   const shell = await executable(preparation.shell, signal);
-  return { tree, lookup, launcher, node, shell };
+  if (await inspectPackageRunnerNativeStage(runtime, signal) !== nativeStage) throw new Error('Native runner stage authority changed');
+  return { tree, lookup, launcher, node, shell, nativeStage, runtime };
 }
 
 /** Opaque inspection intent, deliberately separate from consent/launch authority. */
@@ -87,6 +97,10 @@ export async function revalidatePackageRunnerIntent(intent: PreparedPackageRunne
     if (JSON.stringify(await executable(prior.path, signal)) !== JSON.stringify(prior)) throw new Error('Package runner executable changed');
   }
   if (state.request !== requestIdentity(config)) throw new Error('Package request changed during revalidation');
+  if (await inspectPackageRunnerNativeStage(state.evidence.runtime, signal) !== state.evidence.nativeStage) {
+    throw new Error('Native runner stage authority changed after preparation');
+  }
+  if (state.request !== requestIdentity(config)) throw new Error('Package request changed during native revalidation');
 }
 
 // No spawn/exported grant issuer exists here. A prepared intent cannot authorize
