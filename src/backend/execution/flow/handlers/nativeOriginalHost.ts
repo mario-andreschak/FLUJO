@@ -1,4 +1,5 @@
 import { constants, promises as fs, fstatSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Flow } from '@/shared/types/flow';
@@ -77,6 +78,18 @@ async function readLedger(binding: Binding): Promise<Ledger> {
 
 type CommitCapability = { assertCurrent: () => Promise<void>; assertActive: () => void };
 
+async function withLedgerParent<T>(directory: string, task: (parent?: FileHandle) => Promise<T>): Promise<T> {
+  if (process.platform === 'win32') return task();
+  // Hold the directory before admitting its identity and throughout publication.
+  // Durability must refer to this descriptor, not a later reopening of the name.
+  const parent = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const opened = await parent.stat({ bigint: true });
+    if (!opened.isDirectory() || !privateOwner(opened)) return held();
+    return await task(parent);
+  } finally { await parent.close(); }
+}
+
 function cleanupOwnedTemporary(binding: Binding, temporary: string, fd: number,
   directoryIdentity: { dev: bigint; ino: bigint }): void {
   try {
@@ -112,8 +125,12 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
       const stat = await fs.lstat(part, { bigint: true });
       if (!stat.isDirectory() || stat.isSymbolicLink() || !privateOwner(stat)) return held();
     }
+    return withLedgerParent(directory, async parent => {
     await assertDirectories(binding);
-    const directoryIdentity = await fs.lstat(directory, { bigint: true });
+    const directoryIdentity = parent ? await parent.stat({ bigint: true }) : await fs.lstat(directory, { bigint: true });
+    const namedDirectory = await fs.lstat(directory, { bigint: true });
+    if (!namedDirectory.isDirectory() || namedDirectory.isSymbolicLink() || namedDirectory.dev !== directoryIdentity.dev
+      || namedDirectory.ino !== directoryIdentity.ino) return held();
     const fileIdentity = await fs.lstat(ledgerFile(binding), { bigint: true }).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -145,24 +162,25 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
         || currentTemporary.size !== BigInt(bytes.length) || !privateOwner(currentTemporary)) return held();
       await cap.assertCurrent();
       await lock.assertOwned();
+      const finalDirectory = lstatSync(directory, { bigint: true });
+      if (!finalDirectory.isDirectory() || finalDirectory.isSymbolicLink() || finalDirectory.dev !== directoryIdentity.dev
+        || finalDirectory.ino !== directoryIdentity.ino || !privateOwner(finalDirectory)) return held();
+      if (parent) {
+        const owned = fstatSync(parent.fd, { bigint: true });
+        if (!owned.isDirectory() || owned.dev !== directoryIdentity.dev || owned.ino !== directoryIdentity.ino) return held();
+      }
       cap.assertActive();
       // The final owner check is adjacent to rename; all awaited path checks are
       // complete. Launch mutations also retain the outer Persona lease commit.
       await fs.rename(temporary, ledgerFile(binding));
       committed = true;
-      if (process.platform !== 'win32') {
-        const parent = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-        try {
-          const owned = await parent.stat({ bigint: true });
-          if (!owned.isDirectory() || owned.dev !== directoryIdentity.dev || owned.ino !== directoryIdentity.ino) return held();
-          await parent.sync();
-        } finally { await parent.close(); }
-      }
+      await parent?.sync();
       return result;
     } finally {
       if (!committed) cleanupOwnedTemporary(binding, temporary, handle.fd, directoryIdentity);
       await handle.close();
     }
+    });
   }), binding.workspace);
 }
 

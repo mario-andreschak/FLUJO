@@ -204,6 +204,31 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
+    await withClaim(async input => {
+      const { invoke, state } = await prepare(input);
+      const lstat = fs.lstat.bind(fs);
+      let replaced: string | undefined;
+      const spy = jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        const stat = await lstat(...args);
+        const filename = String(args[0]);
+        if (!replaced && filename.includes('host-ledger') && filename.endsWith('.tmp')) {
+          replaced = path.dirname(filename);
+          await fs.rename(replaced, `${replaced}.displaced`);
+          await fs.mkdir(replaced, { mode: 0o700 });
+          await fs.writeFile(path.join(replaced, 'foreign.json'), 'foreign sentinel', { mode: 0o600 });
+        }
+        return stat;
+      });
+      try {
+        expect((await invoke()).success).toBe(false);
+        expect(replaced).toBeDefined();
+        expect(queryMock).not.toHaveBeenCalled();
+        expect(await fs.readFile(path.join(replaced!, 'foreign.json'), 'utf8')).toBe('foreign sentinel');
+        expect(await fs.readdir(replaced!)).toEqual(['foreign.json']);
+      } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
+    });
+  }, 30000);
   it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
     transcriptText = 'late-private-persona-transcript';
     lateResultFirst = true;
