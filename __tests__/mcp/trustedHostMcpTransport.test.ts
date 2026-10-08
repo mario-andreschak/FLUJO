@@ -142,14 +142,30 @@ test('a newly approved same-name revision cannot authorize the older client', as
   expect(close).toHaveBeenCalledTimes(1);
 });
 
-test('tool dispatch forwards literals, denies shared-secret references and redacts SDK errors', async () => {
+test('tool dispatch forwards literals without reading shared secrets', async () => {
   const transport = createStdioTransport(config);
   const sdkCall = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'synthetic result' }] });
   const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { literal: 'scoped input' }, 5)).toMatchObject({ success: true });
   expect(sdkCall.mock.calls[0][0].arguments).toEqual({ literal: 'scoped input' });
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+  await transport.close();
+});
+
+test('tool dispatch denies shared-secret references before calling the SDK', async () => {
+  const transport = createStdioTransport(config);
+  const sdkCall = jest.fn();
+  const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { secret: '${global:UNAPPROVED}' }, 5)).toMatchObject({ success: false, error: 'HOST_POLICY_INVALID', statusCode: 403 });
-  sdkCall.mockRejectedValue(new Error('synthetic private SDK diagnostic'));
+  expect(sdkCall).not.toHaveBeenCalled();
+  expect(resolveGlobalVars).not.toHaveBeenCalled();
+  await transport.close();
+});
+
+test('tool dispatch redacts SDK errors without reading shared secrets', async () => {
+  const transport = createStdioTransport(config);
+  const sdkCall = jest.fn().mockRejectedValue(new Error('synthetic private SDK diagnostic'));
+  const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   const failed = await callTool(client, config.name, 'probe', {}, 5);
   expect(failed).toMatchObject({ success: false, error: 'TRUSTED_HOST_TOOL_FAILED' });
   expect(JSON.stringify(failed)).not.toContain('synthetic private SDK diagnostic');
