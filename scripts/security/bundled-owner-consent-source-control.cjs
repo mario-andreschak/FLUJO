@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
 const assert = require('node:assert/strict');
+const {closeAndRestoreFixture}=require('./owned-source-fixture-cleanup.cjs');
 const sourceRoot = path.resolve(process.argv[2] || path.join(__dirname, '../..'));
 const ts = require(path.join(sourceRoot, 'node_modules/typescript'));
 const resolve = Module._resolveFilename;
@@ -24,11 +25,12 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
  const {installTrustedHostProfile}=require(path.join(sourceRoot,'__tests__/mcp/fixtures/trustedHostProfile.ts'));
  const fixture=installTrustedHostProfile();
  const savedApp=process.env.FLUJO_APP_ROOT;process.env.FLUJO_APP_ROOT=sourceRoot;
- let transport;
+ let transport,primaryError;
  try{
   const {issueOwnerCredential}=require(path.join(sourceRoot,'src/backend/services/security/ownerCredentials.ts'));
   const credential=issueOwnerCredential(['control:admin','mcp:access','secrets:read'],Date.now()+600000);
   fs.writeFileSync(process.env.FLUJO_OWNER_AUTH_FILE,JSON.stringify({schemaVersion:1,ownerId:'synthetic-fixture-owner',credentials:[credential.record]}),{mode:0o600});
+  const ledgerFilename=process.env.FLUJO_MCP_TRUSTED_HOST_FILE;assert.equal(fs.lstatSync(ledgerFilename).isSymbolicLink(),false);fs.unlinkSync(ledgerFilename);
   await require(path.join(sourceRoot,'__tests__/utils/privateProfileFixture.ts')).unlockPrivateFixtureInCurrentWorkspace();
   const workspace=require(path.join(sourceRoot,'src/utils/workspace.ts'));
   const copied=require(path.join(sourceRoot,'src/backend/services/mcp/shippedWorkspacePackages.ts'));
@@ -49,7 +51,9 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    const previewMs=performance.now()-started;
    console.log(JSON.stringify({stage:'bundle-preview',sdk:era,elapsedMs:previewMs,dependencyPackages:preview.revision.dependencyGraph.packages.length}));
    await assert.rejects(consent.approveBundledHostConsent(new Request('http://127.0.0.1'),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000}),e=>e.response?.status===401);
+   if(era==='v1')assert.equal(fs.existsSync(ledgerFilename),false);
    await assert.rejects(consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:'0'.repeat(64),expiresAt:Date.now()+120000}));
+   if(era==='v1'){const initialized=JSON.parse(fs.readFileSync(ledgerFilename,'utf8'));assert.equal(initialized.ownerId,'synthetic-fixture-owner');assert.deepEqual(initialized.approvals,[]);console.log(JSON.stringify({stage:'operator-ledger-initialized',missingBearerCreatedNoFile:true,actualPrivateOwnerInitializedEmptyLedger:true,staleReviewCreatedNoGrant:true}));}
    const approvalStarted=performance.now();
    await consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000});
    const approvalMs=performance.now()-approvalStarted;
@@ -69,5 +73,5 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    console.log(JSON.stringify({stage:'bundle-original-positive-workflow',sdk:era,previewMs,approvalMs,launchInitializeMs,toolsAndCloseMs,totalPositiveWorkflowMs:previewMs+approvalMs+launchInitializeMs+toolsAndCloseMs,negativeControlsExcluded:true}));
    console.log(JSON.stringify({sourceControl:'bundled-owner-consent',sdk:era,realOwnerBearer:true,missingBearerRefused:true,changedReviewRefused:true,actualProtectedLedgerWritten:true,authoritativeApprovedConfigPersisted:true,actualShippedFilesystemSourceUsed:true,actualSdkInitializeReadWrite:true,originalTargetAssertions:true,ownedRootPidAbsentAfterClose:true,scope:'Source-built actual shipped package/nonmatching SDK graph; no packed-installed qualification, descendant-family absence or scanner clearance'}));
   }
- }finally{if(transport)await transport.close();if(savedApp===undefined)delete process.env.FLUJO_APP_ROOT;else process.env.FLUJO_APP_ROOT=savedApp;fixture.restore();}
+ }catch(error){primaryError=error;throw error;}finally{await closeAndRestoreFixture(transport,()=>{if(savedApp===undefined)delete process.env.FLUJO_APP_ROOT;else process.env.FLUJO_APP_ROOT=savedApp;},()=>fixture.restore(),primaryError);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

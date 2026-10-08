@@ -1,11 +1,12 @@
 import path from 'node:path';
+import fs, { constants } from 'node:fs';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { loadServerConfigs, saveConfig } from '../mcp/config';
 import { shippedDescriptorForConfig, shippedMcpAppRoot } from '../mcp/shippedServers';
 import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackages';
-import { resolveOwnerRequest } from './ownerAccess';
+import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
@@ -20,6 +21,53 @@ export class BundledConsentError extends Error {
 const HOST_BINDINGS = ['PATH', 'PATHEXT', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
   'PROGRAMDATA', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
   'TMP', 'TEMP', 'TMPDIR', 'SHELL', 'COMSPEC', 'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'PROGRAMFILES', 'GH_CONFIG_DIR'];
+
+/** An explicit authenticated operator may initialize an empty grant namespace. */
+async function initializePrivateLedger(filename: string, request: Request, authorization: OwnerRequestAuthorization) {
+  if (!path.isAbsolute(filename)) throw new Error('A protected absolute approval path is required.');
+  try { await fs.promises.lstat(filename); return; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  const resolved = path.resolve(filename), parent = path.dirname(resolved);
+  const dataRoots = [path.resolve(getDataDir())];
+  try { dataRoots.push(await fs.promises.realpath(dataRoots[0])); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  if (dataRoots.some(root => { const relative = path.relative(root, resolved); return !relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)); })) throw new Error('Approval authority must be outside workspace data.');
+  const canonical = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  if (canonical(await fs.promises.realpath(parent)) !== canonical(parent)) throw new Error('Approval parent must be canonical.');
+  const owner = ownerPolicySchema.parse(await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal));
+  const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+  if (owner.ownerId !== authorization.principal.ownerId || request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
+  let handle: fs.promises.FileHandle;
+  try { handle = await fs.promises.open(resolved, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return; throw error; }
+  const content = Buffer.from(JSON.stringify({ schemaVersion: 1, ownerId: owner.ownerId, approvals: [] }));
+  let initialized = false, failure: unknown;
+  try {
+    await handle.writeFile(content); await handle.sync();
+    const written = await handle.stat({ bigint: true });
+    const observed = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(resolved, request.signal));
+    const current = await handle.stat({ bigint: true }), named = await fs.promises.lstat(resolved, { bigint: true });
+    const stable = (value: fs.BigIntStats) => value.isFile() && !value.isSymbolicLink() && value.nlink === BigInt(1)
+      && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'].every(field => value[field as keyof fs.BigIntStats] === written[field as keyof fs.BigIntStats]);
+    if (!stable(current) || !stable(named) || observed.ownerId !== owner.ownerId || observed.approvals.length) throw new Error('Created approval ledger changed.');
+    const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
+    if (request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval initialization retired.');
+    initialized = true;
+  } catch (error) { failure = error; throw error; }
+  finally {
+    const cleanupErrors: unknown[] = [];
+    try {
+      if (!initialized) {
+        const held = await handle.stat({ bigint: true });
+        const named = await fs.promises.lstat(resolved, { bigint: true }).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
+        if (named?.isFile() && !named.isSymbolicLink() && held.nlink === BigInt(1) && named.nlink === BigInt(1) && held.dev === named.dev && held.ino === named.ino) await fs.promises.unlink(resolved);
+      }
+    } catch (error) { cleanupErrors.push(error); }
+    content.fill(0);
+    try { await handle.close(); } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) throw new AggregateError(failure === undefined ? cleanupErrors : [failure, ...cleanupErrors], 'Approval initialization cleanup failed.', { cause: failure ?? cleanupErrors[0] });
+  }
+}
 
 export async function previewBundledHostConsent(serverName: string, options: { runtimeHome: 'host' | 'isolated' }) {
   if (!['host', 'isolated'].includes(options.runtimeHome)) throw new Error('Invalid runtime home selection.');
@@ -75,6 +123,7 @@ export async function approveBundledHostConsent(request: Request, serverName: st
   if (!owner.ok) throw new BundledConsentError(owner.response);
   const filename = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   if (!filename) throw new Error('A protected approval file is required.');
+  await initializePrivateLedger(filename, request, owner.authorization);
   return withPrivateApprovalLedgerLock(filename, request.signal, () => {
     const revoked = owner.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
     if (filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Captured approval ledger changed.');
