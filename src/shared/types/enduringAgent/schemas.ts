@@ -1241,6 +1241,7 @@ export const PersonaWorkItemSchema = z.object({
   description: z.string().trim().max(100_000).optional(),
   parentGoalId: EnduringAgentIdSchema.optional(),
   goal: PersonaGoalStateSchema.optional(),
+  goalCreateRequestDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   status: z.enum(PERSONA_WORK_ITEM_STATUSES),
   priority: z.enum(PERSONA_PRIORITIES),
   dependencyIds: UniqueIdsSchema,

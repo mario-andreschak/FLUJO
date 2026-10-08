@@ -900,6 +900,8 @@ export interface PersonaWorkItem {
   description?: string;
   parentGoalId?: string;
   goal?: PersonaGoalState;
+  /** Immutable request digest for idempotent native Goal creation. */
+  goalCreateRequestDigest?: string;
   status: PersonaWorkItemStatus;
   priority: PersonaPriority;
   dependencyIds: string[];
