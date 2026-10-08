@@ -27,7 +27,7 @@ export function nativeCodexEnvironment(runtime: Record<string, string | undefine
  * No SDK private fields, process monkeypatch, resume, or replacement child. */
 export function createOwnedCodexThread(input: {
   host: NativeOriginalProcessHost; env: NodeJS.ProcessEnv; config: Record<string, unknown>;
-  options: ThreadOptions; maxTurns: number; executable?: string;
+  options: ThreadOptions; maxTurns: number; executable?: string; onThreadStarted?: (threadId: string) => void;
 }) {
   assertNativeOriginalProcessHost(input.host);
   let issued = false, closed = false;
@@ -69,6 +69,7 @@ export function createOwnedCodexThread(input: {
           }));
           const threadId = id(record(started.thread).id);
           if (started.model !== input.options.model) return unavailable();
+          input.onThreadStarted?.(threadId);
           yield { type: 'thread.started', thread_id: threadId };
           await input.host.beforeFirstPrompt();
           const response = record(await child.request('turn/start', { threadId, model: input.options.model,
