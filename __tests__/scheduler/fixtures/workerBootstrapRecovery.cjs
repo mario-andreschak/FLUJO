@@ -1,0 +1,165 @@
+'use strict';
+// Source-loaded application witness. No readiness setters, scheduler/engine
+// mocks, forced clock, runNow, or synthetic occurrence admission.
+const fs = require('node:fs');
+const path = require('node:path');
+const Module = require('node:module');
+const ts = require('typescript');
+const root = process.cwd();
+const resolve = Module._resolveFilename;
+Module._resolveFilename = function(request, parent, ...rest) {
+  if (request.startsWith('@/')) request = path.join(root, 'src', request.slice(2));
+  if (request === 'mcp-stdio-oauth/client' || request === 'mcp-stdio-oauth/protocol') {
+    request = path.join(root, 'node_modules/mcp-stdio-oauth/dist', request.split('/')[1], 'index.js');
+  }
+  if (request === 'mcp-stdio-oauth/client/transport') {
+    request = path.join(root, 'node_modules/mcp-stdio-oauth/dist/client/transport.js');
+  }
+  if (request.startsWith('.') && request.endsWith('.js') && parent) {
+    const source = path.resolve(path.dirname(parent.filename), request.slice(0, -3) + '.ts');
+    if (fs.existsSync(source)) request = source;
+  }
+  return resolve.call(this, request, parent, ...rest);
+};
+require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(
+  fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true,
+  } }).outputText, filename);
+const source = name => require(path.join(root, 'src', name));
+const send = message => { if (process.connected) process.send(message); };
+let owner;
+let scheduler;
+let stopping = false;
+let commands = Promise.resolve();
+
+async function shutdown() {
+  stopping = true;
+  await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture');
+  if (owner) { owner.restore(); owner = undefined; }
+}
+
+async function command(message) {
+  if (!message || typeof message.id !== 'string') throw new Error('Missing command identity');
+  let result;
+  switch (message.action) {
+    case 'list': result = await scheduler.list(); break;
+    case 'create': {
+      // A real persisted Flow is required. The parent cannot submit executable
+      // code through this protocol; it chooses a flow captured in its snapshot.
+      const flow = await source('backend/services/flow/index.ts').flowService.getFlow(message.flowId);
+      if (!flow) throw new Error('Snapshot flow is unavailable');
+      const created = await scheduler.create({ id: message.planId, name: 'Owned bootstrap recovery',
+        enabled: true, startRestriction: 'singleton', flowId: message.flowId,
+        prompt: 'Owned offline effect fixture', overlapStrategy: 'skip',
+        trigger: { type: 'schedule', cron: '* * * * *', catchUp: true }, saveConversations: false });
+      if (!created.execution || created.error) throw new Error(created.error || 'Creation failed');
+      const recovery = source('backend/services/scheduler/workerLocalRecovery.ts');
+      await scheduler.setWorkerLocalRecovery(created.execution.id, { enabled: true,
+        expectedGenerationId: created.execution.generationId,
+        expectedDefinitionSha256: recovery.workerRecoveryDefinitionSha256(created.execution) });
+      result = created.execution;
+      break;
+    }
+    case 'pause': await scheduler.setPaused(message.paused === true); result = await scheduler.list(); break;
+    case 'disable': result = await scheduler.update(message.planId, { enabled: false }); break;
+    case 'start-again': await scheduler.start(); result = await scheduler.list(); break;
+    case 'stop': await shutdown(); send({ id: message.id, result: { shutdownCompleted: true } });
+      // The parent must separately observe OS exit/close; this reply is an ACK.
+      process.disconnect(); return;
+    default: throw new Error('Unsupported fixture command');
+  }
+  send({ id: message.id, result });
+}
+
+(async () => {
+  if (process.argv[2] === 'seed') {
+    await source('backend/services/workspace/migration.ts').migrateWorkspaceLayout();
+    const secure = source('utils/encryption/secure.ts');
+    const password = 'disposable-owned-worker-bootstrap-fixture';
+    if (!await secure.initializeEncryption(password) || !await secure.authenticate(password)) {
+      throw new Error('Owned seed encryption failed');
+    }
+    const scratch = path.resolve(process.env.FLUJO_BOOTSTRAP_EFFECT_ROOT || '');
+    if (!process.env.FLUJO_BOOTSTRAP_EFFECT_ROOT || !fs.statSync(scratch).isDirectory()) {
+      throw new Error('Missing owned effect directory');
+    }
+    const program = path.join(scratch, 'effect.cjs');
+    const journal = path.join(scratch, 'effects.ndjson');
+    fs.writeFileSync(program, `require('node:fs').appendFileSync(${JSON.stringify(journal)},JSON.stringify({pid:process.pid,at:Date.now()})+'\\n');console.log('owned effect completed');`);
+    await source('backend/services/mcp/shippedWorkspacePackages.ts').ensureShippedWorkspacePackages(
+      source('utils/workspace.ts').getWorkspaceDataDir(), undefined, ['bash']);
+    const shipped = source('backend/services/mcp/shippedServers.ts');
+    const descriptor = shipped.SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'bash');
+    const config = { ...shipped.createShippedServerConfig(descriptor), name: 'bash', disabled: false,
+      roots: [scratch], env: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch } };
+    if (!(await source('backend/services/mcp/config.ts').saveConfig(new Map([['bash', config]]))).success) {
+      throw new Error('Seed MCP config failed');
+    }
+    const quote = value => process.platform === 'win32' ? "'" + value.replace(/'/g, "''") + "'"
+      : "'" + value.replace(/'/g, "'\\''") + "'";
+    const command = (process.platform === 'win32' ? '& ' : '') + quote(process.execPath) + ' ' + quote(program);
+    const compiled = source('utils/shared/flowSpecCompiler.ts').compileFlowSpec({
+      name: 'Owned real bootstrap effect', nodes: [{ key: 'start', type: 'start' },
+        { key: 'effect', type: 'static', entries: [{ kind: 'toolCall', executionMode: 'real',
+          serverName: 'bash', toolName: 'run', argumentsJson: JSON.stringify({ command, cwd: scratch, timeout: 10 }),
+          result: '', captureVariable: 'effect', resultFormat: 'text', onError: 'fail' }] },
+        { key: 'finish', type: 'finish' }],
+      edges: [{ from: 'start', to: 'effect' }, { from: 'effect', to: 'finish' }],
+    }, { servers: [{ name: 'bash' }], serverTools: { bash: ['run'] } });
+    if (!compiled.flow || compiled.errorCount) throw new Error('Seed flow compilation failed');
+    if (!(await source('backend/services/flow/index.ts').flowService.saveFlow(compiled.flow)).success) {
+      throw new Error('Seed flow persistence failed');
+    }
+    const at = new Date().toISOString();
+    await source('utils/storage/backend.ts').saveItem('planned_executions', { version: 1, paused: false,
+      executions: [{ id: 'copied-plan', generationId: 'copied-generation', createdAt: at, updatedAt: at,
+        name: 'Copied plan must stay inert', enabled: true, flowId: compiled.flow.id,
+        prompt: 'Copied fixture', overlapStrategy: 'skip', startRestriction: 'singleton',
+        trigger: { type: 'schedule', cron: '* * * * *', catchUp: true }, saveConversations: false }] });
+    const key = require('node:crypto').randomBytes(32).toString('hex');
+    const archive = source('backend/services/workspace/snapshotArchive.ts');
+    const workspace = source('utils/workspace.ts').getCurrentWorkspace();
+    const captured = await archive.captureWorkspaceSnapshot(workspace, 1, { recipientKey: key });
+    let written;
+    try { written = await archive.writeWorkspaceSnapshotArchive(captured); }
+    finally { if (captured.dispose) await captured.dispose(); }
+    send({ phase: 'seeded', archivePath: written.archivePath, stagingDir: written.stagingDir,
+      sha256: written.sha256, key, workspace, flowId: compiled.flow.id, journal });
+    stopping = true;
+    if (process.connected) process.disconnect();
+    return;
+  }
+  if (process.env.FLUJO_WORKER_MODE !== '1' || !process.env.FLUJO_WORKER_SNAPSHOT) {
+    throw new Error('A genuine worker snapshot and worker mode are required');
+  }
+  // Restore/unlock first so the owner reviews the actual restored proposal.
+  // ensureBackendInitialized subsequently traverses the real startup graph.
+  const restore = source('backend/services/workspace/snapshotRestore.ts');
+  const snapshot = await restore.restoreConfiguredWorkerSnapshot();
+  if (!snapshot) throw new Error('Snapshot restore returned no worker');
+  await restore.unlockWorkerSnapshot(snapshot);
+  owner = require(path.join(root, '__tests__/mcp/fixtures/bundledFixtureOwner.ts')).installBundledFixtureOwner();
+  const consent = source('backend/services/security/bundledMcpConsent.ts');
+  const reviewed = await consent.previewBundledHostConsent('bash', { runtimeHome: 'host' });
+  await consent.approveBundledHostConsent(owner.request('bash'), 'bash', {
+    runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt: owner.expiresAt,
+  });
+  await source('backend/init.ts').ensureBackendInitialized();
+  const status = source('backend/services/workspace/workerMode.ts').getWorkerBootstrapStatus();
+  if (status.state !== 'ready') throw new Error(`Actual bootstrap failed: ${status.state}`);
+  scheduler = source('backend/services/scheduler/index.ts').getSchedulerService();
+  process.on('message', message => {
+    commands = commands.then(() => command(message)).catch(error => {
+      send({ id: message && message.id, error: String(error.stack || error) });
+    });
+  });
+  send({ phase: 'bootstrapped', status, plans: await scheduler.list() });
+})().catch(async error => {
+  send({ phase: 'failed', error: String(error.stack || error) });
+  try { await shutdown(); } catch (cleanup) { send({ phase: 'cleanup-failed', error: String(cleanup) }); }
+  process.exitCode = 1;
+  if (process.connected) process.disconnect();
+});
+process.on('disconnect', () => {
+  if (!stopping) void shutdown().catch(error => { process.stderr.write(String(error)); process.exitCode = 1; });
+});
