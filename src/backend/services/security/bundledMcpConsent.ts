@@ -8,7 +8,7 @@ import { shippedDescriptorForConfig, shippedMcpAppRoot } from '../mcp/shippedSer
 import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackages';
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
-import { consentDiagnosticStage, consentDiagnosticStageSync } from './bundledConsentDiagnostic';
+import { consentDiagnosticStage, consentDiagnosticStageSync, BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
 import { BUNDLED_FLUJO_WORKLOAD_PURPOSE, computeBundledFlujoWorkloadInventory } from '../mcp/bundledFlujoWorkloadInventory';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
@@ -153,57 +153,89 @@ export async function approveBundledHostConsent(request: Request, serverName: st
   if (!owner.ok) throw new BundledConsentError(owner.response);
   const filename = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   if (!filename) throw new Error('A protected approval file is required.');
-  await initializePrivateLedger(filename, request, owner.authorization);
-  return withPrivateApprovalLedgerLock(filename, request.signal, () => {
-    const revoked = owner.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
-    if (filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Captured approval ledger changed.');
-    return approveBundledHostConsentLocked(request, serverName, options, filename);
-  });
+  let diagnostic: ConsentDiagnosticStage = 'APPROVAL_INITIALIZE';
+  try {
+    await initializePrivateLedger(filename, request, owner.authorization);
+    diagnostic = 'APPROVAL_LOCK';
+    return await withPrivateApprovalLedgerLock(filename, request.signal, () => {
+      const revoked = owner.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+      if (filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Captured approval ledger changed.');
+      return approveBundledHostConsentLocked(request, serverName, options, filename);
+    });
+  } catch (error) {
+    if (error instanceof BundledConsentError || error instanceof BundledConsentDiagnostic) throw error;
+    throw new BundledConsentDiagnostic(diagnostic, error);
+  }
 }
 
 async function approveBundledHostConsentLocked(request: Request, serverName: string,
   options: { runtimeHome: 'host' | 'isolated'; reviewedDigest: string; expiresAt: number }, filename: string) {
-  const resolution = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
-  if (!resolution.ok) throw new BundledConsentError(resolution.response);
-  const authorization = resolution.authorization;
-  const workspace = getCurrentWorkspace();
-  if (!/^[a-f0-9]{64}$/.test(options.reviewedDigest) || !Number.isSafeInteger(options.expiresAt)
-      || options.expiresAt <= Date.now() || options.expiresAt > Date.now() + 30 * 24 * 60 * 60 * 1000) throw new Error('Invalid consent request.');
-  const proposal = await previewBundledHostConsent(serverName, options);
-  if (proposal.policyDigest !== options.reviewedDigest) throw new Error('The reviewed proposal changed.');
-  if (!path.isAbsolute(filename) || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('A separately protected approval file is required.');
-  const [ownerValue, approvalValue] = await readPrivateApprovalPairAsync(process.env.FLUJO_OWNER_AUTH_FILE, filename, request.signal);
-  const owner = ownerPolicySchema.parse(ownerValue);
-  const previous = trustedHostApprovalsSchema.parse(approvalValue);
-  if (previous.ownerId !== owner.ownerId || owner.ownerId !== authorization.principal.ownerId) throw new Error('Approval authority changed.');
-  const next = trustedHostApprovalsSchema.parse({ ...previous, approvals: [
-    ...previous.approvals.filter(item => item.workspace !== workspace || item.serverName !== serverName),
-    { workspace, serverName, policyDigest: proposal.policyDigest, expiresAt: options.expiresAt },
-  ] });
-  const stage = await createOwnedPrivateApprovalStage(filename, next, request.signal);
+  let diagnostic: ConsentDiagnosticStage = 'APPROVAL_REQUEST';
   try {
-    const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
-    if (request.signal.aborted || workspace !== getCurrentWorkspace()) throw new Error('Consent request retired.');
-    const finalProposal = await previewBundledHostConsent(serverName, options);
-    if (!sameTrustedHostConsent(finalProposal.config, proposal.config) || finalProposal.policyDigest !== proposal.policyDigest) throw new Error('The installed revision changed.');
-    const latest = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
-    if (JSON.stringify(latest) !== JSON.stringify(previous)) throw new Error('Approval ledger changed concurrently.');
-    const configs = await loadServerConfigs();
-    if (!Array.isArray(configs)) throw new Error('Authoritative MCP configuration unavailable.');
-    if (JSON.stringify(configs.find(item => item.name === serverName)) !== JSON.stringify(proposal.storedConfig)) throw new Error('Stored configuration changed before approval.');
-    const beforeSave = authorization.recheck(); if (beforeSave) throw new BundledConsentError(beforeSave);
-    const result = await saveConfig(new Map(configs.map(item => [item.name, item.name === serverName ? proposal.config : item])));
-    if (!result.success) throw new Error('Approved configuration could not be saved.');
-    const beforePublication = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
-    if (JSON.stringify(beforePublication) !== JSON.stringify(previous)) throw new Error('Approval ledger changed before publication.');
-    const beforePublish = authorization.recheck(); if (beforePublish) throw new BundledConsentError(beforePublish);
-    if (request.signal.aborted || workspace !== getCurrentWorkspace()) throw new Error('Consent request retired.');
-    await stage.publish(filename, () => {
-      const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
-      if (workspace !== getCurrentWorkspace() || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
-    });
-    return proposal;
-  } finally { await stage.dispose(); }
+    const resolution = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+    if (!resolution.ok) throw new BundledConsentError(resolution.response);
+    const authorization = resolution.authorization;
+    const workspace = getCurrentWorkspace();
+    if (!/^[a-f0-9]{64}$/.test(options.reviewedDigest) || !Number.isSafeInteger(options.expiresAt)
+        || options.expiresAt <= Date.now() || options.expiresAt > Date.now() + 30 * 24 * 60 * 60 * 1000) throw new Error('Invalid consent request.');
+    diagnostic = 'APPROVAL_PROPOSAL';
+    const proposal = await previewBundledHostConsent(serverName, options);
+    if (proposal.policyDigest !== options.reviewedDigest) throw new Error('The reviewed proposal changed.');
+    if (!path.isAbsolute(filename) || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('A separately protected approval file is required.');
+    diagnostic = 'APPROVAL_AUTHORITY';
+    const [ownerValue, approvalValue] = await readPrivateApprovalPairAsync(process.env.FLUJO_OWNER_AUTH_FILE, filename, request.signal);
+    const owner = ownerPolicySchema.parse(ownerValue);
+    const previous = trustedHostApprovalsSchema.parse(approvalValue);
+    if (previous.ownerId !== owner.ownerId || owner.ownerId !== authorization.principal.ownerId) throw new Error('Approval authority changed.');
+    const next = trustedHostApprovalsSchema.parse({ ...previous, approvals: [
+      ...previous.approvals.filter(item => item.workspace !== workspace || item.serverName !== serverName),
+      { workspace, serverName, policyDigest: proposal.policyDigest, expiresAt: options.expiresAt },
+    ] });
+    diagnostic = 'APPROVAL_STAGE';
+    const stage = await createOwnedPrivateApprovalStage(filename, next, request.signal);
+    let primaryError: unknown;
+    let failed = false;
+    try {
+      diagnostic = 'APPROVAL_RECHECK';
+      const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+      if (request.signal.aborted || workspace !== getCurrentWorkspace()) throw new Error('Consent request retired.');
+      const finalProposal = await previewBundledHostConsent(serverName, options);
+      if (!sameTrustedHostConsent(finalProposal.config, proposal.config) || finalProposal.policyDigest !== proposal.policyDigest) throw new Error('The installed revision changed.');
+      const latest = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
+      if (JSON.stringify(latest) !== JSON.stringify(previous)) throw new Error('Approval ledger changed concurrently.');
+      diagnostic = 'APPROVAL_CONFIG';
+      const configs = await loadServerConfigs();
+      if (!Array.isArray(configs)) throw new Error('Authoritative MCP configuration unavailable.');
+      if (JSON.stringify(configs.find(item => item.name === serverName)) !== JSON.stringify(proposal.storedConfig)) throw new Error('Stored configuration changed before approval.');
+      const beforeSave = authorization.recheck(); if (beforeSave) throw new BundledConsentError(beforeSave);
+      diagnostic = 'APPROVAL_SAVE';
+      const result = await saveConfig(new Map(configs.map(item => [item.name, item.name === serverName ? proposal.config : item])));
+      if (!result.success) throw new Error('Approved configuration could not be saved.');
+      diagnostic = 'APPROVAL_PUBLICATION';
+      const beforePublication = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
+      if (JSON.stringify(beforePublication) !== JSON.stringify(previous)) throw new Error('Approval ledger changed before publication.');
+      const beforePublish = authorization.recheck(); if (beforePublish) throw new BundledConsentError(beforePublish);
+      if (request.signal.aborted || workspace !== getCurrentWorkspace()) throw new Error('Consent request retired.');
+      await stage.publish(filename, () => {
+        const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
+        if (workspace !== getCurrentWorkspace() || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
+      });
+      return proposal;
+    } catch (error) {
+      failed = true;
+      primaryError = error;
+      throw error;
+    } finally {
+      try { await stage.dispose(); }
+      catch (cleanup) {
+        throw new BundledConsentDiagnostic('APPROVAL_DISPOSE', failed
+          ? new AggregateError([primaryError, cleanup], 'Approval and owned-stage cleanup failed.') : cleanup);
+      }
+    }
+  } catch (error) {
+    if (error instanceof BundledConsentError || error instanceof BundledConsentDiagnostic) throw error;
+    throw new BundledConsentDiagnostic(diagnostic, error);
+  }
 }
 
 export async function revokeBundledHostConsent(request: Request, serverName: string) {

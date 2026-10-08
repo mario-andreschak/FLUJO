@@ -7,6 +7,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
 import { approveBundledHostConsent, BundledConsentError, previewBundledHostConsent, revokeBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 import { consentDiagnosticCode } from '@/backend/services/security/bundledConsentDiagnostic';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 
 type RouteContext = { params: Promise<{ name: string }> };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -22,10 +23,14 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     const { name } = await params;
     const preview = await previewBundledHostConsent(name, { runtimeHome });
     const revoked = owner.authorization.recheck(); if (revoked) return revoked;
-    const policy = preview.config.trustedHost as { environmentNames: string[] };
+    const policy = trustedHostMcpPolicySchema.parse(preview.config.trustedHost);
+    const reviewedWorkload = policy.bundledInstallation?.workload;
+    const workload = reviewedWorkload ? { ...reviewedWorkload, capabilities: {
+      systemScreenshotEnabled: reviewedWorkload.inventory.some(action => action.action === 'system_screenshot'),
+    } } : undefined;
     return json({ serverName: name, policyDigest: preview.policyDigest, privileges: 'owner-account',
       command: preview.config.command, args: preview.config.args, roots: preview.config.roots,
-      runtimeHome, environmentNames: policy.environmentNames, revision: preview.revision });
+      runtimeHome, environmentNames: policy.environmentNames, workload, revision: preview.revision });
   } catch (error) {
     if (!owner.authorization.recheck()) console.warn(`[bundled-consent-preview] ${consentDiagnosticCode(error)}`);
     return json({ error: 'A fixed installed package proposal is unavailable.' }, 409);
