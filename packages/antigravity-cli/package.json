@@ -1,0 +1,12 @@
+{
+  "name": "@flujo-ai/antigravity-cli",
+  "version": "1.2.13",
+  "private": true,
+  "description": "Verified, package-owned Google Antigravity CLI runtime for FLUJO",
+  "main": "index.cjs",
+  "bin": { "flujo-agy": "bin.cjs" },
+  "scripts": { "postinstall": "node install.cjs" },
+  "files": ["index.cjs", "install.cjs", "bin.cjs", "artifacts.json"],
+  "engines": { "node": ">=22" },
+  "license": "UNLICENSED"
+}

@@ -28,6 +28,8 @@ on:
       - 'scripts/launch-next.mjs'
       - 'scripts/smoke-mcp-artifacts.mjs'
       - 'scripts/validate-mcp-release.mjs'
+      - 'scripts/antigravity-cli-*.mjs'
+      - 'packages/antigravity-cli/**'
       - '__tests__/mcp/**'
       - 'mcp-servers/**'
       - 'src/app/mcp-proxy/**'
@@ -55,16 +57,25 @@ jobs:
           cache: npm
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Install production build dependencies
+        run: npm ci --include=dev
+
       - name: Build production artifacts
-        run: |
-          npm ci --include=dev
-          npm run build
+        run: npm run build
+
+      # Separate native commands so a later success cannot mask an earlier
+      # nonzero exit code in PowerShell.
+      - name: Verify browser installer helpers
+        run: node --test mcp-servers/browser/scripts/install-browser.test.mjs
 
       - name: Exercise MCP process boundaries
-        run: |
-          node --test mcp-servers/browser/scripts/install-browser.test.mjs
-          npm run test:mcp-process-boundary
-          npm run validate:mcp-release
+        run: npm run test:mcp-process-boundary
+
+      - name: Validate MCP release artifacts
+        run: npm run validate:mcp-release
+
+      - name: Verify the packaged Antigravity CLI
+        run: node --test scripts/antigravity-cli-artifact.test.mjs
 
       # A clean consumer install is intentionally expensive on hosted Windows.
       # Keep it as a release/manual gate instead of paying that cost on every

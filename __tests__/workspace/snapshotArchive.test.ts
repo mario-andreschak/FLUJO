@@ -281,6 +281,30 @@ describe('portable workspace capture', () => {
     await expect(writeWorkspaceSnapshotArchive(captured)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
   });
 
+  it('keeps Antigravity model configurations portable without exporting private authentication or CLI sessions', async () => {
+    const model = '[{"id":"antigravity","provider":"antigravity-cli","adapter":"antigravity-cli","name":"gemini-3.1-pro-high","ApiKey":""}]';
+    const authPath = 'db/antigravity-cli-runtime/invocation-one/.gemini/antigravity-cli/antigravity-oauth-token';
+    const credentials = '{"token":{"access_token":"private-google-access","refresh_token":"private-google-refresh"}}';
+    await put('db/models.json', model);
+    await put(authPath, credentials);
+    await put('db/antigravity-cli-runtime/invocation-one/.gemini/antigravity-cli/settings.json', '{"private":"host-settings"}');
+    await put('db/antigravity-cli-runtime/invocation-one/.gemini/antigravity-cli/brain/session/transcript.jsonl', '{"private":"cli-transcript"}');
+    await put('db/antigravity-cli-runtime-metadata.json', '{"description":"ordinary workspace record"}');
+
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const unpacked = await JSZip.loadAsync(await fs.readFile(archive.archivePath));
+      expect(await unpacked.file('db/models.json')!.async('string')).toBe(model);
+      expect(unpacked.file('db/antigravity-cli-runtime-metadata.json')).not.toBeNull();
+      expect(Object.keys(unpacked.files).some(name => name.startsWith('db/antigravity-cli-runtime/'))).toBe(false);
+      expect(captured.manifest.files.some(file => file.path.startsWith('db/antigravity-cli-runtime/'))).toBe(false);
+      expect(await fs.readFile(path.join(workspace, authPath), 'utf8')).toBe(credentials);
+    } finally {
+      await fs.rm(archive.stagingDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails before producing a clone when subscription credentials are unavailable', async () => {
     await put('db/models.json', '[{"provider":"codex"}]');
     await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });

@@ -22,6 +22,7 @@ COPY mcp-servers ./mcp-servers
 # The locked lint dependency is a private local adapter, so npm ci needs its
 # package metadata before the later full source copy.
 COPY tooling/next-lint-glob ./tooling/next-lint-glob
+COPY packages/antigravity-cli ./packages/antigravity-cli
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
@@ -108,6 +109,7 @@ RUN if [ -n "$FLUJO_APPLICATION_VERSION" ]; then \
 COPY --from=builder /app/mcp-servers ./mcp-servers
 # Keep local lockfile targets available during the production install.
 COPY --from=builder /app/tooling/next-lint-glob ./tooling/next-lint-glob
+COPY --from=builder /app/packages/antigravity-cli ./packages/antigravity-cli
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
 COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright

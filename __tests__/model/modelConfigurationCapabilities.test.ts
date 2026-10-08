@@ -1,6 +1,14 @@
 import { getModelConfigurationCapabilities } from '@/shared/types/model/provider';
 
 describe('provider-aware model configuration capabilities (#329)', () => {
+  it('hides generation settings without a verified Antigravity CLI mapping', () => {
+    for (const name of ['default', 'custom-model']) {
+      expect(getModelConfigurationCapabilities('antigravity-cli', 'antigravity-cli', name))
+        .toEqual({ maxOutputTokens: false });
+    }
+    expect(getModelConfigurationCapabilities('antigravity-cli', undefined, 'default'))
+      .toEqual({ maxOutputTokens: false });
+  });
   it('exposes effort and priority for Codex while hiding sampling/output caps', () => {
     expect(getModelConfigurationCapabilities('codex', 'codex-cli', 'gpt-6-astra')).toEqual({
       effortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],

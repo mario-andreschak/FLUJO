@@ -11,6 +11,7 @@ import { MCPServerConfig, MCPSamplingPolicy } from '@/shared/types/mcp';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { normalizeMaxTokens } from '@/shared/types/model';
+import { resolveModelAdapter, supportsLocalModelAuth } from '@/shared/types/model/provider';
 
 const log = createLogger('backend/services/mcp/sampling');
 
@@ -112,7 +113,8 @@ export function createSamplingHandler(
     if (!model) {
       throw new McpError(ErrorCode.InternalError, `Sampling model not found: ${policy.modelId}`);
     }
-    const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey) ?? (model.fallbackPolicy ? '' : null);
+    const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+    const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
     if (apiKey === null) {
       throw new McpError(ErrorCode.InternalError, 'Could not resolve the sampling model API key');
     }

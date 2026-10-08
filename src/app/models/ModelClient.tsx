@@ -31,6 +31,7 @@ import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
+import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { getModelService, ModelResult } from '@/frontend/services/model';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
@@ -259,7 +260,7 @@ export default function ModelClient() {
         // correction or a rotated key).
         const match = known.find((model) =>
           model.provider === candidate.provider &&
-          (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
+          resolveModelAdapter(model.provider, model.adapter) === resolveModelAdapter(candidate.provider, candidate.adapter) &&
           model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase() &&
           (candidate.provider !== 'azure' || (
             (model.baseUrl || '').replace(/\/+$/, '').toLowerCase() ===
@@ -268,8 +269,12 @@ export default function ModelClient() {
           ))
         );
         if (match) {
-          if (candidate.ApiKey?.trim() && candidate.provider !== 'ollama') {
-            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey });
+          // The Antigravity wizard explicitly chooses between an API key and
+          // the host account login. Clearing a saved key applies that choice.
+          const clearsAntigravityKey = candidate.provider === 'antigravity-cli' &&
+            !candidate.ApiKey?.trim() && Boolean(match.ApiKey?.trim());
+          if ((candidate.ApiKey?.trim() && candidate.provider !== 'ollama') || clearsAntigravityKey) {
+            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey ?? '' });
             if (!result.success || !result.model) {
               setModels(await service.loadModels());
               return { success: false, created, existing, error: result.error || t('models.saveFailed') };
