@@ -192,6 +192,22 @@ export async function readPrivateApprovalAsync(filename: string | undefined, sig
   return (await readPrivateApprovalEvidenceAsync(filename, signal)).value;
 }
 
+/** Fresh private evidence for two related files, never a cross-request cache. */
+export async function readPrivateApprovalPairAsync(first: string | undefined, second: string | undefined, signal?: AbortSignal): Promise<[unknown, unknown]> {
+  if (!first || !second || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const filenames = [first, second];
+  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
+  const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
+  const values = filenames.map(filename => readPrivateApprovalContents(filename));
+  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  for (const [index, filename] of filenames.entries()) {
+    assertLinkFree(filename);
+    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  }
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  return [values[0], values[1]];
+}
+
 async function readPrivateApprovalEvidenceAsync(filename: string | undefined, signal?: AbortSignal) {
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const before = process.platform === 'win32' && filename ? await windowsPrivateAuthorityStampAsync(filename, signal) : undefined;
@@ -362,18 +378,9 @@ export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal
     const approvalFile = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
     const ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
     if (!approvalFile || !ownerFile) throw new Error();
-    const identities = [approvalFile, ownerFile].map(filename => fs.lstatSync(filename, { bigint: true }));
     // One fresh native snapshot covers BOTH chains before and after the held-FD
     // reads. There is no gap where one private reader awaits another helper.
-    const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync([approvalFile, ownerFile], signal) : undefined;
-    const results = [readPrivateApprovalContents(approvalFile), readPrivateApprovalContents(ownerFile)];
-    if (process.platform === 'win32') {
-      if (await windowsPrivateAuthorityStampAsync([approvalFile, ownerFile], signal) !== before) throw new Error();
-    }
-    for (const [index, filename] of [approvalFile, ownerFile].entries()) {
-      assertLinkFree(filename);
-      if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new Error();
-    }
+    const results = await readPrivateApprovalPairAsync(approvalFile, ownerFile, signal);
     if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
     const approvals = approvalsSchema.parse(results[0]);
     const owner = ownerPolicySchema.parse(results[1]);

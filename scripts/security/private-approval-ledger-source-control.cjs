@@ -61,6 +61,11 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   await new Promise(resolve=>setTimeout(resolve,100));process.env.FLUJO_MCP_TRUSTED_HOST_FILE=secondLedger;unlock();
   try{await Promise.all([held,refused]);assert.deepEqual(JSON.parse(fs.readFileSync(filename,'utf8')),previous);assert.deepEqual(JSON.parse(fs.readFileSync(secondLedger,'utf8')),previous);}finally{process.env.FLUJO_MCP_TRUSTED_HOST_FILE=filename;}
   console.log(JSON.stringify({sourceControl:'captured-private-ledger',actualOwnerBearer:true,ledgerEnvironmentChangedWhileWriterWaited:true,capturedFilenameChangeRefused:true,bothLedgersUnchanged:true}));
+  const ownerFile=process.env.FLUJO_OWNER_AUTH_FILE,ownerBytes=fs.readFileSync(ownerFile),originalOpenSync=fs.openSync;let revokedWhileStaging=false;
+  fs.openSync=function(...args){const fd=Reflect.apply(originalOpenSync,fs,args);if(path.basename(String(args[0])).startsWith('.flujo-mcp-consent-')&&!revokedWhileStaging){revokedWhileStaging=true;const current=JSON.parse(ownerBytes);current.credentials[0].revokedAt=Date.now();fs.writeFileSync(ownerFile,JSON.stringify(current),{mode:0o600});}return fd;};
+  try{await assert.rejects(consent.revokeBundledHostConsent(request,fixture.config.name),error=>error.response?.status===401);assert.equal(revokedWhileStaging,true);assert.deepEqual(JSON.parse(fs.readFileSync(filename,'utf8')),previous);}finally{fs.openSync=originalOpenSync;fs.writeFileSync(ownerFile,ownerBytes,{mode:0o600});ownerBytes.fill(0);}
+  await consent.revokeBundledHostConsent(request,fixture.config.name);assert.equal(JSON.parse(fs.readFileSync(filename,'utf8')).approvals.some(item=>item.serverName===fixture.config.name),false);fixture.approve();
+  console.log(JSON.stringify({sourceControl:'authenticated-private-ledger-revocation',actualOwnerBearerRevocationPublished:true,actualOwnerCredentialRevokedDuringStageReadRefused:true,grantUnchangedOnRetiredAuthority:true,scope:'Actual Source authenticated API helper/private ledger; no full HTTP or installed acceptance claim'}));
   const {NextRequest}=require(path.join(sourceRoot,'node_modules/next/server.js'));
   const {proxy}=require(path.join(sourceRoot,'src/proxy.ts'));
   const savedMode=process.env.FLUJO_WORKER_MODE,savedToken=process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;

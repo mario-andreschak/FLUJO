@@ -9,7 +9,7 @@ import { resolveOwnerRequest } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync,
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
   trustedHostApprovalsSchema, trustedHostEnvironment, trustedHostMcpPolicyDigestAsync,
   TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES, sameTrustedHostConsent } from './trustedHostMcp';
 
@@ -93,8 +93,9 @@ async function approveBundledHostConsentLocked(request: Request, serverName: str
   const proposal = await previewBundledHostConsent(serverName, options);
   if (proposal.policyDigest !== options.reviewedDigest) throw new Error('The reviewed proposal changed.');
   if (!path.isAbsolute(filename) || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('A separately protected approval file is required.');
-  const owner = ownerPolicySchema.parse(await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal));
-  const previous = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
+  const [ownerValue, approvalValue] = await readPrivateApprovalPairAsync(process.env.FLUJO_OWNER_AUTH_FILE, filename, request.signal);
+  const owner = ownerPolicySchema.parse(ownerValue);
+  const previous = trustedHostApprovalsSchema.parse(approvalValue);
   if (previous.ownerId !== owner.ownerId || owner.ownerId !== authorization.principal.ownerId) throw new Error('Approval authority changed.');
   const next = trustedHostApprovalsSchema.parse({ ...previous, approvals: [
     ...previous.approvals.filter(item => item.workspace !== workspace || item.serverName !== serverName),
@@ -133,8 +134,9 @@ export async function revokeBundledHostConsent(request: Request, serverName: str
   if (!filename) throw new Error('A protected approval file is required.');
   const workspace = getCurrentWorkspace();
   return withPrivateApprovalLedgerLock(filename, request.signal, async () => {
-    const owner = ownerPolicySchema.parse(await readPrivateApprovalAsync(process.env.FLUJO_OWNER_AUTH_FILE, request.signal));
-    const previous = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
+    const [ownerValue, approvalValue] = await readPrivateApprovalPairAsync(process.env.FLUJO_OWNER_AUTH_FILE, filename, request.signal);
+    const owner = ownerPolicySchema.parse(ownerValue);
+    const previous = trustedHostApprovalsSchema.parse(approvalValue);
     if (owner.ownerId !== resolution.authorization.principal.ownerId || previous.ownerId !== owner.ownerId) throw new Error('Approval authority changed.');
     const next = { ...previous, approvals: previous.approvals.filter(item => item.workspace !== workspace || item.serverName !== serverName) };
     const stage = await createOwnedPrivateApprovalStage(filename, next, request.signal);
