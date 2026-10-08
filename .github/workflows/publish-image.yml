@@ -58,7 +58,7 @@ jobs:
           npm run validate:mcp-release
           npm run smoke:mcp-artifacts
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -162,7 +162,7 @@ jobs:
         run: |
           node scripts/require-release-verification.mjs image
           node scripts/image-release.mjs validate
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -208,7 +208,7 @@ jobs:
           artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
           path: ${{ env.IMAGE_EVIDENCE_DIR }}
           merge-multiple: true
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
