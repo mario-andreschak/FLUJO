@@ -3,6 +3,9 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 
+// Native PowerShell startup and fresh ancestor ACL reads can exceed five seconds on busy hosts.
+const NATIVE_INSPECTION_TIMEOUT_MS = 30_000;
+
 // Static program, no profiles/modules or input-selected commands. The filename
 // travels as JSON on stdin and is only passed to native filesystem ACL APIs.
 const inspect = String.raw`
@@ -80,7 +83,7 @@ export function windowsPrivateAuthorityStamp(filename: string | readonly string[
   if (!fs.statSync(executable).isFile()) throw new Error('Windows authority inspection unavailable');
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
     input: JSON.stringify(typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filenames.map(item => path.resolve(item)) }), encoding: 'utf8',
-    windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
+    windowsHide: true, timeout: NATIVE_INSPECTION_TIMEOUT_MS, maxBuffer: 64 * 1024,
     env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
   });
   if (result.error || result.status !== 0 || result.signal) throw new Error('Windows authority inspection refused');
@@ -118,7 +121,7 @@ export async function windowsPrivateAuthorityStampAsync(filename: string | reado
     const errors: Buffer[] = [];
     const stop = (reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'bounds') => { traceNativeRefusal(reason); failure ??= new Error('Windows authority inspection cancelled or exceeded bounds'); child.kill(); };
     const abort = () => stop('abort');
-    const timer = setTimeout(() => stop('deadline'), 5000);
+    const timer = setTimeout(() => stop('deadline'), NATIVE_INSPECTION_TIMEOUT_MS);
     signal?.addEventListener('abort', abort, { once: true });
     child.on('error', error => { failure = error; stop('spawn'); });
     child.stdin.on('error', error => { failure = error; stop('stdin'); });

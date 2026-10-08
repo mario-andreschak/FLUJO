@@ -12,6 +12,11 @@
       "minTests": 6869,
       "intentionalSkips": [
         {
+          "suite": "__tests__/model/codexAppServerProcess.live.test.ts",
+          "name": "qualifies the Source-owned public app-server with exact Luna/medium and original turn interruption",
+          "reason": "Opt-in provider qualification requires explicit private executable, home and receipt paths; normal CI has no live provider credentials."
+        },
+        {
           "suite": "__tests__/enduringAgents/goalEnduranceAcceptance.test.ts",
           "name": "Persona goal endurance across OS process epochs continues the same ordinary ongoing goal through graceful and forced restarts",
           "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
