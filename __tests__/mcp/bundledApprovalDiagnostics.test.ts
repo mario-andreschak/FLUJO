@@ -12,7 +12,7 @@ import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 
 // Genuine owner, package provenance, private ledger and production writer.
 // Only the actual final rename is equipment in the failure case.
-test.each(['success', 'publication-failure'] as const)('protected approval writer retains authority and finite diagnostics: %s', async mode => {
+test.each(['success', 'seed-success', 'publication-failure'] as const)('protected approval writer retains authority and finite diagnostics: %s', async mode => {
   const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE'];
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
@@ -49,6 +49,11 @@ test.each(['success', 'publication-failure'] as const)('protected approval write
     const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE!;
     const before = fs.readFileSync(ledger);
     const entries = fs.readdirSync(path.dirname(ledger)).sort();
+    if (mode === 'seed-success') {
+      expect(JSON.parse(before.toString()).approvals).toEqual([]);
+      fs.unlinkSync(ledger);
+      expect(fs.existsSync(ledger)).toBe(false);
+    }
     const failure = new Error('private-native-rename-canary');
     let ledgerRenameAttempts = 0;
     if (mode === 'publication-failure') {
@@ -63,10 +68,10 @@ test.each(['success', 'publication-failure'] as const)('protected approval write
       const approved = await approveBundledHostConsent(fixtureOwner.request(proposed.name), proposed.name, {
         runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
       });
-      expect(mode).toBe('success');
+      expect(mode).not.toBe('publication-failure');
       expect((await verifyTrustedHostMcp(approved.config)).digest).toBe(preview.policyDigest);
     } catch (error) { caught = error; }
-    if (mode === 'success') {
+    if (mode !== 'publication-failure') {
       expect(caught).toBeUndefined();
       expect(JSON.parse(fs.readFileSync(ledger, 'utf8')).approvals).toHaveLength(1);
     } else {
