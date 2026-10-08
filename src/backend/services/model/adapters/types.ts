@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
@@ -390,6 +391,7 @@ export async function observeSdkRequest<T>(
   try {
     dispatchId = await input.onSdkRequest?.(snapshot);
   } catch (error) {
+    if (error instanceof ModelTurnArchiveMemoryError) throw error;
     rethrowFlowExecutionAuthorityError(error);
     dispatchId = undefined;
   }

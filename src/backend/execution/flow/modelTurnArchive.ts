@@ -3,6 +3,8 @@ import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
+import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
+  settleArchiveWrites, ModelTurnArchiveMemoryError } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -298,12 +300,13 @@ async function sanitizeValue(
           ctx,
           `${parameterPath}.${childKey}`,
           mimeFromFilename(childValue),
-          await fs.readFile(childValue),
+          await readArchiveLocalMedia(childValue),
           'file',
           path.basename(childValue),
         );
         continue;
-      } catch {
+      } catch (error) {
+        if (error instanceof ModelTurnArchiveMemoryError) throw error;
         // Keep the sanitized path if an SDK-provided file is no longer readable.
       }
     }
@@ -323,21 +326,28 @@ async function writeAtomic(file: string, data: Buffer, durable = false): Promise
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    if (durable) {
-      const handle = await fs.open(temp, 'wx', 0o600);
-      try { await handle.writeFile(data); await handle.sync(); }
-      finally { await handle.close(); }
-    } else {
-      await fs.writeFile(temp, data);
-    }
+    const handle = await fs.open(temp, 'wx', durable ? 0o600 : 0o666);
+    let primary: unknown;
+    try { await handle.writeFile(data); if (durable) await handle.sync(); }
+    catch (error) { primary = error; throw error; }
+    finally { await closeArchiveWriteHandle(handle, primary); }
     await fs.rename(temp, file);
   }
-  catch (error) { await fs.rm(temp, { force: true }).catch(() => undefined); throw error; }
+  catch (error) {
+    // A descriptor with uncertain close still owns this file; preserve it.
+    if (!(error instanceof ModelTurnArchiveMemoryError && error.code === 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP')) {
+      await fs.rm(temp, { force: true }).catch(() => undefined);
+    }
+    throw error;
+  }
   if (durable) {
     try {
       const directory = await fs.open(path.dirname(file), 'r');
-      try { await directory.sync(); } finally { await directory.close(); }
-    } catch { /* directory fsync is unavailable on some Windows filesystems */ }
+      try { await directory.sync(); } finally { await closeArchiveWriteHandle(directory); }
+    } catch (error) {
+      if (error instanceof ModelTurnArchiveMemoryError) throw error;
+      /* directory fsync is unavailable on some Windows filesystems */
+    }
   }
 }
 
@@ -361,10 +371,17 @@ export interface ArchiveModelDispatchInput {
   visualCompaction?: VisualCompactionDiagnostic;
 }
 
-export function archiveModelDispatch(input: ArchiveModelDispatchInput): Promise<ModelTurnIndexEntry> {
-  return withWorkspaceMutation(() => commitFlowDurableMutation(
-    input.durableContext ?? {}, () => archiveModelDispatchWithinMutation(input),
-  ));
+export function archiveModelDispatch(
+  input: ArchiveModelDispatchInput, prepare?: () => ArchiveModelDispatchInput,
+): Promise<ModelTurnIndexEntry> {
+  const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
+    sdkRequest: input.sdkRequest, modelInput: input.modelInput, visualCompaction: input.visualCompaction };
+  return withArchiveWriteMemory(payload, () => withWorkspaceMutation(() => commitFlowDurableMutation(
+    input.durableContext ?? {}, () => {
+      recheckArchiveWriteMemory(payload);
+      return archiveModelDispatchWithinMutation(prepare ? prepare() : input);
+    },
+  )));
 }
 
 async function archiveModelDispatchWithinMutation(
@@ -385,7 +402,7 @@ async function archiveModelDispatchWithinMutation(
     media: [],
     writes: new Map(),
   };
-  const [canonicalMessages, genericWire, sdkRequest] = await Promise.all([
+  const [canonicalMessages, genericWire, sdkRequest] = await settleArchiveWrites([
     sanitizeValue(input.canonicalMessages, 'canonicalMessages', ctx),
     sanitizeValue(input.genericWire, 'genericWire', ctx),
     sanitizeValue(input.sdkRequest, 'sdkRequest', ctx),
@@ -421,8 +438,9 @@ async function archiveModelDispatchWithinMutation(
     visualCompaction: input.visualCompaction,
     contextCompaction: input.modelInput?.contextCompaction,
   };
+  recheckArchiveWriteMemory(snapshot);
 
-  await Promise.all([...ctx.writes.entries()].map(async ([sha256, bytes]) => {
+  await settleArchiveWrites([...ctx.writes.entries()].map(async ([sha256, bytes]) => {
     const target = mediaPath(input.conversationId, sha256);
     try {
       await fs.access(target);
