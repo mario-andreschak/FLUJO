@@ -348,11 +348,19 @@ async function evidence(request: Request) {
       || initialGrant.policyDigest !== record.policyDigest) throw new BundledFlujoWorkloadError();
   const url = new URL(request.url);
   phase = 'request-binding';
-  if (url.origin !== record.audience || audience(process.env.FLUJO_BASE_URL) !== record.audience || request.headers.get('host') !== url.host
-      || (request.headers.get('origin') !== null && request.headers.get('origin') !== record.audience)
-      || request.headers.get('x-flujo-workspace') !== record.workspace || url.searchParams.has('workspace')
-      || !record.inventory.some(item => item.path === url.pathname && item.method === request.method)
-      || /%|\\|\/\//.test(url.pathname)) throw new BundledFlujoWorkloadError();
+  const assertBinding = (allowed: boolean, field: 'url-audience' | 'process-audience' | 'host' | 'origin' | 'workspace-header' | 'workspace-query' | 'inventory-route' | 'path') => {
+    if (allowed) return;
+    try { if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[workload-request-binding]', 'refused', field); } catch { /* Preserve refusal. */ }
+    throw new BundledFlujoWorkloadError();
+  };
+  assertBinding(url.origin === record.audience, 'url-audience');
+  assertBinding(audience(process.env.FLUJO_BASE_URL) === record.audience, 'process-audience');
+  assertBinding(request.headers.get('host') === url.host, 'host');
+  assertBinding(request.headers.get('origin') === null || request.headers.get('origin') === record.audience, 'origin');
+  assertBinding(request.headers.get('x-flujo-workspace') === record.workspace, 'workspace-header');
+  assertBinding(!url.searchParams.has('workspace'), 'workspace-query');
+  assertBinding(record.inventory.some(item => item.path === url.pathname && item.method === request.method), 'inventory-route');
+  assertBinding(!/%|\\|\/\//.test(url.pathname), 'path');
   await runWithWorkspace(record.workspace, async () => {
     phase = 'config';
     const first = await traceAsync('config-first', () => readCurrentConfig(record.serverName, request.signal));
