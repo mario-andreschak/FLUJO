@@ -3,7 +3,6 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Flow } from '@/shared/types/flow';
@@ -384,12 +383,9 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
   client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(targetFiles).href }] }));
   connect.mockImplementationOnce(async () => {
     const rebuilt = updateConfig.mock.calls[0][1];
-    // Exercise FLUJO's actual spawn-parameter resolution, then the real SDK/process boundary.
-    const { resolveStdioLaunch } = await import('@/backend/services/mcp/connection');
-    const launch = resolveStdioLaunch(rebuilt);
-    await client.connect(new StdioClientTransport({ ...launch, stderr: 'pipe', env: {
-      ...launch.env, HOME: mockWorkspace, USERPROFILE: mockWorkspace,
-    } }));
+    // Exercise the managed production transport without changing its reviewed environment.
+    const { createStdioTransport } = await import('@/backend/services/mcp/connection');
+    await client.connect(createStdioTransport(rebuilt));
     return { success: true };
   });
   try {
