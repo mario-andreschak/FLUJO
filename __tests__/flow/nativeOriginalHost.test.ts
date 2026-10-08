@@ -50,6 +50,7 @@ let afterPrompt: (() => Promise<void>) | undefined;
 let transcriptText = 'done';
 let lateResultFirst = false;
 let offeredLateUsage: unknown;
+let observedPrompt: unknown;
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
@@ -59,6 +60,7 @@ beforeEach(async () => {
   promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
   afterPrompt = undefined; transcriptText = 'done';
   lateResultFirst = false; offeredLateUsage = undefined;
+  observedPrompt = undefined;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -75,7 +77,7 @@ beforeEach(async () => {
     options.abortController.signal.addEventListener('abort', close, { once: true });
     const stream = (async function* () {
       await beforePrompt?.();
-      await prompt[Symbol.asyncIterator]().next();
+      observedPrompt = (await prompt[Symbol.asyncIterator]().next()).value;
       expect((await ledger()).reservations[0].state).toBe('registered');
       expect(child.exitCode).toBeNull();
       promptCount++;
@@ -122,11 +124,11 @@ afterEach(async () => {
 });
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
-  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' = false) {
+  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
-    if (production === 'no-handoff' || production === 'child') {
+    if (production === 'no-handoff' || production === 'child' || production === 'child-refusal') {
       await ensureTestRole();
       const version = buildTestRoleVersion();
       version.id = 'rolever_native_no_handoff_v2';
@@ -136,7 +138,7 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       const core = version.coreFlowTemplate!;
       core.nodes = core.nodes.filter(node => node.data.type !== 'finish');
       core.edges = core.edges.filter(edge => edge.target !== 'test_core_finish');
-      if (production === 'child') {
+      if (production === 'child' || production === 'child-refusal') {
         const child = structuredClone(core);
         child.id = 'native_pinned_child';
         child.name = 'Pinned native child';
@@ -164,7 +166,7 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
         await task(input, goal.id);
         if (production) {
           const result = await runFlow(input);
-          expect(result.status).toBe(production === 'handoff-refusal' ? 'error' : 'completed');
+          expect(result.status).toBe(production === 'handoff-refusal' || production === 'child-refusal' ? 'error' : 'completed');
           return result;
         }
       } catch (error) { failure = error; }
@@ -223,8 +225,13 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       rootConversation = input.conversationId;
       rootRun = input.runId;
       expect(input.flowDefinition!.executionDependencies!.flows.map(entry => entry.flowId)).toContain('native_pinned_child');
+      // A mutable saved child edit cannot revise the already captured round.
+      const changed = structuredClone(input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot);
+      changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'MUTABLE_CHILD_REVISION';
+      expect((await flowService.saveFlow(changed)).success).toBe(true);
     }, async (_personaId, goalId) => {
       expect(promptCount).toBe(1);
+      expect(JSON.stringify(observedPrompt)).not.toContain('MUTABLE_CHILD_REVISION');
       expect(queryMock).toHaveBeenCalledTimes(1);
       expect(children).toHaveLength(1);
       expect(children[0].exitCode).toBe(0);
@@ -241,6 +248,41 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(child).toMatchObject({ parentConversationId: rootConversation, parentLogicalRunId: rootRun,
         rootConversationId: rootConversation, flowId: 'native_pinned_child', runDepth: 1 });
     }, 'child');
+  }, 30000);
+  it('refuses missing, unlisted, and changed descendant plans before the actual child executes', async () => {
+    await withClaim(async input => {
+      const child = input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot;
+      const common = { authority: subflowExecutionAuthority(input.executionAuthority),
+        conversationId: 'unissued_child', runId: 'unissued_child_run',
+        nodeId: 'test_core_process', modelId: 'model-test', flowId: child.id };
+      await expect(createPersonaNativeOriginalHost(common)).rejects.toThrow('held');
+      await expect(createPersonaNativeOriginalHost({ ...common, flowId: 'unlisted_child', flowSnapshot: child })).rejects.toThrow('held');
+      const changed = structuredClone(child);
+      changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'forged plan';
+      await expect(createPersonaNativeOriginalHost({ ...common, flowSnapshot: changed })).rejects.toThrow('held');
+      expect(queryMock).not.toHaveBeenCalled();
+    }, async () => {
+      expect(promptCount).toBe(1);
+      expect((await ledger()).reservations[0].state).toBe('released');
+    }, 'child');
+  }, 30000);
+  it('holds an issued descendant when its saved lineage changes before the first prompt', async () => {
+    beforePrompt = async () => {
+      const reservation = (await ledger()).reservations[0];
+      const child = await loadCollectionItem<SharedState>('conversations', reservation.owner.conversationId);
+      expect(child!.parentLogicalRunId).toBeTruthy();
+      await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
+    };
+    await withClaim(async () => {}, async () => {
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(children).toHaveLength(1);
+      expect(promptCount).toBe(0);
+      expect(observedPrompt).toBeUndefined();
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.sdkUsage).toBeUndefined();
+      expect(reservation.sdkOutcome).not.toBe('completed');
+    }, 'child-refusal');
   }, 30000);
   it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
     await withClaim(async input => {

@@ -263,7 +263,8 @@ export async function createPersonaNativeOriginalHost(input: {
   if (isRoot) {
     if (input.flowId && input.flowId !== binding.flow.id) return held();
   } else {
-    verifyBehaviorDependencies(binding.flow);
+    if (!input.flowId || !binding.flow.executionDependencies) return held();
+    try { verifyBehaviorDependencies(binding.flow); } catch { return held(); }
     const dependency = binding.flow.executionDependencies?.flows.find(item => item.flowId === input.flowId);
     if (!dependency) return held();
     selectedFlow = dependency.flowSnapshot;
