@@ -14,9 +14,13 @@
 const path = require('node:path');
 const Module = require('node:module');
 const fs = require('node:fs');
+const os = require('node:os');
 const { fileURLToPath } = require('node:url');
 
 const WORKSPACES_ROOT = path.resolve(process.cwd(), 'workspaces');
+// Host login/config/cache is runtime user data, never an application asset.
+// Dynamic Codex reads otherwise expand into its protected sandbox markers.
+const CODEX_RUNTIME_ROOT = path.resolve(process.env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex'));
 const TRACE_MODULES = new Set([
   require.resolve('next/dist/compiled/@vercel/nft'),
   require.resolve('next/dist/compiled/glob'),
@@ -27,12 +31,14 @@ function directoryPath(candidate) {
 }
 
 function isInsideWorkspaces(candidate) {
-  const relative = path.relative(WORKSPACES_ROOT, path.resolve(directoryPath(candidate)));
-  return relative === '' || (
+  return [WORKSPACES_ROOT, CODEX_RUNTIME_ROOT].some(root => {
+    const relative = path.relative(root, path.resolve(directoryPath(candidate)));
+    return relative === '' || (
     relative !== '..'
     && !relative.startsWith(`..${path.sep}`)
     && !path.isAbsolute(relative)
-  );
+    );
+  });
 }
 
 function withoutWorkspaces(candidate, entries) {

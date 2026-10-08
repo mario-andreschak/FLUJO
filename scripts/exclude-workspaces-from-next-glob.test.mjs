@@ -14,13 +14,16 @@ const child = String.raw`
   const fs = require('node:fs');
   const path = require('node:path');
   const workspaceRoot = path.join(process.cwd(), 'workspaces');
+  const codexRoot = path.join(process.cwd(), '.codex');
+  require('node:os').homedir = () => process.cwd();
   let reads = 0;
   let tracing = true;
   for (const [object, method] of [[fs, 'readdir'], [fs, 'readdirSync'], [fs.promises, 'readdir']]) {
     const original = object[method];
     object[method] = function(candidate, ...args) {
       const relative = path.relative(workspaceRoot, String(candidate));
-      if (tracing && (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)))) reads++;
+      const codexRelative = path.relative(codexRoot, String(candidate));
+      if (tracing && ([relative, codexRelative].some(value => value === '' || (!value.startsWith('..') && !path.isAbsolute(value))))) reads++;
       return original.call(this, candidate, ...args);
     };
   }
@@ -33,11 +36,12 @@ const child = String.raw`
       files: [...result.fileList].map(file => file.replaceAll('\\', '/')),
       ordinarySync: fs.readdirSync(workspaceRoot),
       ordinaryAsync: await fs.promises.readdir(workspaceRoot),
+      ordinaryCodex: await fs.promises.readdir(codexRoot),
     }));
   }).catch(error => { console.error(error); process.exitCode = 1; });
 `;
 
-for (const pattern of ['dynamic project-wide glob', 'direct workspace glob']) {
+for (const pattern of ['dynamic project-wide glob', 'direct workspace glob', 'host Codex runtime glob']) {
   test(`Next tracer prunes runtime data before traversing a ${pattern}`, (t) => {
     const tempRoot = path.resolve(tmpdir());
     const root = mkdtempSync(path.join(tempRoot, 'flujo-next-trace-test-'));
@@ -55,8 +59,9 @@ for (const pattern of ['dynamic project-wide glob', 'direct workspace glob']) {
     write('shipped/mcp-servers/asset.json', '{"shipped":true}');
     write('workspaces-backup/mcp-servers/asset.json', '{"prefixCollision":true}');
     write('assets/template.txt', 'Required application asset');
+    write('.codex/private/auth.json', '{"runtimeCredential":"fixture-only"}');
     write('dependency.cjs', 'module.exports = 42;');
-    const directory = pattern.startsWith('dynamic')
+    const directory = pattern.startsWith('host') ? "path.join(require('node:os').homedir(), '.codex')" : pattern.startsWith('dynamic')
       ? "path.join(process.cwd(), process.env.DYNAMIC_DIRECTORY, 'mcp-servers')"
       : "path.join(process.cwd(), 'workspaces', 'default', 'mcp-servers')";
     write('entry.cjs', `
@@ -77,11 +82,13 @@ for (const pattern of ['dynamic project-wide glob', 'direct workspace glob']) {
     assert.ok(report.files.includes('dependency.cjs'));
     assert.ok(report.files.includes('assets/template.txt'));
     assert.ok(!report.files.some(file => file.startsWith('workspaces/')));
+    assert.ok(!report.files.some(file => file.startsWith('.codex/')));
     if (pattern.startsWith('dynamic')) {
       assert.ok(report.files.includes('shipped/mcp-servers/asset.json'));
       assert.ok(report.files.includes('workspaces-backup/mcp-servers/asset.json'));
     }
     assert.deepEqual(report.ordinarySync, ['default'], 'Application filesystem access remains unchanged');
     assert.deepEqual(report.ordinaryAsync, ['default']);
+    assert.deepEqual(report.ordinaryCodex, ['private']);
   });
 }
