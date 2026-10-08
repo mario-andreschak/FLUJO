@@ -13,13 +13,9 @@ function within(root: string, candidate: string): boolean {
 }
 
 async function linkFree(filename: string): Promise<void> {
-  let current = path.resolve(filename);
-  while (true) {
-    if ((await fs.promises.lstat(current)).isSymbolicLink()) throw new Error('Linked installation asset refused.');
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
+  const resolved = path.resolve(filename), actual = await fs.promises.realpath(filename);
+  const canonical = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  if (canonical(actual) !== canonical(resolved)) throw new Error('Linked installation asset refused.');
 }
 
 function same(first: fs.BigIntStats, second: fs.BigIntStats): boolean {

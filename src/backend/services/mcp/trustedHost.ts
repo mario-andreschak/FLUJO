@@ -3,13 +3,27 @@ import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/std
 import { DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, sameTrustedHostConsent, verifyTrustedHostMcp } from '../security/trustedHostMcp';
+import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, trustedHostMcpPolicySchema, sameTrustedHostConsent, verifyTrustedHostMcp } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
-const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN'];
+const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_MODE'];
 const managedHosts = new WeakMap<object, ManagedTrustedHost>();
+
+function workerRuntimeCredentials(config: MCPStdioConfig): Record<string, string> {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  if (process.env.FLUJO_WORKER_MODE !== '1' || policy.bundledInstallation?.packageDirectory !== 'flujo') return {};
+  const environment = trustedHostEnvironment(config);
+  const configured = new URL(environment.get('FLUJO_BASE_URL') || 'http://127.0.0.1:4200');
+  const audience = new URL(process.env.FLUJO_BASE_URL || 'http://127.0.0.1:4200');
+  if (!['http:', 'https:'].includes(configured.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(configured.hostname)
+      || configured.username || configured.password || configured.href !== audience.href
+      || environment.get('FLUJO_WORKSPACE') !== getCurrentWorkspace()
+      || !policy.environmentNames.includes('FLUJO_WORKER_MODE') || !policy.environmentNames.includes('FLUJO_SNAPSHOT_CONTROL_TOKEN')
+      || !process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN?.trim()) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+  return { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN };
+}
 
 interface HostTransport {
   start(): Promise<void>;
@@ -50,6 +64,7 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
     if (!authority.policy.environmentNames.includes(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     environment.set(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, fixtureToken);
   }
+  for (const [name, value] of Object.entries(workerRuntimeCredentials(config))) environment.set(name, value);
   return { command: config.command, args: [...(config.args ?? [])], cwd: config.cwd!, env: mcpStringDataRecord(environment) };
 }
 
@@ -85,6 +100,7 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   const captured = structuredClone(config);
   const initial = trustedHostMcpApproval(captured);
   const fixtureToken = resolveGoalEnduranceFixtureToken(captured);
+  const workerCredentials = workerRuntimeCredentials(captured);
   const cancellation = new AbortController();
   let retired = false;
   const start = transport.start.bind(transport);
@@ -92,6 +108,7 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   const checkLive = () => {
     if (retired || getCurrentWorkspace() !== initial.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (resolveGoalEnduranceFixtureToken(captured) !== fixtureToken) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (JSON.stringify(workerRuntimeCredentials(captured)) !== JSON.stringify(workerCredentials)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   };
   const managed: ManagedTrustedHost = Object.freeze({
     workspace: initial.workspace, serverName: config.name, generation: randomUUID(),

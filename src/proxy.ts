@@ -60,6 +60,15 @@ export function proxy(request: NextRequest): NextResponse {
     : new NextResponse(extensionResponse.body, { status: extensionResponse.status, headers: extensionResponse.headers });
 
   if (isWorkerMode()) {
+    // Private owner provisioning is needed before MCP bootstrap can complete.
+    // This narrow route authenticates independently again in its handler.
+    if (/^\/api\/mcp\/servers\/[^/]+\/host-consent$/.test(pathname)
+        && ['GET', 'POST', 'DELETE'].includes(request.method)) {
+      const owner = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+      return owner.ok ? NextResponse.next() : new NextResponse(owner.response.body, {
+        status: owner.response.status, headers: owner.response.headers,
+      });
+    }
     // Private network membership and a caller-supplied Host header are not
     // authentication. Every worker HTTP control/execution surface uses the
     // dedicated bearer, including the normally public OpenAI and MCP routes.

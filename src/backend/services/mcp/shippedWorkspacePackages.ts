@@ -163,7 +163,16 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
   const [installed, copied] = await Promise.all([packageDigests(source), packageDigests(destination)]);
   if (installed.assetSha256 !== copied.assetSha256) throw new Error('Copied package differs from the installed revision.');
   const layout = await dependencyLayout(installation, packageDirectory);
-  const dependencyGraph = await inspectBundledMcpDependencyGraph(installation, layout.packages.map(item => item.directory));
+  const runtimeManifest = JSON.parse(await fs.readFile(path.join(source, 'package.json'), 'utf8'));
+  const runtimeNames = new Set(Object.keys({ ...runtimeManifest.dependencies, ...runtimeManifest.optionalDependencies }));
+  const runtimeDependencies = layout.packages.filter(item => runtimeNames.has(item.name));
+  let dependencyNamespaceRoot = installation;
+  if (path.basename(path.dirname(installation)) === 'node_modules') {
+    const application = JSON.parse(await fs.readFile(path.join(installation, 'package.json'), 'utf8'));
+    if (application.name !== 'flujo-ai') throw new Error('Unrecognized flattened application installation.');
+    dependencyNamespaceRoot = await fs.realpath(path.dirname(installation));
+  }
+  const dependencyGraph = await inspectBundledMcpDependencyGraph(dependencyNamespaceRoot, runtimeDependencies.map(item => item.directory));
   const target = path.join(destination, 'node_modules');
   const links: Array<{ link: string; target: string }> = [];
   if (layout.sharedRoot) {
@@ -180,7 +189,7 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
   // Neither a workspace marker nor a source/name flag proves this comparison.
   return { installation, packageDirectory, sourceRoot: destination, assetDigest: copied.assetSha256,
     runtimeDigest: copied.runtimeSha256, dependencyLinks: links,
-    dependencies: layout.packages.map(item => ({ name: item.name, directory: item.directory })), dependencyGraph };
+    dependencies: runtimeDependencies.map(item => ({ name: item.name, directory: item.directory })), dependencyNamespaceRoot, dependencyGraph };
 }
 
 async function ensureDependencies(root: string, appRoot: string, name: string): Promise<void> {

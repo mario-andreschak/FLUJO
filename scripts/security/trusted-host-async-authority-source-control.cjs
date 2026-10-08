@@ -54,23 +54,18 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   let exclusiveParentAclDriftRefused;
   if(process.platform==='win32'){
    const windows=require(path.join(sourceRoot,'src/backend/services/security/windowsPrivateAuthority.ts'));
-   const originalStamp=windows.windowsPrivateAuthorityStampAsync;
    const previousApproval=process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
    const parent=path.join(path.dirname(previousApproval),'exclusive-approval-parent');fs.mkdirSync(parent,{mode:0o700});
    const exclusiveApproval=path.join(parent,'grant.json');process.env.FLUJO_MCP_TRUSTED_HOST_FILE=exclusiveApproval;fixture.approve();
    const nativeScript=String.raw`$ErrorActionPreference='Stop';$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;$d=[IO.DirectoryInfo]::new([string]$r.parent);if($r.action -eq 'capture'){$f=[IO.FileInfo]::new([string]$r.child);$fa=$f.GetAccessControl();$fa.SetAccessRuleProtection($true,$true);$f.SetAccessControl($fa)};$acl=$d.GetAccessControl();if($r.action -eq 'foreign'){$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),[Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles,[Security.AccessControl.AccessControlType]::Allow));$d.SetAccessControl($acl)}elseif($r.action -eq 'restore'){$acl.SetSecurityDescriptorSddlForm([string]$r.sddl,[Security.AccessControl.AccessControlSections]::Access);$d.SetAccessControl($acl)}else{$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)}`;
    const run=(action,sddl)=>{const result=require('node:child_process').spawnSync(path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-Command',nativeScript],{input:JSON.stringify({parent,child:exclusiveApproval,action,sddl}),encoding:'utf8',windowsHide:true,timeout:5000,maxBuffer:65536});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
-   const sddl=run('capture');let approvalCalls=0,ownerCalls=0,release,approvalDone;
-   const barrier=new Promise(resolve=>{release=resolve;});const checked=new Promise(resolve=>{approvalDone=resolve;});
-   windows.windowsPrivateAuthorityStampAsync=async function(target,signal){const stamp=await originalStamp(target,signal);if(target===exclusiveApproval&&++approvalCalls===2)approvalDone();if(target===process.env.FLUJO_OWNER_AUTH_FILE&&++ownerCalls===2)await barrier;return stamp;};
-   let pending;
+   const sddl=run('capture'),originalOpen=fs.openSync;let ownerFd,parentChanged=false;
+   fs.openSync=function(...args){const fd=Reflect.apply(originalOpen,fs,args);if(path.resolve(String(args[0]))===path.resolve(process.env.FLUJO_OWNER_AUTH_FILE))ownerFd=fd;return fd;};
+   fs.readSync=function(...args){const read=Reflect.apply(originalRead,fs,args);if(read>0&&args[0]===ownerFd&&!parentChanged){parentChanged=true;const before=fs.lstatSync(exclusiveApproval,{bigint:true});run('foreign');const after=fs.lstatSync(exclusiveApproval,{bigint:true});for(const key of ['dev','ino','size','mtimeNs','ctimeNs','mode'])assert.equal(after[key],before[key]);}return read;};
    try{
-    pending=policy.trustedHostMcpApprovalAsync(fixture.config);
-    await Promise.race([checked,pending.then(()=>{throw new Error('Approval completed before exclusive-parent barrier');})]);
-    const before=fs.lstatSync(exclusiveApproval,{bigint:true});run('foreign');const after=fs.lstatSync(exclusiveApproval,{bigint:true});
-    for(const key of ['dev','ino','size','mtimeNs','ctimeNs','mode'])assert.equal(after[key],before[key]);
-    release();await assert.rejects(pending,e=>e.code==='HOST_CONSENT_REQUIRED');exclusiveParentAclDriftRefused=true;
-   }finally{release();if(pending)await pending.catch(()=>{});windows.windowsPrivateAuthorityStampAsync=originalStamp;run('restore',sddl);process.env.FLUJO_MCP_TRUSTED_HOST_FILE=previousApproval;fixture.approve();}
+    await assert.rejects(policy.trustedHostMcpApprovalAsync(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(parentChanged,true);exclusiveParentAclDriftRefused=true;
+   }finally{fs.openSync=originalOpen;fs.readSync=originalRead;run('restore',sddl);process.env.FLUJO_MCP_TRUSTED_HOST_FILE=previousApproval;fixture.approve();}
+   assert.equal(typeof windows.windowsPrivateAuthorityStampAsync,'function');
   }
   const originalOpen=fs.openSync,ownerFilename=process.env.FLUJO_OWNER_AUTH_FILE,grantBytes=fs.readFileSync(filename);
   let ownerFd,crossReaderChanged=false;
