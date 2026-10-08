@@ -199,6 +199,13 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
       throw new Error(`Installed filesystem proxy returned unexpected tools: ${names.join(', ')}`);
     }
     const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} });
+    if (roots.isError === true) {
+      const refusalCodes = ['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'MCP_RUNTIME_AUTHORITY_RETIRED'];
+      const code = refusalCodes.find((candidate) => Array.isArray(roots.content) && roots.content.some((item) =>
+        item.type === 'text' && typeof item.text === 'string' && item.text.slice(0, 8192).includes(candidate)
+      )) ?? 'UNCLASSIFIED_TOOL_ERROR';
+      throw new Error(`Filesystem proxy get_allowed_directories returned an error result (${code}).`);
+    }
     const directories = roots.structuredContent?.directories;
     const resolvedExpectedRoot = expectedRoot ? path.resolve(expectedRoot) : undefined;
     if (
