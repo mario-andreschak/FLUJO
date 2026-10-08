@@ -453,6 +453,7 @@ async function smokePackedArtifacts(candidateDirectory) {
         FLUJO_BASH_ROOTS: rootsDir,
         FLUJO_PORT: String(port),
         FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
+        FLUJO_MCP_WORKLOAD_TRACE: '1',
       }), ...operator.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
