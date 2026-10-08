@@ -1,4 +1,5 @@
-import { promises as fs, type FileHandle } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 const { OwnedCaptureLedger } = require('./fixtures/ownedCaptureLedger.cjs');
