@@ -285,6 +285,8 @@ export interface PersonaFlowDispatchAdmission {
   relatedAction?: 'steer' | 'coalesce';
   summary?: string;
   notBefore?: number;
+  /** Original WorkItem version supplied for a caller assignment attempt. */
+  assignmentExpectedUpdatedAt?: number;
 }
 
 export interface PersonaFlowDispatchOutcome {
@@ -370,6 +372,7 @@ export interface SubmitPersonaFlowDispatchInput {
   relatedAction?: 'steer' | 'coalesce';
   summary?: string;
   notBefore?: number;
+  assignmentExpectedUpdatedAt?: number;
   flowInput: SerializablePersonaFlowRunInput;
   /** Trusted orchestration only; ordinary callers leave this absent. */
   maintenancePlan?: MemoryMaintenancePlan;
@@ -658,6 +661,8 @@ function normalizeAdmission(input: SubmitPersonaFlowDispatchInput): PersonaFlowD
     ...(input.relatedAction !== undefined ? { relatedAction: input.relatedAction } : {}),
     ...(input.summary !== undefined ? { summary: input.summary } : {}),
     ...(input.notBefore !== undefined ? { notBefore: input.notBefore } : {}),
+    ...(input.assignmentExpectedUpdatedAt !== undefined
+      ? { assignmentExpectedUpdatedAt: input.assignmentExpectedUpdatedAt } : {}),
   }) as PersonaFlowDispatchAdmission;
 }
 
