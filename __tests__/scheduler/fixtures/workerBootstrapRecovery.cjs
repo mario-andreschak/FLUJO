@@ -37,6 +37,7 @@ let stopping = false;
 let backendEntered = false;
 let pendingApprovedConfigs;
 const captures = new (require('./ownedCaptureLedger.cjs').OwnedCaptureLedger)();
+const directories = require('./ownedDirectory.cjs');
 let commands = Promise.resolve();
 
 async function shutdown() {
@@ -138,7 +139,9 @@ async function command(message) {
       captured = captures.own(await archive.captureWorkspaceSnapshot(
         source('utils/workspace.ts').getCurrentWorkspace(), 2, { recipientKey: key }));
         const written = await archive.writeWorkspaceSnapshotArchive(captured);
-        result = { archivePath: written.archivePath, stagingDir: written.stagingDir, sha256: written.sha256, key };
+        const staging = await directories.captureOwnedDirectory(written.stagingDir);
+        result = { archivePath: written.archivePath, stagingDir: written.stagingDir,
+          stagingIdentity: directories.describeOwnedDirectory(staging), sha256: written.sha256, key };
       } catch (error) { failures.push(error); }
       finally {
         try { if (captured) await captures.dispose(captured); }
@@ -218,7 +221,9 @@ async function command(message) {
     catch (error) { failures.push(error); }
     try { await captures.dispose(captured); } catch (error) { failures.push(error); }
     if (failures.length) throw new AggregateError(failures, 'Seed export and owned capture cleanup failed');
+    const staging = await directories.captureOwnedDirectory(written.stagingDir);
     await sendFlushed({ phase: 'seeded', archivePath: written.archivePath, stagingDir: written.stagingDir,
+      stagingIdentity: directories.describeOwnedDirectory(staging),
       sha256: written.sha256, key, workspace, flowId: compiled.flow.id, journal });
     await sendFlushed({ phase: 'cleanup-completed' }); // Captured owned descriptors were disposed above; no worker was started.
     stopping = true;

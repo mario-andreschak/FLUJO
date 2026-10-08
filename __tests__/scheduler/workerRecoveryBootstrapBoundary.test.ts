@@ -16,6 +16,11 @@ const lifecycle = new WeakMap<ChildProcess, {
 let sandbox: string;
 let stagingDir: string | undefined;
 const additionalStaging: string[] = [];
+const directories = require('./fixtures/ownedDirectory.cjs');
+const ownedDirectories = new Map<string, { path: string }>();
+async function ownDirectory(directory: string, expected?: Record<string, unknown>) {
+  ownedDirectories.set(directory, await directories.captureOwnedDirectory(directory, expected));
+}
 
 function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   const child = spawn(process.execPath, [path.resolve(__dirname, 'fixtures/workerBootstrapRecovery.cjs'),
@@ -148,10 +153,10 @@ afterEach(async () => {
   for (const [directory, prefix] of [[sandbox, 'flujo-worker-bootstrap-'], [stagingDir, 'flujo-hot-clone-'],
     ...additionalStaging.map(directory => [directory, 'flujo-hot-clone-'] as const)] as const) {
     if (!directory) continue;
-    const resolved = path.resolve(directory);
-    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith(prefix)
-        || (await fs.lstat(resolved)).isSymbolicLink()) throw new Error('Unsafe bootstrap fixture cleanup');
-    await fs.rm(resolved, { recursive: true, force: true });
+    const token = ownedDirectories.get(directory);
+    if (!token) throw new Error(`Owned directory identity unavailable; preserving ${directory}`);
+    await directories.removeOwnedDirectory(token, os.tmpdir(), prefix);
+    ownedDirectories.delete(directory);
   }
   stagingDir = undefined;
   additionalStaging.length = 0;
@@ -159,10 +164,12 @@ afterEach(async () => {
 
 it('boots real snapshots, recovers a local schedule once, and keeps copied, sibling, paused and disabled schedules inert', async () => {
   sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+  await ownDirectory(sandbox);
   const scratch = path.join(sandbox, 'effects'); await fs.mkdir(scratch);
   const seed = launch(path.join(sandbox, 'seed'), { FLUJO_BOOTSTRAP_EFFECT_ROOT: scratch }, 'seed');
   const snapshot = await seed.wait(message => message.phase === 'seeded');
   stagingDir = snapshot.stagingDir;
+  await ownDirectory(snapshot.stagingDir, snapshot.stagingIdentity);
   await seed.exit();
   const workerEnv = { FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: snapshot.archivePath,
     FLUJO_WORKER_SNAPSHOT_SHA256: snapshot.sha256, FLUJO_WORKER_SNAPSHOT_KEY: snapshot.key,
@@ -184,6 +191,7 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   // Its installation-private HMAC record must not travel to the sibling.
   const localSnapshot = await worker.request('export');
   additionalStaging.push(localSnapshot.stagingDir);
+  await ownDirectory(localSnapshot.stagingDir, localSnapshot.stagingIdentity);
   await worker.request('stop'); await worker.exit();
   // A naturally missed occurrence must be recovered by bootstrap, not runNow.
   await crossMinute();
@@ -224,10 +232,13 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
 it.each(['invalid-provenance', 'generation-changed', 'retired', 'not-opted-in'] as const)(
   'keeps a real enrolled worker schedule inert after %s on genuine bootstrap', async reason => {
     sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+    await ownDirectory(sandbox);
     const scratch = path.join(sandbox, 'effects'); await fs.mkdir(scratch);
     const seed = launch(path.join(sandbox, 'seed'), { FLUJO_BOOTSTRAP_EFFECT_ROOT: scratch }, 'seed');
     const snapshot = await seed.wait(message => message.phase === 'seeded');
-    stagingDir = snapshot.stagingDir; await seed.exit();
+    stagingDir = snapshot.stagingDir;
+    await ownDirectory(snapshot.stagingDir, snapshot.stagingIdentity);
+    await seed.exit();
     const data = path.join(sandbox, 'worker');
     const env = { FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: snapshot.archivePath,
       FLUJO_WORKER_SNAPSHOT_SHA256: snapshot.sha256, FLUJO_WORKER_SNAPSHOT_KEY: snapshot.key,
