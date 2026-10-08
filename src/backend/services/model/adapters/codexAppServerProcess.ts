@@ -69,10 +69,18 @@ export async function startOwnedCodexAppServer(input: {
     child.stdin.write(bytes);
   };
   child.stdout.on('data', (chunk: Buffer) => {
+    // Child output is not authority: unsolicited frames before admission or
+    // after refusal must never reach a callback, even in one coalesced chunk.
+    if (!registered || exited || closed || stopping || input.signal?.aborted) {
+      rejectPending(unavailable());
+      if (!registered) requestStop();
+      return;
+    }
     if (frame.length+chunk.length > MAX_FRAME_BYTES) {rejectPending(unavailable());requestStop();return;}
     frame=Buffer.concat([frame,chunk]);
     let newline;
     while ((newline=frame.indexOf(10)) >= 0) {
+      if (!registered || exited || closed || stopping || input.signal?.aborted) return;
       const line=frame.subarray(0,newline);frame=frame.subarray(newline+1);
       let message: Message;
       try {message=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(line));}
@@ -90,7 +98,7 @@ export async function startOwnedCodexAppServer(input: {
         catch {requestStop();}
       } else if (typeof message.method==='string') {
         try {input.onNotification(Object.freeze(message));}
-        catch {rejectPending(unavailable());requestStop();}
+        catch {rejectPending(unavailable());requestStop();return;}
       } else {rejectPending(unavailable());requestStop();return;}
     }
   });
@@ -129,5 +137,11 @@ export async function startOwnedCodexAppServer(input: {
         });
       },
     });
-  } catch(error) {requestStop();await stop();throw error;}
+  } catch(error) {
+    requestStop();
+    try {await stop();} catch(closeError) {
+      throw new AggregateError([error,closeError], 'Codex admission failed and process closure remains unconfirmed.');
+    }
+    throw error;
+  }
 }
