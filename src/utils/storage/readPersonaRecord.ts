@@ -46,11 +46,16 @@ async function parentsFor(root: string, filename: string): Promise<Parent[] | nu
 }
 async function verifyParents(parents: Parent[]) {
   for (const parent of parents) {
-    const current = await fs.lstat(parent.filename, { bigint: true });
+    // Both reads inspect an already-admitted parent. Validate every field at
+    // the same strict read checkpoints, without serial metadata round trips.
+    const [current, canonical] = await Promise.all([
+      fs.lstat(parent.filename, { bigint: true }),
+      fs.realpath(parent.filename),
+    ]);
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== parent.stats.dev
         || current.ino !== parent.stats.ino || current.mode !== parent.stats.mode
         || current.uid !== parent.stats.uid || current.gid !== parent.stats.gid
-        || await fs.realpath(parent.filename) !== parent.canonical) {
+        || canonical !== parent.canonical) {
       throw new Error('Persona record parent changed during its read.');
     }
   }
