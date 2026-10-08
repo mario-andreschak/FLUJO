@@ -34,9 +34,12 @@ const sendFlushed = message => new Promise((resolve, reject) => {
 const startedAt = Date.now();
 let diagnosticCount = 0;
 function phase(code) {
-  if (diagnosticCount >= 128) return; // Preserve the real operation when the diagnostic budget is exhausted.
-  diagnosticCount++;
-  send({ phase: 'diagnostic', code, elapsedMs: Date.now() - startedAt });
+  try {
+    if (diagnosticCount >= 128) return;
+    diagnosticCount++;
+    if (process.connected) process.send({ phase: 'diagnostic', code, elapsedMs: Date.now() - startedAt },
+      () => { /* Async diagnostic delivery failure also cannot replace cleanup. */ });
+  } catch { /* Preserve real operation/cleanup even after synchronous IPC failure. */ }
 }
 let owner;
 let scheduler;

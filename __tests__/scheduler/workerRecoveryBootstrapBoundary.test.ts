@@ -24,11 +24,13 @@ function currentCase() {
   return context;
 }
 function phase(name: string, childElapsedMs?: number) {
-  const context = currentCase();
-  if (context.diagnostics >= 512) return; // Diagnostic limits cannot replace cleanup/effect outcomes.
-  context.diagnostics++;
-  console.info(JSON.stringify({ workerRecoveryPhase: name, elapsedMs: Date.now() - context.startedAt,
-    ...(childElapsedMs === undefined ? {} : { childElapsedMs }) }));
+  try {
+    const context = caseStorage.getStore();
+    if (!context || context.controller.signal.aborted || context.diagnostics >= 512) return;
+    context.diagnostics++;
+    console.info(JSON.stringify({ workerRecoveryPhase: name, elapsedMs: Date.now() - context.startedAt,
+      ...(childElapsedMs === undefined ? {} : { childElapsedMs }) }));
+  } catch { /* Diagnostics cannot replace real operation/cleanup outcomes. */ }
 }
 function delay(milliseconds: number) {
   const signal = currentCase().controller.signal;
