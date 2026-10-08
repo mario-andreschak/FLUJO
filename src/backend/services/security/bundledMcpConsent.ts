@@ -41,14 +41,17 @@ async function initializePrivateLedger(filename: string, request: Request, autho
   try { handle = await fs.promises.open(resolved, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return; throw error; }
   const content = Buffer.from(JSON.stringify({ schemaVersion: 1, ownerId: owner.ownerId, approvals: [] }));
-  let initialized = false, failure: unknown;
+  let initialized = false, failure: unknown, written: fs.BigIntStats | undefined;
+  const stable = (value: fs.BigIntStats) => {
+    const expected = written;
+    return expected !== undefined && value.isFile() && !value.isSymbolicLink() && value.nlink === BigInt(1)
+      && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'].every(field => value[field as keyof fs.BigIntStats] === expected[field as keyof fs.BigIntStats]);
+  };
   try {
     await handle.writeFile(content); await handle.sync();
-    const written = await handle.stat({ bigint: true });
+    written = await handle.stat({ bigint: true });
     const observed = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(resolved, request.signal));
     const current = await handle.stat({ bigint: true }), named = await fs.promises.lstat(resolved, { bigint: true });
-    const stable = (value: fs.BigIntStats) => value.isFile() && !value.isSymbolicLink() && value.nlink === BigInt(1)
-      && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'].every(field => value[field as keyof fs.BigIntStats] === written[field as keyof fs.BigIntStats]);
     if (!stable(current) || !stable(named) || observed.ownerId !== owner.ownerId || observed.approvals.length) throw new Error('Created approval ledger changed.');
     const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
     if (request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval initialization retired.');
@@ -60,7 +63,14 @@ async function initializePrivateLedger(filename: string, request: Request, autho
       if (!initialized) {
         const held = await handle.stat({ bigint: true });
         const named = await fs.promises.lstat(resolved, { bigint: true }).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
-        if (named?.isFile() && !named.isSymbolicLink() && held.nlink === BigInt(1) && named.nlink === BigInt(1) && held.dev === named.dev && held.ino === named.ino) await fs.promises.unlink(resolved);
+        if (named && stable(held) && stable(named)) {
+          const bytes = Buffer.alloc(content.length + 1);
+          try {
+            const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+            if (bytesRead === content.length && bytes.subarray(0, bytesRead).equals(content)
+                && stable(await handle.stat({ bigint: true })) && stable(await fs.promises.lstat(resolved, { bigint: true }))) await fs.promises.unlink(resolved);
+          } finally { bytes.fill(0); }
+        }
       }
     } catch (error) { cleanupErrors.push(error); }
     content.fill(0);
