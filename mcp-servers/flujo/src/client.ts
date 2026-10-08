@@ -130,7 +130,8 @@ export function toolRoute(name: string): string {
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
-  timeoutMs = 30_000,
+  // Fresh package and private-authority fences run throughout authenticated requests.
+  timeoutMs = workloadCredential ? 120_000 : 30_000,
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -242,8 +243,8 @@ export async function flujoRequest<T>(
   if (!name) throw new Error('A FLUJO tool name is required.');
   const requestedTimeout = Number(payload.args?.timeout);
   const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
-    ? Math.max(30_000, Math.ceil(requestedTimeout * 1000) + 5_000)
-    : 30_000;
+    ? Math.max(workloadCredential ? 120_000 : 30_000, Math.ceil(requestedTimeout * 1000) + 5_000)
+    : workloadCredential ? 120_000 : 30_000;
   return requestJson<T>(toolRoute(name), {
     method: 'POST',
     body: JSON.stringify({ name, args: payload.args ?? {} }),

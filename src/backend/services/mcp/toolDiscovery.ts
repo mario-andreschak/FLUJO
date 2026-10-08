@@ -28,8 +28,10 @@ export async function collectToolPages(
 }
 
 /** Also supports client adapters that expose individual pages through listTools. */
-export function listCompleteTools(client: Pick<Client, 'listTools'>): Promise<ListToolsResult> {
-  return collectToolPages((cursor) => cursor === undefined ? client.listTools() : client.listTools({ cursor }));
+export function listCompleteTools(client: Pick<Client, 'listTools'>, options?: RequestOptions): Promise<ListToolsResult> {
+  return collectToolPages((cursor) => options
+    ? client.listTools(cursor === undefined ? undefined : { cursor }, options)
+    : cursor === undefined ? client.listTools() : client.listTools({ cursor }));
 }
 
 /**

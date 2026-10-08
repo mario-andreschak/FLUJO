@@ -144,7 +144,7 @@ export async function listServerTools(
 
   try {
     log.info(`Listing tools for server ${serverName}`);
-    const response = await listCompleteTools(client);
+    const response = await listCompleteTools(client, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
     const tools = response.tools.map((tool) => ({
       // Preserve the complete SDK-validated definition so newer standard
       // display and execution metadata (title, icons, outputSchema, execution)
