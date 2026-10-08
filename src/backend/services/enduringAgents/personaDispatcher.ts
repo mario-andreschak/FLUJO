@@ -1,8 +1,34 @@
 import { createHash, randomUUID } from 'crypto';
 import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createHeldReadScope } from '@/backend/execution/flow/heldReadScope';
 
 const authorityRegistryRoot = globalThis as typeof globalThis & { __flujoPersonaFlowAuthorities?: WeakSet<object> };
 const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthorities ??= new WeakSet<object>();
+export type HeldFlowReadAssertion = (additionalCheck?: () => Promise<void>) => Promise<void>;
+type HeldFlowReadRunner = <T>(task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>) => Promise<T>;
+const heldFlowReadRunners = new WeakMap<object, HeldFlowReadRunner>();
+
+/** Pure membership only: no authority callbacks, state reads or private guards. */
+export function supportsPersonaHeldReadIssuer(value: unknown): value is FlowExecutionAuthority {
+  return typeof value === 'object' && value !== null
+    && personaFlowAuthorities.has(value) && heldFlowReadRunners.has(value);
+}
+
+export function assertPersonaHeldReadIssuer(authority: FlowExecutionAuthority): void {
+  assertPersonaFlowExecutionAuthority(authority);
+  if (!heldFlowReadRunners.has(authority)) throw new Error('Persona authority does not support held reads.');
+}
+
+/** Dispatcher-only issuer lookup; lookalike and inherited authorities cannot mint a scope. */
+export async function readWithPersonaFlowAuthority<T>(
+  authority: FlowExecutionAuthority,
+  task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>,
+): Promise<T> {
+  assertPersonaHeldReadIssuer(authority);
+  const runner = heldFlowReadRunners.get(authority);
+  if (!runner) throw new Error('Persona authority does not support held reads.');
+  return runner(task);
+}
 /** Provenance only: the live lease and goal must still be checked on every use. */
 export function assertPersonaFlowExecutionAuthority(value: unknown): asserts value is FlowExecutionAuthority {
   if (!value || typeof value !== 'object' || !personaFlowAuthorities.has(value) || !Object.isFrozen(value)) {
@@ -2876,6 +2902,47 @@ export class PersonaFlowDispatcher {
 
     Object.freeze(authority);
     personaFlowAuthorities.add(authority);
+    heldFlowReadRunners.set(authority, <T>(task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>) => (
+      this.inWorkspace(async () => {
+        const { readWithPersonaActivityLease } = await import('./activityRuntime');
+        return readWithPersonaActivityLease(fence, async (reader) => {
+          const scope = createHeldReadScope();
+          const assertCurrent: HeldFlowReadAssertion = additionalCheck => scope.run(async () => {
+            abortController.signal.throwIfAborted();
+            if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
+            await reader.assertCurrent();
+            scope.assertActive();
+            await this.assertGoalDispatchCurrent(record, false);
+            scope.assertActive();
+            await reader.assertCurrent();
+            scope.assertActive();
+            abortController.signal.throwIfAborted();
+            if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
+            if (additionalCheck) {
+              await additionalCheck();
+              scope.assertActive();
+              await reader.assertCurrent();
+              scope.assertActive();
+              // The Native guard awaited independently of the dispatch goal.
+              // Re-read that goal after it returns; a fresh lease alone cannot
+              // detect a goal/dispatch mutation on the separate store chain.
+              await this.assertGoalDispatchCurrent(record, false);
+              scope.assertActive();
+              await reader.assertCurrent();
+              scope.assertActive();
+            }
+            abortController.signal.throwIfAborted();
+            if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
+          });
+          try {
+            await assertCurrent();
+            const result = await task(assertCurrent);
+            await assertCurrent();
+            return result;
+          } finally { await scope.close(); }
+        });
+      })
+    ));
 
     // Approval/debug state mutation must happen under the same freshly claimed
     // authority as the continuation. The callback receives no raw fence. A
