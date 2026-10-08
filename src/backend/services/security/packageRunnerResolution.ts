@@ -54,9 +54,14 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
   let total = 0;
   const records: Array<[string, string]> = [];
   const metadata = new Map<string, Buffer>();
+  const identities = new Map<string, string>();
+  const identity = (stat: import('node:fs').BigIntStats) => JSON.stringify([
+    stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.gid, stat.nlink,
+  ].map(value => value.toString()));
   async function walk(directory: string) {
     signal?.throwIfAborted();
     const before = await fs.lstat(directory, { bigint: true });
+    identities.set(directory, identity(before));
     if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('Linked package directory');
     const names = (await fs.readdir(directory)).sort();
     for (const name of names) {
@@ -64,6 +69,7 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
       const filename = path.join(directory, name);
       descendant(root, filename);
       const stat = await fs.lstat(filename, { bigint: true });
+      identities.set(filename, identity(stat));
       if (stat.isDirectory() && !stat.isSymbolicLink()) { await walk(filename); continue; }
       if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== BigInt(1)) throw new Error('Non-plain package member');
       if (stat.size > BigInt(MAX_BYTES - total)) throw new Error('Package closure exceeds byte bound');
@@ -109,6 +115,8 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
         && !lock.packages[key.slice(0, -'/package.json'.length)]) throw new Error('Unrecorded installed package');
   }
   if (artifactFiles) {
+    const originalRecords = JSON.stringify(records);
+    const originalIdentities = JSON.stringify([...identities].sort(([a], [b]) => a.localeCompare(b)));
     const packageKeys = graph.map(([key]) => key).sort((a, b) => b.length - a.length);
     if (Object.keys(artifactFiles).length !== packageKeys.length
         || packageKeys.some(key => !artifactFiles[key])) throw new Error('Incomplete exact dependency artifact set');
@@ -117,6 +125,14 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
         && packageKeys.find(candidate => member.startsWith(candidate + '/')) === key)
         .map(([member, digest]) => [member.slice(key.length + 1), digest]));
       await verifyPackageRunnerArtifact(artifactFiles[key], lock.packages[key].integrity, owned, signal);
+    }
+    // Archive verification yields. Re-read every actual installed member only
+    // after all those awaits, retaining exact identities as well as byte hashes.
+    records.length = 0; metadata.clear(); identities.clear(); count = 0; total = 0;
+    await walk(root);
+    if (JSON.stringify(records) !== originalRecords
+        || JSON.stringify([...identities].sort(([a], [b]) => a.localeCompare(b))) !== originalIdentities) {
+      throw new Error('Installed package closure changed during artifact verification');
     }
   }
   if (manifest.name !== packageName || manifest.version !== entry.version) throw new Error('Package identity differs from lock');
