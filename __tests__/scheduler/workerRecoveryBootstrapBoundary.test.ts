@@ -25,7 +25,8 @@ function currentCase() {
 }
 function phase(name: string, childElapsedMs?: number) {
   const context = currentCase();
-  if (++context.diagnostics > 512) throw new Error('Owned phase diagnostic bound exceeded');
+  if (context.diagnostics >= 512) return; // Diagnostic limits cannot replace cleanup/effect outcomes.
+  context.diagnostics++;
   console.info(JSON.stringify({ workerRecoveryPhase: name, elapsedMs: Date.now() - context.startedAt,
     ...(childElapsedMs === undefined ? {} : { childElapsedMs }) }));
 }

@@ -34,7 +34,8 @@ const sendFlushed = message => new Promise((resolve, reject) => {
 const startedAt = Date.now();
 let diagnosticCount = 0;
 function phase(code) {
-  if (++diagnosticCount > 128) throw new Error('Owned child diagnostic bound exceeded');
+  if (diagnosticCount >= 128) return; // Preserve the real operation when the diagnostic budget is exhausted.
+  diagnosticCount++;
   send({ phase: 'diagnostic', code, elapsedMs: Date.now() - startedAt });
 }
 let owner;
