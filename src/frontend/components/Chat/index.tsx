@@ -112,6 +112,7 @@ import {
   type McpSkillSelection,
 } from '@/shared/types/mcp';
 import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
+import { ModelTurnDetailCache } from './modelTurnDetailCache';
 import {
   LiveActivity,
   EMPTY_LIVE_ACTIVITY,
@@ -588,7 +589,7 @@ const Chat: React.FC = () => {
   const [modelTurnFollowLive, setModelTurnFollowLive] = useState(true);
   const [unseenModelTurnCount, setUnseenModelTurnCount] = useState(0);
   const modelTurnFollowLiveRef = useRef(true);
-  const modelTurnDetailCacheRef = useRef(new Map<string, ModelTurnSnapshot>());
+  const modelTurnDetailCacheRef = useRef(new ModelTurnDetailCache());
   const modelTurnIdsRef = useRef(new Set<string>());
   const modelTurnsRef = useRef<ModelTurnIndexEntry[]>([]);
   // Whether a debug session is active (panel should stay open). Decoupled from
@@ -4744,6 +4745,9 @@ const Chat: React.FC = () => {
       return;
     }
 
+    // Release the previously selected, durably archived snapshot before the
+    // next response is parsed. Revisiting another marker reloads its history.
+    modelTurnDetailCacheRef.current.clear();
     const controller = new AbortController();
     setModelTurnSnapshot(null);
     setModelTurnError(null);
