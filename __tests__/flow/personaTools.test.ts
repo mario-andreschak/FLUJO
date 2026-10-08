@@ -1,5 +1,6 @@
 const rememberMemoryMock = jest.fn();
 const createPersonaGoalWorkItemMock = jest.fn();
+const readPersonaGoalRuntimeMock = jest.fn();
 const searchPersonaMemoryMock = jest.fn();
 const unpinMemoryFromCoreMock = jest.fn();
 const suggestBehaviorInstructionImprovementMock = jest.fn();
@@ -18,6 +19,10 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   ),
   unpinMemoryFromCore: (...args: unknown[]) => unpinMemoryFromCoreMock(...args),
   updatePersonaWorkItem: jest.fn(),
+}));
+
+jest.mock('@/backend/services/enduringAgents/goalRuntimeRead', () => ({
+  readPersonaGoalRuntime: (...args: unknown[]) => readPersonaGoalRuntimeMock(...args),
 }));
 
 jest.mock('@/backend/services/enduringAgents/memoryKernel', () => ({
@@ -100,6 +105,26 @@ describe('authored Persona tools', () => {
       goal: { successCriteria: args.success_criteria },
       sourceRefs: [{ kind: 'activity', id: 'activity_owner' }],
     }), { executionAuthority });
+  });
+
+  it('requires a trusted current Activity before and after owner-scoped Goal runtime reads', async () => {
+    const args = { goal_id: 'goal_owner' };
+    await expect(executePersonaTool('work_item_runtime_read', args, {}))
+      .resolves.toMatchObject({ success: false });
+    expect(readPersonaGoalRuntimeMock).not.toHaveBeenCalled();
+    const executionAuthority = authority();
+    readPersonaGoalRuntimeMock.mockResolvedValue({ state: 'accepted_running', verified: true });
+    const ctx = { executionAuthority, personaAttribution: {
+      personaId: 'persona_owner', activityId: 'activity_owner', behaviorRevisionId: 'revision_owner',
+    } };
+    await expect(executePersonaTool('work_item_runtime_read', args, ctx))
+      .resolves.toMatchObject({ success: true, data: { state: 'accepted_running' } });
+    expect(readPersonaGoalRuntimeMock).toHaveBeenCalledWith('persona_owner', 'goal_owner');
+    expect(executionAuthority.assertCurrent).toHaveBeenCalledTimes(2);
+    (executionAuthority.assertCurrent as jest.Mock).mockRejectedValueOnce(new Error('stale Activity'));
+    await expect(executePersonaTool('work_item_runtime_read', args, ctx))
+      .resolves.toMatchObject({ success: false, error: 'stale Activity' });
+    expect(readPersonaGoalRuntimeMock).toHaveBeenCalledTimes(1);
   });
 
   it('requires evidence ids on the maintenance-only remember facade', () => {

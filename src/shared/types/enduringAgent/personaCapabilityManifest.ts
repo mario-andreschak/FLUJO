@@ -16,6 +16,7 @@ export const PERSONA_NATIVE_ABILITY_IDS = [
   'work_item_list',
   'work_item_create',
   'work_item_goal_create',
+  'work_item_runtime_read',
   'work_item_update',
   'work_item_complete',
   'work_item_promote_todo',
@@ -27,8 +28,8 @@ export type PersonaNativeAbilityId = (typeof PERSONA_NATIVE_ABILITY_IDS)[number]
 
 /** Safe defaults for newly materialized Persona Core Flows. */
 export const DEFAULT_PERSONA_NATIVE_ABILITY_IDS = PERSONA_NATIVE_ABILITY_IDS.filter(
-  (ability): ability is Exclude<PersonaNativeAbilityId, 'forget' | 'resolve_conflict' | 'work_item_goal_create'> => (
-    ability !== 'forget' && ability !== 'resolve_conflict' && ability !== 'work_item_goal_create'
+  (ability): ability is Exclude<PersonaNativeAbilityId, 'forget' | 'resolve_conflict' | 'work_item_goal_create' | 'work_item_runtime_read'> => (
+    ability !== 'forget' && ability !== 'resolve_conflict' && ability !== 'work_item_goal_create' && ability !== 'work_item_runtime_read'
   ),
 );
 
