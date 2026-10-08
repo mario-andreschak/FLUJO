@@ -328,6 +328,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       expect(foreignDescriptors).toContain(acquired);
       await expect(transport.close()).rejects.toThrow();
       for (const fd of foreignDescriptors) expect(actualStat(fd).isFile()).toBe(true);
+      expect(fs.readFileSync(unrelated, 'utf8')).toBe('{"unrelated":"preserve"}');
       for (const fd of foreignDescriptors) actualClose(fd);
       foreignDescriptors.length = 0;
       expectedCloseCount = 4;
