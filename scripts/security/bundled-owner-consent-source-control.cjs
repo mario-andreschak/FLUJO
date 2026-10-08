@@ -41,6 +41,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const config={...descriptors.createShippedServerConfig(descriptor,{FLUJO_DATA_DIR:process.env.FLUJO_DATA_DIR}),roots:[target]};config.env.FLUJO_FS_ROOTS=target;
   const stored=require(path.join(sourceRoot,'src/backend/services/mcp/config.ts'));assert.equal((await stored.saveConfig(new Map([[config.name,config]]))).success,true);
   const consent=require(path.join(sourceRoot,'src/backend/services/security/bundledMcpConsent.ts'));
+  const {readPrivateApprovalAsync}=require(path.join(sourceRoot,'src/backend/services/security/trustedHostMcp.ts'));
   const makeRequest=()=>new Request('http://127.0.0.1/api/mcp/servers/filesystem/host-consent',{method:'POST',headers:{Authorization:`Bearer ${credential.token}`}});
   const ordinary=require(path.join(sourceRoot,'src/backend/services/mcp/connection.ts'));
   const beta=require(path.join(sourceRoot,'src/backend/services/mcp/betaClient.ts'));
@@ -53,7 +54,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    await assert.rejects(consent.approveBundledHostConsent(new Request('http://127.0.0.1'),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000}),e=>e.response?.status===401);
    if(era==='v1')assert.equal(fs.existsSync(ledgerFilename),false);
    await assert.rejects(consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:'0'.repeat(64),expiresAt:Date.now()+120000}));
-   if(era==='v1'){const initialized=JSON.parse(fs.readFileSync(ledgerFilename,'utf8'));assert.equal(initialized.ownerId,'synthetic-fixture-owner');assert.deepEqual(initialized.approvals,[]);console.log(JSON.stringify({stage:'operator-ledger-initialized',missingBearerCreatedNoFile:true,actualPrivateOwnerInitializedEmptyLedger:true,staleReviewCreatedNoGrant:true}));}
+   if(era==='v1'){const initialized=await readPrivateApprovalAsync(ledgerFilename);assert.equal(initialized.ownerId,'synthetic-fixture-owner');assert.deepEqual(initialized.approvals,[]);console.log(JSON.stringify({stage:'operator-ledger-initialized',missingBearerCreatedNoFile:true,actualPrivateOwnerInitializedEmptyLedger:true,staleReviewCreatedNoGrant:true}));}
    const approvalStarted=performance.now();
    await consent.approveBundledHostConsent(makeRequest(),config.name,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000});
    const approvalMs=performance.now()-approvalStarted;
@@ -62,7 +63,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    const launchStarted=performance.now();
    transport=era==='v1'?ordinary.createStdioTransport(approved):beta.createBetaTransport(approved);
    const client=era==='v1'?ordinary.createNewClient(approved):beta.createNewBetaClient(approved);await client.connect(transport);
-   const grant=JSON.parse(fs.readFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE,'utf8')).approvals.find(item=>item.serverName===approved.name);
+   const grant=(await readPrivateApprovalAsync(ledgerFilename)).approvals.find(item=>item.serverName===approved.name);
    const launchInitializeMs=performance.now()-launchStarted;
    console.log(JSON.stringify({stage:'bundle-before-read',sdk:era,elapsedMs:performance.now()-started,grantRemainingMs:grant.expiresAt-Date.now(),launchInitializeMs}));
    const toolsStarted=performance.now();

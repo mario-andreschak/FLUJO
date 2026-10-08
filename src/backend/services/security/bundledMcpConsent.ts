@@ -47,12 +47,23 @@ async function initializePrivateLedger(filename: string, request: Request, autho
     return expected !== undefined && value.isFile() && !value.isSymbolicLink() && value.nlink === BigInt(1)
       && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'].every(field => value[field as keyof fs.BigIntStats] === expected[field as keyof fs.BigIntStats]);
   };
+  const assertExactSeed = async () => {
+    const bytes = Buffer.alloc(content.length + 1);
+    try {
+      if (!stable(await handle.stat({ bigint: true })) || !stable(await fs.promises.lstat(resolved, { bigint: true }))) throw new Error('Created approval seed identity changed.');
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+      if (bytesRead !== content.length || !bytes.subarray(0, bytesRead).equals(content)) throw new Error('Created approval seed bytes changed.');
+      if (!stable(await handle.stat({ bigint: true })) || !stable(await fs.promises.lstat(resolved, { bigint: true }))) throw new Error('Created approval seed identity changed.');
+    } finally { bytes.fill(0); }
+  };
   try {
     await handle.writeFile(content); await handle.sync();
     written = await handle.stat({ bigint: true });
+    await assertExactSeed();
     const observed = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(resolved, request.signal));
     const current = await handle.stat({ bigint: true }), named = await fs.promises.lstat(resolved, { bigint: true });
     if (!stable(current) || !stable(named) || observed.ownerId !== owner.ownerId || observed.approvals.length) throw new Error('Created approval ledger changed.');
+    await assertExactSeed();
     const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
     if (request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval initialization retired.');
     initialized = true;

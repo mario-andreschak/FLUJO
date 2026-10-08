@@ -77,6 +77,27 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    fs.openSync=function(...args){const fd=Reflect.apply(originalOpenSync,fs,args);if(path.resolve(String(args[0]))===seedFilename&&!seedRewritten){seedRewritten=true;fs.writeFileSync(seedFilename,foreignSeed,{mode:0o600});}return fd;};
    try{await assert.rejects(consent.approveBundledHostConsent(request,'filesystem',seedOptions));assert.equal(seedRewritten,true);assert.equal(fs.readFileSync(seedFilename,'utf8'),foreignSeed);}finally{fs.openSync=originalOpenSync;}
    fs.unlinkSync(seedFilename);
+   const originalOpen=fs.promises.open;
+   for(const rewrite of[
+    JSON.stringify({schemaVersion:1,ownerId:previous.ownerId,approvals:[],unexpected:'foreign bytes'}),
+    JSON.stringify({approvals:[],ownerId:previous.ownerId,schemaVersion:1},null,2),
+   ]){
+    let rewrittenBeforeStamp=false;
+    fs.promises.open=async function(...args){
+     const handle=await Reflect.apply(originalOpen,fs.promises,args);
+     if(path.resolve(String(args[0]))===seedFilename&&(args[1]&fs.constants.O_EXCL)){
+      const originalSync=handle.sync.bind(handle);
+      handle.sync=async()=>{await originalSync();fs.writeFileSync(seedFilename,rewrite,{mode:0o600});rewrittenBeforeStamp=true;};
+     }
+     return handle;
+    };
+    try{
+     await assert.rejects(consent.approveBundledHostConsent(request,'filesystem',seedOptions),/Created approval seed bytes changed/);
+     assert.equal(rewrittenBeforeStamp,true);assert.equal(fs.readFileSync(seedFilename,'utf8'),rewrite);
+    }finally{fs.promises.open=originalOpen;}
+    fs.unlinkSync(seedFilename);
+   }
+   console.log(JSON.stringify({sourceControl:'exact-created-ledger-seed',actualSameInodeRewriteBeforeWrittenStamp:true,sameOwnerEmptyLedgerExtraFieldsRefusedAndPreserved:true,semanticallyIdenticalReorderedPrettyLedgerRefusedAndPreserved:true}));
    let replaced=false;const retainedSeed=path.join(path.dirname(filename),'retained-own-seed.json');
    fs.openSync=function(...args){const fd=Reflect.apply(originalOpenSync,fs,args);if(path.resolve(String(args[0]))===seedFilename&&!replaced){replaced=true;fs.renameSync(seedFilename,retainedSeed);fs.writeFileSync(seedFilename,'synthetic foreign seed replacement',{mode:0o600});}return fd;};
    try{await assert.rejects(consent.approveBundledHostConsent(request,'filesystem',seedOptions));assert.equal(replaced,true);assert.equal(fs.readFileSync(seedFilename,'utf8'),'synthetic foreign seed replacement');}finally{fs.openSync=originalOpenSync;}
