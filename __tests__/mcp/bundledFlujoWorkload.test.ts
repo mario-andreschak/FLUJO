@@ -103,11 +103,17 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
   const cancellation = new AbortController();
   const deadline = setTimeout(() => cancellation.abort(new Error('Workload fixture cancellation deadline.')), 55_000);
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
-  let readerB!: typeof import('@/backend/services/security/trustedHostMcp');
-  jest.isolateModules(() => {
-    graphB = jest.requireActual('@/backend/services/security/bundledFlujoWorkload');
-    readerB = jest.requireActual('@/backend/services/security/trustedHostMcp');
+  let readerDelegate!: { current: typeof import('@/backend/services/security/trustedHostMcp').readPrivateApprovalSetAsync };
+  if (mode === 'deferred-owner-drift') jest.doMock('@/backend/services/security/trustedHostMcp', () => {
+    const actual = jest.requireActual<typeof import('@/backend/services/security/trustedHostMcp')>('@/backend/services/security/trustedHostMcp');
+    readerDelegate = { current: actual.readPrivateApprovalSetAsync };
+    return { ...actual, readPrivateApprovalSetAsync: (...args: Parameters<typeof actual.readPrivateApprovalSetAsync>) => readerDelegate.current(...args) };
   });
+  try {
+    jest.isolateModules(() => { graphB = jest.requireActual('@/backend/services/security/bundledFlujoWorkload'); });
+  } finally {
+    if (mode === 'deferred-owner-drift') jest.dontMock('@/backend/services/security/trustedHostMcp');
+  }
   expect(graphB.assertBundledFlujoWorkloadEffectCurrent).not.toBe(jest.requireActual('@/backend/services/security/bundledFlujoWorkload').assertBundledFlujoWorkloadEffectCurrent);
   const serviceKey = Symbol('Source control global graph B service');
   const capturedService = Object.freeze({ assertEffect: graphB.assertBundledFlujoWorkloadEffectCurrent });
@@ -193,15 +199,15 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     if (mode === 'deferred-owner-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       await timed('graph-b-prime', () => capturedService.assertEffect());
-      const actualRead = readerB.readPrivateApprovalSetAsync;
+      const actualRead = readerDelegate.current;
       let enter!: () => void, release!: () => void, paused = false;
       const entered = new Promise<void>(resolve => { enter = resolve; });
       const continuation = new Promise<void>(resolve => { release = resolve; });
-      const read = jest.spyOn(readerB, 'readPrivateApprovalSetAsync').mockImplementation(async (filenames, signal) => {
+      readerDelegate.current = async (filenames, signal) => {
         const value = await actualRead(filenames, signal);
         if (filenames.includes(ownerFilename) && !paused) { paused = true; stamp('owner-read:entered'); enter(); await continuation; }
         return value;
-      });
+      };
       const checking = timed('graph-b-drift', () => capturedService.assertEffect());
       try {
         // Observe early completion/refusal as well as the gate; always release
@@ -217,7 +223,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       } finally {
         release();
         try { await checking; } catch { /* The refusal is asserted above; drain before fixture restoration. */ }
-        read.mockRestore(); fs.writeFileSync(ownerFilename, originalOwner);
+        readerDelegate.current = actualRead; fs.writeFileSync(ownerFilename, originalOwner);
       }
     });
     expect(producer).not.toHaveBeenCalled();
