@@ -1,3 +1,4 @@
+import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
@@ -125,6 +126,8 @@ export interface TransportWithConfigKey {
   __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
   /** Capability lease for one managed MCP Apps stdio process generation. */
   __flujoRuntimeBrokerLeaseId?: string;
+  /** Opaque pending capability for this bundled FLUJO process generation. */
+  __flujoBundledWorkload?: PendingBundledFlujoWorkload;
   /** Inner SDK transport when FLUJO applies a protocol decorator. */
   __flujoInnerTransport?: unknown;
 }
@@ -1019,9 +1022,12 @@ export function createStdioTransport(
   }
 
   const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
-  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
-    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
-    : undefined;
+  let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
+  let workload: PendingBundledFlujoWorkload | undefined;
+  const retireRuntimeAuthority = () => {
+    try { if (workload) revokePendingWorkload(workload); }
+    finally { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); }
+  };
 
   // Create the transport with stderr capture
   log.info(
@@ -1030,10 +1036,14 @@ export function createStdioTransport(
 
   let transport: StdioClientTransport;
   try {
+    workload = prepareBundledFlujoWorkload(config);
+    runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+      ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
+    const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
     const transportoptions: StdioServerParameters = {
       command: command,
       args: args,
-      env: runtimeBroker ? { ...env, ...(isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) } : env,
+      env: { ...env, ...(runtimeBroker ? (isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) : {}), ...workloadEnv },
       cwd: cwd,
       stderr: isolation ? 'ignore' : 'pipe',
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -1045,17 +1055,21 @@ export function createStdioTransport(
     }
 
     transport = new StdioClientTransport(transportoptions);
-    if (isolation) attachMcpIsolation(transport, config, isolation, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
-    else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
+    if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
+    else attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
   } catch (error) {
-    isolation?.close();
-    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    const cleanupErrors: unknown[] = [];
+    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
   if (runtimeBroker) {
     (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
       runtimeBroker.leaseId;
   }
+
+  (transport as unknown as TransportWithConfigKey).__flujoBundledWorkload = workload;
 
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
@@ -1431,10 +1445,17 @@ export async function safelyCloseClient(
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
-    isolationCleanup = isolation?.close();
-    revokeMcpAppRuntimeBrokerLease(
-      (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
-    );
+    try { isolationCleanup = isolation?.close(); }
+    finally {
+      try {
+        const workload = (rawTransport as TransportWithConfigKey | undefined)?.__flujoBundledWorkload;
+        if (workload) revokePendingWorkload(workload);
+      } finally {
+        revokeMcpAppRuntimeBrokerLease(
+          (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
+        );
+      }
+    }
   }
   // SDK close can itself observe exit after the bounded tree-kill wait ended.
   if (processOwnership === 'owned' && child) {

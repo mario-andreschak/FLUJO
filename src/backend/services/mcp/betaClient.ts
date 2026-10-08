@@ -1,3 +1,4 @@
+import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   Client as BetaClient,
@@ -293,15 +294,22 @@ export function createBetaTransport(
 
   // Admission above leaves only explicit stdio after the remote branches.
   const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
-  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
-    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
-    : undefined;
+  let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
+  let workload: PendingBundledFlujoWorkload | undefined;
+  const retireRuntimeAuthority = () => {
+    try { if (workload) revokePendingWorkload(workload); }
+    finally { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); }
+  };
   let transport: BetaStdioClientTransport;
   try {
+    workload = prepareBundledFlujoWorkload(config);
+    runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+      ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
+    const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
     const parameters = {
       command,
       args,
-      env: runtimeBroker ? { ...env, ...(isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) } : env,
+      env: { ...env, ...(runtimeBroker ? (isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) : {}), ...workloadEnv },
       cwd,
       stderr: isolation ? 'ignore' as const : 'pipe' as const,
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -312,15 +320,18 @@ export function createBetaTransport(
       Object.freeze(parameters);
     }
     transport = new BetaStdioClientTransport(parameters);
-    if (isolation) attachMcpIsolation(transport, config, isolation, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
-    else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
+    if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
+    else attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
   } catch (error) {
-    isolation?.close();
-    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    const cleanupErrors: unknown[] = [];
+    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
   const keyed = transport as unknown as TransportWithConfigKey;
   keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
+  keyed.__flujoBundledWorkload = workload;
   keyed.__flujoStdioKey = stdioConfigKey(
     config,
     options?.isolateRuntimeHome === true,
