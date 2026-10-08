@@ -59,7 +59,9 @@ export function pairFirstOwner(request: Request, confirmed: boolean, now = Date.
   const configured = grant(now);
   const principal = authenticateOwnerBearer(request, configured.grant, now);
   if (!principal) throw new Error();
-  const issued = issueOwnerCredential(['control:admin', 'secrets:read'], now + 365 * 24 * 60 * 60 * 1000, now);
+  // Enrollment authorizes the owner to review MCP proposals; each host still
+  // requires its own explicit approval before it can execute.
+  const issued = issueOwnerCredential(['control:admin', 'secrets:read', 'mcp:access'], now + 365 * 24 * 60 * 60 * 1000, now);
   const policy: OwnerPolicy = { schemaVersion: 1, ownerId: principal.ownerId, credentials: [issued.record] };
   const staged = path.join(configured.directory, `.owner-enrollment-${randomUUID()}`);
   const fd = fs.openSync(staged, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
