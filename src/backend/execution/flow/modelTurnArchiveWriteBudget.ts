@@ -2,7 +2,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants, promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { types } from 'node:util';
-import { z } from 'zod';
+import type { z } from 'zod';
+import { getOwnedArchiveSchema, isOwnedArchiveDescriptor, type ArchiveSchemaProjectionPolicy } from '@/backend/services/model/adapters/ownedArchiveSchema';
 
 export function archiveOmission(key: string): string | undefined {
   if (/(api[_-]?key|authorization|cookie|(?:^|[_-])(?:access[_-]?|refresh[_-]?|oauth[_-]?)?token$|secret|password|signature)/i.test(key)) return '[redacted]';
@@ -12,7 +13,14 @@ export function archiveOmission(key: string): string | undefined {
 }
 
 export function isArchiveSchema(value: object): value is z.ZodType {
-  return !types.isProxy(value) && value instanceof z.ZodType;
+  if (types.isProxy(value)) return false;
+  // Zod's Symbol.hasInstance reads _zod.traits and can invoke a user getter.
+  // Recognize its public/opaque own descriptors without following that graph.
+  const marker = Object.getOwnPropertyDescriptor(value, '_zod');
+  const projector = Object.getOwnPropertyDescriptor(value, 'toJSONSchema');
+  const kind = Object.getOwnPropertyDescriptor(value, 'type');
+  return !!marker && !marker.enumerable && 'value' in marker
+    && typeof projector?.value === 'function' && typeof kind?.value === 'string';
 }
 
 /** Intrinsic Object prototypes can come from another VM/structuredClone realm. */
@@ -64,7 +72,7 @@ function refuse(code: ModelTurnArchiveMemoryError['code']): never {
 }
 
 /** Bounded descriptor walk: no stringify, getters, JSON hooks, or full clones. */
-export function estimateArchivePayload(value: unknown, schemaFound?: () => void, archiveProjection = false): number {
+export function estimateArchivePayload(value: unknown, archiveProjection = false, unowned?: (schema: object) => void): number {
   let bytes = 0;
   let inspected = 0;
   const seen = new WeakSet<object>();
@@ -74,7 +82,7 @@ export function estimateArchivePayload(value: unknown, schemaFound?: () => void,
       refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     }
   };
-  const visit = (item: unknown, depth: number): void => {
+  const visit = (item: unknown, depth: number, schemaData = false): void => {
     if (++inspected > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues || depth > MODEL_TURN_ARCHIVE_WRITE_LIMITS.depth) {
       refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     }
@@ -98,7 +106,13 @@ export function estimateArchivePayload(value: unknown, schemaFound?: () => void,
     if (seen.has(item)) { add(32); return; }
     seen.add(item);
     add(128);
-    if (archiveProjection && isArchiveSchema(item)) { schemaFound?.(); seen.delete(item); return; }
+    schemaData ||= isOwnedArchiveDescriptor(item);
+    if (archiveProjection && isArchiveSchema(item)) {
+      const descriptor = getOwnedArchiveSchema(item);
+      if (descriptor) visit(descriptor, depth + 1, true);
+      else unowned?.(item);
+      seen.delete(item); return;
+    }
     if (ArrayBuffer.isView(item)) { add(item.buffer.byteLength); seen.delete(item); return; }
     if (item instanceof ArrayBuffer) { add(item.byteLength); seen.delete(item); return; }
     // Map/Set and arbitrary private graphs are not an admitted archive format.
@@ -114,11 +128,11 @@ export function estimateArchivePayload(value: unknown, schemaFound?: () => void,
       if (++inspected > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
       const descriptor = Object.getOwnPropertyDescriptor(item, key);
       if (!descriptor) continue;
-      const omitted = archiveProjection ? archiveOmission(key) : undefined;
+      const omitted = archiveProjection && !schemaData ? archiveOmission(key) : undefined;
       if (omitted !== undefined) { add(key.length * 2 + 128); continue; }
       if (!('value' in descriptor)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
       add(key.length * 2 + 32);
-      visit(descriptor.value, depth + 1);
+      visit(descriptor.value, depth + 1, schemaData);
     }
     seen.delete(item); // Count each serialization occurrence, not just identity.
   };
@@ -160,18 +174,23 @@ interface WriteScope {
   reservedEstimate: number;
   pendingCloses: number;
   settled: boolean;
+  schemaProjectionPolicy: ArchiveSchemaProjectionPolicy;
 }
 
 /** Callback evaluation/cloning must occur inside this admitted boundary. */
-export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Promise<T>): Promise<T> {
+export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Promise<T>,
+  schemaProjectionPolicy: ArchiveSchemaProjectionPolicy = 'legacy-unbounded'): Promise<T> {
   // Re-entrant or escaped AsyncLocalStorage work cannot borrow a spent permit.
   if (scopes.getStore()) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
   // Covers copied object/string views, serialization, UTF8 and compression work.
-  let schema = false;
-  const estimate = estimateArchivePayload(payload, () => { schema = true; }, true) * 4;
-  const reservedEstimate = schema ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
+  let legacy = false;
+  const estimate = estimateArchivePayload(payload, true, () => {
+    if (schemaProjectionPolicy === 'owned-only') refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+    legacy = true;
+  }) * 4;
+  const reservedEstimate = legacy ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
   const reservation = reserve(reservedEstimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true);
-  const scope: WriteScope = { reservation, reservedEstimate, pendingCloses: 0, settled: false };
+  const scope: WriteScope = { reservation, reservedEstimate, pendingCloses: 0, settled: false, schemaProjectionPolicy };
   try { return await scopes.run(scope, task); }
   finally {
     scope.settled = true;
@@ -180,12 +199,15 @@ export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Pr
 }
 
 /** Recheck references after an ownership await, before clones or serialization. */
-export function recheckArchiveWriteMemory(payload: unknown): void {
+export function recheckArchiveWriteMemory(payload: unknown, serializedData = false): void {
   const scope = scopes.getStore();
   if (!scope || scope.settled) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
-  let schema = false;
-  const estimate = estimateArchivePayload(payload, () => { schema = true; }, true) * 4;
-  const required = schema ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
+  let legacy = false;
+  const estimate = estimateArchivePayload(payload, !serializedData, () => {
+    if (scope.schemaProjectionPolicy === 'owned-only') refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+    legacy = true;
+  }) * 4;
+  const required = legacy ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
   if (required > scope.reservedEstimate) {
     scope.reservation.grow(required - scope.reservedEstimate);
     scope.reservedEstimate = required;
@@ -247,3 +269,8 @@ export async function settleArchiveWrites<T>(tasks: Array<Promise<T>>): Promise<
 }
 
 export function getArchiveWritePressure() { return { ...ledger, limits: { ...MODEL_TURN_ARCHIVE_WRITE_LIMITS } }; }
+export function getArchiveSchemaProjectionPolicy(): ArchiveSchemaProjectionPolicy {
+  const scope = scopes.getStore();
+  if (!scope || scope.settled) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
+  return scope.schemaProjectionPolicy;
+}

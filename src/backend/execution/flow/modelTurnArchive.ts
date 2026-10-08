@@ -3,10 +3,11 @@ import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
-import { z } from 'zod';
+import { projectArchiveSchema, isOwnedArchiveDescriptor, type ArchiveSchemaProjectionPolicy } from '@/backend/services/model/adapters/ownedArchiveSchema';
 import { types as utilTypes } from 'node:util';
 import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
-  settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema, isArchivePlainObject } from './modelTurnArchiveWriteBudget';
+  settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema, isArchivePlainObject,
+  getArchiveSchemaProjectionPolicy } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -247,27 +248,23 @@ async function sanitizeValue(
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'function') return '[function omitted]';
   if (typeof value !== 'object') return String(value);
+  if (isOwnedArchiveDescriptor(value as object)) {
+    recheckArchiveWriteMemory(value, true);
+    return value;
+  }
   if (utilTypes.isProxy(value)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
   if (seen.has(value as object)) return '[circular]';
   seen.add(value as object);
+  try {
 
-  // Zod schemas are sometimes legitimate inputs to an agent SDK (notably the
-  // Claude Agent SDK's in-process MCP tools). Object.entries(schema) exposes
-  // Zod's large private implementation graph, however, and that graph is not
-  // what the SDK serializes for the model. Zod 4 exposes the public JSON-Schema
-  // projection on each schema; archive that provider-facing representation.
+  // Preserve metered constructor-produced schema representation without
+  // traversing Zod internals or invoking a projector/default/lazy closure.
   if (isArchiveSchema(value as object)) {
     try {
-      const projected = z.toJSONSchema(value as z.ZodType);
-      recheckArchiveWriteMemory(projected);
-      return await sanitizeValue(
-        projected,
-        parameterPath,
-        ctx,
-        parent,
-        key,
-        seen,
-      );
+      const projected = projectArchiveSchema(value, getArchiveSchemaProjectionPolicy());
+      recheckArchiveWriteMemory(projected, true);
+      if (isOwnedArchiveDescriptor(projected)) return projected;
+      return await sanitizeValue(projected, parameterPath, ctx, parent, key, seen);
     } catch (error) {
       if (error instanceof ModelTurnArchiveMemoryError) throw error;
       return '[schema could not be serialized]';
@@ -322,6 +319,11 @@ async function sanitizeValue(
     );
   }
   return out;
+  } finally {
+    // Shared immutable constructor descriptors are serialized at each real
+    // occurrence. Only active recursion edges become circular markers.
+    seen.delete(value as object);
+  }
 }
 
 async function writeAtomic(file: string, data: Buffer, durable = false): Promise<void> {
@@ -354,6 +356,8 @@ async function writeAtomic(file: string, data: Buffer, durable = false): Promise
 }
 
 export interface ArchiveModelDispatchInput {
+  /** Explicit strict opt-in; default preserves existing arbitrary-Zod compatibility. */
+  schemaProjectionPolicy?: ArchiveSchemaProjectionPolicy;
   /** Mandatory preallocated origin ID for a journalled native dispatch. */
   id?: string;
   durableContext?: FlowDurableMutationContext;
@@ -383,7 +387,7 @@ export function archiveModelDispatch(
       recheckArchiveWriteMemory(payload);
       return archiveModelDispatchWithinMutation(prepare ? prepare() : input);
     },
-  )));
+  )), input.schemaProjectionPolicy ?? 'legacy-unbounded');
 }
 
 async function archiveModelDispatchWithinMutation(
@@ -440,7 +444,7 @@ async function archiveModelDispatchWithinMutation(
     visualCompaction: input.visualCompaction,
     contextCompaction: input.modelInput?.contextCompaction,
   };
-  recheckArchiveWriteMemory(snapshot);
+  recheckArchiveWriteMemory(snapshot, true);
 
   await settleArchiveWrites([...ctx.writes.entries()].map(async ([sha256, bytes]) => {
     const target = mediaPath(input.conversationId, sha256);

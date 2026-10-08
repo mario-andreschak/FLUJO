@@ -34,7 +34,13 @@ Conservative rejection can occur below
 actual available memory. These thresholds have not been ratified as the #569
 operational budget and may reject an original-shape large-context dispatch.
 
-Actual Zod schemas use the official `z.toJSONSchema` projection under an already
+Owned tool schemas now carry immutable constructor-generated descriptors; see
+[owned schema construction](owned-schema-construction.md) for the proposed limits
+and qualification requirements. Their archive path avoids the official projector.
+Default `legacy-unbounded` policy preserves unowned schema compatibility; explicit
+`owned-only` policy rejects unowned schemas before the archive callback.
+
+Unowned Zod schemas use the official `z.toJSONSchema` projection under an already
 held full 256 MiB write reservation, then the bounded output walk runs before
 sanitization and serialization. Arbitrary `toJSONSchema` hooks are not invoked.
 This preserves ordinary Zod/AbortSignal SDK archive metadata without walking

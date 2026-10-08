@@ -36,7 +36,8 @@ import {
   toAnthropicImageMediaType,
 } from './messageUtils';
 import { normalizeMessageInput, isMalformedToolCallProse } from './messageNormalization';
-import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
+import { embedSchemaInDescription } from './jsonSchemaToZod';
+import { createOwnedToolSchemaBuilder } from './ownedArchiveSchema';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { ClaudeUsageTracker } from './claudeUsageTracker';
 import {
@@ -564,6 +565,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // tools (e.g. the flow generator's marketplace search/install) dispatch to the
     // executor supplied via localToolExecutors. Anything else is omitted from an
     // agentic run.
+    const buildToolInputShape = createOwnedToolSchemaBuilder();
+    const hostToolShapes: Array<{ name: string; properties: Readonly<Record<string, unknown>> }> = [];
+    const nativeToolShapes: Array<{ name: string; properties: Readonly<Record<string, unknown>> }> = [];
     const sdkTools = (tools ?? [])
       .filter(t => t.type === 'function')
       .map(t => {
@@ -576,7 +580,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Build the Zod raw shape and, when a composed/ref schema couldn't be
         // faithfully translated, surface the original JSON Schema in the
         // description so the model still sees the real contract (issue #232).
-        const { shape: schemaShape, fallbackSchema } = buildToolInputShape(t.function.parameters);
+        const { shape: schemaShape, fallbackSchema, archiveShape } = buildToolInputShape(t.function.parameters);
+        hostToolShapes.push({ name: fnName, properties: archiveShape });
         const description = embedSchemaInDescription(t.function.description ?? '', fallbackSchema);
 
         if (handoff) {
@@ -818,7 +823,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       .filter((t): t is NonNullable<typeof t> => t !== null);
     const effectiveSdkTools = nativeToolPort
       ? nativeToolPort.advertised.map(advertised => {
-          const { shape, fallbackSchema } = buildToolInputShape(advertised.inputSchema);
+          const { shape, fallbackSchema, archiveShape } = buildToolInputShape(advertised.inputSchema);
+          nativeToolShapes.push({ name: advertised.name, properties: archiveShape });
           return tool(advertised.name,
             embedSchemaInDescription(advertised.description, fallbackSchema), shape,
             async (args: Record<string, unknown>): Promise<CallToolResult> => {
@@ -1068,7 +1074,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       dispatchId = await onSdkRequest?.({
         adapter: 'claude-cli',
         operation: 'query',
-        request: { prompt: sdkPromptMessage, options: queryOptions },
+        request: { prompt: sdkPromptMessage, options: queryOptions,
+          ownedToolShapes: nativeToolPort ? nativeToolShapes : hostToolShapes },
       });
       if (nativeToolPort && dispatchId !== nativeToolPort.invocationId) {
         throw new Error('Native Claude SDK dispatch receipt differs from its broker origin.');
