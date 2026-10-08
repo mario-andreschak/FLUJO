@@ -50,10 +50,11 @@ test.each(['success', 'publication-failure'] as const)('protected approval write
     const before = fs.readFileSync(ledger);
     const entries = fs.readdirSync(path.dirname(ledger)).sort();
     const failure = new Error('private-native-rename-canary');
+    let ledgerRenameAttempts = 0;
     if (mode === 'publication-failure') {
       const actualRename = fs.promises.rename.bind(fs.promises);
       rename = jest.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
-        if (String(to) === ledger) throw failure;
+        if (String(to) === ledger) { ledgerRenameAttempts += 1; throw failure; }
         return actualRename(from, to);
       });
     }
@@ -71,6 +72,8 @@ test.each(['success', 'publication-failure'] as const)('protected approval write
     } else {
       expect(caught).toBeInstanceOf(BundledConsentDiagnostic);
       expect(consentDiagnosticCode(caught)).toBe('APPROVAL_PUBLICATION');
+      expect(ledgerRenameAttempts).toBe(1);
+      expect((caught as Error).cause).toBe(failure);
       expect((caught as Error).message).not.toContain(failure.message);
       expect(fs.readFileSync(ledger)).toEqual(before);
       const configs = await loadServerConfigs();
