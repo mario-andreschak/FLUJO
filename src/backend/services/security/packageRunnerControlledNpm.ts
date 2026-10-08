@@ -17,6 +17,7 @@ export interface ControlledNpmResolution {
 export async function buildControlledNpmExecRevision(npmRoot: string, input: ControlledNpmResolution,
   signal?: AbortSignal): Promise<{ source: string; upstreamSha256: string; controlledSha256: string }> {
   if (!path.isAbsolute(npmRoot) || !path.isAbsolute(input.cwd) || !path.isAbsolute(input.binShim)
+      || [input.cwd, input.binShim].some(value => /[\0\r\n"'`$%!&|<>^]/.test(value))
       || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(input.packageName)
       || !/^[a-z0-9][a-z0-9._-]*$/.test(input.binName)
       || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(input.version)) {
