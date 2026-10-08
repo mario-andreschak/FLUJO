@@ -448,12 +448,14 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
   live(); phase('source-enter');
   const sourceRoot = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'flujo-transfer-source-'));
   const sourceOwnership = captureOwnedFixtureDirectory(sourceRoot);
-  phase('source-ready');
+  phase('source-ready'); live();
   const client = new Client({ name: 'hot-clone-filesystem-smoke', version: '1.0.0' }, { capabilities: { roots: { listChanged: true } } });
   const sourceFiles = path.join(sourceRoot, 'userdata', 'files');
   const targetFiles = path.join(mockWorkspace, 'userdata', 'files');
   await fs.mkdir(sourceFiles, { recursive: true });
+  live();
   await fs.mkdir(targetFiles, { recursive: true });
+  live();
   const config = server({
     name: 'my-files', command: 'node', rootPath: path.join(sourceRoot, 'old-app', 'mcp-servers', 'filesystem'),
     args: [path.join(sourceRoot, 'old-app', 'mcp-servers', 'filesystem', 'dist', 'index.js')],
@@ -465,8 +467,16 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
   const owner = installBundledFixtureOwner();
   let child: ChildProcessWithoutNullStreams | undefined;
   let startEntered = false;
-  const observed = { exit: false, close: false, stdoutEnd: false, stderrEnd: false };
+  const observed = { exit: false, close: false, stdoutEnd: false, stderrEnd: false, error: false };
+  const childFailures: unknown[] = [];
+  const rememberChildFailure = (error: unknown) => {
+    observed.error = true;
+    try { childFailures.push(error); } catch { /* Uncertainty flag survives a failed error sink. */ }
+  };
+  let connectionPrimary: unknown;
+  let connectionFailed = false;
   connect.mockImplementationOnce(async () => {
+    try {
     const rebuilt = updateConfig.mock.calls[0][1];
     live(); phase('preview-enter');
     const { previewBundledHostConsent, approveBundledHostConsent } = await import('@/backend/services/security/bundledMcpConsent');
@@ -483,7 +493,6 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
     const { getManagedTrustedHost } = await import('@/backend/services/mcp/trustedHost');
     phase('transport-import-ready'); live();
     const transport = createStdioTransport(approved.config);
-    transport.stderr?.resume();
     context.retire = () => { getManagedTrustedHost(transport)?.retire(); };
     const start = transport.start.bind(transport);
     transport.start = async () => {
@@ -498,12 +507,26 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
       child.once('close', () => { observed.close = true; });
       child.stdout.once('end', () => { observed.stdoutEnd = true; });
       child.stderr.once('end', () => { observed.stderrEnd = true; });
+      child.on('error', rememberChildFailure);
+      child.stdin.on('error', rememberChildFailure);
+      child.stdout.on('error', rememberChildFailure);
+      child.stderr.on('error', rememberChildFailure);
+      for (const stream of [child.stdin, child.stdout, child.stderr]) {
+        if (stream.errored) rememberChildFailure(stream.errored);
+      }
+      // Drain the actual created stderr stream after start/capture, without
+      // consuming or changing stdout's SDK protocol framing.
+      transport.stderr?.on('error', rememberChildFailure);
+      transport.stderr?.resume();
     };
     phase('handshake-enter');
     await client.connect(transport);
     phase('handshake-ready'); live();
     return { success: true };
+    } catch (error) { connectionPrimary = error; connectionFailed = true; throw error; }
   });
+  let primary: unknown;
+  let primaryFailed = false;
   try {
     live(); phase('reinstall-enter');
     const result = await reinstallWorkspaceMcpServers(buildWorkspaceMcpTransferPlan([config], sourceRoot));
@@ -524,7 +547,8 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
     expect(JSON.stringify(read)).toContain('cloud-worker-smoke');
     expect(await fs.readFile(targetFile, 'utf8')).toBe('cloud-worker-smoke');
     await expect(fs.access(path.join(sourceFiles, 'worker-result.txt'))).rejects.toThrow();
-  } finally {
+  } catch (error) { primary = error; primaryFailed = true; throw error; }
+  finally {
     const failures: unknown[] = [];
     phase('close-enter');
     try { await client.close(); } catch (error) { failures.push(error); }
@@ -538,6 +562,8 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
       }
     }
     failures.push(...context.retirementFailures);
+    failures.push(...childFailures);
+    if (observed.error && !childFailures.length) failures.push(new Error('Actual child/stream error observed; diagnostic sink failed'));
     try { owner.restoreEnvironment(); } catch (error) { failures.push(error); }
     if (!failures.length) {
       try { owner.removeDirectory(); } catch (error) { failures.push(error); }
@@ -546,7 +572,11 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
       try { removeOwnedFixtureDirectory(sourceOwnership, path.dirname(sourceRoot), 'flujo-transfer-source-'); } catch (error) { failures.push(error); }
     }
     context.cleanupCertain = failures.length === 0;
-    if (failures.length) throw Object.assign(new AggregateError(failures, 'Actual filesystem fixture cleanup uncertain; roots preserved'), { child, sourceRoot });
+    if (failures.length) throw Object.assign(new AggregateError([
+      ...(connectionFailed ? [connectionPrimary] : []), ...(primaryFailed ? [primary] : []), ...failures,
+    ], 'Actual filesystem operation/cleanup failed; roots preserved', {
+      cause: connectionFailed ? connectionPrimary : primary,
+    }), { child, sourceRoot });
     phase('close-ready');
   }
   })().finally(() => { clearTimeout(deadline); context.settled = true; });
