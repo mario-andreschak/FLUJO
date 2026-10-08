@@ -30,12 +30,14 @@ const send = message => { if (process.connected) process.send(message); };
 let owner;
 let scheduler;
 let stopping = false;
+let backendEntered = false;
 let commands = Promise.resolve();
 
 async function shutdown() {
   stopping = true;
   const failures = [];
-  try { await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); }
+  // Do not import/start the backend graph to clean up a seed-only failure.
+  try { if (backendEntered) await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); }
   catch (error) { failures.push(error); }
   // Private owner cleanup is independent of backend shutdown success.
   if (owner) {
@@ -48,6 +50,16 @@ async function shutdown() {
     throw new AggregateError(failures, 'Worker fixture shutdown/owner cleanup failed');
   }
   send({ phase: 'cleanup-completed' });
+}
+
+async function exitSeedOnly(code) {
+  if (backendEntered || owner) throw new Error('Seed-only exit cannot retire a live backend/owner');
+  // Seed preparation never connects MCP or executes its effect program. Drain
+  // owned output before exiting; the parent still observes exit and close.
+  await Promise.all([new Promise(resolve => process.stdout.end(resolve)),
+    new Promise(resolve => process.stderr.end(resolve))]);
+  if (process.connected) process.disconnect();
+  process.exit(code);
 }
 
 async function command(message) {
@@ -85,7 +97,7 @@ async function command(message) {
       break;
     }
     case 'export': {
-      const key = require('node:crypto').randomBytes(32).toString('hex');
+      const key = require('node:crypto').randomBytes(32).toString('base64');
       const archive = source('backend/services/workspace/snapshotArchive.ts');
       const captured = await archive.captureWorkspaceSnapshot(
         source('utils/workspace.ts').getCurrentWorkspace(), 2, { recipientKey: key });
@@ -149,7 +161,7 @@ async function command(message) {
         name: 'Copied plan must stay inert', enabled: true, flowId: compiled.flow.id,
         prompt: 'Copied fixture', overlapStrategy: 'skip', startRestriction: 'singleton',
         trigger: { type: 'schedule', cron: '* * * * *', catchUp: true }, saveConversations: false }] });
-    const key = require('node:crypto').randomBytes(32).toString('hex');
+    const key = require('node:crypto').randomBytes(32).toString('base64');
     const archive = source('backend/services/workspace/snapshotArchive.ts');
     const workspace = source('utils/workspace.ts').getCurrentWorkspace();
     const captured = await archive.captureWorkspaceSnapshot(workspace, 1, { recipientKey: key });
@@ -160,7 +172,7 @@ async function command(message) {
       sha256: written.sha256, key, workspace, flowId: compiled.flow.id, journal });
     send({ phase: 'cleanup-completed' }); // Captured owned descriptors were disposed above; no worker was started.
     stopping = true;
-    if (process.connected) process.disconnect();
+    await exitSeedOnly(0);
     return;
   }
   if (process.env.FLUJO_WORKER_MODE !== '1' || !process.env.FLUJO_WORKER_SNAPSHOT) {
@@ -178,6 +190,7 @@ async function command(message) {
   await consent.approveBundledHostConsent(owner.request('bash'), 'bash', {
     runtimeHome: 'host', reviewedDigest: reviewed.policyDigest, expiresAt: owner.expiresAt,
   });
+  backendEntered = true;
   await source('backend/init.ts').ensureBackendInitialized();
   const status = source('backend/services/workspace/workerMode.ts').getWorkerBootstrapStatus();
   if (status.state !== 'ready') throw new Error(`Actual bootstrap failed: ${status.state}`);
@@ -191,8 +204,10 @@ async function command(message) {
     workspaceDataDir: source('utils/workspace.ts').getWorkspaceDataDir() });
 })().catch(async error => {
   send({ phase: 'failed', error: String(error.stack || error) });
-  try { await shutdown(); } catch (cleanup) { send({ phase: 'cleanup-failed', error: String(cleanup) }); }
+  let cleaned = false;
+  try { await shutdown(); cleaned = true; } catch (cleanup) { send({ phase: 'cleanup-failed', error: String(cleanup) }); }
   process.exitCode = 1;
+  if (cleaned && !backendEntered) { await exitSeedOnly(1); return; }
   if (process.connected) process.disconnect();
 });
 process.on('disconnect', () => {
