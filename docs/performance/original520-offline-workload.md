@@ -30,7 +30,8 @@ up from the supported `openai` entry, verifies checkout-local containment and
 the package name, and records its real version/hash. Its test-only admission
 mock copies lazy export descriptors and replaces only the named budget controls,
 without enumerating getter values during module initialization. These repairs
-have not yet been executed or qualified.
+were unqualified at introduction; the actual qualification results are recorded
+above, with the earlier failed receipts retained.
 
 The next actual repaired run passed guarded execution (72.816 s) but the
 admission-off process hit the unchanged production archive read limit while
@@ -49,8 +50,8 @@ The real reader is then called. Only admission-off may record an actual typed
 MODEL_TURN_ARCHIVE_READ_LIMIT after a successful canonical witness; every other
 error fails and guarded reads must remain admitted. The proof records each
 archive's production readability separately. A byte-fidelity witness does not
-establish reader support, an OOM cause or full #520 closure. New controls are
-Source-only and UNRUN until exact-pin qualification.
+establish reader support, an OOM cause or full #520 closure. The new controls
+passed the exact-pin qualification recorded above.
 
 The original report describes approximately 500k parent tokens, 900–1400k child
 tokens, three completed children, one AtlasCloud 400 failure and four queued
