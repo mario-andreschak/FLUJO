@@ -13,7 +13,7 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
-import { fingerprintTrustedHostSource } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource, trustedHostEnvironment } from '@/backend/services/security/trustedHostMcp';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
@@ -74,7 +74,7 @@ function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
   syncFs.mkdirSync(sourceRoot, { recursive: true });
   syncFs.writeFileSync(entryPoint, 'process.exitCode = 0;\n');
   const fixture = installTrustedHostProfile({ name: server.name, nodeSource: 'process.exitCode = 0;\n',
-    environment: server.env, runtimeHome: isolated ? 'isolated' : 'host' });
+    environment: Object.fromEntries(trustedHostEnvironment(server)), runtimeHome: isolated ? 'isolated' : 'host' });
   try {
     process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
     process.env.FLUJO_DATA_DIR = dataRoot;

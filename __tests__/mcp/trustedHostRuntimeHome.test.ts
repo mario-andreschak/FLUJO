@@ -5,6 +5,7 @@ import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import { ensureWorkspaceDirs, getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 
 describe('approved host runtime-home isolation', () => {
   let approved: ReturnType<typeof installTrustedHostProfile>;
@@ -58,8 +59,9 @@ describe('approved host runtime-home isolation', () => {
 
   it.each(['FLUJO_PARENT_DATA_DIR', 'FLUJO_DATA_DIR', 'FLUJO_WORKSPACE'])(
     'requires explicit reviewed authority for injected %s', name => {
-      const incomplete = { ...approved.config, trustedHost: { ...approved.config.trustedHost!,
-        environmentNames: approved.config.trustedHost!.environmentNames.filter(value => value !== name) } };
+      const policy = trustedHostMcpPolicySchema.parse(approved.config.trustedHost);
+      const incomplete = { ...approved.config, trustedHost: { ...policy,
+        environmentNames: policy.environmentNames.filter(value => value !== name) } };
       approved.approve(incomplete);
       expect(() => resolveStdioLaunch(incomplete, { isolateRuntimeHome: true }))
         .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
