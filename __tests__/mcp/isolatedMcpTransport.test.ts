@@ -32,6 +32,7 @@ const create = jest.mocked(createIsolatedMcpLaunch);
 const configs = jest.mocked(loadServerConfigs);
 const generation = '9cda7d2f-1a8d-41d2-a48d-97c6ed8614f6';
 let directory: string;
+let fixtureParent: string;
 let config: MCPStdioConfig;
 let launch: IsolatedMcpLaunch;
 let close: jest.Mock;
@@ -40,7 +41,10 @@ let saved: Record<string, string | undefined>;
 
 function persist() { fs.writeFileSync(path.join(directory, 'approvals.json'), JSON.stringify(approvals), { mode: 0o600 }); }
 beforeEach(() => {
-  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-mcp-transport-test-'));
+  const parent = process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir();
+  if (!parent || !path.isAbsolute(parent)) throw new Error('A private fixture parent is required.');
+  fixtureParent = path.resolve(parent);
+  directory = fs.mkdtempSync(path.join(fixtureParent, 'flujo-mcp-transport-test-'));
   saved = { FLUJO_MCP_ISOLATION_FILE: process.env.FLUJO_MCP_ISOLATION_FILE, FLUJO_OWNER_AUTH_FILE: process.env.FLUJO_OWNER_AUTH_FILE };
   process.env.FLUJO_MCP_ISOLATION_FILE = path.join(directory, 'approvals.json');
   process.env.FLUJO_OWNER_AUTH_FILE = path.join(directory, 'owner.json');
@@ -70,7 +74,7 @@ afterEach(() => {
   for (const [key, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
-  const relative = path.relative(path.resolve(os.tmpdir()), directory);
+  const relative = path.relative(fixtureParent, directory);
   if (!/^flujo-mcp-transport-test-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe transport test cleanup');
   fs.rmSync(directory, { recursive: true, force: true });
 });
