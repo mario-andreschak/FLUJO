@@ -2764,6 +2764,7 @@ export class ModelHandler {
                       authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
                       authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
                       terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
+                      executionExtensionContext: opts.executionExtensionContext,
                     });
                   })()
                 : undefined;

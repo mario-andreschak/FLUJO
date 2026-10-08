@@ -14,7 +14,8 @@ import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { combineAbortSignals } from '../combineAbortSignals';
 import { isNativeHandoffProtocol, type NativeHandoffProtocol } from './nativeHandoffProtocol';
-import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import type { ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 const ports = new WeakSet<object>();
 const authorities = new WeakSet<object>();
@@ -114,11 +115,14 @@ export interface NativeBrokerInput {
   signal: AbortSignal;
   terminationProtocol?: NativeHandoffProtocol;
   originalProcessHost?: NativeOriginalProcessHost;
+  executionExtensionContext?: ExecutionExtensionContext;
 }
 
 /** Freeze exactly the tools on this provider attempt; retain executors only here. */
 export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
   assertNativeBrokerAuthority(input.authority);
+  const executionContext = input.executionExtensionContext;
+  if (executionContext) assertNativeOriginalExecutionContext(input.originalProcessHost, executionContext);
   if (input.terminationProtocol !== undefined) {
     if (!isNativeHandoffProtocol(input.terminationProtocol)) throw new Error('Unknown native termination protocol.');
     assertNativeOriginalProcessHost(input.originalProcessHost);
@@ -260,6 +264,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
             undefined, decoded.nodeId, combined, 'model',
             ownerScopeForRun({ runId: input.receipt.owner.runId, conversationId: input.receipt.owner.conversationId }),
             { conversationId: input.receipt.owner.conversationId },
+            executionContext,
           );
           await input.authority.assertCurrent();
           await input.afterToolDispatch?.();

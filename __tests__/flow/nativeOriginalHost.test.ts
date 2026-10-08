@@ -95,7 +95,8 @@ import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assert
 import { createExecutionExtensionContext, registerExecutionExtension, runWithExecutionInput,
   type ExecutionExtensionAdapter, type ExecutionNativeWorkerRoot } from '@/backend/execution/extensions';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
-import { nativeDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { nativeDigest, createNativeToolPort, createNativeBrokerAuthority, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
@@ -339,6 +340,23 @@ async function withWorkerClaim(task: (input: {
 }
 
 describe('Worker roots from trusted Source execution contexts / offline model edge', () => {
+  it('forwards the actual Worker context from its Original broker into MCP dispatch', async () => {
+    await withWorkerClaim(async ({ host, context, state }) => {
+      const tools=[{type:'function' as const,function:{name:'owned_worker_read',parameters:{type:'object',properties:{}}}}];
+      const mapping={owned_worker_read:{server:'fixture-worker',tool:'worker_read_file',clientGeneration:7,schemaHash:'fixture-schema'}};
+      const receipt=await prepareNativeInvocation({conversationId:state.conversationId!,runId:state.logicalRunId!,nodeId:'node-worker-owned',
+        modelId:'model-test',leaseEpoch:host.broker.leaseEpoch,inventoryDigest:nativeToolInventoryDigest(tools,mapping),inputDigest:'fixture',attemptOrdinal:1});
+      await submitNativeInvocation(receipt);
+      const callTool=jest.fn(async(...args:unknown[])=>{expect(args[10]).toBe(context);return {success:true,data:{content:[{type:'text',text:'fixture'}]}};});
+      const service={getClient:()=>({}),getClientGeneration:()=>7,getToolSchemaHash:()=> 'fixture-schema',callTool} as unknown as Parameters<typeof createNativeToolPort>[0]['service'];
+      const input={receipt,tools,toolNameMap:mapping,service,signal:new AbortController().signal,
+        authority:createNativeBrokerAuthority(host.broker.leaseEpoch,async()=>{}),originalProcessHost:host.process,executionExtensionContext:context};
+      expect(()=>createNativeToolPort({...input,executionExtensionContext:{} as never})).toThrow('held');
+      const port=createNativeToolPort(input);
+      const result=await port.dispatch({toolInvocationId:'fixture-context-forward',name:'owned_worker_read',args:{path:'repo/file'},signal:input.signal});
+      expect(result.result.isError).not.toBe(true);expect(callTool).toHaveBeenCalledTimes(1);expect(promptCount).toBe(0);
+    });
+  },30000);
   it('acquires the Worker host through production callModel instead of caller-supplied native capabilities', async () => {
     await withWorkerClaim(async ({ autoInvoke, workerLedger }) => {
       expect(await autoInvoke()).toMatchObject({ success: true });

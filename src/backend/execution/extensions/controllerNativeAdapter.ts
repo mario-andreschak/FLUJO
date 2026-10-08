@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { applyExecutionRunInput, createExecutionExtensionContext, ExecutionExtensionError, runWithExecutionInput,
   type ExecutionExtensionAdapter, type ExecutionExtensionContext, type ExecutionNativeWorkerRoot,
   type ExecutionNativeWorkerRootRequest } from './index';
+import { createControllerNativeToolGateway, type ControllerNativeToolTransport } from './controllerNativeTools';
 
 type Claim = Readonly<{ runId: string; rootConversationId: string; goalId: string; workspace: string }>;
 type Plan = Readonly<{ flowId: string; flowDigest: string; modelId: string; modelDigest: string }>;
@@ -31,6 +32,13 @@ export interface ControllerNativeSourceAdapter {
   close(): Promise<void>;
 }
 export interface ControllerNativeRequester { origin: string; authorization: string }
+
+/** Production composition uses the actual Parent client for both ownership
+ * and tools, rather than supplying permissive gateway callbacks. */
+export function createControllerNativeWorkerSourceAdapter(transport: ControllerNativeTransport & ControllerNativeToolTransport,
+  requester: ControllerNativeRequester): ControllerNativeSourceAdapter {
+  return createControllerNativeSourceAdapter(transport,createControllerNativeToolGateway(transport),requester);
+}
 type Binding = { composed: ControllerNativeSourceAdapter; requesterDigest: string };
 const shared = globalThis as typeof globalThis & { __flujoControllerNativeAdapters?: Map<string, Binding> };
 const adapters = shared.__flujoControllerNativeAdapters ??= new Map<string, Binding>();
