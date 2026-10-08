@@ -75,6 +75,7 @@ it('returns null for an initially absent record', async () => {
   expect(await read()).toBeNull();
 });
 it('drains the concurrent canonical-parent read before returning a metadata refusal', async () => {
+  const priorStrictReads = jest.mocked(strictReader.readPlainFile).mock.calls.length;
   const actualStat = fs.lstat.bind(fs);
   const actualRealpath = fs.realpath.bind(fs);
   const failure = new Error('filesystem metadata read refused');
@@ -101,7 +102,7 @@ it('drains the concurrent canonical-parent read before returning a metadata refu
   try {
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(jest.mocked(strictReader.readPlainFile)).not.toHaveBeenCalled();
+    expect(jest.mocked(strictReader.readPlainFile)).toHaveBeenCalledTimes(priorStrictReads);
   } finally { resume(); }
   await refused;
   expect(settled).toBe(true);
