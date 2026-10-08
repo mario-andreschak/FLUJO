@@ -166,7 +166,7 @@ function assertDependencyGraph(
 
 export async function createPersonaWorkItem(
   input: CreatePersonaWorkItemInput,
-  options: PersonaDomainMutationOptions = {},
+  options: PersonaDomainMutationOptions & { goalCreateRequestDigest?: string } = {},
 ): Promise<PersonaWorkItem> {
   const parsed = CreatePersonaWorkItemInputSchema.parse(input) as CreatePersonaWorkItemInput;
   const created = await withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
@@ -179,7 +179,9 @@ export async function createPersonaWorkItem(
     }
     const assigned = activity?.kind === 'assignment' && activity.source.sourceId
       ? await getPersonaWorkItem(parsed.personaId, activity.source.sourceId) : null;
-    const inheritedGoalId = assigned?.goal ? assigned.id : assigned?.parentGoalId;
+    // An explicit Goal creates an independent root, even from a Goal Activity.
+    // Ordinary Tasks continue to inherit the current Goal.
+    const inheritedGoalId = parsed.goal ? undefined : (assigned?.goal ? assigned.id : assigned?.parentGoalId);
     if (inheritedGoalId && parsed.parentGoalId && parsed.parentGoalId !== inheritedGoalId) {
       throw new PersonaDomainConflictError('Tasks created during an ongoing goal must belong to that goal.');
     }
@@ -198,6 +200,8 @@ export async function createPersonaWorkItem(
       ...(parsed.description ? { description: parsed.description } : {}),
       ...(parentGoalId ? { parentGoalId } : {}),
       ...(parsed.goal ? { goal: initialPersonaGoalState(parsed.goal, now) } : {}),
+      ...(parsed.goal && options.goalCreateRequestDigest
+        ? { goalCreateRequestDigest: options.goalCreateRequestDigest } : {}),
       status: 'open',
       priority: parsed.priority ?? 'normal',
       dependencyIds: parsed.dependencyIds ?? [],
