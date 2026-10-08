@@ -552,6 +552,8 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
 export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: AbortSignal) {
   const captured = structuredClone(config);
   const before = await trustedHostMcpApprovalAsync(captured, signal);
+  let phase: 'inspection' | 'executable-read' | 'source-read' | 'provenance-read' | 'provenance-result'
+    | 'signal' | 'asset-digest' | 'namespace' | 'graph-digest' | 'links' | 'directories' | 'executable-digest' | 'source-digest' = 'inspection';
   try {
     // Every independent inspection obtains fresh evidence and retains its own
     // witnesses. Drain all three before refusing or rereading final authority.
@@ -566,25 +568,28 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
       fingerprintSourceAsync(before.policy.sourceRoot, signal, before.policy.bundledInstallation?.dependencyLinks),
       provenance(),
     ] as const);
-    if (byteChecks[0].status === 'rejected') throw byteChecks[0].reason;
-    if (byteChecks[1].status === 'rejected') throw byteChecks[1].reason;
-    if (byteChecks[2].status === 'rejected') throw byteChecks[2].reason;
+    if (byteChecks[0].status === 'rejected') { phase = 'executable-read'; throw byteChecks[0].reason; }
+    if (byteChecks[1].status === 'rejected') { phase = 'source-read'; throw byteChecks[1].reason; }
+    if (byteChecks[2].status === 'rejected') { phase = 'provenance-read'; throw byteChecks[2].reason; }
+    const check = (allowed: boolean, at: typeof phase) => { phase = at; if (!allowed) throw new Error(); };
     const executable = byteChecks[0].value;
     const source = byteChecks[1].value;
     if (before.policy.bundledInstallation) {
       const bundle = before.policy.bundledInstallation;
       const inspected = byteChecks[2].value;
-      if (!inspected) throw new Error();
-      if (signal?.aborted || inspected.assetDigest !== bundle.assetDigest
-          || canonical(inspected.dependencyNamespaceRoot) !== canonical(bundle.dependencyNamespaceRoot)
-          || inspected.dependencyGraph.digest !== bundle.dependencyGraphDigest
-          || JSON.stringify(inspected.dependencyLinks) !== JSON.stringify(bundle.dependencyLinks)
-          || JSON.stringify(inspected.dependencies.map(item => item.directory)) !== JSON.stringify(bundle.dependencyDirectories)) throw new Error();
+      phase = 'provenance-result'; if (!inspected) throw new Error();
+      check(!signal?.aborted, 'signal');
+      check(inspected.assetDigest === bundle.assetDigest, 'asset-digest');
+      check(canonical(inspected.dependencyNamespaceRoot) === canonical(bundle.dependencyNamespaceRoot), 'namespace');
+      check(inspected.dependencyGraph.digest === bundle.dependencyGraphDigest, 'graph-digest');
+      check(JSON.stringify(inspected.dependencyLinks) === JSON.stringify(bundle.dependencyLinks), 'links');
+      check(JSON.stringify(inspected.dependencies.map(item => item.directory)) === JSON.stringify(bundle.dependencyDirectories), 'directories');
     }
-    if (executable.digest !== before.policy.executableDigest || source !== before.policy.sourceDigest) throw new Error();
+    check(executable.digest === before.policy.executableDigest, 'executable-digest');
+    check(source === before.policy.sourceDigest, 'source-digest');
   } catch {
     try {
-      if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read');
+      if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read', phase);
     } catch { /* Preserve the original source-refusal disposition. */ }
     throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
   }
