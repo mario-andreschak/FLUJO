@@ -21,3 +21,27 @@ Concurrent calls may share an in-flight executable digest and version check only
 Failed native MCP events emit the error-level diagnostic `Codex native MCP tool call failed` with fixed code `codex_native_mcp_tool_failed`, a fixed category (`timeout`, `authentication`, `authorization`, `rate_limit`, `network`, `validation`, or `unknown`), available run/node identifiers, and an exact offered bridge tool label or `unknown`. Native error text, URLs, item identifiers, arguments and results are excluded. Categories recognize error-message patterns and do not establish the underlying cause. These diagnostics add no tool transcript, invocation count or retry. Startup warnings that the SDK exposes only through successful-process stderr remain outside this event diagnostic.
 
 Authentication refresh from an isolated child is currently discarded when its home is cleaned up. Sustained or concurrent real-model runs require separate validation of subscription token refresh and capacity. Mock provider load tests establish admission and isolation behavior, not paid-model throughput.
+
+## Private Original lifecycle reader
+
+`nativeOriginalSourceReader` returns a reader only for a branded, in-process
+`NativeOriginalProcessHost`. The reader rereads the saved origin and private
+payload through the captured Source authority. Publication also checks the
+exact session, current root lineage and admission stage. It cannot authenticate
+a Controller Worker or mint a new root from request metadata.
+
+Live acknowledgement retains one opaque handle bound to the accepted Original,
+its registered actual child, the facade owner and the host generation. A fresh
+positive OS birth observation is required; copied handles, changed owners and
+other generations are refused. Process-global weak registries preserve this
+provenance across Next server graphs without recovering it after a restart.
+
+Process teardown removes live proof. Terminal reconciliation separately requires
+actual exit and pipe close, the matching private host reservation, and the saved
+completed invocation with its hold absent and effects resolved. SDK completion
+or a process phase alone cannot release an unknown Original.
+
+This is an internal Source capability, not a Worker transport or fleet eligibility
+switch. The current host mint remains bound to genuine Persona dispatch. A fleet
+integration still needs independently authenticated Worker ownership, a scoped
+tool gateway and qualification of its actual deployed image and provider route.

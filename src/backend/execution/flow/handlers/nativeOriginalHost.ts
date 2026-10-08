@@ -12,10 +12,11 @@ import { withWorkspaceRuntimeLock, probeRuntimeProcessIdentity } from '@/backend
 import { getPersonaActivity, getPersonaWorkItem } from '@/backend/services/enduringAgents/store';
 import { createNativeBrokerAuthority, nativeDigest } from './nativeToolBroker';
 import { createNativeLineageRootBinding } from './nativeOriginLineage';
-import { createNativeInvocationSessionHook, type NativeInvocationSession } from './nativeInvocationSession';
-import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
+import { createNativeInvocationSessionHook, type NativeInvocationSession, type NativeInvocationSessionPayloadRef } from './nativeInvocationSession';
+import { assertSavedNativePublishable, readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
+import { readNativeSessionPayload } from './nativeSessionPayload';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
-import { assertCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
+import { assertCodexOwnedProcessRegistration, probeCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { qualifyNativeCodex, assertNativeCodexQualification } from '@/backend/services/model/adapters/codexNativeQualification';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
 import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
@@ -40,7 +41,37 @@ type Reservation = { invocationId: string; descriptorDigest: string; owner: Nati
     outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalCostUsd?: number; durationMs?: number };
   identity?: ClaudeOwnedProcessRegistration['identity']; sdkOutcome?: string; exit?: { code: number | null; signal: NodeJS.Signals | null } };
 type Ledger = { version: 1; goalId: string; personaId: string; reservations: Reservation[] };
-const hosts = new WeakSet<object>();
+type FacadeOwner = Readonly<Record<string, unknown>>;
+type TerminalExpectation = {
+  expectedOwner: NativeInvocationSession['descriptor']['receipt']['owner'];
+  expectedLineageDigest: string; expectedDescriptorDigest: string; expectedWorkspace: string;
+};
+/** Source-only capabilities. Target enrollment and Worker bearer admission
+ * still belong to the Controller; this reader cannot mint either authority. */
+export interface NativeOriginalSourceReader {
+  readOrigin(invocationId: string): Promise<NativeInvocationSession['descriptor']>;
+  readPayload(ref: NativeInvocationSessionPayloadRef): ReturnType<typeof readNativeSessionPayload>;
+  assertPublishable(input: Omit<Parameters<typeof assertSavedNativePublishable>[0], 'authority' | 'root'>): Promise<true>;
+  retainLive(session: NativeInvocationSession, owner: FacadeOwner, hostGeneration: object):
+    Promise<Readonly<{ handle: object; generation: string }>>;
+  probeLive(handle: object, owner: FacadeOwner, hostGeneration: object): Promise<object | null>;
+  readTerminal(invocationId: string, expected: TerminalExpectation):
+    Promise<Awaited<ReturnType<typeof readSavedNativeTerminal>> & { cancelResolved: true }>;
+}
+// Next may evaluate this module in several server graphs. Preserve provenance
+// and the exact retained reader within this process, never across a restart.
+const hostRoot = globalThis as typeof globalThis & {
+  __flujoNativeOriginalHosts?: WeakSet<object>;
+  __flujoNativeOriginalReaders?: WeakMap<object, NativeOriginalSourceReader>;
+};
+const hosts = hostRoot.__flujoNativeOriginalHosts ??= new WeakSet<object>();
+const sourceReaders = hostRoot.__flujoNativeOriginalReaders ??= new WeakMap<object, NativeOriginalSourceReader>();
+/** In-process access only. JSON, a PID, or caller-supplied lifecycle callbacks
+ * cannot recover a reader for an existing Original. No transport is exposed. */
+export function nativeOriginalSourceReader(host: unknown): NativeOriginalSourceReader {
+  assertNativeOriginalProcessHost(host);
+  return sourceReaders.get(host) ?? held();
+}
 export function assertNativeOriginalProcessHost(value: unknown): asserts value is NativeOriginalProcessHost {
   if (!value || typeof value !== 'object' || !hosts.has(value)) return held();
 }
@@ -439,6 +470,94 @@ export async function createPersonaNativeOriginalHost(input: {
         { assertCurrent: terminalCap, assertActive: () => { if (value !== original || !exited || !closed) return held(); } });
     },
   };
+  const requireOriginal = (invocationId?: string) => {
+    if (!original || invocationId !== undefined && original.descriptor.receipt.invocationId !== invocationId) return held();
+    return original;
+  };
+  // One accepted Original can retain one opaque facade owner/generation. Keep
+  // the actual child in this closure, never in a serializable proof envelope.
+  let retained: { handle: object; ownerDigest: string; hostGeneration: object; generation: string } | undefined;
+  const liveChild = async () => {
+    if (!child || exited || closed || authority.signal.aborted || original?.signal.aborted) return false;
+    const owned = child;
+    if (model.adapter === 'codex-cli') {
+      if (!await probeCodexOwnedProcessRegistration(owned, processHost)) return false;
+    } else {
+      assertClaudeOwnedProcessRegistration(owned, processHost);
+      if (!await probeRuntimeProcessIdentity(owned.identity)) return false;
+    }
+    return child === owned && !exited && !closed && !authority.signal.aborted && !original?.signal.aborted;
+  };
+  const sourceReader: NativeOriginalSourceReader = Object.freeze({
+    async readOrigin(invocationId: string) {
+      const value = requireOriginal(invocationId);
+      const saved = await readSavedNativeOrigin({ invocationId, authority: broker, root, signal: authority.signal });
+      if (nativeDigest(saved) !== nativeDigest(value.descriptor)) return held();
+      return saved;
+    },
+    async readPayload(ref: NativeInvocationSessionPayloadRef) {
+      const value = requireOriginal(ref?.invocationId);
+      if (nativeDigest(ref) !== nativeDigest(value.descriptor.payloadRef)) return held();
+      await sourceReader.readOrigin(ref.invocationId);
+      const payload = await readNativeSessionPayload(ref, binding.workspace);
+      await assertCurrent();
+      return payload;
+    },
+    async assertPublishable(input: Parameters<NativeOriginalSourceReader['assertPublishable']>[0]) {
+      if (input.session !== requireOriginal(input.invocationId) || child) return held();
+      await assertCurrent();
+      return assertSavedNativePublishable({ ...input, authority: broker, root });
+    },
+    async retainLive(value: NativeInvocationSession, owner: FacadeOwner, hostGeneration: object) {
+      if (value !== requireOriginal() || !hostGeneration || typeof hostGeneration !== 'object'
+        || Array.isArray(hostGeneration) || !child) return held();
+      const descriptor = value.descriptor;
+      const generation = `source-${nativeDigest([descriptor.lineage.installationId, descriptor.receipt.owner.leaseEpoch])}`;
+      const fields = { invocationId: descriptor.receipt.invocationId,
+        workerId: descriptor.lineage.workerId, goalId: descriptor.lineage.goalId,
+        fleetRunId: descriptor.lineage.fleetRunId, rootConversationId: descriptor.lineage.rootConversationId,
+        workspace: binding.workspace, conversationId: descriptor.receipt.owner.conversationId,
+        logicalRunId: descriptor.receipt.owner.runId, nodeId: descriptor.receipt.owner.nodeId, generation };
+      if (Object.entries(fields).some(([key, expected]) => owner?.[key] !== expected)) return held();
+      const ownerDigest = nativeDigest(owner);
+      if (retained && (retained.ownerDigest !== ownerDigest || retained.hostGeneration !== hostGeneration)) return held();
+      await assertCurrent();
+      if (!await liveChild()) return held();
+      const reservation = (await readLedger(binding)).reservations.find(item => item.invocationId === fields.invocationId);
+      if (reservation?.state !== 'registered' || nativeDigest(reservation.identity) !== nativeDigest(child.identity)
+        || reservation.descriptorDigest !== nativeDigest(descriptor)) return held();
+      await assertCurrent();
+      if (!await liveChild()) return held();
+      retained ??= { handle: Object.freeze({}), ownerDigest, hostGeneration, generation };
+      return Object.freeze({ handle: retained.handle, generation });
+    },
+    async probeLive(handle: object, owner: FacadeOwner, hostGeneration: object) {
+      if (!retained || handle !== retained.handle || hostGeneration !== retained.hostGeneration
+        || nativeDigest(owner) !== retained.ownerDigest || !await liveChild()) return null;
+      return handle;
+    },
+    async readTerminal(invocationId: string, expected: TerminalExpectation) {
+      const value = requireOriginal(invocationId);
+      const exact = { expectedOwner: value.descriptor.receipt.owner,
+        expectedLineageDigest: value.descriptor.lineage.digest,
+        expectedDescriptorDigest: nativeDigest(value.descriptor), expectedWorkspace: binding.workspace };
+      if (nativeDigest(expected) !== nativeDigest(exact)) return held();
+      const authorize = async () => {
+        if (!child || !exited || !closed || value !== original) return held();
+        const reservation = (await readLedger(binding)).reservations.find(item => item.invocationId === invocationId);
+        if (!reservation || !['exited', 'released'].includes(reservation.state)
+          || reservation.sdkOutcome !== 'completed' || !reservation.exit
+          || reservation.descriptorDigest !== exact.expectedDescriptorDigest
+          || nativeDigest(reservation.identity) !== nativeDigest(child.identity)
+          || reservation.handoff && reservation.handoff.state !== 'confirmed') return held();
+      };
+      const terminal = await readSavedNativeTerminal({ invocationId, ...exact, assertReadAuthorized: authorize });
+      // Both actual exit/close and durable effect resolution have been reread.
+      // Neither SDK completion nor process exit alone resolves cancellation.
+      return { ...terminal, cancelResolved: true as const };
+    },
+  });
   hosts.add(processHost);
+  sourceReaders.set(processHost, sourceReader);
   return { broker, session, process: Object.freeze(processHost) };
 }

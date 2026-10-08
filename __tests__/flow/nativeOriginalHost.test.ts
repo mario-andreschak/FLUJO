@@ -90,7 +90,9 @@ import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend'
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { createPersonaNativeOriginalHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createPersonaNativeOriginalHost, nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
+import { nativeDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
@@ -234,7 +236,7 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
   });
 }
 
-async function prepare(input: FlowRunInput) {
+async function prepare(input: FlowRunInput, observeSession?: (session: NativeInvocationSession) => Promise<void>) {
   const node = input.flowDefinition!.nodes.find(value => value.data.type === 'process')!;
   const state = { conversationId: input.conversationId!, logicalRunId: input.runId!, flowId: input.flowDefinition!.id,
     flowSnapshot: input.flowDefinition!, currentNodeId: node.id, source: 'api', status: 'running', runDepth: 0,
@@ -245,10 +247,12 @@ async function prepare(input: FlowRunInput) {
   const host = await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
     conversationId: input.conversationId, runId: input.runId, nodeId: node.id,
     modelId: node.data.properties!.boundModel as string });
+  const sessionHook = observeSession ? createNativeInvocationSessionHook({ ...host!.session,
+    publish: async value => { await host!.session.publish(value); await observeSession(value); } }) : host!.session;
   const invoke = () => (ModelHandler as unknown as { generateCompletion: (...args: unknown[]) => Promise<{ success: boolean }> })
     .generateCompletion('model-test', '', [{ id: 'user-fixture', role: 'user', content: 'offline', timestamp: 1 }], [], {
       conversationId: input.conversationId, runId: input.runId, nodeId: node.id, archiveModelTurns: true, maxTurns: 3,
-      nativeBrokerAuthority: host!.broker, nativeInvocationSessionHook: host!.session, nativeOriginalProcessHost: host!.process,
+      nativeBrokerAuthority: host!.broker, nativeInvocationSessionHook: sessionHook, nativeOriginalProcessHost: host!.process,
       durableContext: { executionAuthority: input.executionAuthority, personaAttribution: input.personaAttribution },
       signal: input.executionAuthority!.signal,
     });
@@ -262,6 +266,86 @@ async function ledger() {
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
   function selectCodex(){selectedModel={...modelFixture,name:'gpt-6-luna',provider:'codex',adapter:'codex-cli',ApiKey:'',reasoningEffort:'medium'};}
+  it('does not recover private Source readers from serialized or caller-owned hosts', () => {
+    for (const value of [{}, { readOrigin: async () => ({}) }, JSON.parse('{"identity":{"pid":1}}')]) {
+      expect(() => nativeOriginalSourceReader(value)).toThrow('held');
+    }
+  });
+  it.each(['codex', 'claude'] as const)('retains the exact %s Original child and rereads durable terminal evidence', async adapter => {
+    if (adapter === 'codex') selectCodex();
+    await withClaim(async input => {
+      let original!: NativeInvocationSession;
+      const prepared = await prepare(input, async value => {
+        original = value;
+        const source = nativeOriginalSourceReader(prepared.host.process);
+        const descriptor = value.descriptor;
+        expect(await source.readOrigin(descriptor.receipt.invocationId)).toEqual(descriptor);
+        expect((await source.readPayload(descriptor.payloadRef)).invocationId).toBe(descriptor.receipt.invocationId);
+        await expect(source.readPayload({ ...descriptor.payloadRef, sha256: '0'.repeat(64) })).rejects.toThrow('held');
+        await expect(source.readOrigin('foreign-original')).rejects.toThrow('held');
+        expect(await source.assertPublishable({ session: value, descriptor,
+          invocationId: descriptor.receipt.invocationId, stage: 'grant', signal: input.executionAuthority!.signal,
+          deadlineAt: Date.now() + 120000, actor: descriptor.lineage })).toBe(true);
+      });
+      const source = nativeOriginalSourceReader(prepared.host.process);
+      jest.isolateModules(() => {
+        const isolated = require('@/backend/execution/flow/handlers/nativeOriginalHost') as typeof import('@/backend/execution/flow/handlers/nativeOriginalHost');
+        expect(isolated.nativeOriginalSourceReader(prepared.host.process)).toBe(source);
+        expect(() => isolated.nativeOriginalSourceReader({ ...prepared.host.process })).toThrow('held');
+      });
+      const hostGeneration = Object.freeze({ nonce: 'offline-controller-generation' });
+      let handle!: object;
+      let owner!: Record<string, unknown>;
+      let expected!: Parameters<typeof source.readTerminal>[1];
+      afterPrompt = async () => {
+        const descriptor = original.descriptor;
+        owner = { invocationId: descriptor.receipt.invocationId, workerId: descriptor.lineage.workerId,
+          goalId: descriptor.lineage.goalId, fleetRunId: descriptor.lineage.fleetRunId,
+          rootConversationId: descriptor.lineage.rootConversationId, workspace: descriptor.lineage.workspace,
+          conversationId: descriptor.receipt.owner.conversationId, logicalRunId: descriptor.receipt.owner.runId,
+          nodeId: descriptor.receipt.owner.nodeId,
+          generation: `source-${nativeDigest([descriptor.lineage.installationId, descriptor.receipt.owner.leaseEpoch])}` };
+        expected = { expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+          expectedDescriptorDigest: nativeDigest(descriptor), expectedWorkspace: descriptor.lineage.workspace };
+        await expect(source.retainLive(original, { ...owner, workerId: 'foreign-worker' }, hostGeneration)).rejects.toThrow('held');
+        handle = (await source.retainLive(original, owner, hostGeneration)).handle;
+        expect(await source.probeLive(handle, { ...owner }, hostGeneration)).toBe(handle);
+        expect(await source.probeLive(JSON.parse(JSON.stringify(handle)), owner, hostGeneration)).toBeNull();
+        expect(await source.probeLive(handle, { ...owner, nodeId: 'foreign-node' }, hostGeneration)).toBeNull();
+        expect(await source.probeLive(handle, owner, { ...hostGeneration })).toBeNull();
+        await expect(source.retainLive(original, owner, { ...hostGeneration })).rejects.toThrow('held');
+        await expect(source.readTerminal(descriptor.receipt.invocationId, expected)).rejects.toThrow('held');
+      };
+      try {
+        expect((await prepared.invoke()).success).toBe(true);
+        expect(handle).toBeDefined();
+        expect(await source.probeLive(handle, owner, hostGeneration)).toBeNull();
+        expect(await source.readTerminal(original.descriptor.receipt.invocationId, expected))
+          .toMatchObject({ receipt: { state: 'terminal', outcome: 'completed' }, holdAbsent: true,
+            effectsResolved: true, cancelResolved: true });
+        await expect(source.readTerminal(original.descriptor.receipt.invocationId,
+          { ...expected, expectedWorkspace: 'foreign-workspace' })).rejects.toThrow('held');
+      } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
+    });
+  }, 60000);
+  it('keeps a cancelled Codex Original held instead of inferring terminal from process teardown', async () => {
+    selectCodex();
+    await withClaim(async input => {
+      let original!: NativeInvocationSession;
+      const prepared = await prepare(input, async value => { original = value; });
+      const source = nativeOriginalSourceReader(prepared.host.process);
+      afterPrompt = async () => { original.cancel(); };
+      try {
+        expect((await prepared.invoke()).success).toBe(false);
+        const descriptor = original.descriptor;
+        expect((await ledger()).reservations[0].state).not.toBe('released');
+        await expect(source.readTerminal(descriptor.receipt.invocationId, {
+          expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+          expectedDescriptorDigest: nativeDigest(descriptor), expectedWorkspace: descriptor.lineage.workspace,
+        })).rejects.toThrow();
+      } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
+    });
+  }, 30000);
   it('runs a Codex Core through its saved Original, owned app-server child, actual usage and terminal release',async()=>{
     selectCodex();await withClaim(async()=>{},async()=>{
       expect(promptCount).toBe(1);const reservation=(await ledger()).reservations[0];
