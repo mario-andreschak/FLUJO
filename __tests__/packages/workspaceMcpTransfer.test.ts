@@ -8,8 +8,16 @@ import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
+import { StorageKey } from '@/shared/types/storage';
+import { saveConfig } from '@/backend/services/mcp/config';
 
 let mockWorkspace = '';
+const mockConfigStorage = new Map<StorageKey, unknown>();
+const mockPreparedConfigs = new Map<string, MCPServerConfig>();
+jest.mock('@/utils/storage/backend', () => ({
+  loadItem: jest.fn(async (key: StorageKey, fallback: unknown) => mockConfigStorage.has(key) ? mockConfigStorage.get(key) : fallback),
+  saveItem: jest.fn(async (key: StorageKey, value: unknown) => { mockConfigStorage.set(key, value); }),
+}));
 const loadConfigs = jest.fn();
 const updateConfig = jest.fn();
 const connect = jest.fn();
@@ -18,6 +26,7 @@ const prepareRegistry = jest.fn();
 const gitRaw = jest.fn();
 jest.mock('simple-git', () => ({ __esModule: true, simpleGit: () => ({ raw: (...args: unknown[]) => gitRaw(...args) }) }));
 jest.mock('@/utils/workspace', () => ({
+  ...jest.requireActual('@/utils/workspace'),
   getWorkspaceDataDir: () => mockWorkspace,
   getCurrentWorkspace: () => 'worker',
   bindToCurrentWorkspace: (callback: unknown) => callback,
@@ -112,8 +121,13 @@ it('does not silently disable unsupported, disabled, or dynamic dependencies of 
 
 beforeEach(async () => {
   jest.clearAllMocks();
+  mockConfigStorage.clear();
+  mockPreparedConfigs.clear();
   mockWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-transfer-'));
-  updateConfig.mockResolvedValue({ success: true });
+  updateConfig.mockImplementation(async (name: string, config: MCPServerConfig) => {
+    mockPreparedConfigs.set(name, config);
+    return saveConfig(mockPreparedConfigs);
+  });
   connect.mockResolvedValue({ success: true });
   prepareRegistry.mockResolvedValue({ config: { transport: 'stdio', command: 'npx', args: ['new-version'] } });
   prepareGithub.mockImplementation(async () => {
