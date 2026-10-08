@@ -25,7 +25,7 @@ let mockReleaseTimer!: () => void;
 let mockTimerGate: Promise<void>;
 let mockTimerEntered!: () => void;
 let mockTimerObserved: Promise<void>;
-let mockTimerCompleted: Promise<void>;
+let mockTimerCompleted: Promise<void> | undefined;
 const mockRunFlow = jest.fn(async (..._args: unknown[]) => {
   expect(getAuthorizedBundledFlujoWorkloadToolNames()).toBeUndefined();
   await assertBundledFlujoWorkloadEffectCurrent();
@@ -36,18 +36,23 @@ jest.mock('@/backend/services/scheduler/triggers/schedule', () => ({
   ...jest.requireActual('@/backend/services/scheduler/triggers/schedule'),
   armSchedule: (_config: unknown, onFire: (occurrence: Date) => Promise<void>) => {
     let timer: ReturnType<typeof setTimeout>;
+    let entered = false;
+    let resolveDisposed!: () => void;
     mockTimerCompleted = new Promise<void>((resolve, reject) => {
+      resolveDisposed = resolve;
       timer = setTimeout(() => {
+        entered = true;
         mockTimerEntered();
         void mockTimerGate.then(() => onFire(new Date())).then(resolve, reject);
       }, 0);
     });
-    return { dispose: () => clearTimeout(timer), nextRun: () => undefined };
+    return { dispose: () => { clearTimeout(timer); if (!entered) resolveDisposed(); }, nextRun: () => undefined };
   },
 }));
 
 test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
   mockRunFlow.mockClear();
+  mockTimerCompleted = undefined;
   mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
   mockTimerObserved = new Promise(resolve => { mockTimerEntered = resolve; });
   const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE'];
@@ -59,6 +64,10 @@ test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule ou
     const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
   };
   let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
+  let scheduler: SchedulerService | undefined;
+  let executionId = '';
+  let primaryError: unknown;
+  let failed = false;
   let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
   try {
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
@@ -91,15 +100,15 @@ test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule ou
     await transport.start();
     expect(start).toHaveBeenCalledTimes(1);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('authorized');
-    const scheduler = new SchedulerService();
+    scheduler = new SchedulerService();
+    const admittedScheduler = scheduler;
     const admittedRequest = request();
     const admitted = await resolveBundledFlujoWorkloadRequest(admittedRequest);
     expect(admitted.kind).toBe('authorized');
     if (admitted.kind !== 'authorized') throw new Error('Genuine capability not admitted');
-    let executionId = '';
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
       expect(() => new SchedulerService()).toThrow();
-      const created = await scheduler.create({ name: 'fixture', enabled: true, flowId: 'fixture-flow',
+      const created = await admittedScheduler.create({ name: 'fixture', enabled: true, flowId: 'fixture-flow',
         prompt: '', trigger: { type: 'schedule', cron: '0 0 1 1 *' } });
       expect(created.error).toBeUndefined();
       expect(created.execution).toBeDefined();
@@ -124,16 +133,38 @@ test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule ou
     await mockTimerCompleted;
     expect(mockRunFlow).toHaveBeenCalledTimes(mode === 'unchanged' ? 1 : 0);
     await scheduler.update(executionId, { enabled: false });
+  } catch (error) {
+    failed = true;
+    primaryError = error;
+    throw error;
   } finally {
+    const cleanupErrors: unknown[] = [];
+    const attempt = async (cleanup: () => void | Promise<unknown>) => {
+      try { await cleanup(); } catch (error) { cleanupErrors.push(error); }
+    };
     mockReleaseTimer();
-    await mockTimerCompleted?.catch(() => undefined);
-    const { flushStatisticsEvents } = await import('@/backend/services/statistics');
-    await flushStatisticsEvents();
-    try { await transport?.close(); } finally {
-      owner?.restore();
-      for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
-      if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
+    await attempt(() => mockTimerCompleted);
+    await attempt(async () => {
+      if (scheduler && executionId) await scheduler.update(executionId, { enabled: false });
+    });
+    await attempt(async () => {
+      const { flushStatisticsEvents } = await import('@/backend/services/statistics');
+      await flushStatisticsEvents();
+    });
+    await attempt(() => transport?.close());
+    await attempt(() => owner?.restore());
+    await attempt(() => {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    });
+    // Uncertain cleanup preserves the owned root as evidence.
+    if (cleanupErrors.length === 0) await attempt(() => {
+      if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture))
+          || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
       fs.rmSync(fixture, { recursive: true, force: true });
-    }
+    });
+    if (cleanupErrors.length) throw new AggregateError(failed ? [primaryError, ...cleanupErrors] : cleanupErrors,
+      'Workload scheduler fixture cleanup failed');
   }
 }, 60_000);

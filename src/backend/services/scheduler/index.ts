@@ -521,6 +521,7 @@ export class SchedulerService {
   }
 
   private async armExecution(execution: PlannedExecution): Promise<void> {
+    if (!await this.isCurrentSchedule(execution)) return;
     const trigger = execution.trigger;
     switch (trigger.type) {
       case 'schedule': {
@@ -665,6 +666,7 @@ export class SchedulerService {
             loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
             saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
               await saveExecutionState(execution.id, { ...current, ...patch });
             }),
             // Await the run and report its outcome so the poll can advance its
@@ -698,9 +700,13 @@ export class SchedulerService {
         this.armed.set(
           execution.id,
           armUrlWatch(trigger, {
+            assertCurrent: this.bindToWorkspace(async () => {
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before URL effect');
+            }),
             loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
             saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
               await saveExecutionState(execution.id, { ...current, ...patch });
             }),
             // Await + report outcome so the baseline hash advances only after a
@@ -2942,6 +2948,10 @@ export class SchedulerService {
         const scheduled = payload.kind === 'manual'
           || payload.kind === 'schedule'
           || payload.kind === 'schedule-catchup';
+        if (payload.kind !== 'manual' && !await this.isCurrentSchedule(execution)) {
+          throw new Error('Schedule changed before Persona dispatch');
+        }
+        await assertBundledFlujoWorkloadEffectCurrent();
         const submission = await submitPersonaFlowDispatch({
           personaId: execution.personaId,
           idempotencyKey: `planned:${execution.id}:${payload.deliveryId ?? runId}`,
