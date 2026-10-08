@@ -45,6 +45,7 @@ export function createOwnedCodexThread(input: {
             notifications.push(message); retainedBytes += bytes; wake?.();
           },
         });
+        let primaryFailure: unknown;
         try {
           await input.host.beforeFirstPrompt();
           await child.request('initialize', { clientInfo: { name: 'flujo_native_original', version: '1' } });
@@ -110,12 +111,21 @@ export function createOwnedCodexThread(input: {
               yield { type: 'turn.completed', usage };
             }
           }
+        } catch (error) {
+          primaryFailure = error;
+          throw error;
         } finally {
-          await child.stop();
-          const outcome = await child.registration.exit;
-          await child.registration.close;
-          closed = true;
-          if (outcome.code !== 0 || outcome.signal) return unavailable();
+          try {
+            await child.stop();
+            const outcome = await child.registration.exit;
+            await child.registration.close;
+            closed = true;
+            if (outcome.code !== 0 || outcome.signal) return unavailable();
+          } catch (closureError) {
+            if (primaryFailure !== undefined) throw new AggregateError([primaryFailure, closureError],
+              'Native Codex Original failed and process closure could not be qualified.');
+            throw closureError;
+          }
         }
       })();
       return { events };
