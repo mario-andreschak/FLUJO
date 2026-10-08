@@ -46,12 +46,13 @@ const recordSchema = z.object({ version: z.literal(1), purpose: z.literal('bundl
 }).strict().refine(value => value.expiresAt > value.issuedAt && value.expiresAt <= value.issuedAt + 5 * 60_000);
 const markerSchema = z.object({ version: z.literal(1), generation: z.string().uuid(), state: z.literal('active'),
   recordDev: z.string().regex(/^\d{1,40}$/), recordIno: z.string().regex(/^\d{1,40}$/) }).strict();
-interface OwnedFile { fd: number; filename: string; bytes: Buffer; identity: fs.BigIntStats }
+interface OwnedFile { fd: number | undefined; filename: string; bytes: Buffer; identity: fs.BigIntStats;
+  parentIdentity: fs.BigIntStats; removed?: boolean; uncertainDescriptor?: number }
 declare const capsuleBrand: unique symbol;
 export interface PendingBundledFlujoWorkload { readonly [capsuleBrand]: true }
 interface Pending { config: MCPStdioConfig; token: string; audience: string; workspace: string; ledger: string;
   ownerFile: string; state: 'inactive' | 'activating' | 'active' | 'retired' | 'uncertain'; generation?: string;
-  record?: OwnedFile; marker?: OwnedFile }
+  record?: OwnedFile; marker?: OwnedFile; durablyRevoked?: boolean }
 const capsules = new WeakMap<object, Pending>();
 const principals = new WeakSet<object>();
 // Reuse only this graph's opaque request binding. Every action/effect still
@@ -138,25 +139,37 @@ function writeAll(fd: number, bytes: Buffer) {
   while (offset < bytes.length) { const count = fs.writeSync(fd, bytes, offset, bytes.length - offset, offset); if (!count) throw new BundledFlujoWorkloadError(); offset += count; }
   fs.ftruncateSync(fd, bytes.length); fs.fsyncSync(fd);
 }
+function descriptor(file: OwnedFile): number {
+  if (file.fd === undefined || file.uncertainDescriptor !== undefined) throw new BundledFlujoWorkloadError();
+  return file.fd;
+}
+function assertOwnedParent(file: OwnedFile) {
+  const parent = path.dirname(file.filename), current = fs.lstatSync(parent, { bigint: true });
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== file.parentIdentity.dev
+      || current.ino !== file.parentIdentity.ino || current.mode !== file.parentIdentity.mode
+      || current.uid !== file.parentIdentity.uid || current.gid !== file.parentIdentity.gid
+      || path.relative(fs.realpathSync(parent), parent) !== '') throw new BundledFlujoWorkloadError();
+}
 function readExact(file: OwnedFile, requireNamed = true) {
-  const before = fs.fstatSync(file.fd, { bigint: true });
-  if (!same(before, file.identity) || !before.isFile() || before.nlink !== BigInt(1)) throw new BundledFlujoWorkloadError();
+  const fd = descriptor(file), before = fs.fstatSync(fd, { bigint: true });
+  if (!same(before, file.identity) || !before.isFile() || before.nlink !== BigInt(file.removed ? 0 : 1)) throw new BundledFlujoWorkloadError();
   if (requireNamed && !same(before, fs.lstatSync(file.filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
   const bytes = Buffer.alloc(file.bytes.length + 1);
   try {
-    const count = fs.readSync(file.fd, bytes, 0, bytes.length, 0);
-    if (count !== file.bytes.length || !bytes.subarray(0, count).equals(file.bytes) || !same(before, fs.fstatSync(file.fd, { bigint: true }))
+    const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    if (count !== file.bytes.length || !bytes.subarray(0, count).equals(file.bytes) || !same(before, fs.fstatSync(fd, { bigint: true }))
         || (requireNamed && !same(before, fs.lstatSync(file.filename, { bigint: true })))) throw new BundledFlujoWorkloadError();
   } finally { bytes.fill(0); }
 }
 function createFile(filename: string): OwnedFile {
+  const parentIdentity = fs.lstatSync(path.dirname(filename), { bigint: true });
   const fd = fs.openSync(filename, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600);
-  return { fd, filename, bytes: Buffer.alloc(0), identity: fs.fstatSync(fd, { bigint: true }) };
+  return { fd, filename, bytes: Buffer.alloc(0), identity: fs.fstatSync(fd, { bigint: true }), parentIdentity };
 }
 function fillFile(file: OwnedFile, value: unknown) {
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > 64 * 1024) throw new BundledFlujoWorkloadError();
-  readExact(file); writeAll(file.fd, bytes); file.bytes.fill(0); file.bytes = bytes; file.identity = fs.fstatSync(file.fd, { bigint: true });
+  readExact(file); writeAll(descriptor(file), bytes); file.bytes.fill(0); file.bytes = bytes; file.identity = fs.fstatSync(descriptor(file), { bigint: true });
   readExact(file); readPrivateApproval(file.filename);
 }
 /** Activation accepts only the private start proof minted by the genuine host guard. */
@@ -203,13 +216,13 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     assertPending(pending); verified.assertLive();
     // Exclusive publication cannot overwrite an unknown replacement.
     fs.linkSync(pending.record.filename, publishedName);
-    const linked = fs.fstatSync(pending.record.fd, { bigint: true });
+    const linked = fs.fstatSync(descriptor(pending.record), { bigint: true });
     if (linked.nlink !== BigInt(2) || !same(linked, fs.lstatSync(pending.record.filename, { bigint: true }))
         || !same(linked, fs.lstatSync(publishedName, { bigint: true }))) throw new BundledFlujoWorkloadError();
     fs.unlinkSync(pending.record.filename);
     pending.record.filename = publishedName;
-    fs.fsyncSync(pending.record.fd);
-    pending.record.identity = fs.fstatSync(pending.record.fd, { bigint: true });
+    fs.fsyncSync(descriptor(pending.record));
+    pending.record.identity = fs.fstatSync(descriptor(pending.record), { bigint: true });
     readExact(pending.record);
     pending.state = 'active';
   } catch (cause) {
@@ -217,55 +230,82 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     throw cause;
   }
 }
-/** Synchronous completed invalidation; unknown replacement paths are preserved. */
+function settleDescriptor(file: OwnedFile) {
+  if (file.uncertainDescriptor === undefined) return;
+  // Metadata probing cannot close or mutate a descriptor that may have been
+  // recycled. Only authoritative EBADF settles the uncertainty.
+  try { fs.fstatSync(file.uncertainDescriptor); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EBADF') { file.uncertainDescriptor = undefined; return; }
+    throw error;
+  }
+  throw new BundledFlujoWorkloadError();
+}
+function closeOwnedFile(file: OwnedFile) {
+  settleDescriptor(file);
+  if (file.fd === undefined) return;
+  const fd = file.fd; file.fd = undefined;
+  try { fs.closeSync(fd); }
+  catch (error) {
+    file.uncertainDescriptor = fd;
+    try { settleDescriptor(file); } catch { /* Retain uncertainty without touching a possibly recycled descriptor. */ }
+    throw error;
+  }
+}
+function recoverOwnedFile(file: OwnedFile) {
+  settleDescriptor(file); assertOwnedParent(file);
+  if (file.removed) {
+    try { fs.lstatSync(file.filename); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+    throw new BundledFlujoWorkloadError();
+  }
+  if (file.fd !== undefined) { readExact(file); return; }
+  if (!same(file.identity, fs.lstatSync(file.filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
+  if (file.bytes.length) readPrivateApproval(file.filename);
+  file.fd = fs.openSync(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  readExact(file); assertOwnedParent(file);
+}
+/** Completed durable invalidation, with private proof retained for safe retry. */
 export function revokePendingWorkload(value: PendingBundledFlujoWorkload | undefined): void {
   if (!value) return;
   const pending = capsule(value);
   if (pending.state === 'retired') return;
   pending.state = 'uncertain';
-  const marker = pending.marker;
-  if (marker) {
-    // Never mutate a foreign held object or pathname. A foreign named marker
-    // already fails the record's fixed identity; invalidate our held object too.
-    readExact(marker, false);
-    let named: fs.BigIntStats | undefined;
-    try { named = fs.lstatSync(marker.filename, { bigint: true }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    const ownedName = !!named && same(named, marker.identity);
-    if (ownedName) {
-      readPrivateApproval(marker.filename);
-      readExact(marker);
-    }
-    const revoked = Buffer.from(JSON.stringify({ version: 1, generation: pending.generation, state: 'revoked' }));
-    writeAll(marker.fd, revoked);
-    marker.bytes.fill(0); marker.bytes = revoked;
-    marker.identity = fs.fstatSync(marker.fd, { bigint: true });
-    readExact(marker, false);
-    if (ownedName && !same(marker.identity, fs.lstatSync(marker.filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
-  }
   const errors: unknown[] = [];
-  // The completed revoked marker already prevents authorization. Remove only
-  // names still proved to be our exact held objects; preserve foreign names.
+  const marker = pending.marker;
+  if (marker) try {
+    recoverOwnedFile(marker);
+    if (!pending.durablyRevoked) {
+      if (marker.removed) throw new BundledFlujoWorkloadError();
+      if (marker.bytes.length) readPrivateApproval(marker.filename);
+      readExact(marker);
+      const revoked = Buffer.from(JSON.stringify({ version: 1, generation: pending.generation, state: 'revoked' }));
+      writeAll(descriptor(marker), revoked);
+      marker.bytes.fill(0); marker.bytes = revoked;
+      marker.identity = fs.fstatSync(descriptor(marker), { bigint: true });
+      readExact(marker); assertOwnedParent(marker);
+      pending.durablyRevoked = true;
+    }
+  } catch (error) { errors.push(error); }
   for (const file of [pending.record, pending.marker]) if (file) {
     try {
-      readExact(file, false);
-      let named: fs.BigIntStats | undefined;
-      try { named = fs.lstatSync(file.filename, { bigint: true }); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-      if (named && same(named, file.identity)) {
+      recoverOwnedFile(file);
+      if (!file.removed) {
         if (file.bytes.length) readPrivateApproval(file.filename);
-        readExact(file);
+        readExact(file); assertOwnedParent(file);
         fs.unlinkSync(file.filename);
-        const removed = fs.fstatSync(file.fd, { bigint: true });
+        const removed = fs.fstatSync(descriptor(file), { bigint: true });
         if (removed.dev !== file.identity.dev || removed.ino !== file.identity.ino || removed.nlink !== BigInt(0)
             || removed.mode !== file.identity.mode || removed.uid !== file.identity.uid || removed.gid !== file.identity.gid) throw new BundledFlujoWorkloadError();
-        fs.fsyncSync(file.fd);
+        file.identity = removed; file.removed = true;
+        fs.fsyncSync(descriptor(file));
       }
     } catch (error) { errors.push(error); }
-    try { fs.closeSync(file.fd); } catch (error) { errors.push(error); }
-    file.bytes.fill(0);
+    try { closeOwnedFile(file); } catch (error) { errors.push(error); }
   }
-  if (errors.length) throw new AggregateError(errors, 'Workload retirement descriptor cleanup failed.');
+  if (errors.length) throw new AggregateError(errors, 'Workload retirement remains uncertain.');
+  if (marker && !pending.durablyRevoked) throw new BundledFlujoWorkloadError();
+  for (const file of [pending.record, pending.marker]) file?.bytes.fill(0);
   pending.state = 'retired';
 }
 
