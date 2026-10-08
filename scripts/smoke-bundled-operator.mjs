@@ -4,6 +4,7 @@ import Module, { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensurePrivateDirectory } from './local-instance.mjs';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -51,7 +52,7 @@ export async function createSmokeOperator() {
     await fs.rm(directory, { recursive: true, force: true });
   };
   try {
-    await fs.chmod(directory, 0o700);
+    await ensurePrivateDirectory(directory);
     const issued = issuer.issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], Date.now() + 15 * 60_000);
     const policy = issuer.ownerPolicySchema.parse({ schemaVersion: 1, ownerId: 'packed-smoke-operator', credentials: [issued.record] });
     const ownerFile = path.join(directory, 'owner.json');
