@@ -24,9 +24,13 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     const preview = await previewBundledHostConsent(name, { runtimeHome });
     const revoked = owner.authorization.recheck(); if (revoked) return revoked;
     const policy = trustedHostMcpPolicySchema.parse(preview.config.trustedHost);
+    const reviewedWorkload = policy.bundledInstallation?.workload;
+    const workload = reviewedWorkload ? { ...reviewedWorkload, capabilities: {
+      systemScreenshotEnabled: reviewedWorkload.inventory.some(action => action.action === 'system_screenshot'),
+    } } : undefined;
     return json({ serverName: name, policyDigest: preview.policyDigest, privileges: 'owner-account',
       command: preview.config.command, args: preview.config.args, roots: preview.config.roots,
-      runtimeHome, environmentNames: policy.environmentNames, workload: policy.bundledInstallation?.workload, revision: preview.revision });
+      runtimeHome, environmentNames: policy.environmentNames, workload, revision: preview.revision });
   } catch (error) {
     if (!owner.authorization.recheck()) console.warn(`[bundled-consent-preview] ${consentDiagnosticCode(error)}`);
     return json({ error: 'A fixed installed package proposal is unavailable.' }, 409);
