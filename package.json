@@ -31,6 +31,7 @@
     "!.next/trace",
     "public/**/*",
     "scripts/launch-next.mjs",
+    "scripts/canonical-data-root.mjs",
     "scripts/bootstrap-directory.mjs",
     "scripts/local-instance.mjs",
     "scripts/healthcheck.mjs",

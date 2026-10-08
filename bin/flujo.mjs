@@ -70,7 +70,8 @@ if (!process.env.FLUJO_DATA_DIR || process.env.FLUJO_DATA_DIR.trim().length === 
   process.env.FLUJO_DATA_DIR = path.join(os.homedir(), '.flujo');
 }
 try {
-  fs.mkdirSync(process.env.FLUJO_DATA_DIR, { recursive: true });
+  const { prepareCanonicalDataRoot } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'canonical-data-root.mjs')).href);
+  process.env.FLUJO_DATA_DIR = prepareCanonicalDataRoot(process.env.FLUJO_DATA_DIR);
 } catch (error) {
   console.error(`[FLUJO] Could not create data directory ${process.env.FLUJO_DATA_DIR}:`, error);
   process.exit(1);
