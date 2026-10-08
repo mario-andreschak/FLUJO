@@ -14,6 +14,7 @@ export interface PackageRunnerPreparation {
   launcher: string;
   node: string;
   shell: string;
+  artifactFiles: Readonly<Record<string, string>>;
 }
 export interface PreparedPackageRunnerIntent { readonly digest: string }
 type Evidence = Awaited<ReturnType<typeof collect>>;
@@ -48,7 +49,8 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
   if (path.resolve(preparation.lookup.cwd) !== path.join(runtime, 'cwd')
       || path.resolve(preparation.lookup.home) !== path.join(runtime, 'home')) throw new Error('Package runtime binding changed');
   // Sequential real observations; no submitted digest becomes evidence.
-  const tree = await prepareResolvedPackageTree(preparation.lookup.cwd, config.args[1], signal);
+  if (!preparation.artifactFiles) throw new Error('Actual dependency archives are required for a runner intent');
+  const tree = await prepareResolvedPackageTree(preparation.lookup.cwd, config.args[1], signal, preparation.artifactFiles);
   const lookup = await preparePackageRunnerLookup(preparation.lookup, signal);
   const launcher = await executable(preparation.launcher, signal);
   const node = await executable(preparation.node, signal);

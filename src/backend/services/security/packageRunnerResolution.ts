@@ -2,11 +2,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readPlainFile } from '@/utils/readPlainFile';
+import { verifyPackageRunnerArtifact } from './packageRunnerArtifact';
 
 const MAX_FILES = 16_384;
 const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_METADATA = 1024 * 1024;
-const prepared = new WeakMap<object, { root: string; packageName: string; witness: string }>();
+const prepared = new WeakMap<object, { root: string; packageName: string; witness: string;
+  artifactFiles?: Readonly<Record<string, string>> }>();
 export interface ResolvedPackageTree {
   readonly packageName: string;
   readonly version: string;
@@ -16,6 +18,7 @@ export interface ResolvedPackageTree {
   readonly treeSha256: string;
   readonly lockfileSha256: string;
   readonly dependencyGraphSha256: string;
+  readonly artifactsVerified: boolean;
 }
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 function descendant(root: string, filename: string) {
@@ -40,7 +43,8 @@ async function parents(filename: string) {
  * npm/launcher/config/lookup closure and rebind this object before any effect.
  */
 export async function prepareResolvedPackageTree(rootInput: string, packageName: string,
-  signal?: AbortSignal): Promise<ResolvedPackageTree> {
+  signal?: AbortSignal, artifactInput?: Readonly<Record<string, string>>): Promise<ResolvedPackageTree> {
+  const artifactFiles = artifactInput && Object.freeze({ ...artifactInput });
   if (!path.isAbsolute(rootInput) || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(packageName)) {
     throw new Error('Invalid isolated package resolution request');
   }
@@ -101,8 +105,19 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
     graph.push([key, node.version, node.integrity]);
   }
   for (const key of metadata.keys()) {
-    if (key.startsWith('node_modules/') && key.endsWith('/package.json')
+    if (/^node_modules\/(?:@[^/]+\/)?[^/]+(?:\/node_modules\/(?:@[^/]+\/)?[^/]+)*\/package\.json$/.test(key)
         && !lock.packages[key.slice(0, -'/package.json'.length)]) throw new Error('Unrecorded installed package');
+  }
+  if (artifactFiles) {
+    const packageKeys = graph.map(([key]) => key).sort((a, b) => b.length - a.length);
+    if (Object.keys(artifactFiles).length !== packageKeys.length
+        || packageKeys.some(key => !artifactFiles[key])) throw new Error('Incomplete exact dependency artifact set');
+    for (const key of packageKeys) {
+      const owned = new Map(records.filter(([member]) => member.startsWith(key + '/')
+        && packageKeys.find(candidate => member.startsWith(candidate + '/')) === key)
+        .map(([member, digest]) => [member.slice(key.length + 1), digest]));
+      await verifyPackageRunnerArtifact(artifactFiles[key], lock.packages[key].integrity, owned, signal);
+    }
   }
   if (manifest.name !== packageName || manifest.version !== entry.version) throw new Error('Package identity differs from lock');
   const bins = typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin ?? {});
@@ -112,8 +127,9 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
   if (!records.some(([key]) => key === path.relative(root, bin).split(path.sep).join('/'))) throw new Error('Missing package bin');
   const result = Object.freeze({ packageName, version: manifest.version as string, integrity: entry.integrity as string,
     packageRoot, bin, treeSha256: sha(JSON.stringify(records.sort(([a], [b]) => a.localeCompare(b)))),
-    lockfileSha256: sha(lockBytes), dependencyGraphSha256: sha(JSON.stringify(graph.sort(([a], [b]) => a.localeCompare(b)))) });
-  prepared.set(result, { root, packageName, witness: JSON.stringify(result) });
+    lockfileSha256: sha(lockBytes), dependencyGraphSha256: sha(JSON.stringify(graph.sort(([a], [b]) => a.localeCompare(b)))),
+    artifactsVerified: artifactFiles !== undefined });
+  prepared.set(result, { root, packageName, witness: JSON.stringify(result), artifactFiles });
   return result;
 }
 
@@ -121,6 +137,6 @@ export async function prepareResolvedPackageTree(rootInput: string, packageName:
 export async function revalidateResolvedPackageTree(value: ResolvedPackageTree, signal?: AbortSignal): Promise<void> {
   const original = prepared.get(value);
   if (!original) throw new Error('Package resolution was not prepared in this process');
-  const fresh = await prepareResolvedPackageTree(original.root, original.packageName, signal);
+  const fresh = await prepareResolvedPackageTree(original.root, original.packageName, signal, original.artifactFiles);
   if (JSON.stringify(fresh) !== original.witness) throw new Error('Prepared package closure changed');
 }
