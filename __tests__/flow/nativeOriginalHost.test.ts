@@ -30,12 +30,16 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
     '@/backend/services/model/adapters/codexAppServerProcess');
   return { ...actual, startOwnedCodexAppServer: async (input: Parameters<typeof actual.startOwnedCodexAppServer>[0]) => {
     const wire = path.join(directory, 'codex-wire.jsonl');
-    return actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
+    let resolveOffered: (() => void) | undefined;
+    const offered = new Promise<void>(resolve => { resolveOffered = resolve; });
+    phase('Codex transport launch started');
+    const transport = await actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
       args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
-      register: async registration => { codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
+      register: async registration => { phase('Codex registration started'); codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
         let closeObserved = false;
         codexCloseDelays.push(registration.exit.then(async () => {
-          const atExit = performance.now(); await registration.close; return performance.now() - atExit;
+          phase('Codex original exited');
+          const atExit = performance.now(); await registration.close; phase('Codex pipes closed'); return performance.now() - atExit;
         }));
         void registration.close.then(() => { closeObserved = true; });
         codexExitWitnesses.push(registration.exit.then(async () => {
@@ -44,15 +48,33 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
           const reservation = (await ledger()).reservations[0];
           return { pipeCloseObservedAtExit, stateAtExit: reservation.state };
         }));
-        await input.register(registration); await beforePrompt?.(); },
+        await input.register(registration); phase('Codex registration completed'); await beforePrompt?.(); },
       onNotification: message => {
+        phase(`Codex notification ${message.method}`);
         codexFrames.push(message);
         input.onNotification(message);
-        if (message.method === 'turn/started') {
+        if (message.method === 'item/completed') resolveOffered?.();
+        if (!codexAfterResponseBarrier && message.method === 'turn/started') {
           void (async () => { await afterPrompt?.(); await fs.writeFile(`${wire}.events`, 'ready'); })();
         }
       },
     });
+    phase('Codex transport admitted');
+    if (!codexAfterResponseBarrier) return transport;
+    return Object.freeze({ ...transport, request: async (...args: Parameters<typeof transport.request>) => {
+      const response = await transport.request(...args);
+      if (args[0] === 'turn/start') {
+        phase('Codex accepted turn response barrier started');
+        await afterPrompt?.();
+        phase('Codex after-prompt mutation completed');
+        await fs.writeFile(`${wire}.events`, 'ready');
+        await Promise.race([offered, transport.registration.close.then(() => {
+          throw new Error('Offline producer closed before offering the late item.');
+        })]);
+        phase('Codex real late item offered before response release');
+      }
+      return response;
+    } });
   } };
 });
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: (...args: unknown[]) => queryMock(...args),
@@ -90,6 +112,7 @@ let offeredLateUsage: unknown;
 let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
 let codexFrames: unknown[] = [];
 let codexForeignScope = '';
+let codexAfterResponseBarrier = false;
 let codexOwners: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost[] = [];
 let codexCloseDelays: Array<Promise<number>> = [];
 let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
@@ -147,7 +170,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = [];
+  codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = []; codexAfterResponseBarrier = false;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -363,6 +386,8 @@ describe('Original host with real Persona lease and actual child / offline SDK e
   }, 30000);
   it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
     'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
+      if (mode === 'after-prompt') { phaseStart = performance.now(); phase('Codex after-prompt control started'); }
+      codexAfterResponseBarrier = mode === 'after-prompt';
       selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
       codexForeignScope = mode === 'foreign-thread' ? 'thread' : mode === 'foreign-turn' ? 'turn' : '';
       const events: string[] = [];
@@ -429,6 +454,9 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     }, revoked ? 'handoff-refusal' : 'handoff');
   }, 30000);
   it.each([false, true])('owns a Codex descendant under the root budget and fences parent drift (drift=%s)', async drift => {
+    phaseStart = performance.now();
+    phase(`Codex descendant test started drift=${drift}`);
+    codexAfterResponseBarrier = drift;
     selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
     let rootConversation: string | undefined, rootRun: string | undefined;
     const events: string[] = [];
