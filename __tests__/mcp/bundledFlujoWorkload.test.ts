@@ -99,6 +99,8 @@ test('real private consent activates only at guarded start, owner drift denies, 
     stamp(`${name}:start`);
     try { return await operation(); } finally { stamp(`${name}:settled`); }
   };
+  const cancellation = new AbortController();
+  const deadline = setTimeout(() => cancellation.abort(new Error('Workload fixture cancellation deadline.')), 55_000);
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
   let readerB!: typeof import('@/backend/services/security/trustedHostMcp');
   jest.isolateModules(() => {
@@ -109,7 +111,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
   const serviceKey = Symbol('Source control global graph B service');
   const capturedService = Object.freeze({ assertEffect: graphB.assertBundledFlujoWorkloadEffectCurrent });
   Object.defineProperty(globalThis, serviceKey, { value: capturedService, configurable: true });
-  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_SYSTEM_SCREENSHOT_ENABLED'];
+  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_SYSTEM_SCREENSHOT_ENABLED', 'FLUJO_MCP_WORKLOAD_TRACE'];
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
   const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
@@ -125,6 +127,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
     process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
     process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '0';
+    process.env.FLUJO_MCP_WORKLOAD_TRACE = '1';
     const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'flujo')!;
     write('package.json', '{"name":"flujo-ai","version":"1.0.0"}');
     write('node_modules/fixture-dependency/package.json', '{"name":"fixture-dependency","version":"1.0.0","type":"module","exports":"./index.js"}');
@@ -138,13 +141,13 @@ test('real private consent activates only at guarded start, owner drift denies, 
     expect((await timed('persist-config', () => saveConfig(new Map([[proposed.name, proposed]])))).success).toBe(true);
     owner = installBundledFixtureOwner();
     const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
-    const approved = await timed('approve', () => approveBundledHostConsent(owner!.request(proposed.name), proposed.name, {
+    const approved = await timed('approve', () => approveBundledHostConsent(new Request(owner!.request(proposed.name), { signal: cancellation.signal }), proposed.name, {
       runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner!.expiresAt,
     }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
     const token = environment.FLUJO_MCP_WORKLOAD_TOKEN;
-    const request = () => new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { headers: {
+    const request = () => new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { signal: cancellation.signal, headers: {
       host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}`,
     } });
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
@@ -218,6 +221,8 @@ test('real private consent activates only at guarded start, owner drift denies, 
     primaryFailed = true; primaryError = error; throw error;
   } finally {
     const cleanupErrors: unknown[] = [];
+    clearTimeout(deadline);
+    cancellation.abort(new Error('Workload fixture cleanup.'));
     stamp('cleanup:start');
     try { Reflect.deleteProperty(globalThis, serviceKey); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
