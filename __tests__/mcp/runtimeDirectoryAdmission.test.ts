@@ -326,7 +326,7 @@ describe('isolated MCP runtime directory admission', () => {
     approved.config.env.FLUJO_PARENT_DATA_DIR = process.env.FLUJO_PARENT_DATA_DIR!;
     approved.config.env.FLUJO_WORKSPACE = getCurrentWorkspace();
     const policy = trustedHostMcpPolicySchema.parse(approved.config.trustedHost);
-    approved.config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames, 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKSPACE'] };
+    approved.config.trustedHost = { ...policy, environmentNames: [...new Set([...policy.environmentNames, 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKSPACE'])] };
     approved.approve();
     return getWorkspaceDataDir();
   }
