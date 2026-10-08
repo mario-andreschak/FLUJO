@@ -728,6 +728,11 @@ async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<vo
   const dir = await resolveManagedWorkspace(name);
   const { stopAndDrainPersonaGoalRuntime } = await import('@/backend/services/enduringAgents/goalRuntime');
   await runWithWorkspace(name, () => stopAndDrainPersonaGoalRuntime());
+  const { mcpService } = await import('@/backend/services/mcp');
+  const disconnected = await runWithWorkspace(name, () => mcpService.disconnectAll('workspace deletion'));
+  if (disconnected.failed.length > 0) {
+    throw new Error(`Cannot delete workspace while ${disconnected.failed.length} MCP server(s) remain open.`);
+  }
   
   // Force delete with retry logic for EBUSY (Windows file locking)
   const maxRetries = 5;

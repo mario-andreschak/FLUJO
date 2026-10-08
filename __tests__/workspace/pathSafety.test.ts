@@ -7,6 +7,7 @@ import {
   createWorkspace,
   deleteWorkspace,
   ensureWorkspaceDirs,
+  getCurrentWorkspace,
   isValidWorkspaceName,
   listWorkspaces,
   loadWorkspaceRoots,
@@ -16,6 +17,7 @@ import {
   workspaceExists,
 } from '@/utils/workspace';
 import { reconcilePersonaGoals, startPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
+import { mcpService } from '@/backend/services/mcp';
 
 describe('workspace path safety', () => {
   let dataRoot: string;
@@ -130,6 +132,28 @@ describe('workspace path safety', () => {
     // A stale runtime poll used to recreate the deleted db directory.
     await runWithWorkspace('goal-runtime', () => reconcilePersonaGoals());
     await expect(workspaceExists('goal-runtime')).resolves.toBe(false);
+  });
+
+  it('disconnects workspace MCP processes before removing their files', async () => {
+    await createWorkspace('mcp-runtime');
+    const disconnect = jest.spyOn(mcpService, 'disconnectAll').mockImplementation(async () => {
+      expect(getCurrentWorkspace()).toBe('mcp-runtime');
+      return { closed: ['bash'], failed: [] };
+    });
+    try {
+      await deleteWorkspace('mcp-runtime');
+      expect(disconnect).toHaveBeenCalledWith('workspace deletion');
+      await expect(workspaceExists('mcp-runtime')).resolves.toBe(false);
+    } finally { disconnect.mockRestore(); }
+  });
+
+  it('keeps the workspace when MCP teardown is unconfirmed', async () => {
+    await createWorkspace('busy-mcp');
+    const disconnect = jest.spyOn(mcpService, 'disconnectAll').mockResolvedValue({ closed: [], failed: ['bash'] });
+    try {
+      await expect(deleteWorkspace('busy-mcp')).rejects.toThrow(/MCP server/);
+      await expect(workspaceExists('busy-mcp')).resolves.toBe(true);
+    } finally { disconnect.mockRestore(); }
   });
 
   it('recreates missing subtrees and rejects a replacement junction after initialization', async () => {
