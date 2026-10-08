@@ -9,6 +9,7 @@ import {
   recordModelTurnArchiveCleanupFailure, retryModelTurnArchiveCleanup,
 } from './modelTurnArchiveReadBudget';
 import type { ModelDispatchOutcome } from '@/shared/types/modelTurn';
+import { ModelTurnSnapshotChunks } from './modelTurnSnapshotChunks';
 
 const CHUNK = 64 * 1024;
 export class ModelTurnArchiveChangedError extends Error {
@@ -56,7 +57,7 @@ async function* descriptorChunks(handle: FileHandle, size: number, hash: ReturnT
  * No plaintext spool, transcript object, or complete response string exists. */
 export async function prepareModelTurnSnapshotResponse(
   source: FileHandle, identity: ModelTurnStreamIdentity,
-  outcome?: Exclude<ModelDispatchOutcome, 'running'>, signal?: AbortSignal,
+  outcome?: Exclude<ModelDispatchOutcome, 'running'>, signal?: AbortSignal, framed = false,
 ): Promise<{ body: ReadableStream<Uint8Array>; completed: Promise<void> }> {
   const streams: Array<Readable | Transform> = [];
   let decoding: Promise<void> | undefined;
@@ -137,9 +138,11 @@ export async function prepareModelTurnSnapshotResponse(
               { objectMode: false, highWaterMark: CHUNK });
             const decoder = createGunzip({ chunkSize: CHUNK });
             const output = new LegacyModelTurnOutcomeTransform(outcome, identity);
-            streams.push(input, decoder, output);
-            iterator = output[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
-            decoding = pipeline(input, decoder, output, { signal }).then(async () => {
+            const transport = framed ? new ModelTurnSnapshotChunks() : undefined;
+            streams.push(input, decoder, output, ...(transport ? [transport] : []));
+            iterator = (transport ?? output)[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
+            decoding = (transport ? pipeline(input, decoder, output, transport, { signal })
+              : pipeline(input, decoder, output, { signal })).then(async () => {
               await verifyDescriptor();
               if (hash.digest('hex') !== expectedHash) throw changed();
             });

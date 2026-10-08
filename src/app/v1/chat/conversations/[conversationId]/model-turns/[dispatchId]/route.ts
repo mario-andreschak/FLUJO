@@ -20,8 +20,10 @@ async function GET_handler(
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
   let body: Awaited<ReturnType<typeof readModelTurnSnapshotResponse>>;
+  const framed = request.nextUrl.searchParams.get('format') === 'chunks';
   try {
-    body = await readModelTurnSnapshotResponse(conversationId, dispatchId, request.signal);
+    body = framed ? await readModelTurnSnapshotResponse(conversationId, dispatchId, request.signal, true)
+      : await readModelTurnSnapshotResponse(conversationId, dispatchId, request.signal);
   } catch (error) {
     if (!(error instanceof ModelTurnArchiveReadError)) throw error;
     return NextResponse.json({ error: error.message, code: error.code, limits: MODEL_TURN_ARCHIVE_READ_LIMITS }, {
@@ -32,7 +34,10 @@ async function GET_handler(
   if (!body) {
     return NextResponse.json({ error: 'Model turn not found' }, { status: 404 });
   }
-  return new NextResponse(body, { headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' } });
+  return new NextResponse(body, { headers: { 'Cache-Control': 'no-store',
+    'Content-Type': framed ? 'application/x-ndjson; charset=utf-8' : 'application/json; charset=utf-8',
+    ...(framed ? { 'X-Flujo-Model-Turn-Format': 'json-chunks-v1' } : {}),
+  } });
 }
 
 export const GET = withWorkspaceRoute(GET_handler);

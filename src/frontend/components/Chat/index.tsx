@@ -76,7 +76,7 @@ import DebuggerConversation from './DebuggerConversation';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import ModelTurnTimeline from './ModelTurnTimeline';
-import ModelTurnInspector, { type ModelTurnInspectorTab } from './ModelTurnInspector';
+import ModelTurnInspector, { ArchivedModelTurnChat, type ModelTurnInspectorTab } from './ModelTurnInspector';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
@@ -111,8 +111,9 @@ import {
   type McpLoadedSkill,
   type McpSkillSelection,
 } from '@/shared/types/mcp';
-import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
+import type { ModelTurnIndexEntry } from '@/shared/types/modelTurn';
 import { ModelTurnDetailCache } from './modelTurnDetailCache';
+import { isModelTurnInspection, type ModelTurnView } from '@/frontend/services/chat/modelTurnInspection';
 import {
   LiveActivity,
   EMPTY_LIVE_ACTIVITY,
@@ -579,7 +580,7 @@ const Chat: React.FC = () => {
   // the selected sidecar supplies both its historical Chat render and Model Input.
   const [modelTurns, setModelTurns] = useState<ModelTurnIndexEntry[]>([]);
   const [selectedModelTurnId, setSelectedModelTurnId] = useState<string | null>(null);
-  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnSnapshot | null>(null);
+  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnView | null>(null);
   const [modelTurnLoading, setModelTurnLoading] = useState(false);
   const [modelTurnError, setModelTurnError] = useState<string | null>(null);
   const [modelTurnRetry, setModelTurnRetry] = useState(0);
@@ -4726,7 +4727,7 @@ const Chat: React.FC = () => {
     && currentPreviewAvailable;
   const showingWireView = showingArchivedModelTurn || showingHistoricalWireView || showingCurrentPreview;
   const selectedModelTurnChatMessages = useMemo(
-    () => (modelTurnSnapshot?.canonicalMessages ?? [])
+    () => (modelTurnSnapshot && !isModelTurnInspection(modelTurnSnapshot) ? modelTurnSnapshot.canonicalMessages : [])
       .filter(message => message.role !== 'system') as ChatMessage[],
     [modelTurnSnapshot],
   );
@@ -4752,7 +4753,7 @@ const Chat: React.FC = () => {
     setModelTurnSnapshot(null);
     setModelTurnError(null);
     setModelTurnLoading(true);
-    void chatService.getModelTurn(
+    void chatService.getModelTurnInspection(
       selectedModelTurn.conversationId,
       selectedModelTurn.id,
       { signal: controller.signal },
@@ -5566,7 +5567,9 @@ const Chat: React.FC = () => {
                       {modelTurnError}
                     </Alert>
                   ) : modelTurnSnapshot ? (
-                    selectedModelTurnChatMessages.length > 0 ? (
+                    isModelTurnInspection(modelTurnSnapshot) && selectedModelTurn ? (
+                      <ArchivedModelTurnChat key={modelTurnSnapshot.entry.id} snapshot={modelTurnSnapshot} conversationId={selectedModelTurn.conversationId} />
+                    ) : selectedModelTurnChatMessages.length > 0 ? (
                       <ChatMessages
                         messages={selectedModelTurnChatMessages}
                         availableNodes={availableNodes}

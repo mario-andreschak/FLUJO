@@ -13,6 +13,7 @@ import type { ConversationChainsResponse } from '@/shared/types/conversationChai
 import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { readModelTurnInspection, type ModelTurnInspection } from './modelTurnInspection';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -286,6 +287,18 @@ class ChatService {
       { cache: 'no-store', signal: options.signal },
     );
     return parse<ModelTurnSnapshot>(response);
+  }
+
+  /** Inspect complete archived bytes without materializing a large SDK graph. */
+  async getModelTurnInspection(conversationId: string, dispatchId: string,
+    options: { signal?: AbortSignal } = {}): Promise<ModelTurnInspection> {
+    const response = await fetch(withWorkspaceUrl(
+      `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}?format=chunks`,
+    ), { cache: 'no-store', signal: options.signal });
+    if (!response.ok) return parse<ModelTurnInspection>(response);
+    const inspection = await readModelTurnInspection(response, options.signal);
+    if (inspection.entry.id !== dispatchId || inspection.entry.conversationId !== conversationId) throw new Error('Model-turn inspection identity does not match the selected dispatch.');
+    return inspection;
   }
 
   modelTurnMediaUrl(conversationId: string, dispatchId: string, mediaId: string): string {
