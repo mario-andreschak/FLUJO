@@ -82,3 +82,31 @@ test('unchanged actual dependency assets retain a deterministic graph digest', a
   expect(second).toEqual(first);
   expect(first.packages).toHaveLength(1);
 });
+
+test('replacement after the final scan named observation but before canonical completion is refused', async () => {
+  const realpath = fs.promises.realpath.bind(fs.promises);
+  const lstat = fs.promises.lstat.bind(fs.promises);
+  let canonicalReads = 0;
+  let release!: () => void;
+  let observed!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const namedObserved = new Promise<void>(resolve => { observed = resolve; });
+  jest.spyOn(fs.promises, 'realpath').mockImplementation((async (filename: fs.PathLike) => {
+    const result = await realpath(filename);
+    if (String(filename) === manifest && ++canonicalReads === 5) await pending;
+    return result;
+  }) as typeof fs.promises.realpath);
+  jest.spyOn(fs.promises, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.promises.lstat>) => {
+    const result = await lstat(...args);
+    if (String(args[0]) === manifest && canonicalReads === 5) observed();
+    return result;
+  }) as typeof fs.promises.lstat);
+  const inspection = inspectBundledMcpDependencyGraph(root, [directory]);
+  const outcome = inspection.then(() => undefined, error => error);
+  try {
+    await namedObserved;
+    fs.renameSync(manifest, `${manifest}.old`);
+    fs.writeFileSync(manifest, '{"name":"late-replacement","version":"3.0.0"}');
+  } finally { release(); }
+  expect(await outcome).toEqual(new Error('Installation changed during dependency inspection.'));
+});

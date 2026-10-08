@@ -33,7 +33,8 @@ async function settledBatch<T>(operations: Promise<T>[]): Promise<T[]> {
 }
 
 /** Drain independent metadata reads before reporting the original ordered refusal. */
-async function checkpoint(filename: string, identity: fs.BigIntStats, handle?: FileHandle, length?: number): Promise<void> {
+async function checkpoint(filename: string, identity: fs.BigIntStats, handle?: FileHandle, length?: number,
+  refusal = 'Dependency asset changed.'): Promise<void> {
   const results = await Promise.allSettled([
     linkFree(filename),
     ...(handle ? [handle.stat({ bigint: true })] : []),
@@ -41,11 +42,16 @@ async function checkpoint(filename: string, identity: fs.BigIntStats, handle?: F
   ]);
   const canonical = results[0];
   if (canonical.status === 'rejected') throw canonical.reason;
-  if (length !== undefined && BigInt(length) !== identity.size) throw new Error('Dependency asset changed.');
+  if (length !== undefined && BigInt(length) !== identity.size) throw new Error(refusal);
   for (const result of results.slice(1)) {
     if (result.status === 'rejected') throw result.reason;
-    if (!result.value || !same(identity, result.value)) throw new Error('Dependency asset changed.');
+    if (!result.value || !same(identity, result.value)) throw new Error(refusal);
   }
+  // Parallel observations may precede the final canonical-path yield. Reread
+  // every identity after all operations settle, without another await between
+  // the descriptor and named-file observations and the caller's publication.
+  if (handle && !same(identity, fs.fstatSync(handle.fd, { bigint: true }))) throw new Error(refusal);
+  if (!same(identity, fs.lstatSync(filename, { bigint: true }))) throw new Error(refusal);
 }
 
 /** Declared dependency inspection only: never loads package code or conveys consent. */
@@ -166,7 +172,7 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
   const observed = [...identities];
   for (let offset = 0; offset < observed.length; offset += 32) {
     await settledBatch(observed.slice(offset, offset + 32).map(async ([filename, identity]) => {
-      live(); await checkpoint(filename, identity);
+      live(); await checkpoint(filename, identity, undefined, undefined, 'Installation changed during dependency inspection.');
     }));
   }
   packages.sort((a, b) => a.directory.localeCompare(b.directory));
