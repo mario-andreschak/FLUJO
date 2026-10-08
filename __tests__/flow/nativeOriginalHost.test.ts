@@ -293,8 +293,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
     };
     const observed: unknown[] = [];
-    const listener = (event: unknown) => observed.push(event);
-    executionEventBus.on('event', listener);
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => observed.push(event));
     try {
       await withClaim(async () => {}, async () => {
         expect(promptCount).toBe(1);
@@ -306,7 +305,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(JSON.stringify(child!.messages)).not.toContain(transcriptText);
         expect(JSON.stringify(observed)).not.toContain(transcriptText);
       }, 'child-refusal');
-    } finally { executionEventBus.off('event', listener); }
+    } finally { unsubscribe(); }
   }, 30000);
   it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
     await withClaim(async input => {
