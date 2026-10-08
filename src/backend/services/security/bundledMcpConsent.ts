@@ -115,6 +115,8 @@ export async function previewBundledHostConsent(serverName: string, options: { r
       if (browsersPath) environment.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
     }
     const root = getWorkspaceDataDir();
+    const ownedPaths = ['FLUJO_BROWSER_PROFILE_DIR', 'FLUJO_BROWSER_SCREENSHOT_DIR', 'FLUJO_BROWSER_RECORD_DIR'];
+    for (const name of Object.keys(environment)) if (ownedPaths.includes(name.toUpperCase())) delete environment[name];
     environment.FLUJO_BROWSER_PROFILE_DIR = path.join(root, 'browser-profile', 'trusted');
     environment.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(root, 'screenshots', 'browser');
     environment.FLUJO_BROWSER_RECORD_DIR = path.join(root, 'recordings', 'browser');
