@@ -8,6 +8,7 @@ let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { Flow } from '@/shared/types/flow';
 import type { RunRecord } from '@/shared/types/plannedExecution';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
@@ -84,28 +85,46 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   let expectedErrors: jest.SpyInstance;
   let firstCase = true;
   let reviewedBashDigest: string;
+  const preparationEpoch = performance.now();
+  const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready' | 'connection-enter' | 'connection-ready') => {
+    console.info(JSON.stringify({ shippedFixture: 'real-bash', stage, elapsedMs: performance.now() - preparationEpoch }));
+  };
 
   async function approveBash() {
     const approvalStarted = performance.now();
     owner = installBundledFixtureOwner();
     // The same reviewed proposal may be approved again; the protected writer
     // still rechecks the full current proposal and its final publication fence.
-    reviewedBashDigest ??= (await previewBundledHostConsent('bash', { runtimeHome: 'host' })).policyDigest;
+    if (reviewedBashDigest === undefined) {
+      phase('preview-enter');
+      reviewedBashDigest = (await previewBundledHostConsent('bash', { runtimeHome: 'host' })).policyDigest;
+      phase('preview-ready');
+    }
+    phase('grant-enter');
     bashConfig = (await approveBundledHostConsent(owner.request('bash'), 'bash', {
       runtimeHome: 'host', reviewedDigest: reviewedBashDigest, expiresAt: owner.expiresAt,
     })).config;
+    phase('grant-ready');
     console.info(JSON.stringify({ bashFixturePhase: 'protected-approval', elapsedMs: performance.now() - approvalStarted }));
   }
 
   beforeAll(async () => {
     expect(fs.existsSync(binary)).toBe(true); // CI builds MCP packages before Jest.
+    phase('private-profile-enter');
     privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
+    phase('private-profile-ready');
+    phase('provisioning-enter');
     await ensureShippedWorkspacePackages(getWorkspaceDataDir(), undefined, ['bash']);
+    phase('provisioning-ready');
     const config: MCPStdioConfig = { ...createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'bash')!),
       name: 'bash', disabled: false, roots: [scratch], env: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch } };
+    phase('config-enter');
     expect((await saveConfig(new Map([['bash', config]]))).success).toBe(true);
+    phase('config-ready');
     await approveBash();
+    phase('connection-enter');
     const connected = await mcpService.connectServer('bash');
+    phase('connection-ready');
     expect(connected).toMatchObject({ success: true });
   }, 60_000);
 
