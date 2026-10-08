@@ -6,8 +6,13 @@ const crypto = require('node:crypto');
 const artifacts = require('./artifacts.json');
 let verified;
 
-function sameFile(first, second) {
-  return ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'nlink']
+function sameFile(first, second, pathToDescriptor = false) {
+  // Windows' GetFileInformationByName path stat can omit the volume serial,
+  // while descriptor stat obtains it through NtQueryVolumeInformationFile.
+  // Keep descriptor-to-descriptor and path-to-path device checks exact.
+  const sameDevice = first.dev === second.dev || (pathToDescriptor && process.platform === 'win32'
+    && (first.dev === 0n || second.dev === 0n));
+  return sameDevice && ['ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'nlink']
     .every(name => first[name] === second[name]);
 }
 
@@ -16,7 +21,7 @@ function readReceipt(file, expected) {
   let bytes;
   try {
     const opened = fs.fstatSync(descriptor, { bigint: true });
-    if (!opened.isFile() || opened.nlink !== 1n || opened.size > 65536n || !sameFile(expected, opened)) {
+    if (!opened.isFile() || opened.nlink !== 1n || opened.size > 65536n || !sameFile(expected, opened, true)) {
       throw new Error('Verification receipt changed');
     }
     bytes = Buffer.alloc(Number(opened.size) + 1);
@@ -27,7 +32,7 @@ function readReceipt(file, expected) {
       length += count;
     }
     if (BigInt(length) !== opened.size || !sameFile(opened, fs.fstatSync(descriptor, { bigint: true }))
-      || !sameFile(opened, fs.lstatSync(file, { bigint: true }))) throw new Error('Verification receipt changed');
+      || !sameFile(opened, fs.lstatSync(file, { bigint: true }), true)) throw new Error('Verification receipt changed');
     return JSON.parse(bytes.subarray(0, length).toString('utf8'));
   } finally {
     bytes?.fill(0);
@@ -54,7 +59,7 @@ function sha512(file) {
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   try {
     const opened = fs.fstatSync(descriptor, { bigint: true });
-    if (!opened.isFile() || opened.nlink !== 1n || !sameFile(opened, fs.lstatSync(file, { bigint: true }))) {
+    if (!opened.isFile() || opened.nlink !== 1n || !sameFile(opened, fs.lstatSync(file, { bigint: true }), true)) {
       throw new Error('Executable changed');
     }
     let length = 0;
@@ -65,7 +70,7 @@ function sha512(file) {
       hash.update(buffer.subarray(0, count));
     }
     if (BigInt(length) !== opened.size || !sameFile(opened, fs.fstatSync(descriptor, { bigint: true }))
-      || !sameFile(opened, fs.lstatSync(file, { bigint: true }))) throw new Error('Executable changed');
+      || !sameFile(opened, fs.lstatSync(file, { bigint: true }), true)) throw new Error('Executable changed');
     return hash.digest('hex');
   } finally {
     buffer.fill(0);
