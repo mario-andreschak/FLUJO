@@ -230,3 +230,40 @@ it('async verification yields and refuses an approval revoked while filesystem v
   await rejected;
   spy.mockRestore();
 });
+
+it('an executable read refusal drains the pending actual source descriptor before returning', async () => {
+  const open = fs.promises.open.bind(fs.promises);
+  const sourceFile = path.join(trustedHostMcpPolicySchema.parse(config.trustedHost).sourceRoot, 'server.js');
+  let entered!: () => void;
+  let release!: () => void;
+  const checking = new Promise<void>(resolve => { entered = resolve; });
+  const finish = new Promise<void>(resolve => { release = resolve; });
+  let sourceClosed = false;
+  let settled = false;
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const filename = String(args[0]);
+    if (filename === config.command) {
+      handle.read = (async () => { throw new Error('actual executable read refused'); }) as typeof handle.read;
+    } else if (filename === sourceFile) {
+      const read = handle.read.bind(handle);
+      const close = handle.close.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        entered(); await finish; return read(...readArgs);
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); sourceClosed = true; };
+    }
+    return handle;
+  });
+  const verification = verifyTrustedHostMcp(config);
+  const outcome = verification.then(() => { settled = true; return undefined; }, error => { settled = true; return error; });
+  try {
+    await checking;
+    expect(settled).toBe(false);
+    expect(sourceClosed).toBe(false);
+  } finally { release(); }
+  try {
+    expect((await outcome).message).toContain('package revision changed');
+    expect(sourceClosed).toBe(true);
+  } finally { spy.mockRestore(); }
+});
