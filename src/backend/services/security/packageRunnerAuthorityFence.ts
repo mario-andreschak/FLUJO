@@ -3,6 +3,9 @@ import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { readPrivateApprovalSetAsync, readPrivateApprovalSet } from './trustedHostMcp';
 
+// Keep failed closes strongly owned even if the caller's stack unwinds.
+const retainedHandles = new Set<FileHandle>();
+
 const same = (a: BigIntStats, b: BigIntStats) =>
   (['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const).every(key => a[key] === b[key]);
 function parents(filename: string) {
@@ -26,7 +29,7 @@ export async function capturePackageRunnerAuthorityFence(input: readonly string[
   async function dispose() {
     const failures: unknown[] = [];
     for (const item of [...held]) {
-      try { await item.handle.close(); item.bytes.fill(0); held.splice(held.indexOf(item), 1); }
+      try { await item.handle.close(); retainedHandles.delete(item.handle); item.bytes.fill(0); held.splice(held.indexOf(item), 1); }
       catch (error) { failures.push(error); }
     }
     if (failures.length) throw new AggregateError(failures, 'Held runner authority close remains unresolved');
@@ -36,6 +39,7 @@ export async function capturePackageRunnerAuthorityFence(input: readonly string[
       signal?.throwIfAborted();
       const filename = files[index]; parents(filename);
       const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      retainedHandles.add(handle);
       const item = { handle, filename, identity: undefined as BigIntStats | undefined, bytes: Buffer.alloc(0) };
       held.push(item);
       item.identity = await handle.stat({ bigint: true });

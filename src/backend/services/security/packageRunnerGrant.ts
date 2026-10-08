@@ -8,7 +8,7 @@ import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { resolveOwnerRequest } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
-import { readPrivateApprovalPairAsync, readPrivateApprovalSetAsync, readPrivateApprovalSet } from './trustedHostMcp';
+import { readPrivateApprovalPairAsync } from './trustedHostMcp';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
 import { capturePackageRunnerAuthorityFence } from './packageRunnerAuthorityFence';
@@ -104,12 +104,18 @@ export async function approvePackageRunnerIntent(request: Request, intent: Prepa
     } catch (error) { failures.push(error); }
     try { await stage?.dispose(); } catch (error) { failures.push(error); }
     try { await fence.dispose(); } catch (error) { failures.push(error); }
-    if (failures.length) throw new AggregateError(failures, 'Runner publication/owned stage disposal failed');
+    if (failures.length) throw Object.assign(new AggregateError(failures, 'Runner publication/owned stage disposal failed'), {
+      disposeAuthority: fence.dispose,
+    });
     return receipt!;
   });
 }
 
 const ownedLaunches = new Set<ChildProcessWithoutNullStreams>();
+const closedLaunches = new WeakSet<ChildProcessWithoutNullStreams>();
+type LaunchBinding = { request: Request; intent: PreparedPackageRunnerIntent; serverName: string;
+  workspace: string; filename: string; ownerFile: string; configFile: string; authority: string; principal: string };
+const launchBindings = new WeakMap<ChildProcessWithoutNullStreams, LaunchBinding>();
 export class PackageRunnerSpawnUncertain extends Error {
   constructor(cause: unknown, readonly child: ChildProcessWithoutNullStreams) {
     super('Controlled runner spawned but boundary/cleanup is uncertain; child ownership retained', { cause });
@@ -121,44 +127,120 @@ export class PackageRunnerSpawnUncertain extends Error {
  * reads rebind actual owner, CAS row and raw authoritative configuration after
  * asynchronous stage checks. No new Node-direct/native-interpreter exemption.
  */
-export async function spawnGrantedPackageRunner(intent: PreparedPackageRunnerIntent, serverName: string,
-  signal: AbortSignal): Promise<ChildProcessWithoutNullStreams> {
+async function withCurrentRunnerAuthority<T>(request: Request, intent: PreparedPackageRunnerIntent, serverName: string,
+  signal: AbortSignal, effect: (config: MCPStdioConfig, binding: LaunchBinding) => T, previous?: LaunchBinding): Promise<T> {
+  const resolution = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+  if (!resolution.ok) throw new Error('Actual runner owner authorization refused');
+  const authorization = resolution.authorization;
+  const principal = fingerprint(authorization.principal);
   const filename = ledgerPath();
   const workspace = getCurrentWorkspace();
   const ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
   if (!ownerFile) throw new Error('Actual runner owner authority unavailable');
   const configFile = path.join(getWorkspaceDataDir(), 'db', 'mcp_servers.json');
-  let child: ChildProcessWithoutNullStreams | undefined;
-  try {
-    return await withPrivateApprovalLedgerLock(filename, signal, async () => {
-      const initial = await readPrivateApprovalSetAsync([ownerFile, filename, configFile], signal);
+  if (previous && (previous.workspace !== workspace || previous.filename !== filename
+      || previous.ownerFile !== ownerFile || previous.configFile !== configFile
+      || previous.principal !== principal)) throw new Error('Captured runner request/authority alias changed');
+  return withPrivateApprovalLedgerLock(filename, signal, async () => {
+    const fence = await capturePackageRunnerAuthorityFence([ownerFile, filename, configFile], signal);
+    const failures: unknown[] = [];
+    let result: T | undefined;
+    try {
       const config = await actualConfig(serverName);
       const subject = packageRunnerIntentSubject(intent, config);
-      const second = await readPrivateApprovalSetAsync([ownerFile, filename, configFile], signal);
-      if (JSON.stringify(initial) !== JSON.stringify(second)) throw new Error('Runner configuration/private authority changed during binding');
-      const owner = ownerPolicySchema.parse(second[0]);
-      const ledger = ledgerSchema.parse(second[1]);
+      fence.assertCurrent();
+      const authority = fingerprint(fence.values);
+      if (previous && previous.authority !== authority) throw new Error('Captured runner grant/configuration revision changed');
+      const owner = ownerPolicySchema.parse(fence.values[0]);
+      const ledger = ledgerSchema.parse(fence.values[1]);
       const row = ledger.grants.find(value => value.workspace === workspace && value.serverName === serverName);
-      if (ledger.ownerId !== owner.ownerId || !row || row.expiresAt <= Date.now()
+      if (owner.ownerId !== authorization.principal.ownerId || ledger.ownerId !== owner.ownerId || !row || row.expiresAt <= Date.now()
           || row.digest !== subject.digest || row.revision !== subject.revision
           || row.ownerAuthorityDigest !== fingerprint(owner)) throw new Error('Current private runner grant does not authorize this owned intent');
       await revalidatePackageRunnerIntent(intent, config, subject.revision, signal);
-      const launch = packageRunnerIntentLaunchParameters(intent, config);
-      const final = readPrivateApprovalSet([ownerFile, filename, configFile], signal);
-      if (JSON.stringify(final) !== JSON.stringify(second) || signal.aborted || row.expiresAt <= Date.now()
+      if (authorization.recheck()) throw new Error('Runner request owner authority retired');
+      fence.assertCurrent();
+      if (signal.aborted || request.signal.aborted || row.expiresAt <= Date.now()
+          || authorization.principal.expiresAt <= Date.now()
           || workspace !== getCurrentWorkspace() || filename !== ledgerPath()
-          || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error('Runner final native/request/private CAS fence retired');
+          || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE
+          || configFile !== path.join(getWorkspaceDataDir(), 'db', 'mcp_servers.json')) throw new Error('Runner final native/request/private CAS fence retired');
+      // Synchronous effect only: no new await may separate this fence from
+      // spawn/write. Same-account mutation is still not OS-atomically excluded.
+      result = effect(config, { request, intent, serverName, workspace, filename, ownerFile, configFile, authority, principal });
+    } catch (error) { failures.push(error); }
+    try { await fence.dispose(); } catch (error) { failures.push(error); }
+    if (failures.length) throw Object.assign(new AggregateError(failures, 'Runner effect/held authority disposal failed'), {
+      disposeAuthority: fence.dispose,
+    });
+    return result!;
+  });
+}
+
+export async function spawnGrantedPackageRunner(request: Request, intent: PreparedPackageRunnerIntent, serverName: string,
+  signal: AbortSignal, observeChild?: (child: ChildProcessWithoutNullStreams) => void): Promise<ChildProcessWithoutNullStreams> {
+  let child: ChildProcessWithoutNullStreams | undefined;
+  try {
+    return await withCurrentRunnerAuthority(request, intent, serverName, signal, (config, binding) => {
+      const launch = packageRunnerIntentLaunchParameters(intent, config);
       child = spawn(launch.command, launch.args, { cwd: launch.cwd, env: { ...launch.env },
         windowsHide: true, windowsVerbatimArguments: true, stdio: ['pipe', 'pipe', 'pipe'] });
       ownedLaunches.add(child);
+      launchBindings.set(child, binding);
       // Ownership survives spawn errors and writer-lock cleanup exceptions. The
       // caller receives the real child even when a post-spawn boundary fails.
       child.on('error', () => { /* Actual error remains observable by caller. */ });
-      child.once('close', () => { ownedLaunches.delete(child!); });
+      // Closed parent alone is not descendant or stdio-drain proof. The actual
+      // transport owns terminal stream witnesses separately.
+      child.once('close', () => { closedLaunches.add(child!); launchBindings.delete(child!); });
+      observeChild?.(child);
       return child;
     });
   } catch (error) {
     if (child) throw new PackageRunnerSpawnUncertain(error, child);
     throw error;
   }
+}
+
+/** Dispatch only to an actual child with its original captured authority. */
+export async function writeGrantedPackageRunner(child: ChildProcessWithoutNullStreams, bytes: string,
+  signal: AbortSignal): Promise<void> {
+  const binding = launchBindings.get(child);
+  if (!binding || !ownedLaunches.has(child) || child.exitCode !== null || child.signalCode !== null
+      || child.stdin.destroyed || Buffer.byteLength(bytes) > 256 * 1024) throw new Error('Owned runner dispatch unavailable');
+  let completion: Promise<void> | undefined;
+  await withCurrentRunnerAuthority(binding.request, binding.intent, binding.serverName, signal, () => {
+    if (!launchBindings.has(child) || child.exitCode !== null || child.signalCode !== null || child.stdin.destroyed) {
+      throw new Error('Owned runner exited before dispatch');
+    }
+    completion = new Promise<void>((resolve, reject) => {
+      const aborted = () => { reject(new Error('Runner write completion aborted; prior write effect may have occurred')); };
+      signal.addEventListener('abort', aborted, { once: true });
+      if (signal.aborted) {
+        signal.removeEventListener('abort', aborted);
+        aborted();
+        return;
+      }
+      try {
+        child.stdin.write(bytes, error => {
+          signal.removeEventListener('abort', aborted);
+          error ? reject(error) : resolve();
+        });
+      } catch (error) {
+        signal.removeEventListener('abort', aborted);
+        reject(error);
+      }
+    });
+    // Observe errors immediately while held-file and writer-lock cleanup await.
+    void completion.catch(() => {});
+  }, binding);
+  await completion;
+}
+
+/** Only actual terminal stream witnesses release process ownership. */
+export function releaseDrainedPackageRunner(child: ChildProcessWithoutNullStreams): void {
+  if (!ownedLaunches.has(child) || !closedLaunches.has(child) || !child.stdout.readableEnded || !child.stderr.readableEnded
+      || (child.exitCode === null && child.signalCode === null)) throw new Error('Runner exit/drain remains unresolved');
+  launchBindings.delete(child);
+  ownedLaunches.delete(child);
 }
