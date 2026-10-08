@@ -472,6 +472,10 @@ export class SchedulerService {
     return this.withScheduleState(execution.id, () => this.initializeScheduleState(execution, armedAt));
   }
 
+  private async assertCurrentSchedule(execution: PlannedExecution): Promise<void> {
+    if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before effect');
+  }
+
   private async isCurrentSchedule(execution: PlannedExecution): Promise<boolean> {
     const file = await this.loadFile();
     const current = file.executions.find(candidate => candidate.id === execution.id);
@@ -488,7 +492,7 @@ export class SchedulerService {
     if (!await this.isCurrentSchedule(execution)) return;
     const baseline = new Date(armedAt).toISOString();
     if (!state.lastScheduledFireAt) {
-      await advanceLastScheduledFireAt(execution.id, baseline);
+      await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
       return;
     }
     // Catch up only occurrences due before arming. A future tick during slow
@@ -507,11 +511,11 @@ export class SchedulerService {
     };
     if (execution.personaId) {
       const admitted = await this.admitPersonaFire(execution, payload);
-      await advanceLastScheduledFireAt(execution.id, baseline);
+      await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
       void admitted.completion.catch(error =>
         log.error(`Catch-up continuation failed for ${execution.id}:`, error));
     } else {
-      await advanceLastScheduledFireAt(execution.id, baseline);
+      await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
       void this.fireOrdinarySchedule(execution, payload, occurrence.toISOString()).catch(error => {
         const reason = error instanceof Error ? error.message : String(error);
         this.lastTriggerErrors.set(execution.id, `Schedule catch-up failed: ${reason.slice(0, 1024)}`);
@@ -552,7 +556,7 @@ export class SchedulerService {
                 const admitted = await this.admitPersonaFire(execution, payload);
                 completion = admitted.completion;
               }
-              await advanceLastScheduledFireAt(execution.id, occurrence.toISOString());
+              await advanceLastScheduledFireAt(execution.id, occurrence.toISOString(), () => this.assertCurrentSchedule(execution));
               this.lastTriggerErrors.delete(execution.id);
               if (!execution.personaId) completion = this.fireOrdinarySchedule(execution, payload, occurrence.toISOString());
             });
@@ -667,7 +671,7 @@ export class SchedulerService {
             saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
               if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
-              await saveExecutionState(execution.id, { ...current, ...patch });
+              await saveExecutionState(execution.id, { ...current, ...patch }, () => this.assertCurrentSchedule(execution));
             }),
             // Await the run and report its outcome so the poll can advance its
             // change baseline only after a successful run (commit-after-success,
@@ -707,7 +711,7 @@ export class SchedulerService {
             saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
               if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
-              await saveExecutionState(execution.id, { ...current, ...patch });
+              await saveExecutionState(execution.id, { ...current, ...patch }, () => this.assertCurrentSchedule(execution));
             }),
             // Await + report outcome so the baseline hash advances only after a
             // successful run (commit-after-success, issue #75).

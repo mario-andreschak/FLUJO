@@ -30,9 +30,10 @@ export async function loadExecutionState(
 
 export async function saveExecutionState(
   executionId: string,
-  state: PlannedExecutionState
+  state: PlannedExecutionState,
+  assertCurrent?: () => Promise<void>,
 ): Promise<void> {
-  await saveItem(stateKey(executionId), state);
+  await saveItem(stateKey(executionId), state, assertCurrent);
 }
 
 /**
@@ -43,6 +44,7 @@ export async function saveExecutionState(
 export async function advanceLastScheduledFireAt(
   executionId: string,
   candidate: string,
+  assertCurrent?: () => Promise<void>,
 ): Promise<PlannedExecutionState> {
   const candidateMs = Date.parse(candidate);
   if (!Number.isFinite(candidateMs)) {
@@ -60,7 +62,11 @@ export async function advanceLastScheduledFireAt(
     if (Number.isFinite(currentMs) && currentMs >= candidateMs) return current;
     const updated = { ...current, lastScheduledFireAt: new Date(candidateMs).toISOString() };
     await lock.assertOwned();
-    await saveExecutionState(executionId, updated);
+    await saveExecutionState(executionId, updated, async () => {
+      await lock.assertOwned();
+      if (assertCurrent) await assertCurrent();
+      await lock.assertOwned();
+    });
     return updated;
   });
 }

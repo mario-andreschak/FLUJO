@@ -18,6 +18,7 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { PlannedExecutionsFile } from '@/shared/types/plannedExecution';
 import { randomUUID } from 'node:crypto';
+import { loadExecutionState, saveExecutionState } from '@/backend/services/scheduler/state';
 
 // Real issued capability and durable storage; only timer scheduling and the
 // final Flow producer are equipment. This does not claim compiled Flow execution.
@@ -50,7 +51,7 @@ jest.mock('@/backend/services/scheduler/triggers/schedule', () => ({
   },
 }));
 
-test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
+test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
   mockRunFlow.mockClear();
   mockTimerCompleted = undefined;
   mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
@@ -116,6 +117,39 @@ test.each(['unchanged', 'disabled', 'replaced'] as const)('committed schedule ou
     });
     await mockTimerObserved;
     if (mode === 'disabled') await scheduler.update(executionId, { enabled: false });
+    if (mode === 'state-publication-disabled') {
+      const previous = await loadExecutionState(executionId);
+      const realOpen = fs.promises.open.bind(fs.promises);
+      let releaseOpen!: () => void;
+      let enteredOpen!: () => void;
+      const heldOpen = new Promise<void>(resolve => { releaseOpen = resolve; });
+      const observedOpen = new Promise<void>(resolve => { enteredOpen = resolve; });
+      const open = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await realOpen(...args);
+        if (String(args[0]).includes(`planned-execution-state${path.sep}${executionId}.json.tmp.`)) {
+          enteredOpen();
+          await heldOpen;
+        }
+        return handle;
+      });
+      const refusal = new Error('durable schedule disabled before state publication');
+      const publication = saveExecutionState(executionId, { ...previous, pendingFailures: 42 }, async () => {
+        if (!(await admittedScheduler.get(executionId))?.enabled) throw refusal;
+      });
+      // Observe both outcomes immediately; a refused write never escapes as an unhandled rejection.
+      const completedPublication = publication.then(() => undefined, () => undefined);
+      try {
+        await observedOpen;
+        await admittedScheduler.update(executionId, { enabled: false });
+      } finally {
+        releaseOpen();
+        await completedPublication;
+        open.mockRestore();
+      }
+      await expect(publication).rejects.toBe(refusal);
+      expect(await loadExecutionState(executionId)).toEqual(previous);
+    }
+
     if (mode === 'replaced') {
       const file = await loadItem<PlannedExecutionsFile>(StorageKey.PLANNED_EXECUTIONS, { version: 1, paused: false, executions: [] });
       file.executions = file.executions.map(execution => execution.id === executionId
