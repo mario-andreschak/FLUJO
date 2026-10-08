@@ -18,6 +18,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 
 // Source equipment only. Every owner issue/read and native ACL check is real;
 // no installed/compiled HTTP result is inferred from this control.
+let failureStage = 'UNKNOWN';
 (async () => {
   const promises = fs.promises;
   const originalMkdtemp = promises.mkdtemp;
@@ -29,12 +30,14 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const cleanupErrors = [];
   const savedData = process.env.FLUJO_DATA_DIR;
   const savedParent = process.env.FLUJO_PARENT_DATA_DIR;
+  let stage = 'ISSUE_OPERATOR';
   try {
     if (process.platform === 'win32') promises.mkdtemp = async (...args) => {
       const directory = await originalMkdtemp.apply(promises, args);
       if (!String(args[0]).includes('flujo-smoke-operator-')) return directory;
       const parent = path.dirname(path.resolve(String(args[0])));
       created = { directory, parent, identity: fs.lstatSync(directory, { bigint: true }), parentIdentity: fs.lstatSync(parent, { bigint: true }) };
+      stage = 'INJECT_FOREIGN_ACL';
       // Introduce a real inheritable foreign-reader rule on this freshly owned
       // directory before the operator helper runs. chmod alone cannot fix it.
       const executable = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
@@ -50,6 +53,7 @@ if (-not @($directory.GetAccessControl().GetAccessRules($true,$true,[Security.Pr
 `], { input: JSON.stringify({ directory }), encoding: 'utf8', windowsHide: true, timeout: 5000, maxBuffer: 65536 });
       if (result.error || result.status !== 0 || result.signal) throw new Error('Owned foreign ACL fixture setup failed.');
       injected++;
+      stage = 'ISSUE_OPERATOR';
       return directory;
     };
     const { createSmokeOperator } = await import(pathToFileURL(path.join(sourceRoot, 'scripts/smoke-bundled-operator.mjs')).href);
@@ -61,15 +65,20 @@ if (-not @($directory.GetAccessControl().GetAccessRules($true,$true,[Security.Pr
     process.env.FLUJO_DATA_DIR = path.join(path.dirname(filename), 'unrelated-data');
     delete process.env.FLUJO_PARENT_DATA_DIR;
     const bytes = ownerBytes = fs.readFileSync(filename);
+    stage = 'LOAD_PRIVATE_READER';
     const { readPrivateApprovalAsync } = require(path.join(sourceRoot, 'src/backend/services/security/trustedHostMcp.ts'));
     const { ownerPolicySchema, authenticateOwnerBearer } = require(path.join(sourceRoot, 'src/backend/services/security/ownerCredentials.ts'));
-    const policy = ownerPolicySchema.parse(await readPrivateApprovalAsync(filename, AbortSignal.timeout(30_000)));
+    stage = 'READ_PRIVATE_OWNER';
+    const observed = await readPrivateApprovalAsync(filename, AbortSignal.timeout(30_000));
+    stage = 'PARSE_PRIVATE_OWNER';
+    const policy = ownerPolicySchema.parse(observed);
     assert.equal(policy.ownerId, 'packed-smoke-operator');
+    stage = 'AUTHENTICATE_OWNER';
     assert.ok(authenticateOwnerBearer(new Request('http://localhost/', { headers: { authorization: `Bearer ${operator.token}` } }), policy));
     assert.deepEqual(fs.readFileSync(filename), bytes);
     bytes.fill(0);
     console.log(JSON.stringify({ scope: 'source-private-smoke-owner', nativeWindows: process.platform === 'win32', foreignAclIntroduced: injected === 1, realAsyncOwnerRead: true, realOwnerAuthentication: true }));
-  } catch (error) { primary = error; }
+  } catch (error) { primary = error; failureStage = stage; }
   finally {
     promises.mkdtemp = originalMkdtemp;
     if (operator) try { await operator.restore(); } catch (error) { cleanupErrors.push(error); }
@@ -93,5 +102,8 @@ if (-not @($directory.GetAccessControl().GetAccessRules($true,$true,[Security.Pr
     Module._resolveFilename = originalResolve;
     if (originalTs === undefined) delete require.extensions['.ts']; else require.extensions['.ts'] = originalTs;
   }
-  if (primary || cleanupErrors.length) throw new AggregateError(primary ? [primary, ...cleanupErrors] : cleanupErrors, 'Smoke owner authority source control failed.');
-})().catch(() => { console.error('Smoke owner authority source control failed; private causes are not logged.'); process.exitCode = 1; });
+  if (primary || cleanupErrors.length) {
+    if (!primary) failureStage = 'CLEANUP';
+    throw new AggregateError(primary ? [primary, ...cleanupErrors] : cleanupErrors, 'Smoke owner authority source control failed.');
+  }
+})().catch(() => { console.error(JSON.stringify({ scope: 'source-private-smoke-owner', result: 'failed', stage: failureStage })); process.exitCode = 1; });
