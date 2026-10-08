@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -41,6 +42,15 @@ describe('private native Original archive format composition', () => {
     expect((await f.read()).entry.outcome).toBe('completed');
     expect(await fs.readFile(f.current)).toEqual(before);
   });
+  it('opens the authoritative descriptor with nonblocking and no-follow flags', async () => {
+    const f = await fixture();
+    const opening = jest.spyOn(fs, 'open');
+    try {
+      await f.read();
+      expect(opening).toHaveBeenCalledWith(f.current,
+        constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
+    } finally { opening.mockRestore(); }
+  });
   it('accepts historical V1 only when V2 is absent and both format identities agree', async () => {
     const f = await fixture();
     f.snapshot.version = 1; f.snapshot.entry.archiveVersion = 1;
@@ -82,5 +92,26 @@ describe('private native Original archive format composition', () => {
         await expect(f.read()).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_BUSY' });
       }))));
     expect((await f.read()).entry.outcome).toBe('running');
+  });
+
+  it('rejects pathname replacement after open before reading descriptor payload', async () => {
+    const f = await fixture();
+    const open = fs.open.bind(fs);
+    let payloadRead: jest.SpyInstance | undefined;
+    const opening = jest.spyOn(fs, 'open').mockImplementation(async (file, ...args) => {
+      const handle = await open(file, ...args);
+      if (file === f.current) {
+        payloadRead = jest.spyOn(handle, 'read');
+        const replacement = `${f.current}.replacement`;
+        await fs.writeFile(replacement, await fs.readFile(f.current));
+        if (process.platform === 'win32') await fs.rename(f.current, `${f.current}.original`);
+        await fs.rename(replacement, f.current);
+      }
+      return handle;
+    });
+    try {
+      await expect(f.read()).rejects.toThrow('Native model-turn archive changed');
+      expect(payloadRead).not.toHaveBeenCalled();
+    } finally { opening.mockRestore(); }
   });
 });

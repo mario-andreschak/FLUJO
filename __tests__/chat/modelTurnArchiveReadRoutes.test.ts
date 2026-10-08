@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
-import { readModelTurnMedia, readModelTurnSnapshot } from '@/backend/execution/flow/modelTurnArchive';
+import { readModelTurnMedia, readModelTurnSnapshotResponse } from '@/backend/execution/flow/modelTurnArchive';
 import { MODEL_TURN_ARCHIVE_READ_LIMITS, ModelTurnArchiveReadError } from '@/backend/execution/flow/modelTurnArchiveReadBudget';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -10,7 +10,7 @@ import { GET as mediaGet } from '@/app/v1/chat/conversations/[conversationId]/mo
 
 jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: (handler: unknown) => handler }));
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationStateReadOnly: jest.fn() }));
-jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({ readModelTurnSnapshot: jest.fn(), readModelTurnMedia: jest.fn() }));
+jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({ readModelTurnSnapshotResponse: jest.fn(), readModelTurnMedia: jest.fn() }));
 jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: jest.fn() }));
 jest.mock('@/utils/http/localRequest', () => ({ assertLocalRequest: jest.fn() }));
 
@@ -29,7 +29,7 @@ describe('model-turn archive read limit responses', () => {
   };
 
   const reader = (route: 'snapshot' | 'media') => route === 'snapshot'
-    ? jest.mocked(readModelTurnSnapshot) : jest.mocked(readModelTurnMedia);
+    ? jest.mocked(readModelTurnSnapshotResponse) : jest.mocked(readModelTurnMedia);
 
   it.each([
     ['snapshot', 'MODEL_TURN_ARCHIVE_READ_LIMIT', 413],
@@ -70,7 +70,7 @@ describe('model-turn archive read limit responses', () => {
     reader(route).mockResolvedValueOnce(undefined);
     await (route === 'snapshot' ? snapshotGet(request, context) : mediaGet(request, context));
     if (route === 'snapshot') {
-      expect(readModelTurnSnapshot).toHaveBeenCalledWith('conversation', 'dispatch', request.signal);
+      expect(readModelTurnSnapshotResponse).toHaveBeenCalledWith('conversation', 'dispatch', request.signal);
     } else {
       expect(readModelTurnMedia).toHaveBeenCalledWith('conversation', 'dispatch', 'media', request.signal);
     }

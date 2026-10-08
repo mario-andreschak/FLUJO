@@ -21,11 +21,13 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { commitFlowDurableMutation, type FlowDurableMutationContext } from './executionAuthority';
 import {
   MODEL_TURN_ARCHIVE_READ_LIMITS,
-  ModelTurnArchiveReadError,
   readBoundedModelTurnFile,
   readBoundedModelTurnJson,
   withModelTurnArchiveRead,
+  withModelTurnArchiveResponse,
 } from './modelTurnArchiveReadBudget';
+import { rewriteLegacyModelTurnOutcome } from './legacyModelTurnOutcomeStream';
+import { closeModelTurnResponseDescriptor, prepareModelTurnSnapshotResponse } from './modelTurnSnapshotResponse';
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -467,30 +469,34 @@ async function updateModelDispatchOutcomeWithinMutation(
     await writeAtomic(outcomePath(conversationId, dispatchId), bytes);
     return;
   }
-  // Historical v1 outcomes require a transcript rewrite. Share the inspection
-  // allowance through replacement so concurrent reads and rewrites cannot each
-  // allocate a separate budget, and reject overload without retaining a queue.
+  // Legacy compatibility retains its JSON shape and complete historical bytes.
+  // Stream validation and the outcome edit instead of allocating a transcript
+  // buffer, UTF-16 source, parsed object, and serialization for every update.
   const file = snapshotPath(conversationId, dispatchId, 1);
-  await withModelTurnArchiveRead(async () => {
-    const snapshot = await readBoundedModelTurnJson<ModelTurnSnapshot>(file);
-    snapshot.entry.outcome = outcome;
-    const serialized = JSON.stringify(snapshot);
-    const limitError = () => new ModelTurnArchiveReadError(
-      'MODEL_TURN_ARCHIVE_READ_LIMIT',
-      'Legacy model-turn outcome exceeds archive inspection limits. The persisted archive is unchanged.',
-    );
-    if (Buffer.byteLength(serialized, 'utf8') > MODEL_TURN_ARCHIVE_READ_LIMITS.decodedSnapshotBytes) throw limitError();
-    let compressed: Buffer;
-    try {
-      compressed = await gzipAsync(Buffer.from(serialized, 'utf8'), {
-        maxOutputLength: MODEL_TURN_ARCHIVE_READ_LIMITS.compressedSnapshotBytes,
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw limitError();
-      throw error;
+  await withModelTurnArchiveRead(() => rewriteLegacyModelTurnOutcome(file, outcome));
+}
+
+export function readModelTurnSnapshotResponse(
+  conversationId: string, dispatchId: string, signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array> | undefined> {
+  return withModelTurnArchiveResponse(async () => {
+    let source;
+    let version: 1 | 2 = 2;
+    try { source = await fs.open(snapshotPath(conversationId, dispatchId), constants.O_RDONLY | constants.O_NONBLOCK); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      version = 1;
+      try { source = await fs.open(snapshotPath(conversationId, dispatchId, 1), constants.O_RDONLY | constants.O_NONBLOCK); }
+      catch (legacyError) {
+        if ((legacyError as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw legacyError;
+      }
     }
-    await writeAtomic(file, compressed);
-  });
+    let outcome;
+    try { outcome = version === 2 ? await readOutcome(conversationId, dispatchId, signal) : undefined; }
+    catch (error) { await closeModelTurnResponseDescriptor(source, error); throw error; }
+    return prepareModelTurnSnapshotResponse(source, { version, conversationId, dispatchId }, outcome?.outcome, signal);
+  }, signal);
 }
 
 export async function readModelTurnSnapshot(
@@ -578,19 +584,15 @@ export async function readNativeModelTurnSnapshot(
  * descriptor/path identity checks. No public inspection reader is substituted. */
 async function readNativeArchiveFile(file: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
   signal?.throwIfAborted();
-  const entry = await fs.lstat(file, { bigint: true });
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
-    || entry.size < BigInt(1) || entry.size > BigInt(maxBytes)) {
-    throw new Error('Native model-turn archive is missing or unsafe.');
-  }
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  // Open first with no-follow and validate the authoritative descriptor before
+  // reading any body bytes. A pathname check is not permission to open later.
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const stat = await handle.stat({ bigint: true });
     const current = await fs.lstat(file, { bigint: true });
-    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
-      || stat.dev !== entry.dev || stat.ino !== entry.ino
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size < BigInt(1) || stat.size > BigInt(maxBytes)
       || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
-      || current.dev !== entry.dev || current.ino !== entry.ino) {
+      || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size) {
       throw new Error('Native model-turn archive changed.');
     }
     const bytes = Buffer.alloc(Number(stat.size) + 1);
@@ -608,7 +610,8 @@ async function readNativeArchiveFile(file: string, maxBytes: number, signal?: Ab
       || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs
       || !finalPath.isFile() || finalPath.isSymbolicLink() || finalPath.nlink !== BigInt(1)
       || finalPath.dev !== stat.dev || finalPath.ino !== stat.ino
-      || finalPath.size !== stat.size) throw new Error('Native model-turn archive changed.');
+      || finalPath.size !== stat.size || finalPath.mtimeNs !== stat.mtimeNs
+      || finalPath.ctimeNs !== stat.ctimeNs) throw new Error('Native model-turn archive changed.');
     signal?.throwIfAborted();
     return bytes.subarray(0, read);
   } finally { await handle.close(); }
