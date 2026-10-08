@@ -23,7 +23,7 @@ jest.mock('@/backend/execution/flow/modelTurnArchiveWriteBudget', () => {
     reserveArchiveSnapshot: () => ({ grow: () => undefined, release: () => undefined }),
     withArchiveWriteMemory: async (_payload: unknown, task: () => Promise<unknown>) => task(),
     recheckArchiveWriteMemory: () => undefined,
-    getArchiveSchemaProjectionPolicy: () => 'legacy-unbounded',
+    getArchiveSchemaProjectionPolicy: (): 'legacy-unbounded' => 'legacy-unbounded',
     readArchiveLocalMedia: (file: string) => fileSystem.promises.readFile(file),
   };
 });
