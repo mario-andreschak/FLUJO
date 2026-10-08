@@ -133,6 +133,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
   let primaryFailed = false;
   let primaryError: unknown;
   const foreignDescriptors: number[] = [];
+  let retireQuarantinedAuthority: (() => void) | undefined;
   try {
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
     process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
@@ -245,6 +246,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     let expectedCloseCount = 1;
     if (mode === 'retire-quarantine-retry') {
       const retireOwned = () => retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), capsule, undefined);
+      retireQuarantinedAuthority = retireOwned;
       const actualUnlink = fs.unlinkSync;
       let injected = 0;
       const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
@@ -338,6 +340,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     cancellation.abort(new Error('Workload fixture cleanup.'));
     stamp('cleanup:start');
     try { Reflect.deleteProperty(globalThis, serviceKey); } catch (error) { cleanupErrors.push(error); }
+    try { retireQuarantinedAuthority?.(); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
     for (const fd of foreignDescriptors) { try { fs.closeSync(fd); } catch (error) { cleanupErrors.push(error); } }
     try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
