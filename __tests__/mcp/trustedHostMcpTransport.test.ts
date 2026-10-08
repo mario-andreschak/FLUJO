@@ -24,6 +24,7 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: jest.
 }) }));
 
 let directory: string;
+let fixtureParent: string;
 let config: MCPStdioConfig;
 let saved: Record<string, string | undefined>;
 let grant: { schemaVersion: number; ownerId: string; approvals: Array<{ workspace: string; serverName: string; policyDigest: string; expiresAt: number }> };
@@ -33,7 +34,10 @@ function approve(current = config) { grant.approvals[0].policyDigest = trustedHo
 
 beforeEach(() => {
   saved = Object.fromEntries(['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE'].map(name => [name, process.env[name]]));
-  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-trusted-transport-'));
+  const parent = process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir();
+  if (!parent || !path.isAbsolute(parent)) throw new Error('A private fixture parent is required.');
+  fixtureParent = path.resolve(parent);
+  directory = fs.mkdtempSync(path.join(fixtureParent, 'flujo-trusted-transport-'));
   process.env.FLUJO_DATA_DIR = path.join(directory, 'data');
   delete process.env.FLUJO_PARENT_DATA_DIR;
   delete process.env.FLUJO_MCP_ISOLATION_FILE;
@@ -63,7 +67,7 @@ afterEach(() => {
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
-  if (path.dirname(directory) !== path.resolve(os.tmpdir()) || !/^flujo-trusted-transport-[A-Za-z0-9]+$/.test(path.basename(directory)) || fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe owned fixture cleanup');
+  if (path.dirname(directory) !== fixtureParent || !/^flujo-trusted-transport-[A-Za-z0-9]+$/.test(path.basename(directory)) || fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe owned fixture cleanup');
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
