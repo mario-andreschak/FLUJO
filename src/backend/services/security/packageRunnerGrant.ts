@@ -11,6 +11,7 @@ import { ownerPolicySchema } from './ownerCredentials';
 import { readPrivateApprovalPairAsync, readPrivateApprovalSetAsync, readPrivateApprovalSet } from './trustedHostMcp';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
+import { capturePackageRunnerAuthorityFence } from './packageRunnerAuthorityFence';
 import { packageRunnerIntentSubject, packageRunnerIntentLaunchParameters, revalidatePackageRunnerIntent,
   type PreparedPackageRunnerIntent } from './packageRunnerIntent';
 
@@ -45,48 +46,66 @@ async function actualConfig(serverName: string): Promise<MCPStdioConfig> {
  */
 export async function approvePackageRunnerIntent(request: Request, intent: PreparedPackageRunnerIntent,
   serverName: string, options: { reviewedDigest: string; expiresAt: number }) {
+  const { reviewedDigest, expiresAt } = options;
+  const ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
+  if (!ownerFile) throw new Error('Actual runner owner authority unavailable');
+  const configFile = path.join(getWorkspaceDataDir(), 'db', 'mcp_servers.json');
   const resolution = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
   if (!resolution.ok) throw new Error('Actual runner owner authorization refused');
   const authorization = resolution.authorization;
   const filename = ledgerPath();
   const workspace = getCurrentWorkspace();
-  if (options.reviewedDigest !== intent.digest || !Number.isSafeInteger(options.expiresAt)
-      || options.expiresAt <= Date.now() || options.expiresAt > Date.now() + 30 * 24 * 60 * 60 * 1000) {
+  if (reviewedDigest !== intent.digest || !Number.isSafeInteger(expiresAt)
+      || expiresAt <= Date.now() || expiresAt > Date.now() + 30 * 24 * 60 * 60 * 1000) {
     throw new Error('Runner review/expiration differs from the owned intent');
   }
   const current = () => {
     if (request.signal.aborted || authorization.recheck() || workspace !== getCurrentWorkspace()
-        || filename !== ledgerPath()) throw new Error('Runner owner/workspace/grant authority retired');
+        || filename !== ledgerPath() || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE
+        || configFile !== path.join(getWorkspaceDataDir(), 'db', 'mcp_servers.json')
+        || expiresAt <= Date.now()) throw new Error('Runner owner/workspace/grant authority retired');
   };
   current();
   return withPrivateApprovalLedgerLock(filename, request.signal, async () => {
     current();
+    const fence = await capturePackageRunnerAuthorityFence([ownerFile, filename, configFile], request.signal);
+    const failures: unknown[] = [];
+    let stage: Awaited<ReturnType<typeof createOwnedPrivateApprovalStage>> | undefined;
+    let receipt: Readonly<ReturnType<typeof packageRunnerIntentSubject> & {
+      ownerAuthorityDigest: string; expiresAt: number; ledgerRevision: number;
+    }> | undefined;
+    try {
     const config = await actualConfig(serverName);
+    fence.assertCurrent();
     const subject = packageRunnerIntentSubject(intent, config);
     await revalidatePackageRunnerIntent(intent, config, subject.revision, request.signal);
-    const [ownerValue, ledgerValue] = await readPrivateApprovalPairAsync(process.env.FLUJO_OWNER_AUTH_FILE, filename, request.signal);
+    const [ownerValue, ledgerValue] = fence.values;
     const owner = ownerPolicySchema.parse(ownerValue);
     const previous = ledgerSchema.parse(ledgerValue);
     if (owner.ownerId !== authorization.principal.ownerId || previous.ownerId !== owner.ownerId) throw new Error('Runner private authority owner mismatch');
     const ownerAuthorityDigest = fingerprint(owner);
     const next = ledgerSchema.parse({ ...previous, revision: previous.revision + 1, grants: [
       ...previous.grants.filter(row => row.workspace !== workspace || row.serverName !== serverName),
-      { ...subject, ownerAuthorityDigest, expiresAt: options.expiresAt },
+      { ...subject, ownerAuthorityDigest, expiresAt },
     ] });
-    const stage = await createOwnedPrivateApprovalStage(filename, next, request.signal);
-    const failures: unknown[] = [];
-    try {
+    stage = await createOwnedPrivateApprovalStage(filename, next, request.signal);
       await revalidatePackageRunnerIntent(intent, await actualConfig(serverName), subject.revision, request.signal);
-      const [latestOwner, latestLedger] = await readPrivateApprovalPairAsync(process.env.FLUJO_OWNER_AUTH_FILE, filename, request.signal);
+      const [latestOwner, latestLedger] = await readPrivateApprovalPairAsync(ownerFile, filename, request.signal);
       if (fingerprint(ownerPolicySchema.parse(latestOwner)) !== ownerAuthorityDigest
           || JSON.stringify(ledgerSchema.parse(latestLedger)) !== JSON.stringify(previous)) throw new Error('Runner owner/private CAS revision changed');
       packageRunnerIntentSubject(intent, await actualConfig(serverName));
       current();
-      await stage.publish(filename, current);
+      await stage.publish(filename, () => {
+        current();
+        fence.assertCurrent();
+        current();
+      });
+      receipt = Object.freeze({ ...subject, ownerAuthorityDigest, expiresAt, ledgerRevision: next.revision });
     } catch (error) { failures.push(error); }
-    try { await stage.dispose(); } catch (error) { failures.push(error); }
+    try { await stage?.dispose(); } catch (error) { failures.push(error); }
+    try { await fence.dispose(); } catch (error) { failures.push(error); }
     if (failures.length) throw new AggregateError(failures, 'Runner publication/owned stage disposal failed');
-    return Object.freeze({ ...subject, ownerAuthorityDigest, expiresAt: options.expiresAt, ledgerRevision: next.revision });
+    return receipt!;
   });
 }
 
