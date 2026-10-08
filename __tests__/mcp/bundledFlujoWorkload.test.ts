@@ -109,7 +109,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
   const serviceKey = Symbol('Source control global graph B service');
   const capturedService = Object.freeze({ assertEffect: graphB.assertBundledFlujoWorkloadEffectCurrent });
   Object.defineProperty(globalThis, serviceKey, { value: capturedService, configurable: true });
-  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_SYSTEM_SCREENSHOT_ENABLED'];
+  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_SYSTEM_SCREENSHOT_ENABLED', 'FLUJO_MCP_WORKLOAD_TRACE'];
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
   const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
@@ -125,6 +125,7 @@ test('real private consent activates only at guarded start, owner drift denies, 
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
     process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
     process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '0';
+    process.env.FLUJO_MCP_WORKLOAD_TRACE = '1';
     const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'flujo')!;
     write('package.json', '{"name":"flujo-ai","version":"1.0.0"}');
     write('node_modules/fixture-dependency/package.json', '{"name":"fixture-dependency","version":"1.0.0","type":"module","exports":"./index.js"}');
