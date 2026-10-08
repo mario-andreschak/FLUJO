@@ -254,14 +254,26 @@ export function readPrivateApprovalSet(input: readonly string[], signal?: AbortS
 }
 
 async function readPrivateApprovalEvidenceAsync(filename: string | undefined, signal?: AbortSignal) {
+  let phase: 'signal-before' | 'native-before' | 'identity-before' | 'contents' | 'native-after' | 'identity-after' | 'signal-after' = 'signal-before';
+  try {
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  phase = 'native-before';
   const before = process.platform === 'win32' && filename ? await windowsPrivateAuthorityStampAsync(filename, signal) : undefined;
+  phase = 'identity-before';
   const identity = filename ? fs.lstatSync(filename, { bigint: true }) : undefined;
+  phase = 'contents';
   const value = readPrivateApprovalContents(filename);
+  phase = 'native-after';
   if (before !== undefined && await windowsPrivateAuthorityStampAsync(filename!, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  phase = 'identity-after';
   if (identity && filename) { assertLinkFree(filename); if (!sameIdentity(identity, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); }
+  phase = 'signal-after';
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   return { value, windowsAuthority: before };
+  } catch (error) {
+    try { if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[private-approval-reader]', 'refused', phase); } catch { /* Preserve the original failure. */ }
+    throw error;
+  }
 }
 
 function readPrivateApprovalContents(filename: string | undefined): unknown {
