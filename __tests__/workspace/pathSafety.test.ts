@@ -11,9 +11,11 @@ import {
   listWorkspaces,
   loadWorkspaceRoots,
   renameWorkspace,
+  runWithWorkspace,
   updateWorkspaceRoots,
   workspaceExists,
 } from '@/utils/workspace';
+import { reconcilePersonaGoals, startPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
 
 describe('workspace path safety', () => {
   let dataRoot: string;
@@ -119,6 +121,15 @@ describe('workspace path safety', () => {
 
     await deleteWorkspace('planning');
     await expect(workspaceExists('planning')).resolves.toBe(false);
+  });
+
+  it('stops the ongoing-goal poll before deleting its workspace', async () => {
+    await createWorkspace('goal-runtime');
+    await runWithWorkspace('goal-runtime', () => startPersonaGoalRuntime());
+    await deleteWorkspace('goal-runtime');
+    // A stale runtime poll used to recreate the deleted db directory.
+    await runWithWorkspace('goal-runtime', () => reconcilePersonaGoals());
+    await expect(workspaceExists('goal-runtime')).resolves.toBe(false);
   });
 
   it('recreates missing subtrees and rejects a replacement junction after initialization', async () => {

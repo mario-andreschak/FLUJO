@@ -726,6 +726,8 @@ async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<vo
     );
   }
   const dir = await resolveManagedWorkspace(name);
+  const { stopAndDrainPersonaGoalRuntime } = await import('@/backend/services/enduringAgents/goalRuntime');
+  await runWithWorkspace(name, () => stopAndDrainPersonaGoalRuntime());
   
   // Force delete with retry logic for EBUSY (Windows file locking)
   const maxRetries = 5;
