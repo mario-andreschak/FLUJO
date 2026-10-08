@@ -7,6 +7,7 @@ import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '
 import { getDataDir } from '@/utils/paths';
 import { ownerPolicySchema } from './ownerCredentials';
 import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
+import { BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
 
 /** Admit only own data properties; configuration accessors never run during consent. */
 export function trustedHostEnvironment(config: MCPStdioConfig): Map<string, string> {
@@ -247,9 +248,11 @@ function readPrivateApprovalContents(filename: string | undefined): unknown {
   finally { for (const chunk of chunks) chunk.fill(0); }
 }
 
-function consentInput(config: MCPStdioConfig): { consent: string; salt: string } {
+function consentInput(config: MCPStdioConfig, diagnostic = false): { consent: string; salt: string } {
+  let stage: ConsentDiagnosticStage = 'CONSENT_POLICY_SCHEMA';
   try {
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+    stage = 'CONSENT_LAUNCH';
     const command = absolutePath.parse(config.command);
     const cwd = absolutePath.parse(config.cwd);
     const args = z.array(z.string().max(2048).refine(value => !value.includes('\0'))).max(64).parse(config.args ?? []);
@@ -262,6 +265,7 @@ function consentInput(config: MCPStdioConfig): { consent: string; salt: string }
       if (executableName !== 'node' || args[0] !== policy.entryPoint || !/\.(?:mjs|cjs|js)$/.test(policy.entryPoint)) throw new Error();
     } else if (canonical(command) !== canonical(policy.entryPoint)
         || ['node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack', 'uv', 'uvx', 'pip', 'pip3', 'python', 'python3', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'ruby', 'perl', 'deno', 'bun', 'go', 'cargo'].includes(executableName)) throw new Error();
+    stage = 'CONSENT_BUNDLE';
     if (policy.bundledInstallation) {
       if (policy.runtime !== 'node' || canonical(policy.entryPoint) !== canonical(path.join(policy.sourceRoot, 'dist', 'index.js'))) throw new Error();
       if (canonical(policy.sourceRoot) !== canonical(path.join(getWorkspaceDataDir(), 'mcp-servers', policy.bundledInstallation.packageDirectory))) throw new Error();
@@ -272,13 +276,16 @@ function consentInput(config: MCPStdioConfig): { consent: string; salt: string }
         if (relativeLink === '..' || relativeLink.startsWith(`..${path.sep}`) || path.isAbsolute(relativeLink)) throw new Error();
       }
     }
+    stage = 'CONSENT_ENVIRONMENT';
     const requestedEnvironment = [...trustedHostEnvironment(config)].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, value]) => {
       if (!policy.environmentNames.includes(name)) throw new Error();
       return [name, value];
     });
+    stage = 'CONSENT_CAPABILITIES';
     const rootEntry = z.string().max(2048).refine(value => !value.includes('${global:') && !/[\x00-\x1f\x7f]/.test(value));
     const roots = z.array(rootEntry).max(64).parse(config.roots ?? []);
     const rootPath = rootEntry.parse(config.rootPath ?? '');
+    stage = 'CONSENT_SERIALIZE';
     const consent = JSON.stringify({
       domain: 'flujo:mcp:trusted-host-consent:v2', command, args, cwd, requestedEnvironment,
       policy: { ...policy, environmentNames: [...policy.environmentNames].sort() },
@@ -291,7 +298,10 @@ function consentInput(config: MCPStdioConfig): { consent: string; salt: string }
     // with the same fast SHA-256 used for public package byte fingerprints.
     const salt = JSON.stringify(['flujo:mcp:trusted-host-consent:v2', getCurrentWorkspace(), config.name, policy.sourceRoot]);
     return { consent, salt };
-  } catch { throw new TrustedHostMcpError('HOST_POLICY_INVALID'); }
+  } catch (cause) {
+    if (diagnostic) throw new BundledConsentDiagnostic(stage, cause);
+    throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+  }
 }
 
 export function trustedHostMcpPolicyDigest(config: MCPStdioConfig): string {
@@ -306,10 +316,24 @@ export function sameTrustedHostConsent(left: MCPStdioConfig, right: MCPStdioConf
 }
 
 export async function trustedHostMcpPolicyDigestAsync(config: MCPStdioConfig, signal?: AbortSignal): Promise<string> {
+  return policyDigestAsync(config, signal, false);
+}
+
+/** Preview diagnostics only; ordinary runtime errors and authority are unchanged. */
+export async function trustedHostMcpPreviewDigestAsync(config: MCPStdioConfig): Promise<string> {
+  return policyDigestAsync(config, undefined, true);
+}
+
+async function policyDigestAsync(config: MCPStdioConfig, signal: AbortSignal | undefined, diagnostic: boolean): Promise<string> {
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const { consent, salt } = consentInput(config);
-  const digest = await new Promise<Buffer>((resolve, reject) => scrypt(consent, salt, 32,
-    { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (error, result) => error ? reject(error) : resolve(result)));
+  const { consent, salt } = consentInput(config, diagnostic);
+  const digest = await new Promise<Buffer>((resolve, reject) => {
+    const refuse = (cause: unknown) => reject(diagnostic ? new BundledConsentDiagnostic('CONSENT_SCRYPT', cause) : cause);
+    try {
+      scrypt(consent, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
+        (error, result) => error ? refuse(error) : resolve(result));
+    } catch (cause) { refuse(cause); }
+  });
   try {
     if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     return digest.toString('hex');

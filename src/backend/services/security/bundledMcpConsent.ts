@@ -12,7 +12,7 @@ import { consentDiagnosticStage, consentDiagnosticStageSync } from './bundledCon
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
 import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
-  trustedHostApprovalsSchema, trustedHostEnvironment, trustedHostMcpPolicyDigestAsync,
+  trustedHostApprovalsSchema, trustedHostEnvironment, trustedHostMcpPreviewDigestAsync,
   TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES, sameTrustedHostConsent } from './trustedHostMcp';
 
 export class BundledConsentError extends Error {
@@ -136,7 +136,7 @@ export async function previewBundledHostConsent(serverName: string, options: { r
         installationRoot: revision.installation, dependencyNamespaceRoot: revision.dependencyNamespaceRoot,
         assetDigest: revision.assetDigest, dependencyGraphDigest: revision.dependencyGraph.digest,
         dependencyDirectories: revision.dependencies.map(item => item.directory), dependencyLinks: revision.dependencyLinks } } };
-  return { config, policyDigest: await consentDiagnosticStage('CONSENT_DIGEST', () => trustedHostMcpPolicyDigestAsync(config)), revision, storedConfig: structuredClone(stored) };
+  return { config, policyDigest: await consentDiagnosticStage('CONSENT_DIGEST', () => trustedHostMcpPreviewDigestAsync(config)), revision, storedConfig: structuredClone(stored) };
   });
 }
 
