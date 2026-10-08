@@ -65,12 +65,12 @@ function assertPending(pending: Pending) {
       || audience(process.env.FLUJO_BASE_URL) !== pending.audience) throw new BundledFlujoWorkloadError();
 }
 export function prepareBundledFlujoWorkload(config: MCPStdioConfig): PendingBundledFlujoWorkload | undefined {
+  const env = trustedHostEnvironment(config);
+  if ([...env.keys()].some(name => [BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV, BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV].includes(name.toUpperCase()))) throw new BundledFlujoWorkloadError();
   if (process.env.FLUJO_WORKER_MODE === '1' || config.trustedHost === undefined) return undefined;
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
   if (policy.bundledInstallation?.packageDirectory !== 'flujo') return undefined;
   if (!policy.bundledInstallation?.workload || ![BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV, BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV].every(name => policy.environmentNames.includes(name))) throw new BundledFlujoWorkloadError();
-  const env = trustedHostEnvironment(config);
-  if ([...env.keys()].some(name => [BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV, BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV].includes(name.toUpperCase()))) throw new BundledFlujoWorkloadError();
   const selected = getCurrentWorkspace(), target = audience(process.env.FLUJO_BASE_URL);
   if (audience(env.get('FLUJO_BASE_URL')) !== target || env.get('FLUJO_WORKSPACE') !== selected) throw new BundledFlujoWorkloadError();
   const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE, ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;

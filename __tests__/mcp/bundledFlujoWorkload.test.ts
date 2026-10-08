@@ -15,6 +15,27 @@ import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 
+test.each(['FLUJO_MCP_WORKLOAD_TOKEN', 'flujo_mcp_workload_token', 'Flujo_Mcp_Workload_Token',
+  'FLUJO_MCP_WORKLOAD_AUDIENCE', 'flujo_mcp_workload_audience', 'Flujo_Mcp_Workload_Audience'])
+('reserved persisted %s denies unrelated and worker stdio before eligibility returns', name => {
+  const previous = process.env.FLUJO_WORKER_MODE;
+  try {
+    const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'filesystem')!;
+    for (const worker of [undefined, '1']) {
+      if (worker === undefined) delete process.env.FLUJO_WORKER_MODE; else process.env.FLUJO_WORKER_MODE = worker;
+      const config = createShippedServerConfig(descriptor);
+      expect(prepareBundledFlujoWorkload(config)).toBeUndefined();
+      for (const trustedHost of [undefined, { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account',
+        runtime: 'node', entryPoint: process.execPath, sourceRoot: path.dirname(process.execPath),
+        sourceDigest: '0'.repeat(64), executableDigest: '0'.repeat(64), environmentNames: [] }]) {
+        expect(() => prepareBundledFlujoWorkload({ ...config, trustedHost, env: { ...config.env, [name]: 'persisted-untrusted-value' } })).toThrow();
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.FLUJO_WORKER_MODE; else process.env.FLUJO_WORKER_MODE = previous;
+  }
+});
+
 test('review inventory covers every actual mapped tool and all six protocol operations', async () => {
   const mapped = [...FLUJO_AUTHORING_TOOLS, ...FLUJO_FLOW_TOOLS, ...FLUJO_SERVER_TOOLS, ...FLUJO_AUTOMATION_TOOLS, ...FLUJO_STATE_TOOLS];
   expect(mapped).toHaveLength(43);
@@ -65,6 +86,8 @@ test('real private consent activates only at guarded start, owner drift denies, 
   };
   let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
   let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
+  let primaryFailed = false;
+  let primaryError: unknown;
   try {
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
     process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
@@ -109,12 +132,21 @@ test('real private consent activates only at guarded start, owner drift denies, 
     expect(close).toHaveBeenCalledTimes(1);
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+  } catch (error) {
+    primaryFailed = true; primaryError = error; throw error;
   } finally {
-    try { await transport?.close(); } finally {
-      owner?.restore();
-      for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    const cleanupErrors: unknown[] = [];
+    try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
+    try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
+    for (const [name, value] of Object.entries(saved)) {
+      try { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+      catch (error) { cleanupErrors.push(error); }
+    }
+    try {
       if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
       fs.rmSync(fixture, { recursive: true, force: true });
-    }
+    } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) throw new AggregateError(primaryFailed ? [primaryError, ...cleanupErrors] : cleanupErrors,
+      'Workload fixture cleanup failed.', primaryFailed ? { cause: primaryError } : undefined);
   }
 }, 60_000);
