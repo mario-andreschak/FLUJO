@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 
 const mockLoad = jest.fn();
+let mockSavedView = 'playground';
 const mockPlaygroundCanvas = jest.fn((_props: unknown) => <div data-testid="playground-canvas" />);
 
 jest.mock('@/frontend/services/automationMap', () => ({
@@ -8,7 +9,12 @@ jest.mock('@/frontend/services/automationMap', () => ({
 }));
 
 jest.mock('@/frontend/hooks/useUiPreference', () => ({
-  useWorkspaceUiPreference: (_key: string, initial: unknown) => [initial, jest.fn()],
+  useWorkspaceUiPreference: (key: string, initial: unknown) => [key === 'flujo-ui:waves:view' ? mockSavedView : initial, jest.fn()],
+}));
+
+jest.mock('@/frontend/components/Waves/FactoryObservatoryPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="factory-observatory" />,
 }));
 
 jest.mock('@/frontend/components/Waves/PlaygroundCanvas', () => ({
@@ -27,6 +33,7 @@ describe('Waves full-page layout (#325)', () => {
   beforeEach(() => {
     mockLoad.mockReset();
     mockPlaygroundCanvas.mockClear();
+    mockSavedView = 'playground';
   });
 
   it('lets the unified Playground canvas fill the constrained manager height', async () => {
@@ -74,5 +81,12 @@ describe('Waves full-page layout (#325)', () => {
       mode: 'simple',
       activeWaveId: null,
     }));
+  });
+
+  it('does not load or arm the automation map when the saved view is FACTORY', async () => {
+    mockSavedView = 'factory';
+    render(<WavesManager />);
+    expect(await screen.findByTestId('factory-observatory')).toBeInTheDocument();
+    expect(mockLoad).not.toHaveBeenCalled();
   });
 });

@@ -91,6 +91,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   }, [refresh]);
 
   useEffect(() => {
+    if (view === 'factory') return;
     refresh().catch((error) => {
       log.warn('Initial automation map load failed', error);
       setLoadError(true);
@@ -103,7 +104,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
       });
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, view]);
 
   useEffect(() => {
     if (!data || !activeWaveId) return;
