@@ -3,7 +3,8 @@ jest.mock('simple-git', () => {
   const git = {
     checkIsRepo: jest.fn(), fetch: jest.fn(), status: jest.fn(), pull: jest.fn(), raw: jest.fn(),
   };
-  return { __esModule: true, default: jest.fn(() => git), __git: git };
+  const factory = jest.fn(() => git);
+  return { __esModule: true, simpleGit: factory, __git: git };
 });
 
 jest.mock('child_process', () => ({
@@ -15,8 +16,8 @@ jest.mock('child_process', () => ({
 import { GET, POST } from '@/app/api/update/route';
 import { makeLocalRequest } from '../utils/localRequest';
 
-const { __git: mockGit, default: simpleGitFactory } = jest.requireMock('simple-git') as {
-  __git: Record<string, jest.Mock>; default: jest.Mock;
+const { __git: mockGit, simpleGit: simpleGitFactory } = jest.requireMock('simple-git') as {
+  __git: Record<string, jest.Mock>; simpleGit: jest.Mock;
 };
 const { execSync: mockExecSync, spawn: mockSpawn } = jest.requireMock('child_process') as {
   execSync: jest.Mock; spawn: jest.Mock;

@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { createHash } from 'crypto';
 import { spawn } from 'child_process';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 import { killProcessTree } from '@/utils/process/killProcessTree';

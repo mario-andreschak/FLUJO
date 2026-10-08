@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import simpleGit, { type SimpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
@@ -82,7 +82,8 @@ function parseCountObjects(output: string, fallback: number): number {
 }
 
 function gitForSnapshot(gitDir: string): SimpleGit {
-  return simpleGit(path.dirname(gitDir)).env('GIT_DIR', gitDir);
+  return simpleGit({ baseDir: path.dirname(gitDir), allowEnvironment: ['GIT_DIR'],
+    unsafe: { allowUnsafeConfigPaths: true } }).env('GIT_DIR', gitDir);
 }
 
 async function usageFor(root: string, id: string): Promise<SnapshotRepositoryUsage> {

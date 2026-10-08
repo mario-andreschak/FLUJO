@@ -22,7 +22,7 @@ jest.mock('simple-git', () => {
   };
   return {
     __esModule: true,
-    default: jest.fn(() => git),
+    simpleGit: jest.fn(() => git),
     __git: git,
   };
 });

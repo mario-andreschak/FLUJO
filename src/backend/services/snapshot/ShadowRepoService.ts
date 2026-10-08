@@ -26,7 +26,7 @@
 import path from 'path';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import simpleGit, { SimpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
@@ -107,7 +107,9 @@ function gitDirFor(root: string): string {
  * `--git-dir` / `--work-tree` prefix is applied per-call via raw().
  */
 function clientFor(root: string): SimpleGit {
-  return simpleGit(path.resolve(root));
+  // Only this verified local snapshot path uses an independently owned gitdir.
+  // v4 requires explicit opt-in for --git-dir/--work-tree arguments.
+  return simpleGit({ baseDir: path.resolve(root), unsafe: { allowUnsafeConfigPaths: true } });
 }
 
 function gitArgs(root: string): string[] {
