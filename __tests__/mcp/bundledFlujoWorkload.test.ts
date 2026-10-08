@@ -174,6 +174,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     }
     if (mode === 'inventory-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+      await timed('graph-b-prime', () => capturedService.assertEffect());
       process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '1';
       try { await expect(capturedService.assertEffect()).rejects.toThrow(); }
       finally { process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '0'; }
@@ -190,6 +191,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     }
     if (mode === 'deferred-owner-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+      await timed('graph-b-prime', () => capturedService.assertEffect());
       const actualRead = readerB.readPrivateApprovalSetAsync;
       let enter!: () => void, release!: () => void, paused = false;
       const entered = new Promise<void>(resolve => { enter = resolve; });
@@ -227,6 +229,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     };
     if (mode === 'retired-selected-context') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
+      await timed('graph-b-prime', () => capturedService.assertEffect());
       await retire();
       await expect(capturedService.assertEffect()).rejects.toThrow();
       expect(() => graphB.getAuthorizedBundledFlujoWorkloadToolNames()).toThrow();
