@@ -41,8 +41,14 @@ export function createControllerNativeToolGateway(transport: ControllerNativeToo
     isProtectedServer:server=>server===config.name,
     assertServerConfig(received:MCPServerConfig) {
       if(received.name!==config.name)return;
+      if(received.transport!=='streamable')throw refused();
+      const authorization=received.headers?.Authorization;
+      const secret=typeof authorization==='object'&&authorization!==null
+        &&Object.keys(authorization).sort().join()==='metadata,value'
+        &&Object.keys(authorization.metadata??{}).join()==='isSecret'&&authorization.metadata.isSecret===true;
+      const headers={...received.headers,Authorization:secret?authorization.value:authorization};
       if(received.transport!=='streamable'||received.serverUrl!==config.serverUrl
-        ||digest(received.headers)!==digest(config.headers)||'command' in received||'args' in received
+        ||digest(headers)!==digest(config.headers)||'command' in received||'args' in received
         ||received.sampling?.enabled||received.elicitation?.enabled||received.exposeAsMcpServer
         ||received.enableMcpApps||received.enableMcpSkills)throw refused();
     },

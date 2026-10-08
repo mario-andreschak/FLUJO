@@ -18,6 +18,7 @@ function equipment() {
 test('gateway pins the trusted private server and refuses configuration changes',()=>{
   const e=equipment();expect(e.gateway.isProtectedServer('seagulled-worker')).toBe(true);
   e.gateway.assertServerConfig(e.toolConfig as MCPServerConfig);
+  e.gateway.assertServerConfig({...e.toolConfig,headers:{Authorization:{value:e.toolConfig.headers.Authorization,metadata:{isSecret:true}}}});
   for(const changed of [{serverUrl:'http://foreign/'},{headers:{Authorization:'Bearer foreign'}},{command:'sh'},
     {sampling:{enabled:true}},{exposeAsMcpServer:true}]) {
     expect(()=>e.gateway.assertServerConfig({...e.toolConfig,...changed} as MCPServerConfig)).toThrow();

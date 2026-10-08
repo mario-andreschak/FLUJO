@@ -136,7 +136,12 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
     const target=(request:Request)=>new URL(request.url).pathname==='/v1/chat/completions';
     const authorized=(request:Request)=>{
       const address=new URL(request.url), supplied=Buffer.from(request.headers.get('authorization')??'');
-      return !closed && address.origin===selectedOrigin.origin && !address.search && !address.hash
+      // Next normalizes the proxy's internal URL to localhost even when its
+      // actual listener and HTTP Host are 127.0.0.1. Preserve the exact wire
+      // Host/port and private bearer; only this internal spelling is equivalent.
+      const ownedAddress=address.origin===selectedOrigin.origin || address.protocol==='http:'
+        && address.hostname==='localhost' && address.port===selectedOrigin.port;
+      return !closed && ownedAddress && !address.search && !address.hash && !address.username && !address.password
         && request.headers.get('host')===selectedOrigin.host && !request.headers.has('origin') && request.method==='POST'
         && request.headers.get('content-type')?.split(';')[0].trim()==='application/json'
         && supplied.length===selectedCredential.length && timingSafeEqual(supplied,selectedCredential);

@@ -88,6 +88,22 @@ function request(body:unknown,headers:Record<string,string>={},signal?:AbortSign
 }
 const payload=()=>({prompt:'Offline requester contract only.',claim:{...claim},workerAuthorization:'Bearer synthetic-worker-only'});
 
+test('Next internal localhost URL retains exact wire Host and private requester authority',async()=>{
+  const e=equipment(true);
+  const headers={authorization:requester.authorization,host:'127.0.0.1:12345','content-type':'application/json'};
+  const incoming=(origin:string,host=headers.host)=>new Request(origin+'/v1/chat/completions',{
+    method:'POST',headers:{...headers,host},body:JSON.stringify(payload())});
+  try {
+    for(const refused of [incoming('http://localhost:12346'),incoming('http://foreign:12345'),
+      incoming('http://localhost:12345','localhost:12345')]) {
+      expect(e.composed.adapter.authorizeTransport!(refused)?.status).toBe(403);
+    }
+    const normalized=incoming('http://localhost:12345');
+    expect(e.composed.adapter.authorizeTransport!(normalized)).toBeNull();
+    expect((await e.composed.adapter.withRoute!(normalized,async()=>Response.json({ok:true}))).status).toBe(200);
+  }finally{e.restore();await e.composed.close();}
+});
+
 test('private requester authenticates before deriving a non-streaming root from actual admission',async()=>{
   const e=equipment(true);let retained:ExecutionExtensionContext|undefined;
   try {
