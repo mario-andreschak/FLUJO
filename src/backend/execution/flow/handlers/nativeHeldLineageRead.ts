@@ -2,6 +2,7 @@ import type { FlowExecutionAuthority } from '../types';
 import { flowAssertionRoot, type FlowDurableMutationContext } from '../executionAuthority';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { hasExecutionReadGuards } from '@/backend/execution/extensions';
+import { createHeldReadScope } from '../heldReadScope';
 
 const unsupportedAdmissions = new WeakSet<object>();
 class UnsupportedNativeHeldRead extends Error {
@@ -13,7 +14,7 @@ export function isUnsupportedNativeHeldRead(error: unknown): boolean {
 }
 
 export interface NativeHeldLineageRead {
-  readonly assertCurrent: () => Promise<void>;
+  readonly assertCurrent: (additionalCheck?: () => Promise<void>) => Promise<void>;
   readonly assertGuardEligibility: () => void;
   readonly assertFlowCurrent: (context: FlowDurableMutationContext) => Promise<void>;
 }
@@ -36,6 +37,8 @@ export async function withNativeHeldLineageRead<T>(
   task: (reader: NativeHeldLineageRead) => Promise<T>,
 ): Promise<T> {
   const root = flowAssertionRoot(authority);
+  const dispatcher = await import('@/backend/services/enduringAgents/personaDispatcher');
+  dispatcher.assertPersonaHeldReadIssuer(root);
   const registry = (globalThis as typeof globalThis & {
     __flujoNativeOriginalAuthorities?: WeakMap<object, unknown>;
   }).__flujoNativeOriginalAuthorities;
@@ -55,7 +58,7 @@ export async function withNativeHeldLineageRead<T>(
     if (hasExecutionReadGuards() || (state && typeof state === 'object'
       && ((state as { executionExtensionOwned?: boolean }).executionExtensionOwned
         || (state as { executionExtensionContext?: unknown }).executionExtensionContext))) {
-      throw new UnsupportedNativeHeldRead();
+      throw new Error('Native held-read admission guard shape changed.');
     }
   };
   while (id) {
@@ -68,32 +71,34 @@ export async function withNativeHeldLineageRead<T>(
     const candidate = state?.executionAuthority;
     if (!candidate || state?.executionExtensionOwned || state?.executionExtensionContext
       || flowAssertionRoot(candidate) !== root || registry?.get(candidate) !== binding
-      || hasExecutionReadGuards()) throw new UnsupportedNativeHeldRead();
+      || hasExecutionReadGuards()) throw new Error('Native held-read admission authority shape changed.');
     if (id === rootConversationId) break;
     id = state.parentRunId;
   }
   if (!seen.has(rootConversationId)) throw new Error('Native held-read admission root is unavailable.');
-  const dispatcher = await import('@/backend/services/enduringAgents/personaDispatcher');
-  const assertPersonaAuthority: (value: unknown) => asserts value is FlowExecutionAuthority = dispatcher.assertPersonaFlowExecutionAuthority;
-  assertPersonaAuthority(root);
   return dispatcher.readWithPersonaFlowAuthority(root, async (assertDispatcherCurrent) => {
-    let active = true;
-    const assertCurrent = async () => {
-      if (!active || getCurrentWorkspace() !== workspace) throw new Error('Native held read scope ended.');
+    const scope = createHeldReadScope();
+    const assertCurrent = (additionalCheck?: () => Promise<void>) => scope.run(async () => {
+      if (getCurrentWorkspace() !== workspace) throw new Error('Native held read workspace changed.');
       await assertDispatcherCurrent();
-      if (!active || registry?.get(root) !== binding) throw new Error('Native held read binding changed.');
-    };
+      scope.assertActive();
+      if (additionalCheck) {
+        await additionalCheck();
+        scope.assertActive();
+        await assertDispatcherCurrent();
+      }
+      if (registry?.get(root) !== binding) throw new Error('Native held read binding changed.');
+    });
     const reader: NativeHeldLineageRead = Object.freeze({
       assertCurrent,
       assertGuardEligibility: () => {
         assertNativeHeldLineageRead(reader);
         assertGuardEligibility();
       },
-      assertFlowCurrent: async (context: FlowDurableMutationContext) => {
+      assertFlowCurrent: (context: FlowDurableMutationContext) => scope.run(async () => {
         assertNativeHeldLineageRead(reader);
         const candidate = context.executionAuthority;
-        // Extension adapters are arbitrary assertions and have no proven lock
-        // equivalence. Release the lock and retain their original guard path.
+        // Any post-admission shape drift denies; it can never request fallback.
         if (context.executionExtensionContext || !candidate
           || flowAssertionRoot(candidate) !== root || registry?.get(candidate) !== binding) {
           throw new Error('Native held-read authority shape changed.');
@@ -101,7 +106,7 @@ export async function withNativeHeldLineageRead<T>(
         candidate.signal.throwIfAborted();
         await assertCurrent();
         candidate.signal.throwIfAborted();
-      },
+      }),
     });
     readers.add(reader);
     try {
@@ -110,8 +115,8 @@ export async function withNativeHeldLineageRead<T>(
       await assertCurrent();
       return result;
     } finally {
-      active = false;
       readers.delete(reader);
+      await scope.close();
     }
   });
 }

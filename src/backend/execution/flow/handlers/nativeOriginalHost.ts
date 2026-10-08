@@ -312,9 +312,7 @@ export async function createPersonaNativeOriginalHost(input: {
       return await withNativeHeldLineageRead(authority, input.conversationId, binding.conversationId, async heldRead => {
         const assertHeldCurrent = async () => {
           authority.signal.throwIfAborted();
-          await heldRead.assertCurrent();
-          await assertGoalCurrent();
-          await heldRead.assertCurrent();
+          await heldRead.assertCurrent(assertGoalCurrent);
         };
         const heldBroker = createNativeBrokerAuthority(binding.leaseEpoch, assertHeldCurrent);
         const heldRoot = createNativeLineageRootBinding({ workspace: binding.workspace,

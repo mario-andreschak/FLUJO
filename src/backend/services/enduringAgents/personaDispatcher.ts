@@ -1,17 +1,23 @@
 import { createHash, randomUUID } from 'crypto';
 import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { createHeldReadScope } from '@/backend/execution/flow/heldReadScope';
 
 const authorityRegistryRoot = globalThis as typeof globalThis & { __flujoPersonaFlowAuthorities?: WeakSet<object> };
 const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthorities ??= new WeakSet<object>();
 type HeldFlowReadRunner = <T>(task: (assertCurrent: () => Promise<void>) => Promise<T>) => Promise<T>;
 const heldFlowReadRunners = new WeakMap<object, HeldFlowReadRunner>();
 
+export function assertPersonaHeldReadIssuer(authority: FlowExecutionAuthority): void {
+  assertPersonaFlowExecutionAuthority(authority);
+  if (!heldFlowReadRunners.has(authority)) throw new Error('Persona authority does not support held reads.');
+}
+
 /** Dispatcher-only issuer lookup; lookalike and inherited authorities cannot mint a scope. */
 export async function readWithPersonaFlowAuthority<T>(
   authority: FlowExecutionAuthority,
   task: (assertCurrent: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
-  assertPersonaFlowExecutionAuthority(authority);
+  assertPersonaHeldReadIssuer(authority);
   const runner = heldFlowReadRunners.get(authority);
   if (!runner) throw new Error('Persona authority does not support held reads.');
   return runner(task);
@@ -2893,7 +2899,8 @@ export class PersonaFlowDispatcher {
       this.inWorkspace(async () => {
         const { readWithPersonaActivityLease } = await import('./activityRuntime');
         return readWithPersonaActivityLease(fence, async (reader) => {
-          const assertCurrent = async () => {
+          const scope = createHeldReadScope();
+          const assertCurrent = () => scope.run(async () => {
             abortController.signal.throwIfAborted();
             if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
             await reader.assertCurrent();
@@ -2901,11 +2908,13 @@ export class PersonaFlowDispatcher {
             await reader.assertCurrent();
             abortController.signal.throwIfAborted();
             if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
-          };
-          await assertCurrent();
-          const result = await task(assertCurrent);
-          await assertCurrent();
-          return result;
+          });
+          try {
+            await assertCurrent();
+            const result = await task(assertCurrent);
+            await assertCurrent();
+            return result;
+          } finally { await scope.close(); }
         });
       })
     ));
