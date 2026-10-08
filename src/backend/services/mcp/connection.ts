@@ -1025,8 +1025,10 @@ export function createStdioTransport(
   let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
   let workload: PendingBundledFlujoWorkload | undefined;
   const retireRuntimeAuthority = () => {
-    try { if (workload) revokePendingWorkload(workload); }
-    finally { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); }
+    const errors: unknown[] = [];
+    try { if (workload) revokePendingWorkload(workload); } catch (error) { errors.push(error); }
+    try { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'MCP runtime authority retirement failed.', { cause: errors[0] });
   };
 
   // Create the transport with stderr capture
@@ -1384,6 +1386,8 @@ export async function safelyCloseClient(
     child && typeof child.kill === "function" ? 'owned'
       : config && config.transport !== 'stdio' ? 'external' : 'unknown';
   let errorClassification: MCPShutdownObservation['errorClassification'] = 'none';
+  let primaryCloseError: unknown;
+  const retirementErrors: unknown[] = [];
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
@@ -1442,20 +1446,20 @@ export async function safelyCloseClient(
     log.info(`Client closed successfully for ${serverName}`);
   } catch (error) {
     errorClassification = 'close_failed';
+    primaryCloseError = error;
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
-    try { isolationCleanup = isolation?.close(); }
-    finally {
-      try {
-        const workload = (rawTransport as TransportWithConfigKey | undefined)?.__flujoBundledWorkload;
-        if (workload) revokePendingWorkload(workload);
-      } finally {
-        revokeMcpAppRuntimeBrokerLease(
-          (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
-        );
-      }
-    }
+    try { isolationCleanup = isolation?.close(); } catch (error) { retirementErrors.push(error); }
+    try {
+      const workload = (rawTransport as TransportWithConfigKey | undefined)?.__flujoBundledWorkload;
+      if (workload) revokePendingWorkload(workload);
+    } catch (error) { retirementErrors.push(error); }
+    try {
+      revokeMcpAppRuntimeBrokerLease(
+        (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
+      );
+    } catch (error) { retirementErrors.push(error); }
   }
   // SDK close can itself observe exit after the bounded tree-kill wait ended.
   if (processOwnership === 'owned' && child) {
@@ -1467,9 +1471,15 @@ export async function safelyCloseClient(
   if (exitOutcome === 'unknown' && errorClassification === 'none') {
     errorClassification = 'exit_unobserved';
   }
-  return { exited, forced, durationMs: Date.now() - startedAt,
+  const observation: SafeCloseResult = { exited, forced, durationMs: Date.now() - startedAt,
     processOwnership, exitOutcome, errorClassification,
     ...(isolation && isolationCleanup ? { isolation: { schemaVersion: 1 as const,
       generation: isolation.launch.generation, cleanupOutcome: isolationCleanup.outcome } } : {}),
   };
+  if (retirementErrors.length) {
+    const errors = primaryCloseError === undefined ? retirementErrors : [primaryCloseError, ...retirementErrors];
+    const failure = new AggregateError(errors, 'MCP shutdown authority retirement failed.', { cause: errors[0] });
+    throw Object.assign(failure, { shutdownObservation: observation });
+  }
+  return observation;
 }

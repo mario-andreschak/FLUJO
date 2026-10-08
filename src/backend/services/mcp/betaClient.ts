@@ -297,8 +297,10 @@ export function createBetaTransport(
   let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
   let workload: PendingBundledFlujoWorkload | undefined;
   const retireRuntimeAuthority = () => {
-    try { if (workload) revokePendingWorkload(workload); }
-    finally { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); }
+    const errors: unknown[] = [];
+    try { if (workload) revokePendingWorkload(workload); } catch (error) { errors.push(error); }
+    try { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'MCP runtime authority retirement failed.', { cause: errors[0] });
   };
   let transport: BetaStdioClientTransport;
   try {
