@@ -87,6 +87,36 @@ it('disconnects the generation registered by an already pending connect', async 
   expect(target.child.exitCode).toBe(0);
 });
 
+it('closes its actual owned process after an awaited config read fails and denies folded callers', async () => {
+  const target = await fixture();
+  global.__mcp_clients!.set('srv', target.client);
+  markConnected('srv');
+  const service = new MCPService();
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let rejectRead!: (error: Error) => void;
+  const pendingRead = new Promise<never>((_resolve, reject) => { rejectRead = reject; });
+  jest.spyOn(service, 'getServerConfig').mockImplementationOnce(async () => {
+    entered();
+    return pendingRead;
+  });
+  const first = service.disconnectServer('srv');
+  await reading;
+  const second = service.disconnectServer('srv');
+  rejectRead(new Error('fixture config read failed'));
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  expect(firstResult.success).toBe(false);
+  expect(secondResult.success).toBe(false);
+  expect(secondResult.error).toBe('MCP_SHUTDOWN_FAILED');
+  expect(secondResult.shutdownReceipt?.errorClassification).toBe('close_failed');
+  expect(target.child.exitCode).toBe(0);
+  expect(target.client.close).toHaveBeenCalledTimes(1);
+  expect(service.getClient('srv')).toBeUndefined();
+  const repeated = await service.disconnectServer('srv');
+  expect(repeated.success).toBe(false);
+  expect(repeated.shutdownReceipt).toBe(secondResult.shutdownReceipt);
+});
+
 it('exposes separate process observations during application-wide disconnect', async () => {
   const target = await fixture();
   global.__mcp_clients!.set('srv', target.client);
