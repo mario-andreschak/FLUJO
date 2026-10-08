@@ -330,8 +330,20 @@ export function trustedHostMcpApproval(config: MCPStdioConfig) {
   try {
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     const digest = trustedHostMcpPolicyDigest(config);
-    const approvals = approvalsSchema.parse(readPrivateApproval(process.env.FLUJO_MCP_TRUSTED_HOST_FILE));
-    const owner = ownerPolicySchema.parse(readPrivateApproval(process.env.FLUJO_OWNER_AUTH_FILE));
+    const approvalFile = process.env.FLUJO_MCP_TRUSTED_HOST_FILE, ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
+    if (!approvalFile || !ownerFile) throw new Error();
+    const filenames = [approvalFile, ownerFile];
+    const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
+    const before = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filenames) : undefined;
+    const contents = filenames.map(filename => readPrivateApprovalContents(filename));
+    if (before !== undefined && windowsPrivateAuthorityStamp(filenames) !== before) throw new Error();
+    for (const [index, filename] of filenames.entries()) {
+      assertLinkFree(filename);
+      if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new Error();
+    }
+    if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
+    const approvals = approvalsSchema.parse(contents[0]);
+    const owner = ownerPolicySchema.parse(contents[1]);
     const grant = approvals.approvals.find(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name);
     if (owner.ownerId !== approvals.ownerId || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
     return { policy, digest, ownerId: owner.ownerId, workspace: getCurrentWorkspace(), expiresAt: grant.expiresAt };

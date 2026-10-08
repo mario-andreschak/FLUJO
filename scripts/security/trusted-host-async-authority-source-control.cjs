@@ -63,7 +63,9 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    fs.openSync=function(...args){const fd=Reflect.apply(originalOpen,fs,args);if(path.resolve(String(args[0]))===path.resolve(process.env.FLUJO_OWNER_AUTH_FILE))ownerFd=fd;return fd;};
    fs.readSync=function(...args){const read=Reflect.apply(originalRead,fs,args);if(read>0&&args[0]===ownerFd&&!parentChanged){parentChanged=true;const before=fs.lstatSync(exclusiveApproval,{bigint:true});run('foreign');const after=fs.lstatSync(exclusiveApproval,{bigint:true});for(const key of ['dev','ino','size','mtimeNs','ctimeNs','mode'])assert.equal(after[key],before[key]);}return read;};
    try{
-    await assert.rejects(policy.trustedHostMcpApprovalAsync(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(parentChanged,true);exclusiveParentAclDriftRefused=true;
+    await assert.rejects(policy.trustedHostMcpApprovalAsync(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(parentChanged,true);
+    run('restore',sddl);parentChanged=false;ownerFd=undefined;
+    assert.throws(()=>policy.trustedHostMcpApproval(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(parentChanged,true);exclusiveParentAclDriftRefused=true;
    }finally{fs.openSync=originalOpen;fs.readSync=originalRead;run('restore',sddl);process.env.FLUJO_MCP_TRUSTED_HOST_FILE=previousApproval;fixture.approve();}
    assert.equal(typeof windows.windowsPrivateAuthorityStampAsync,'function');
   }
@@ -71,7 +73,12 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   let ownerFd,crossReaderChanged=false;
   fs.openSync=function(...args){const fd=Reflect.apply(originalOpen,fs,args);if(path.resolve(String(args[0]))===path.resolve(ownerFilename))ownerFd=fd;return fd;};
   fs.readSync=function(...args){const read=Reflect.apply(originalRead,fs,args);if(read>0&&args[0]===ownerFd&&!crossReaderChanged){crossReaderChanged=true;fs.writeFileSync(filename,grantBytes,{mode:0o600});}return read;};
-  try{await assert.rejects(policy.trustedHostMcpApprovalAsync(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(crossReaderChanged,true);}finally{fs.openSync=originalOpen;fs.readSync=originalRead;grantBytes.fill(0);fixture.approve();}
+  try{
+   await assert.rejects(policy.trustedHostMcpApprovalAsync(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(crossReaderChanged,true);
+   fixture.approve();crossReaderChanged=false;ownerFd=undefined;
+   assert.throws(()=>policy.trustedHostMcpApproval(fixture.config),e=>e.code==='HOST_CONSENT_REQUIRED');assert.equal(crossReaderChanged,true);
+  }finally{fs.openSync=originalOpen;fs.readSync=originalRead;grantBytes.fill(0);fixture.approve();}
+  console.log(JSON.stringify({sourceControl:'sync-paired-private-authority',actualFreshOwnerAndGrantAccepted:typeof policy.trustedHostMcpApproval(fixture.config).digest==='string',actualCrossReaderGrantRewriteRefused:true,actualExclusiveParentAclDriftRefused:exclusiveParentAclDriftRefused,scope:'Actual native Source private authority; no installed or overall workflow performance claim'}));
   await policy.verifyTrustedHostMcp(fixture.config);
   console.log(JSON.stringify({sourceControl:'trusted-host-async-authority',matchingScryptCommitment:true,actualPrivateGrantAccepted:true,eventLoopTicks:count,maximumHeartbeatIntervalMs:maxDelay,verificationMs:duration,cancellationMs,preCancelledRefused:true,duringCheckCancelledRefused:true,actualPrivateReadMutationRefused:true,nativeAclChangeRefused,exclusiveParentAclDriftRefused,crossReaderGrantRewriteRefused:crossReaderChanged,restoredGrantAccepted:true,scope:'Source transpilation/nonmatching SDK graph; no installed qualification or maximum-load latency claim'}));
  }finally{fixture.restore();}
