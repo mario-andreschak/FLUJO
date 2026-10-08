@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
@@ -26,6 +27,7 @@ import {
   getPersonaFlowDispatch,
   listPersonaFlowDispatches,
   movePersonaWorkItemDispatch,
+  personaFlowDispatchId,
   reprioritizePersonaWorkItemDispatches,
   submitPersonaFlowDispatch,
   type PersonaFlowDispatchRecord,
@@ -418,6 +420,44 @@ export async function assignPersonaWorkItem(
     notifyPersonaGoalChanged(personaId);
     return { workItem, admission: 'queued' };
   }
+  const dispatchKey = stableEnduringAgentId('taskassign', {
+    purpose: options.attemptKey
+      ? 'persona-work-item-assignment-v2'
+      : 'persona-work-item-caller-attempt-v1',
+    workspaceId: getCurrentWorkspace(),
+    personaId,
+    workItemId,
+    attemptKey: options.attemptKey ?? parsed.idempotencyKey,
+  });
+  const readCallerReceipt = async (): Promise<AssignPersonaWorkItemResult | null> => {
+    if (options.attemptKey) return null;
+    const dispatch = await getPersonaFlowDispatch(personaFlowDispatchId(personaId, dispatchKey));
+    if (!dispatch) return null;
+    if (dispatch.workspaceId !== getCurrentWorkspace() || dispatch.personaId !== personaId
+      || dispatch.idempotencyDigest !== createHash('sha256').update(dispatchKey).digest('hex')
+      || dispatch.admission.kind !== 'assignment'
+      || dispatch.admission.source.kind !== 'assignment'
+      || dispatch.admission.source.sourceId !== workItemId
+      || dispatch.admission.relationKey !== assignmentRelationKey(workItemId)
+      || dispatch.admission.assignmentExpectedUpdatedAt !== parsed.expectedUpdatedAt) {
+      throw new PersonaDomainConflictError('Caller attempt does not match this Task assignment.');
+    }
+    if (!dispatch.mailboxItemId && !dispatch.activityId
+      && !['completed', 'error', 'cancelled'].includes(dispatch.state)) {
+      throw new PersonaDomainConflictError(
+        'Task assignment was saved before mailbox admission; reconcile this dispatch before retrying.',
+        'PERSONA_WORK_ITEM_ADMISSION_UNCONFIRMED',
+        { dispatchId: dispatch.id },
+      );
+    }
+    return {
+      workItem: requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId),
+      admission: 'already_queued',
+      dispatchId: dispatch.id,
+    };
+  };
+  const priorReceipt = await readCallerReceipt();
+  if (priorReceipt) return priorReceipt;
   let workItem: PersonaWorkItem | undefined;
   const validateAdmission = async (): Promise<void> => {
     const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
@@ -429,34 +469,38 @@ export async function assignPersonaWorkItem(
     workItem = current;
   };
 
-  const submission = await submitPersonaFlowDispatch({
-    personaId,
-    idempotencyKey: stableEnduringAgentId('taskassign', {
-      purpose: 'persona-work-item-assignment-v2',
-      workspaceId: getCurrentWorkspace(),
+  let submission: Awaited<ReturnType<typeof submitPersonaFlowDispatch>>;
+  try {
+    submission = await submitPersonaFlowDispatch({
       personaId,
-      workItemId,
-      attemptKey: options.attemptKey ?? 'initial',
-    }),
-    kind: 'assignment',
-    priority: inspected.priority,
-    source: {
+      idempotencyKey: dispatchKey,
       kind: 'assignment',
-      sourceId: workItemId,
-    },
-    relationKey: assignmentRelationKey(workItemId),
-    summary: inspected.title,
-    flowInput: {
-      messages: [{ role: 'user', content: assignmentPrompt(inspected) }],
-      mode: 'conversation',
-      title: inspected.title,
-      source: 'internal',
-      userTurn: true,
-    },
-  }, {
-    waitForCompletion: false,
-    validateAdmission,
-  });
+      priority: inspected.priority,
+      source: {
+        kind: 'assignment',
+        sourceId: workItemId,
+      },
+      relationKey: assignmentRelationKey(workItemId),
+      ...(!options.attemptKey ? { assignmentExpectedUpdatedAt: parsed.expectedUpdatedAt } : {}),
+      summary: inspected.title,
+      flowInput: {
+        messages: [{ role: 'user', content: assignmentPrompt(inspected) }],
+        mode: 'conversation',
+        title: inspected.title,
+        source: 'internal',
+        userTurn: true,
+      },
+    }, {
+      waitForCompletion: false,
+      validateAdmission,
+    });
+  } catch (error) {
+    // A concurrent admission can commit its dispatch before this caller sees
+    // its ACK. Read that durable receipt before reporting a stale CAS failure.
+    const receipt = await readCallerReceipt();
+    if (receipt) return receipt;
+    throw error;
+  }
 
   if (!workItem) {
     throw new PersonaDomainConflictError('Task assignment validation did not complete.');
@@ -464,6 +508,7 @@ export async function assignPersonaWorkItem(
   return {
     workItem,
     admission: submission.duplicate ? 'already_queued' : 'queued',
+    dispatchId: submission.dispatch.id,
   };
 }
 
