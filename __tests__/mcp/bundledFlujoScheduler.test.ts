@@ -11,6 +11,7 @@ import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/
 import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
+import { unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
 
 import { SchedulerService } from '@/backend/services/scheduler';
 import { getAuthorizedBundledFlujoWorkloadToolNames, assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
@@ -65,8 +66,10 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
   mockTimerCompleted = undefined;
   mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
   mockTimerObserved = new Promise(resolve => { mockTimerEntered = resolve; });
-  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE'];
+  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_ENCRYPTION_SECRET_FILE'];
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const priorDek = global.__flujo_server_dek;
+  const priorSessions = global.__flujo_encryption_sessions;
   const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
   const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
   const application = path.join(fixture, 'application');
@@ -90,6 +93,10 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
     write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
     fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
+    delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
+    global.__flujo_server_dek = undefined;
+    global.__flujo_encryption_sessions = undefined;
+    await timed('private-profile', () => unlockPrivateFixtureInCurrentWorkspace());
     await timed('provision', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
     const proposed = createShippedServerConfig(descriptor);
     expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
@@ -224,6 +231,10 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     });
     await attempt(() => transport?.close());
     await attempt(() => owner?.restore());
+    await attempt(() => {
+      global.__flujo_server_dek = priorDek;
+      global.__flujo_encryption_sessions = priorSessions;
+    });
     await attempt(() => {
       for (const [name, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[name]; else process.env[name] = value;
