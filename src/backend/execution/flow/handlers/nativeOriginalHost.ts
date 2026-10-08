@@ -15,7 +15,7 @@ import { createNativeBrokerAuthority, nativeDigest } from './nativeToolBroker';
 import { createNativeLineageRootBinding } from './nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from './nativeInvocationSession';
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
-import { isUnsupportedNativeHeldRead, withNativeHeldLineageRead } from './nativeHeldLineageRead';
+import { readWithNativeHeldLineageFallback } from './nativeHeldLineageRead';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
 import { readNativeHeldFile } from './nativeHeldFile';
 import { assertCodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
@@ -308,8 +308,7 @@ export async function createPersonaNativeOriginalHost(input: {
     workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
   const readOriginal = async (invocationId: string) => {
-    try {
-      return await withNativeHeldLineageRead(authority, input.conversationId, binding.conversationId, async heldRead => {
+      return readWithNativeHeldLineageFallback(authority, input.conversationId, binding.conversationId, async heldRead => {
         const assertHeldCurrent = async () => {
           authority.signal.throwIfAborted();
           await heldRead.assertCurrent(assertGoalCurrent);
@@ -323,13 +322,7 @@ export async function createPersonaNativeOriginalHost(input: {
           root: heldRoot, signal: authority.signal, heldRead });
         await assertHeldCurrent();
         return saved;
-      });
-    } catch (error) {
-      if (!isUnsupportedNativeHeldRead(error)) throw error;
-    }
-    // Eligibility alone can fall back, after the held lease has been released.
-    // Actual lease/goal/lineage failures retain their original refused outcome.
-    return readSavedNativeOrigin({ invocationId, authority: broker, root, signal: authority.signal });
+      }, () => readSavedNativeOrigin({ invocationId, authority: broker, root, signal: authority.signal }));
   };
   let original: NativeInvocationSession | undefined;
   const assertDescendantCurrent = async () => {

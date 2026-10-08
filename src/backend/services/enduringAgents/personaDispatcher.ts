@@ -7,6 +7,12 @@ const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthoriti
 type HeldFlowReadRunner = <T>(task: (assertCurrent: () => Promise<void>) => Promise<T>) => Promise<T>;
 const heldFlowReadRunners = new WeakMap<object, HeldFlowReadRunner>();
 
+/** Pure membership only: no authority callbacks, state reads or private guards. */
+export function supportsPersonaHeldReadIssuer(value: unknown): value is FlowExecutionAuthority {
+  return typeof value === 'object' && value !== null
+    && personaFlowAuthorities.has(value) && heldFlowReadRunners.has(value);
+}
+
 export function assertPersonaHeldReadIssuer(authority: FlowExecutionAuthority): void {
   assertPersonaFlowExecutionAuthority(authority);
   if (!heldFlowReadRunners.has(authority)) throw new Error('Persona authority does not support held reads.');

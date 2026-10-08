@@ -25,6 +25,22 @@ export function assertNativeHeldLineageRead(value: NativeHeldLineageRead): void 
   if (!readers.has(value)) throw new Error('A live native held reader is required.');
 }
 
+/** Only pre-selection eligibility may choose the unchanged original reader. */
+export async function readWithNativeHeldLineageFallback<T>(
+  authority: FlowExecutionAuthority,
+  originConversationId: string,
+  rootConversationId: string,
+  heldTask: (reader: NativeHeldLineageRead) => Promise<T>,
+  originalTask: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await withNativeHeldLineageRead(authority, originConversationId, rootConversationId, heldTask);
+  } catch (error) {
+    if (!isUnsupportedNativeHeldRead(error)) throw error;
+  }
+  return originalTask();
+}
+
 /**
  * The genuine Dispatcher supplies the callback and exact lease. Native binding
  * identity additionally pins Persona/workspace/Activity/goal/root Original.
@@ -38,6 +54,7 @@ export async function withNativeHeldLineageRead<T>(
 ): Promise<T> {
   const root = flowAssertionRoot(authority);
   const dispatcher = await import('@/backend/services/enduringAgents/personaDispatcher');
+  if (!dispatcher.supportsPersonaHeldReadIssuer(root)) throw new UnsupportedNativeHeldRead();
   dispatcher.assertPersonaHeldReadIssuer(root);
   const registry = (globalThis as typeof globalThis & {
     __flujoNativeOriginalAuthorities?: WeakMap<object, unknown>;
