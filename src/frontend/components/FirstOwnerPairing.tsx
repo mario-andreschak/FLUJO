@@ -52,7 +52,7 @@ export default function FirstOwnerPairing() {
       <input id="owner-pairing-capability" type="password" autoComplete="off" value={proof} disabled={busy}
         onChange={event => setProof(event.target.value)} className="my-2 w-full rounded border p-2" />
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={event => setConfirmed(event.target.checked)} />
-        I authorize enrollment of the first owner.</label>
+        I authorize enrollment of the first owner, including review of MCP host access. Each host requires separate approval.</label>
       <button disabled={busy || !confirmed || !/^flo_v1_[A-Za-z0-9_-]{43}$/.test(proof)} type="submit" className="mt-2 rounded border px-4 py-2">Pair owner</button>
     </form>}
     {busy && <button type="button" onClick={() => { setProof(''); setConfirmed(false); setError(true); requestRef.current?.abort(); }}>Cancel pairing request</button>}
