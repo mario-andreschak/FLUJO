@@ -67,17 +67,31 @@ export async function approveSmokeServer(baseUrl, name, token, timeoutMs) {
 export async function createSmokeMetadataBff(baseUrl, token) {
   const upstream = new URL(baseUrl);
   if (upstream.protocol !== 'http:' || upstream.hostname !== '127.0.0.1'
-      || upstream.username || upstream.password || upstream.pathname !== '/') throw new Error('Loopback smoke application required.');
+      || upstream.username || upstream.password || upstream.pathname !== '/'
+      || upstream.search || upstream.hash) throw new Error('Loopback smoke application required.');
+  // Select a complete fixed upstream URL. Request bytes are used only as an
+  // allowlist key and an encoded cursor, never as a relative fetch destination.
+  const endpoints = new Map([
+    ['/api/mcp/flujo/tools', new URL('/api/mcp/flujo/tools', upstream)],
+    ['/api/mcp/flujo/resources', new URL('/api/mcp/flujo/resources', upstream)],
+    ['/api/mcp/flujo/resource-templates', new URL('/api/mcp/flujo/resource-templates', upstream)],
+    ['/api/mcp/flujo/skills', new URL('/api/mcp/flujo/skills', upstream)],
+  ]);
   const server = createServer(async (request, response) => {
     if (request.method !== 'GET' || (request.url?.length ?? 0) > 2048
         || !/^\/api\/mcp\/flujo\/(?:tools|resources|resource-templates|skills)(?:\?[^\r\n]*)?$/.test(request.url ?? '')) {
       response.writeHead(404); response.end(); return;
     }
     try {
-      const target = new URL(request.url, upstream);
-      if ([...target.searchParams.keys()].some(name => name !== 'cursor')) {
+      const requested = new URL(request.url, 'http://metadata.invalid');
+      const endpoint = endpoints.get(requested.pathname);
+      if (!endpoint || requested.hash || [...requested.searchParams.keys()].some(name => name !== 'cursor')
+          || requested.searchParams.getAll('cursor').length > 1) {
         response.writeHead(404); response.end(); return;
       }
+      const target = new URL(endpoint);
+      const cursor = requested.searchParams.get('cursor');
+      if (cursor !== null) target.searchParams.set('cursor', cursor);
       const result = await fetch(target, {
         headers: { authorization: `Bearer ${token}`, 'x-flujo-workspace': 'default-workspace' },
         redirect: 'error', signal: AbortSignal.timeout(30_000),

@@ -44,6 +44,16 @@ test('the disposable metadata bridge retains owner authority and refuses writes 
     }
     assert.equal(received.length, 1);
     await assert.rejects(createSmokeMetadataBff('https://example.com', 'synthetic-test-only-owner'));
+    await assert.rejects(createSmokeMetadataBff(`http://127.0.0.1:${upstream.address().port}/?target=foreign`, 'synthetic-test-only-owner'));
+    for (const route of ['/api/mcp/flujo/resources?cursor=a&cursor=b',
+      '//example.com/api/mcp/flujo/resources', '/api/mcp/flujo/resources%2f..%2fsecrets']) {
+      assert.equal((await fetch(bridge.url + route)).status, 404);
+    }
+    assert.equal(received.length, 1);
+    const cursor = 'https://example.com/private?workspace=foreign#fragment';
+    assert.equal((await fetch(bridge.url + '/api/mcp/flujo/tools?cursor=' + encodeURIComponent(cursor))).status, 200);
+    assert.equal(received.at(-1).url, '/api/mcp/flujo/tools?' + new URLSearchParams({ cursor }).toString());
+    assert.equal(received.at(-1).workspace, 'default-workspace');
   } finally {
     await bridge?.close();
     upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve));
