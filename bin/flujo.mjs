@@ -117,6 +117,11 @@ catch (error) {
   console.error(`[FLUJO] Could not prepare a private local instance.${stage ? ` Storage stage: ${stage}.` : ''}`);
   process.exit(1);
 }
+// Windows source guards inspect many independent paths. Set the native I/O
+// pool before starting Node; preserve an operator's explicit configuration.
+if (process.platform === 'win32' && !instance.env.UV_THREADPOOL_SIZE) {
+  instance.env.UV_THREADPOOL_SIZE = '16';
+}
 const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   stdio: 'inherit',
   cwd: packageRoot,

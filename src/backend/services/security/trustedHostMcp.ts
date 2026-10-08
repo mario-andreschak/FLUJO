@@ -475,12 +475,19 @@ export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal
 }
 
 async function assertLinkFreeAsync(filename: string): Promise<void> {
+  const components: string[] = [];
   let current = path.resolve(filename);
   while (true) {
-    if ((await fs.promises.lstat(current)).isSymbolicLink()) throw new Error();
+    components.push(current);
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
+  }
+  // Inspect every component freshly, overlapping bounded independent metadata
+  // reads. Drain each batch before refusal and resolve the canonical path last.
+  for (let offset = 0; offset < components.length; offset += 8) {
+    const results = await Promise.allSettled(components.slice(offset, offset + 8).map(component => fs.promises.lstat(component)));
+    if (results.some(result => result.status === 'rejected' || result.value.isSymbolicLink())) throw new Error();
   }
   if (canonical(await fs.promises.realpath(filename)) !== canonical(filename)) throw new Error();
 }
