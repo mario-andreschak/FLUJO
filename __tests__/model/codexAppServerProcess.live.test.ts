@@ -12,7 +12,7 @@ live('qualifies the Source-owned public app-server with exact Luna/medium and or
   for(const value of [executable!,home!,receiptFile!])if(!path.isAbsolute(value))throw new Error('Absolute private qualification paths required');
   const relative=path.relative(process.cwd(),receiptFile!);
   if(!relative.startsWith('..'+path.sep) && !path.isAbsolute(relative))throw new Error('Qualification receipt must stay outside the checkout');
-  const env: NodeJS.ProcessEnv={};
+  const env: NodeJS.ProcessEnv={NODE_ENV:'test'};
   for(const key of ['PATH','Path','SystemRoot','WINDIR','COMSPEC','PATHEXT','SSL_CERT_FILE','SSL_CERT_DIR'])if(process.env[key])env[key]=process.env[key];
   Object.assign(env,{CODEX_HOME:home,HOME:home,USERPROFILE:home,APPDATA:path.join(home!,'AppData','Roaming'),LOCALAPPDATA:path.join(home!,'AppData','Local'),TEMP:path.join(home!,'tmp'),TMP:path.join(home!,'tmp')});
   const notifications: Array<{method?:string;params?:unknown}>=[];

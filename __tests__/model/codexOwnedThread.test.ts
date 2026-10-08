@@ -42,7 +42,7 @@ afterEach(async()=>{
   await fs.rm(directory,{recursive:true,force:true});
 });
 function input(overrides:Partial<Parameters<typeof createOwnedCodexThread>[0]>={}) {
-  const env:NodeJS.ProcessEnv={};
+  const env:NodeJS.ProcessEnv={NODE_ENV:'test'};
   for(const key of ['PATH','Path','SystemRoot','WINDIR'])if(process.env[key])env[key]=process.env[key];
   return {executable:process.execPath,env,cwd:directory,owner:{},model:'gpt-6-luna',effort:'medium',
     config:{features:{shell_tool:false},mcp_servers:{flujo:{url:'http://127.0.0.1/fixture-bridge'}},service_tier:'default'},
@@ -64,7 +64,7 @@ it('gates the actual prompt after registration and retains exact model/effort wi
   expect((await wire()).some(message=>message.method==='turn/start')).toBe(false);
   expect(cliArguments).toContain('features.shell_tool=false');
   release();const events=await running;
-  expect(events.filter(event=>event.type==='item.updated').map(event=>event.item.text)).toEqual(['REA','READY']);
+  expect(events.filter(event=>event.type==='item.updated').map(event=>event.item.type==='agent_message'?event.item.text:undefined)).toEqual(['REA','READY']);
   const prompt=(await wire()).find(message=>message.method==='turn/start');
   expect(prompt.params).toMatchObject({model:'gpt-6-luna',effort:'medium',threadId:'thread-fixture'});
   expect(options.observeUsage).toHaveBeenCalledWith({type:'codex-app-server-usage',appServerTurns:1,
