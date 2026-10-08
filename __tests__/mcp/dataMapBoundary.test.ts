@@ -2,6 +2,12 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { callTool } from '@/backend/services/mcp/tools';
 import { flattenCustomHeaders, resolveConfigHeaders, resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import type { MCPStdioConfig, MCPStreamableConfig } from '@/shared/types/mcp';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerConfigs: jest.fn(async () => [{ name: 'ordinary-fixture', transport: 'streamable',
+    serverUrl: 'https://data-map.example.test/mcp', disabled: false }]),
+}));
 
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: async (value: unknown) => value,
   resolveAndDecryptApiKey: async (value: unknown) => value }));
@@ -46,11 +52,16 @@ test('header flattening does not mutate prototypes or lose a special-name header
 });
 
 test('normal stdio launch env keeps special-name values without inheriting unknown fields', () => {
+  const approved = installTrustedHostProfile({ name: common.name, environment: strings() });
+  try {
   const env = Object.create({ inheritedVariable: 'do-not-send' }, Object.getOwnPropertyDescriptors(strings()));
-  const config: MCPStdioConfig = { ...common, transport: 'stdio', command: 'fixture-command', args: [], env };
+  Object.defineProperties(env, Object.getOwnPropertyDescriptors(approved.config.env));
+  const config: MCPStdioConfig = { ...approved.config, env };
+  approved.approve(config);
   const launch = resolveStdioLaunch(config);
   for (const name of names) expect(Object.prototype.hasOwnProperty.call(launch.env, name)).toBe(true);
   expect(JSON.parse(JSON.stringify(launch.env))).toMatchObject(strings());
   expect(launch.env).not.toHaveProperty('inheritedVariable');
   expect(Object.prototype).not.toHaveProperty('fixture');
+  } finally { approved.restore(); }
 });

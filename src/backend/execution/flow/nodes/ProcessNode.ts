@@ -654,6 +654,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   const prepResult: ProcessNodePrepResult = {
     nodeId,
     nodeType: 'process',
+    flowId: sharedState.flowId,
     currentPrompt: completePrompt,
     boundModel,
     availableTools: availableTools,
@@ -686,6 +687,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       : {}),
   };
 
+    Object.defineProperty(prepResult, 'nativeFlowSnapshot', {
+      value: sharedState.personaAttribution ? sharedState.flowSnapshot : undefined,
+      enumerable: false,
+    });
     // runFlow's owner/cancellation-registration signal must reach the provider
     // even when the separate execution authority remains current. Keep this
     // live capability out of serialized preparation/debugger records.
@@ -1205,6 +1210,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             nativeOriginalHost: await createPersonaNativeOriginalHost({
               authority: prepResult.executionAuthority, conversationId: prepResult.conversationId,
               runId: prepResult.runId, nodeId: prepResult.nodeId, modelId: prepResult.boundModel,
+              flowId: prepResult.flowId,
+              flowSnapshot: prepResult.nativeFlowSnapshot,
               personaAttribution: prepResult.personaAttribution,
             }),
             executionAuthority: prepResult.executionAuthority,

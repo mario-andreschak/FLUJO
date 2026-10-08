@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
+import { trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
   type ManagedMcpIsolation,
@@ -785,7 +786,23 @@ export function resolveStdioLaunch(
     return { command: launch.command, args: [...launch.args], env: isolatedSdkEnvironment(launch), cwd: launch.cwd, isolation };
   }
   assertHostMcpLaunchAllowed(config);
-  if (config.trustedHost !== undefined) return resolveTrustedHostLaunch(config);
+  if (config.trustedHost !== undefined) {
+    const launch = resolveTrustedHostLaunch(config);
+    const authority = trustedHostMcpApproval(config);
+    const isolateHome = options?.isolateRuntimeHome === true;
+    if (isolateHome !== (authority.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    if (isolateHome) {
+      const runtime = isolatedStdioRuntime(config.name);
+      for (const [name, value] of Object.entries(runtime.env)) {
+        if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        launch.env[name] = value;
+      }
+    }
+    // Fixed native/Node entries retain their approved source cwd. The private
+    // runtime cwd is for package runners, which this profile never authorizes.
+    log.debug('Transformed environment variable names', Object.keys(launch.env));
+    return launch;
+  }
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
   const isShipped = Boolean(shippedDescriptor);

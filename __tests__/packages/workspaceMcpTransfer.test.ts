@@ -3,13 +3,21 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
+import { StorageKey } from '@/shared/types/storage';
+import { saveConfig } from '@/backend/services/mcp/config';
+import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
 
 let mockWorkspace = '';
+const mockConfigStorage = new Map<StorageKey, unknown>();
+const mockPreparedConfigs = new Map<string, MCPServerConfig>();
+jest.mock('@/utils/storage/backend', () => ({
+  loadItem: jest.fn(async (key: StorageKey, fallback: unknown) => mockConfigStorage.has(key) ? mockConfigStorage.get(key) : fallback),
+  saveItem: jest.fn(async (key: StorageKey, value: unknown) => { mockConfigStorage.set(key, value); }),
+}));
 const loadConfigs = jest.fn();
 const updateConfig = jest.fn();
 const connect = jest.fn();
@@ -18,6 +26,7 @@ const prepareRegistry = jest.fn();
 const gitRaw = jest.fn();
 jest.mock('simple-git', () => ({ __esModule: true, simpleGit: () => ({ raw: (...args: unknown[]) => gitRaw(...args) }) }));
 jest.mock('@/utils/workspace', () => ({
+  ...jest.requireActual('@/utils/workspace'),
   getWorkspaceDataDir: () => mockWorkspace,
   getCurrentWorkspace: () => 'worker',
   bindToCurrentWorkspace: (callback: unknown) => callback,
@@ -112,8 +121,13 @@ it('does not silently disable unsupported, disabled, or dynamic dependencies of 
 
 beforeEach(async () => {
   jest.clearAllMocks();
+  mockConfigStorage.clear();
+  mockPreparedConfigs.clear();
   mockWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-transfer-'));
-  updateConfig.mockResolvedValue({ success: true });
+  updateConfig.mockImplementation(async (name: string, config: MCPServerConfig) => {
+    mockPreparedConfigs.set(name, config);
+    return saveConfig(mockPreparedConfigs);
+  });
   connect.mockResolvedValue({ success: true });
   prepareRegistry.mockResolvedValue({ config: { transport: 'stdio', command: 'npx', args: ['new-version'] } });
   prepareGithub.mockImplementation(async () => {
@@ -368,14 +382,17 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
   });
   loadConfigs.mockResolvedValue([config]);
   client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(targetFiles).href }] }));
+  const owner = installBundledFixtureOwner();
   connect.mockImplementationOnce(async () => {
     const rebuilt = updateConfig.mock.calls[0][1];
-    // Exercise FLUJO's actual spawn-parameter resolution, then the real SDK/process boundary.
-    const { resolveStdioLaunch } = await import('@/backend/services/mcp/connection');
-    const launch = resolveStdioLaunch(rebuilt);
-    await client.connect(new StdioClientTransport({ ...launch, stderr: 'pipe', env: {
-      ...launch.env, HOME: mockWorkspace, USERPROFILE: mockWorkspace,
-    } }));
+    const { previewBundledHostConsent, approveBundledHostConsent } = await import('@/backend/services/security/bundledMcpConsent');
+    const preview = await previewBundledHostConsent(rebuilt.name, { runtimeHome: 'host' });
+    const approved = await approveBundledHostConsent(owner.request(rebuilt.name), rebuilt.name, {
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+    });
+    // Exercise the managed production transport without changing its reviewed environment.
+    const { createStdioTransport } = await import('@/backend/services/mcp/connection');
+    await client.connect(createStdioTransport(approved.config));
     return { success: true };
   });
   try {
@@ -391,7 +408,8 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
     expect(await fs.readFile(targetFile, 'utf8')).toBe('cloud-worker-smoke');
     await expect(fs.access(path.join(sourceFiles, 'worker-result.txt'))).rejects.toThrow();
   } finally {
-    await client.close();
-    await fs.rm(sourceRoot, { recursive: true, force: true });
+    try { await client.close(); } finally {
+      try { owner.restore(); } finally { await fs.rm(sourceRoot, { recursive: true, force: true }); }
+    }
   }
 }, 30_000);

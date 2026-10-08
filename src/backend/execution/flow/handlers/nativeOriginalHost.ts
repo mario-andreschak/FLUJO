@@ -1,4 +1,5 @@
 import { constants, promises as fs, fstatSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Flow } from '@/shared/types/flow';
@@ -15,14 +16,16 @@ import { createNativeLineageRootBinding } from './nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from './nativeInvocationSession';
 import { readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
+import { readNativeHeldFile } from './nativeHeldFile';
+import { resolveBehaviorSubflowSnapshot, verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 
 type Binding = { workspace: string; personaId: string; activityId: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
   conversationId: string; runId: string; flow: Flow; planDigest: string; authority: FlowExecutionAuthority };
 const registryRoot = globalThis as typeof globalThis & { __flujoNativeOriginalAuthorities?: WeakMap<object, Binding> };
 const bindings = registryRoot.__flujoNativeOriginalAuthorities ??= new WeakMap<object, Binding>();
-/** Causal wrappers keep the root's hold. A child is not thereby accepted as a
- * root Original; createPersonaNativeOriginalHost rejects its different tuple. */
+/** Causal wrappers retain only the root binding. Saved lineage and the frozen
+ * dependency closure must separately prove a descendant's executable plan. */
 export { inheritNativeOriginalAuthority } from '../nativeOriginalAuthorityInheritance';
 const held = (): never => { throw new Error('Native Original authority or reservation is held.'); };
 const positive = (value: unknown): number | undefined =>
@@ -58,41 +61,35 @@ async function assertDirectories(binding: Binding): Promise<void> {
 // identities or budget holds enter generic snapshot/restore or provider input.
 async function readLedger(binding: Binding): Promise<Ledger> {
   const file = ledgerFile(binding);
-  let entry;
-  try { entry = await fs.lstat(file, { bigint: true }); }
+  let bytes;
+  try { bytes = await readNativeHeldFile(file, 256 * 1024, { privateOwner: true }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1,
       goalId: binding.goalId, personaId: binding.personaId, reservations: [] };
     throw error;
   }
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
-    || entry.size <= BigInt(0) || entry.size > BigInt(256 * 1024)) return held();
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-  try {
     await assertDirectories(binding);
-    const stat = await handle.stat({ bigint: true });
-    if (stat.dev !== entry.dev || stat.ino !== entry.ino || stat.size !== entry.size || !privateOwner(stat)) return held();
-    const bytes = Buffer.alloc(Number(entry.size) + 1);
-    let read = 0;
-    while (read < bytes.length) {
-      const chunk = await handle.read(bytes, read, bytes.length - read, read);
-      if (!chunk.bytesRead) break;
-      read += chunk.bytesRead;
-    }
-    const final = await handle.stat({ bigint: true });
-    const after = await fs.lstat(file, { bigint: true });
-    if (read !== Number(entry.size) || after.dev !== entry.dev || after.ino !== entry.ino
-      || after.size !== entry.size || after.isSymbolicLink() || final.mtimeNs !== stat.mtimeNs || final.ctimeNs !== stat.ctimeNs) return held();
-    const value = JSON.parse(bytes.subarray(0, read).toString('utf8')) as Ledger;
+    const value = JSON.parse(bytes.toString('utf8')) as Ledger;
     if (value.version !== 1 || value.goalId !== binding.goalId || value.personaId !== binding.personaId
       || !Array.isArray(value.reservations) || value.reservations.length > 256
       || value.reservations.some(item => !item.invocationId || !item.acceptanceDigest
         || !['accepted', 'registered', 'exited', 'released'].includes(item.state))) return held();
     return value;
-  } finally { await handle.close(); }
 }
 
 type CommitCapability = { assertCurrent: () => Promise<void>; assertActive: () => void };
+
+async function withLedgerParent<T>(directory: string, task: (parent?: FileHandle) => Promise<T>): Promise<T> {
+  if (process.platform === 'win32') return task();
+  // Hold the directory before admitting its identity and throughout publication.
+  // Durability must refer to this descriptor, not a later reopening of the name.
+  const parent = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const opened = await parent.stat({ bigint: true });
+    if (!opened.isDirectory() || !privateOwner(opened)) return held();
+    return await task(parent);
+  } finally { await parent.close(); }
+}
 
 function cleanupOwnedTemporary(binding: Binding, temporary: string, fd: number,
   directoryIdentity: { dev: bigint; ino: bigint }): void {
@@ -129,8 +126,12 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
       const stat = await fs.lstat(part, { bigint: true });
       if (!stat.isDirectory() || stat.isSymbolicLink() || !privateOwner(stat)) return held();
     }
+    return withLedgerParent(directory, async parent => {
     await assertDirectories(binding);
-    const directoryIdentity = await fs.lstat(directory, { bigint: true });
+    const directoryIdentity = parent ? await parent.stat({ bigint: true }) : await fs.lstat(directory, { bigint: true });
+    const namedDirectory = await fs.lstat(directory, { bigint: true });
+    if (!namedDirectory.isDirectory() || namedDirectory.isSymbolicLink() || namedDirectory.dev !== directoryIdentity.dev
+      || namedDirectory.ino !== directoryIdentity.ino) return held();
     const fileIdentity = await fs.lstat(ledgerFile(binding), { bigint: true }).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -162,20 +163,25 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
         || currentTemporary.size !== BigInt(bytes.length) || !privateOwner(currentTemporary)) return held();
       await cap.assertCurrent();
       await lock.assertOwned();
+      const finalDirectory = lstatSync(directory, { bigint: true });
+      if (!finalDirectory.isDirectory() || finalDirectory.isSymbolicLink() || finalDirectory.dev !== directoryIdentity.dev
+        || finalDirectory.ino !== directoryIdentity.ino || !privateOwner(finalDirectory)) return held();
+      if (parent) {
+        const owned = fstatSync(parent.fd, { bigint: true });
+        if (!owned.isDirectory() || owned.dev !== directoryIdentity.dev || owned.ino !== directoryIdentity.ino) return held();
+      }
       cap.assertActive();
       // The final owner check is adjacent to rename; all awaited path checks are
       // complete. Launch mutations also retain the outer Persona lease commit.
       await fs.rename(temporary, ledgerFile(binding));
       committed = true;
-      if (process.platform !== 'win32') {
-        const parent = await fs.open(directory, 'r');
-        try { await parent.sync(); } finally { await parent.close(); }
-      }
+      await parent?.sync();
       return result;
     } finally {
       if (!committed) cleanupOwnedTemporary(binding, temporary, handle.fd, directoryIdentity);
       await handle.close();
     }
+    });
   }), binding.workspace);
 }
 
@@ -209,6 +215,7 @@ export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutio
 }
 
 export interface NativeOriginalProcessHost {
+  assertOutputCurrent(): Promise<void>;
   assertTurnBudget(maxTurns: number): Promise<void>;
   register(process: ClaudeOwnedProcessRegistration): Promise<void>;
   beforeFirstPrompt(): Promise<void>;
@@ -220,10 +227,11 @@ export interface NativeOriginalProcessHost {
   confirmHandoffTermination(invocationId: string, toolInvocationIds: readonly string[]): Promise<void>;
 }
 
-/** Only a live branded Persona root run can produce the runtime capabilities. */
+/** Only a live branded Persona root or its proven causal descendant can
+ * produce runtime capabilities. A child remains under the root goal's hold. */
 export async function createPersonaNativeOriginalHost(input: {
   authority?: FlowExecutionAuthority; conversationId?: string; runId?: string; nodeId?: string;
-  modelId: string;
+  modelId: string; flowId?: string; flowSnapshot?: Flow;
   personaAttribution?: PersonaAttribution;
 }): Promise<{ broker: ReturnType<typeof createNativeBrokerAuthority>;
   session: ReturnType<typeof createNativeInvocationSessionHook>; process: NativeOriginalProcessHost } | undefined> {
@@ -249,9 +257,24 @@ export async function createPersonaNativeOriginalHost(input: {
   // Always use the mint's captured real lease closures, including when a causal
   // wrapper carries the binding. Caller-owned wrapper methods are not authority.
   const authority = binding.authority;
-  if (binding.workspace !== getCurrentWorkspace() || input.conversationId !== binding.conversationId
-    || input.runId !== binding.runId || !authority.commitWhileCurrent) return held();
-  const node = binding.flow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
+  if (binding.workspace !== getCurrentWorkspace() || !input.conversationId || !input.runId
+    || !authority.commitWhileCurrent) return held();
+  const isRoot = input.conversationId === binding.conversationId && input.runId === binding.runId;
+  let selectedFlow = binding.flow;
+  if (isRoot) {
+    if (input.flowId && input.flowId !== binding.flow.id) return held();
+  } else {
+    if (!input.flowId || !binding.flow.executionDependencies) return held();
+    try { verifyBehaviorDependencies(binding.flow); } catch { return held(); }
+    const dependency = binding.flow.executionDependencies?.flows.find(item => item.flowId === input.flowId);
+    if (!dependency) return held();
+    selectedFlow = dependency.flowSnapshot;
+  }
+  const graphDigest = (flow: Flow) => nativeDigest({ ...flow, executionDependencies: undefined });
+  const selectedPlanDigest = graphDigest(selectedFlow);
+  if ((!isRoot && !input.flowSnapshot)
+    || (input.flowSnapshot && graphDigest(input.flowSnapshot) !== selectedPlanDigest)) return held();
+  const node = selectedFlow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
   if (!node || node.data.properties?.boundModel !== input.modelId) return held();
   if (model.id !== input.modelId || model.fallbackPolicy) return held();
   const maxTurns = positive(node.data.properties?.maxTurns) ?? positive(model.maxTurns) ?? DEFAULT_AGENTIC_MAX_TURNS;
@@ -281,6 +304,13 @@ export async function createPersonaNativeOriginalHost(input: {
     workerId: binding.activityId, goalId: binding.goalId, rootConversationId: binding.conversationId,
     rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
   let original: NativeInvocationSession | undefined;
+  const assertDescendantCurrent = async () => {
+    if (isRoot) return;
+    if (!original) return held();
+    const saved = await readSavedNativeOrigin({ invocationId: original.descriptor.receipt.invocationId,
+      authority: broker, root, signal: authority.signal });
+    if (nativeDigest(saved) !== nativeDigest(original.descriptor)) return held();
+  };
   let child: ClaudeOwnedProcessRegistration | undefined;
   let exited = false;
   let closed = false;
@@ -299,13 +329,19 @@ export async function createPersonaNativeOriginalHost(input: {
       if (original) return held();
       const descriptor = value.descriptor;
       const owner = descriptor.receipt.owner;
-      if (owner.conversationId !== binding.conversationId || owner.runId !== binding.runId
+      if (owner.conversationId !== input.conversationId || owner.runId !== input.runId
         || owner.nodeId !== input.nodeId || owner.modelId !== input.modelId || owner.leaseEpoch !== binding.leaseEpoch
-        || descriptor.archive.adapter !== 'claude-cli' || descriptor.lineage.edges.length
+        || descriptor.archive.adapter !== 'claude-cli'
+        || (isRoot ? descriptor.lineage.edges.length !== 0 : descriptor.lineage.edges.length === 0)
         || descriptor.lineage.rootFlowId !== binding.flow.id) return held();
       const saved = await readSavedNativeOrigin({ invocationId: descriptor.receipt.invocationId,
         authority: broker, root, signal: authority.signal });
       if (nativeDigest(saved) !== nativeDigest(descriptor)) return held();
+      let provedFlow = binding.flow;
+      for (const edge of saved.lineage.edges) {
+        provedFlow = resolveBehaviorSubflowSnapshot(provedFlow, edge.parentNodeId, edge.childFlowId, binding.workspace);
+      }
+      if (provedFlow.id !== selectedFlow.id || graphDigest(provedFlow) !== selectedPlanDigest) return held();
       await authority.commitWhileCurrent!(async () => {
         await mutate(binding, async ledger => {
           const acceptanceDigest = nativeDigest([binding.dispatchId, binding.round, binding.planDigest,
@@ -314,7 +350,7 @@ export async function createPersonaNativeOriginalHost(input: {
             || item.invocationId === descriptor.receipt.invocationId || item.acceptanceDigest === acceptanceDigest)) return held();
           ledger.reservations.push({ invocationId: descriptor.receipt.invocationId,
             descriptorDigest: nativeDigest(descriptor), owner: structuredClone(owner), lineageDigest: descriptor.lineage.digest,
-            acceptanceDigest, planDigest: nativeDigest([binding.planDigest, modelPlanDigest]), modelId: input.modelId, maxTurns, state: 'accepted' });
+            acceptanceDigest, planDigest: nativeDigest([binding.planDigest, selectedPlanDigest, modelPlanDigest]), modelId: input.modelId, maxTurns, state: 'accepted' });
         }, launchCap);
       });
       original = value;
@@ -334,6 +370,13 @@ export async function createPersonaNativeOriginalHost(input: {
     },
   });
   const processHost: NativeOriginalProcessHost = {
+    assertOutputCurrent: async () => {
+      if (!original || !child) return held();
+      await assertCurrent();
+      await assertDescendantCurrent();
+      if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
+      await assertCurrent();
+    },
     prepareHandoff: async (invocationId, toolInvocationId) => {
       if (!original || original.descriptor.receipt.invocationId !== invocationId || !child || exited || closed
         || original.descriptor.inventory.terminationProtocol !== 'owned-claude-exit-close-v1'
@@ -370,6 +413,7 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!result || typeof result !== 'object' || !child || !original) return held();
       const value = result as Record<string, unknown>;
       if (value.type !== 'result') return held();
+      await processHost.assertOutputCurrent();
       const usage = value.usage && typeof value.usage === 'object' ? value.usage as Record<string, unknown> : {};
       const number = (candidate: unknown): number | undefined => typeof candidate === 'number'
         && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
@@ -404,6 +448,7 @@ export async function createPersonaNativeOriginalHost(input: {
       if (!child || exited || closed || !original) return held();
       if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
       await assertCurrent();
+      await assertDescendantCurrent();
       if (!await isRuntimeProcessIdentityAlive(child.identity) || exited || closed) return held();
       await assertCurrent();
     },

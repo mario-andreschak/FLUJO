@@ -12,6 +12,8 @@ import type { ExecutionEvent } from '@/shared/types/execution/events';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { StorageKey } from '@/shared/types/storage';
 import path from 'node:path';
+import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { ChildProcess } from 'node:child_process';
 
 const mockFlows = new Map<string, Flow>();
@@ -77,7 +79,8 @@ import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEven
 import { loadItem } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
-import type { MCPServerConfig } from '@/shared/types/mcp';
+import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpApproval } from '@/backend/services/security/trustedHostMcp';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 
@@ -86,6 +89,7 @@ jest.setTimeout(30_000);
 type Observation = { conversationId: string; operation: string };
 type Dispatch = { conversationId: string; nodeId: string; id: string };
 const observations: Observation[] = [];
+const timings: Array<Observation & { elapsedMs: number }> = [];
 let dispatch: Dispatch | undefined;
 let server: Server;
 let unsubscribe: () => void;
@@ -93,12 +97,15 @@ let respond: (response: ServerResponse, body: Record<string, unknown>) => void;
 let toolConversationId = '';
 let actualToolCalls = 0;
 let profile = '';
+let observationStart = 0;
 const httpBodies: Record<string, unknown>[] = [];
 const toolChildren: ChildProcess[] = [];
+let toolProfile: ReturnType<typeof installTrustedHostProfile> | undefined;
 const realStep = FlowExecutor.executeStep;
 
 function record(conversationId: string, operation: string) {
   observations.push({ conversationId, operation });
+  timings.push({ conversationId, operation, elapsedMs: Math.round(performance.now() - observationStart) });
 }
 
 function eventOperation(event: ExecutionEvent): string {
@@ -144,14 +151,31 @@ function answer(response: ServerResponse, body: Record<string, unknown>, content
   }
 }
 
-async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
-  const config = {
-    name: 'ordering-fixture', transport: 'stdio', command: process.execPath,
-    args: [path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs')],
-    env: {}, disabled: false, rootPath: process.cwd(), source: { type: 'local' },
-    _buildCommand: '', _installCommand: '',
-  } as MCPServerConfig;
+async function stageToolConfig() {
+  record('ordering-fixture', 'fixture:stage:start');
+  const source = fs.readFileSync(path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs'), 'utf8')
+    .replace(/from '(@modelcontextprotocol\/[^']+)'/g, (_match, moduleName: string) =>
+      `from ${JSON.stringify(pathToFileURL(require.resolve(moduleName)).href)}`);
+  toolProfile = installTrustedHostProfile({ name: 'ordering-fixture', nodeSource: source });
+  const config = toolProfile.config;
+  const policy = trustedHostMcpApproval(config).policy;
+  const originalEntryPoint = policy.entryPoint;
+  const entryPoint = path.join(policy.sourceRoot, 'processBoundaryServer.mjs');
+  fs.renameSync(originalEntryPoint, entryPoint);
+  config.args = [entryPoint];
+  config.source = { type: 'local' };
+  Object.assign(config.trustedHost!, { runtime: 'node', entryPoint,
+    sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot),
+    executableDigest: fingerprintTrustedHostExecutable(process.execPath) });
+  toolProfile.approve();
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });
+  expect(await mcpService.connectServer(config.name)).toMatchObject({ success: true });
+  record('ordering-fixture', 'fixture:stage:done');
+}
+
+async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
+  if (!toolProfile) await stageToolConfig();
+  const config = toolProfile!.config;
   const definition = flow(id, { maxTurns });
   definition.nodes.push(node('mcp-fixture', 'mcp', { boundServer: config.name, enabledTools: ['identity'] }));
   definition.edges.push({ id: 'process-mcp', source: 'process', target: 'mcp-fixture', data: { edgeType: 'mcp' } });
@@ -161,6 +185,7 @@ async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
     record(toolConversationId, `tool-dispatch:${args[1]}`);
     const result = await realCall(...args);
     actualToolCalls += 1;
+    if (!result.success) record(toolConversationId, `tool-error:${result.error}`);
     const identity = (result.data as { structuredContent?: { pid?: number; parentPid?: number; token?: string } })?.structuredContent;
     expect(result.success).toBe(true);
     expect(identity?.pid).toBeGreaterThan(0);
@@ -204,7 +229,9 @@ function expectOrdered(conversationId: string, expected: string[]) {
 }
 
 beforeEach(async () => {
+  observationStart = performance.now();
   observations.length = 0;
+  timings.length = 0;
   httpBodies.length = 0;
   toolChildren.length = 0;
   dispatch = undefined;
@@ -239,6 +266,9 @@ beforeEach(async () => {
     record(state.conversationId!, `step-return:${nextNodeId}:${result.action}`);
     return result;
   });
+  if (profile.includes('holds a real stdio tool behind approval') || profile.includes('answers capped calls synthetically')) {
+    await stageToolConfig();
+  }
 });
 
 afterEach(async () => {
@@ -252,7 +282,7 @@ afterEach(async () => {
   jest.restoreAllMocks();
   FlowExecutor.conversationStates.clear();
   FlowExecutor.clearFlowCache();
-  console.info('CODE_HEALTH_EXECUTION_TRACE', JSON.stringify({ profile, observations, actualToolCalls,
+  console.info('CODE_HEALTH_EXECUTION_TRACE', JSON.stringify({ profile, observations, timings, actualToolCalls,
     shutdownReceipts: teardown.shutdownReceipts,
     childExits: toolChildren.map(child => ({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode })),
   }));
@@ -264,6 +294,8 @@ afterEach(async () => {
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
   }
+  toolProfile?.restore();
+  toolProfile = undefined;
 });
 
 describe('execution ordering with real graph and loopback SDK dispatch', () => {

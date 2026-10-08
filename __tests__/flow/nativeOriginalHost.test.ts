@@ -35,6 +35,8 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createPersonaNativeOriginalHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { flowService } from '@/backend/services/flow';
 
 let directory: string;
 let previousData: string | undefined;
@@ -44,6 +46,16 @@ let children: SpawnedProcess[] = [];
 let beforePrompt: (() => Promise<void>) | undefined;
 let emitHandoff = false;
 let afterHandoffStop: (() => Promise<void>) | undefined;
+let afterPrompt: (() => Promise<void>) | undefined;
+let transcriptText = 'done';
+let lateResultFirst = false;
+let offeredLateUsage: unknown;
+let observedPrompt: unknown;
+let phaseStart: number | undefined;
+function phase(name: string) {
+  if (phaseStart !== undefined) console.info(JSON.stringify({ nativeOriginalHostPhase: name,
+    elapsedMs: Math.round(performance.now() - phaseStart) }));
+}
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
@@ -51,6 +63,10 @@ beforeEach(async () => {
   process.env.FLUJO_DATA_DIR = directory;
   selectedModel = { ...modelFixture };
   promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
+  afterPrompt = undefined; transcriptText = 'done';
+  lateResultFirst = false; offeredLateUsage = undefined;
+  observedPrompt = undefined;
+  phaseStart = undefined;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -63,15 +79,24 @@ beforeEach(async () => {
       args: ['-e', childScript],
       env: options.env, signal: forwarded.signal });
     children.push(child);
+    phase('child spawned');
     const close = () => child.stdin.end();
     options.abortController.signal.addEventListener('abort', close, { once: true });
     const stream = (async function* () {
       await beforePrompt?.();
-      await prompt[Symbol.asyncIterator]().next();
+      observedPrompt = (await prompt[Symbol.asyncIterator]().next()).value;
+      phase('prompt received');
       expect((await ledger()).reservations[0].state).toBe('registered');
       expect(child.exitCode).toBeNull();
       promptCount++;
-      yield { type: 'assistant', uuid: 'fixture-assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } };
+      await afterPrompt?.();
+      if (lateResultFirst) {
+        const result = { type: 'result', subtype: 'success', result: transcriptText, session_id: 'offline-fixture',
+          num_turns: 1, total_cost_usd: 0.012, duration_ms: 19, usage: { input_tokens: 7, output_tokens: 4 } };
+        offeredLateUsage = result;
+        yield result;
+      }
+      yield { type: 'assistant', uuid: 'fixture-assistant', message: { role: 'assistant', content: [{ type: 'text', text: transcriptText }] } };
       if (emitHandoff) {
         const sdk = options as typeof options & {
           mcpServers: { flujo: { tools: { name: string; handler(args: Record<string, unknown>): Promise<unknown> }[] } };
@@ -107,11 +132,12 @@ afterEach(async () => {
 });
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
-  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' = false) {
+  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
+    phase('claim setup started');
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
-    if (production === 'no-handoff') {
+    if (production === 'no-handoff' || production === 'child' || production === 'child-refusal') {
       await ensureTestRole();
       const version = buildTestRoleVersion();
       version.id = 'rolever_native_no_handoff_v2';
@@ -121,11 +147,25 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       const core = version.coreFlowTemplate!;
       core.nodes = core.nodes.filter(node => node.data.type !== 'finish');
       core.edges = core.edges.filter(edge => edge.target !== 'test_core_finish');
+      if (production === 'child' || production === 'child-refusal') {
+        const child = structuredClone(core);
+        child.id = 'native_pinned_child';
+        child.name = 'Pinned native child';
+        child.nodes.find(node => node.data.type === 'process')!.data.properties!.boundModel = 'model-test';
+        expect((await flowService.saveFlow(child)).success).toBe(true);
+        const call = core.nodes.find(node => node.data.type === 'process')!;
+        call.type = 'subflow';
+        call.data.type = 'subflow';
+        call.data.properties = { subflowId: child.id, inputMode: 'isolated', promptTemplate: 'Offline child task' };
+      }
       roleVersionId = (await createRoleVersion(version)).id;
+      phase('role authored');
     }
     const { persona } = await createPersonaFromRole({ name: 'Native host fixture', idempotencyKey: 'native-host-persona', autonomyLevel: 'locked', roleVersionId });
+    phase('persona created');
     const goal = await createPersonaWorkItem({ personaId: persona.id, title: 'Offline host contract',
       goal: { successCriteria: 'Offline lifecycle proof', continuationIntervalMs: 10000 } });
+    phase('goal created');
     const dispatchId = personaFlowDispatchId(persona.id, 'native-host-round');
     await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, rounds: 1, roundsInWindow: 1,
       pendingTaskId: goal.id, pendingDispatchId: dispatchId, pendingAttemptKey: 'native-host-round',
@@ -133,12 +173,16 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
     let observed = false;
     let failure: unknown;
     const dispatcher = new PersonaFlowDispatcher({ dependencies: { runFlow: async input => {
+      phase('dispatcher entered');
       observed = true;
       try {
         await task(input, goal.id);
+        phase('task assertions completed');
         if (production) {
+          phase('production flow started');
           const result = await runFlow(input);
-          expect(result.status).toBe(production === 'handoff-refusal' ? 'error' : 'completed');
+          phase('production flow completed');
+          expect(result.status).toBe(production === 'handoff-refusal' || production === 'child-refusal' ? 'error' : 'completed');
           return result;
         }
       } catch (error) { failure = error; }
@@ -149,17 +193,19 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       await dispatcher.submit({ personaId: persona.id, idempotencyKey: 'native-host-round', kind: 'assignment',
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
       { startPump: false });
+      phase('dispatch submitted');
       if (production === 'handoff-refusal') {
         try { await dispatcher.pump(persona.id); }
         catch (error) { expect(error).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' }); }
       } else await dispatcher.pump(persona.id);
+      phase('dispatcher pump completed');
       expect(observed).toBe(true);
       if (failure) {
         if (production === 'handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
         else throw failure;
       }
       await after?.(persona.id, goal.id);
-    } finally { await dispatcher.quiesce(persona.id); }
+    } finally { await dispatcher.quiesce(persona.id); phase('dispatcher quiesced'); }
   });
 }
 
@@ -190,6 +236,170 @@ async function ledger() {
 }
 
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
+  it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
+    let rootConversation: string | undefined;
+    let rootRun: string | undefined;
+    await withClaim(async input => {
+      rootConversation = input.conversationId;
+      rootRun = input.runId;
+      expect(input.flowDefinition!.executionDependencies!.flows.map(entry => entry.flowId)).toContain('native_pinned_child');
+      // A mutable saved child edit cannot revise the already captured round.
+      const changed = structuredClone(input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot);
+      changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'MUTABLE_CHILD_REVISION';
+      expect((await flowService.saveFlow(changed)).success).toBe(true);
+    }, async (_personaId, goalId) => {
+      expect(promptCount).toBe(1);
+      expect(JSON.stringify(observedPrompt)).not.toContain('MUTABLE_CHILD_REVISION');
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(children).toHaveLength(1);
+      expect(children[0].exitCode).toBe(0);
+      const saved = await ledger();
+      expect(saved.goalId).toBe(goalId);
+      expect(saved.reservations).toHaveLength(1);
+      const reservation = saved.reservations[0];
+      expect(reservation.owner.conversationId).not.toBe(rootConversation);
+      expect(reservation.owner.runId).not.toBe(rootRun);
+      expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+        sdkUsage: { source: 'claude-sdk-result', inputTokens: 7, outputTokens: 4 }, exit: { code: 0, signal: null } });
+      expect(reservation.identity.processBirthMarkerV2).toBeTruthy();
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(child).toMatchObject({ parentConversationId: rootConversation, parentLogicalRunId: rootRun,
+        rootConversationId: rootConversation, flowId: 'native_pinned_child', runDepth: 1 });
+    }, 'child');
+  }, 30000);
+  it('refuses missing, unlisted, and changed descendant plans before the actual child executes', async () => {
+    phaseStart = performance.now();
+    await withClaim(async input => {
+      const child = input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot;
+      const common = { authority: subflowExecutionAuthority(input.executionAuthority),
+        conversationId: 'unissued_child', runId: 'unissued_child_run',
+        nodeId: 'test_core_process', modelId: 'model-test', flowId: child.id };
+      await expect(createPersonaNativeOriginalHost(common)).rejects.toThrow('held');
+      phase('missing plan refused');
+      await expect(createPersonaNativeOriginalHost({ ...common, flowId: 'unlisted_child', flowSnapshot: child })).rejects.toThrow('held');
+      phase('unlisted plan refused');
+      const changed = structuredClone(child);
+      changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'forged plan';
+      await expect(createPersonaNativeOriginalHost({ ...common, flowSnapshot: changed })).rejects.toThrow('held');
+      phase('changed plan refused');
+      expect(queryMock).not.toHaveBeenCalled();
+    }, async () => {
+      expect(promptCount).toBe(1);
+      expect((await ledger()).reservations[0].state).toBe('released');
+    }, 'child');
+  }, 30000);
+  it('holds an issued descendant when its saved lineage changes before the first prompt', async () => {
+    beforePrompt = async () => {
+      const reservation = (await ledger()).reservations[0];
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(child!.parentLogicalRunId).toBeTruthy();
+      await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
+    };
+    await withClaim(async () => {}, async () => {
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(children).toHaveLength(1);
+      expect(promptCount).toBe(0);
+      expect(observedPrompt).toBeUndefined();
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.sdkUsage).toBeUndefined();
+      expect(reservation.sdkOutcome).not.toBe('completed');
+    }, 'child-refusal');
+  }, 30000);
+  it('discards a descendant SDK result and transcript after its saved parent lineage changes', async () => {
+    lateResultFirst = true;
+    transcriptText = 'stale-descendant-private-output';
+    afterPrompt = async () => {
+      const reservation = (await ledger()).reservations[0];
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
+    };
+    const observed: unknown[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => observed.push(event));
+    try {
+      await withClaim(async () => {}, async () => {
+        expect(promptCount).toBe(1);
+        expect(offeredLateUsage).toMatchObject({ type: 'result', usage: { input_tokens: 7, output_tokens: 4 } });
+        const reservation = (await ledger()).reservations[0];
+        expect(reservation.state).not.toBe('released');
+        expect(reservation.sdkUsage).toBeUndefined();
+        const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+        expect(JSON.stringify(child!.messages)).not.toContain(transcriptText);
+        expect(JSON.stringify(observed)).not.toContain(transcriptText);
+      }, 'child-refusal');
+    } finally { unsubscribe(); }
+  }, 30000);
+  it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
+    await withClaim(async input => {
+      const { invoke, state } = await prepare(input);
+      const lstat = fs.lstat.bind(fs);
+      let replaced: string | undefined;
+      let osRefusal: string | undefined;
+      const spy = jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        const stat = await lstat(...args);
+        const filename = String(args[0]);
+        if (!replaced && filename.includes('host-ledger') && filename.endsWith('.tmp')) {
+          replaced = path.dirname(filename);
+          try { await fs.rename(replaced, `${replaced}.displaced`); }
+          catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (process.platform === 'win32' && ['EBUSY', 'EPERM', 'EACCES'].includes(code ?? '')) osRefusal = code;
+            throw error;
+          }
+          await fs.mkdir(replaced, { mode: 0o700 });
+          await fs.writeFile(path.join(replaced, 'foreign.json'), 'foreign sentinel', { mode: 0o600 });
+        }
+        return stat;
+      });
+      try {
+        expect((await invoke()).success).toBe(false);
+        expect(replaced).toBeDefined();
+        expect(queryMock).not.toHaveBeenCalled();
+        if (osRefusal) {
+          expect(process.platform).toBe('win32');
+          expect(['EBUSY', 'EPERM', 'EACCES']).toContain(osRefusal);
+          expect(await fs.readdir(replaced!)).toEqual([]);
+        } else {
+          expect(await fs.readFile(path.join(replaced!, 'foreign.json'), 'utf8')).toBe('foreign sentinel');
+          expect(await fs.readdir(replaced!)).toEqual(['foreign.json']);
+        }
+      } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
+    });
+  }, 30000);
+  it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
+    transcriptText = 'late-private-persona-transcript';
+    lateResultFirst = true;
+    const events: string[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+    try {
+    await withClaim(async (input, goalId) => {
+      afterPrompt = async () => {
+        expect(promptCount).toBe(1);
+        expect((await ledger()).reservations[0].state).toBe('registered');
+        const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+        await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+      };
+    }, async () => {
+      expect(promptCount).toBe(1);
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.sdkUsage).toBeUndefined();
+      expect(offeredLateUsage).toMatchObject({ type: 'result', result: transcriptText,
+        usage: { input_tokens: 7, output_tokens: 4 }, total_cost_usd: 0.012 });
+      expect(events.join('\n')).not.toContain(transcriptText);
+      const saved = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(saved).toBeDefined();
+      expect(JSON.stringify(saved!.messages)).not.toContain(transcriptText);
+      const archive = path.join(getWorkspaceDataDir(), 'db', 'model-turns', reservation.owner.conversationId);
+      const immutable = JSON.parse(gunzipSync(await fs.readFile(path.join(archive, `${reservation.invocationId}.v2.json.gz`))).toString('utf8'));
+      expect(immutable.entry.outcome).toBe('running');
+      await expect(fs.access(path.join(archive, `${reservation.invocationId}.outcome.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+      const holdId = createHash('sha256').update(JSON.stringify(reservation.owner.conversationId)).digest('hex');
+      expect(JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal',
+        'holds', `${holdId}.json`), 'utf8'))).toMatchObject({ invocationId: reservation.invocationId });
+    }, 'handoff-refusal');
+    } finally { unsubscribe(); }
+  }, 30000);
   it('runs the production Core dispatch through ProcessNode and V2 saved Original to actual child release', async () => {
     await withClaim(async () => {
       beforePrompt = async () => {
