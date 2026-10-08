@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -70,11 +70,21 @@ function witness(result) {
   assert.ok(line, result.stdout);
   return JSON.parse(line.slice('BOOTSTRAP_CHILD '.length));
 }
+function assertNativeDataRoot(actual, requested) {
+  assert.equal(actual, realpathSync.native(requested));
+  const requestedDirectory = statSync(requested, { bigint: true });
+  const actualDirectory = statSync(actual, { bigint: true });
+  assert.ok(requestedDirectory.isDirectory());
+  assert.ok(actualDirectory.isDirectory());
+  assert.equal(actualDirectory.dev, requestedDirectory.dev);
+  assert.equal(actualDirectory.ino, requestedDirectory.ino);
+}
 for (const entry of ['npm', 'next']) {
   test(`${entry} entry launches with isolated settings, data and discovery`, t => {
     const f = fixture(t); const child = witness(f.run(entry));
     assert.equal(child.settings, f.selected);
-    assert.equal(child.data, f.env.FLUJO_DATA_DIR);
+    if (entry === 'npm') assertNativeDataRoot(child.data, f.env.FLUJO_DATA_DIR);
+    else assert.equal(child.data, f.env.FLUJO_DATA_DIR);
     assert.equal(child.discovery, f.env.FLUJO_LOCAL_INSTANCE_DIR);
     assert.equal(child.privateValue, 'private');
     assert.equal(child.hostValue, null); assert.equal(child.cwdValue, null);
@@ -87,7 +97,8 @@ for (const entry of ['npm', 'next']) {
     for (const name of ['FLUJO_BOOTSTRAP_DIR', 'FLUJO_DATA_DIR', 'FLUJO_LOCAL_INSTANCE_DIR']) delete f.env[name];
     const child = witness(f.run(entry));
     assert.equal(child.settings, entry === 'npm' ? path.join(f.home, '.flujo') : f.app);
-    assert.equal(child.data, entry === 'npm' ? path.join(f.home, '.flujo') : f.app);
+    if (entry === 'npm') assertNativeDataRoot(child.data, path.join(f.home, '.flujo'));
+    else assert.equal(child.data, f.app);
     assert.equal(child.discovery, path.join(f.home, '.flujo', 'instances'));
   });
   test(`${entry} invalid bootstrap fails before dotenv and child launch`, t => {
