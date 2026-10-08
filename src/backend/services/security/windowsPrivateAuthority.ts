@@ -3,6 +3,10 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 
+// Cold Windows PowerShell startup on hosted runners can exceed five seconds.
+// Keep inspection finite without treating startup latency as ACL evidence.
+const INSPECTION_TIMEOUT_MS = 30_000;
+
 // Static program, no profiles/modules or input-selected commands. The filename
 // travels as JSON on stdin and is only passed to native filesystem ACL APIs.
 const inspect = String.raw`
@@ -49,7 +53,7 @@ export function windowsPrivateAuthorityStamp(filename: string | readonly string[
   if (!fs.statSync(executable).isFile()) throw new Error('Windows authority inspection unavailable');
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
     input: JSON.stringify(typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filenames.map(item => path.resolve(item)) }), encoding: 'utf8',
-    windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
+    windowsHide: true, timeout: INSPECTION_TIMEOUT_MS, maxBuffer: 64 * 1024,
     env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
   });
   if (result.error || result.status !== 0 || result.signal) throw new Error('Windows authority inspection refused');
@@ -88,7 +92,7 @@ export async function windowsPrivateAuthorityStampAsync(filename: string | reado
       failure ??= new Error(`Windows authority inspection ${reason}`); child.kill();
     };
     const abort = () => stop('cancelled');
-    const timer = setTimeout(() => stop('deadline exceeded'), 5000);
+    const timer = setTimeout(() => stop('deadline exceeded'), INSPECTION_TIMEOUT_MS);
     signal?.addEventListener('abort', abort, { once: true });
     child.on('error', error => { failure = error; abort(); });
     child.stdin.on('error', error => { failure = error; abort(); });
