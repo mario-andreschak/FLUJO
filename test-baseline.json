@@ -37,7 +37,7 @@
         },
         {
           "suite": "__tests__/workspace/mcpRuntimeHomeIsolation.test.ts",
-          "name": "stdio MCP runtime homes replaces a blank Windows essential instead of shadowing it with a second spelling",
+          "name": "stdio MCP runtime homes rejects unreviewed blank Windows launch essentials",
           "reason": "Windows process-launch contract runs on Windows; inapplicable on Unix.",
           "platforms": [
             "linux",

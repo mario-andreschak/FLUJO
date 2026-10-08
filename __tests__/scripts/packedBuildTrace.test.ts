@@ -44,7 +44,12 @@ test('npm omits build profiling output while retaining the production payload', 
     'mcp-servers/browser/scripts/install-browser.mjs',
   ];
   for (const workspace of manifest.workspaces) {
-    retained.push(`${workspace}/dist/index.js`, `${workspace}/LICENSE`, `${workspace}/package.json`);
+    if (workspace.startsWith('mcp-servers/')) {
+      retained.push(`${workspace}/dist/index.js`, `${workspace}/LICENSE`, `${workspace}/package.json`);
+    } else {
+      const workspaceManifest = JSON.parse(readFileSync(path.join(repository, workspace, 'package.json'), 'utf8'));
+      retained.push(`${workspace}/package.json`, ...workspaceManifest.files.map((file: string) => `${workspace}/${file}`));
+    }
   }
   const omitted = ['.next/trace', '.next/cache/transient.bin', '.next/dev/server.js'];
   function packSelection(fixture: string, fixtureManifest: typeof manifest): string[] {

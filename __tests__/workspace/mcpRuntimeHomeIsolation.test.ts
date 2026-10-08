@@ -103,7 +103,7 @@ describe('stdio MCP runtime homes', () => {
       .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('keeps bundled Bash attached to the live host account and removes stale config redirects', () => {
+  it('rejects legacy bundled Bash redirects until its host launch is reviewed', () => {
     const bash = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'bash')!;
     const tracked = ['HOME', 'USERPROFILE', 'APPDATA', 'GH_CONFIG_DIR', 'FLUJO_BASH_HOST_ENV_TEST'] as const;
     const previous = new Map(tracked.map(key => [key, process.env[key]]));
@@ -129,14 +129,8 @@ describe('stdio MCP runtime homes', () => {
         GH_CONFIG_DIR: path.join(dataRoot, 'stale-gh-config'),
       };
 
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped));
-
-      expect(launch.env.HOME).toBe(hostHome);
-      expect(launch.env.USERPROFILE).toBe(hostHome);
-      expect(launch.env.APPDATA).toBe(hostAppData);
-      expect(launch.env.FLUJO_BASH_HOST_ENV_TEST).toBe('visible-from-host');
-      expect(launch.env).not.toHaveProperty('GH_CONFIG_DIR');
-      expect(launch.cwd).toBe(path.join(getWorkspaceDataDir('runtime-a'), shipped.rootPath));
+      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped)))
+        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
     } finally {
       for (const key of tracked) {
         const value = previous.get(key);
@@ -164,7 +158,7 @@ describe('stdio MCP runtime homes', () => {
     expect(launchA.env.HOME).not.toBe(launchB.env.HOME);
   });
 
-  it('launches package runners from a private per-server cwd outside the managed server root', async () => {
+  it('rejects dynamic package runners without a reviewed fixed executable', () => {
     const runner: MCPStdioConfig = {
       ...config,
       name: 'weather-mcp',
@@ -178,16 +172,10 @@ describe('stdio MCP runtime homes', () => {
       rootPath: 'mcp-servers/search-mcp',
     };
 
-    const weatherLaunch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(runner));
-    const searchLaunch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(otherRunner));
-    const workspaceRoot = getWorkspaceDataDir('runtime-a');
-    const serverRoot = path.join(workspaceRoot, 'mcp-servers', 'weather-mcp');
-
-    expect(weatherLaunch.cwd).toBe(path.join(path.dirname(weatherLaunch.env.HOME), 'cwd'));
-    expect(weatherLaunch.cwd).not.toBe(serverRoot);
-    expect(path.relative(serverRoot, weatherLaunch.cwd)).toMatch(/^\.\.(?:[\\/]|$)/);
-    expect(weatherLaunch.cwd).not.toBe(searchLaunch.cwd);
-    await expect(fs.stat(weatherLaunch.cwd)).resolves.toMatchObject({});
+    for (const server of [runner, otherRunner]) {
+      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(server)))
+        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+    }
   });
 
   // A stdio server inherits an explicit env, and the MCP SDK's Windows defaults
@@ -197,7 +185,12 @@ describe('stdio MCP runtime homes', () => {
   (process.platform === 'win32' ? it : it.skip)(
     'passes the Windows launch essentials a child needs to spawn its own tools',
     () => {
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(config));
+      const reviewed = { ...config, env: { ...config.env,
+        ComSpec: process.env.ComSpec ?? process.env.COMSPEC!,
+        SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT!,
+        PATHEXT: process.env.PATHEXT!,
+      } };
+      const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(reviewed, true));
       const comSpec = launch.env.ComSpec ?? launch.env.COMSPEC;
       expect(comSpec).toBeTruthy();
       expect(path.basename(comSpec!).toLowerCase()).toBe('cmd.exe');
@@ -206,28 +199,19 @@ describe('stdio MCP runtime homes', () => {
     },
   );
 
-  // Windows resolves env vars case-insensitively, so a persisted config holding
-  // a blank `COMSPEC` must not survive next to the `ComSpec` we backfill: the
-  // child would inherit the empty one and npm would crash at spawn time again.
+  // Windows launch values must be reviewed, rather than silently repaired from
+  // the ambient host environment before consent.
   (process.platform === 'win32' ? it : it.skip)(
-    'replaces a blank Windows essential instead of shadowing it with a second spelling',
+    'rejects unreviewed blank Windows launch essentials',
     () => {
       const blanked: MCPStdioConfig = {
         ...config,
         name: 'server-with-blank-comspec',
         env: { ...config.env, COMSPEC: '', SYSTEMROOT: '   ' },
       };
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked));
-
-      for (const key of ['ComSpec', 'SystemRoot']) {
-        const spellings = Object.entries(launch.env).filter(
-          ([name]) => name.toLowerCase() === key.toLowerCase(),
-        );
-        // Exactly one spelling survives, and it carries a usable value.
-        expect(spellings).toHaveLength(1);
-        expect(spellings[0][1].trim()).not.toBe('');
-      }
-      expect(path.basename(launch.env.ComSpec).toLowerCase()).toBe('cmd.exe');
+      // Persisted values cannot gain ambient launch authority through backfill.
+      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked)))
+        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
     },
   );
 
@@ -243,7 +227,7 @@ describe('stdio MCP runtime homes', () => {
     );
   });
 
-  it('overrides stale shipped-browser output paths at the final child boundary', () => {
+  it('rejects stale shipped-browser output paths before host consent', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -260,14 +244,11 @@ describe('stdio MCP runtime homes', () => {
       FLUJO_BROWSER_RECORD_DIR: 'C:\\shared-recordings',
     };
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
-    const root = getWorkspaceDataDir('runtime-b');
-    expect(launch.env.FLUJO_BROWSER_PROFILE_DIR).toBe(path.join(root, 'browser-profile', 'trusted'));
-    expect(launch.env.FLUJO_BROWSER_SCREENSHOT_DIR).toBe(path.join(root, 'screenshots', 'browser'));
-    expect(launch.env.FLUJO_BROWSER_RECORD_DIR).toBe(path.join(root, 'recordings', 'browser'));
+    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('reattaches the host browser-binary cache to an existing workspace record', () => {
+  it('rejects an unreviewed host browser-binary cache', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -275,15 +256,11 @@ describe('stdio MCP runtime homes', () => {
     delete (shipped.env as Record<string, unknown>).PLAYWRIGHT_BROWSERS_PATH;
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'shared-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
-
-    expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
-      .toBe(path.join(dataRoot, 'shared-browser-binaries'));
-    expect(path.relative(getWorkspaceDataDir('runtime-b'), launch.env.HOME))
-      .not.toMatch(/^\.\.(?:[\\/]|$)/);
+    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('preserves an explicit workspace browser-binary path over the host default', () => {
+  it('requires host consent even with an explicit workspace browser-binary path', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -291,10 +268,8 @@ describe('stdio MCP runtime homes', () => {
     });
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'host-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
-
-    expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
-      .toBe(path.join(dataRoot, 'configured-browser-binaries'));
+    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
   it('remaps only unambiguous absolute paths left by a legacy managed MCP clone', async () => {
