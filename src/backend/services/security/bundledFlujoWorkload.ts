@@ -40,10 +40,39 @@ interface Pending { config: MCPStdioConfig; token: string; audience: string; wor
 const capsules = new WeakMap<object, Pending>();
 const principals = new WeakSet<object>();
 const context = new AsyncLocalStorage<{ authorization: BundledFlujoWorkloadAuthorization; request: Request }>();
+// Next server graphs share only the original request, never an authorization
+// verdict. A receiving graph authenticates it into its own private principal.
+const requestCarrierKey = Symbol.for('FLUJO:bundled-flujo-workload-request:v1');
+const errorProvenanceKey = Symbol.for('FLUJO:bundled-flujo-workload-errors:v1');
+function processObject<T>(key: symbol, create: () => T, accepts: (value: unknown) => value is T): T {
+  const existing = Object.getOwnPropertyDescriptor(globalThis, key);
+  if (existing) {
+    if (!('value' in existing) || existing.configurable || existing.writable || !accepts(existing.value)) throw new Error('Workload process context refused.');
+    return existing.value;
+  }
+  const value = create();
+  Object.defineProperty(globalThis, key, { value, writable: false, configurable: false, enumerable: false });
+  return value;
+}
+const requestCarrier = processObject(requestCarrierKey, () => new AsyncLocalStorage<Request>(),
+  (value): value is AsyncLocalStorage<Request> => value instanceof AsyncLocalStorage);
+const errorProvenance = processObject(errorProvenanceKey, () => new WeakSet<object>(),
+  (value): value is WeakSet<object> => value instanceof WeakSet);
+function originalWorkloadRequest(): Request | undefined {
+  const value: unknown = AsyncLocalStorage.prototype.getStore.call(requestCarrier);
+  if (value !== undefined && !(value instanceof Request)) throw new BundledFlujoWorkloadError();
+  return value;
+}
 const denied = () => Response.json({ error: 'Bundled workload authorization refused.' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
 export class BundledFlujoWorkloadError extends Error {
   readonly response = denied();
-  constructor(cause?: unknown) { super('Bundled workload authorization refused.', { cause }); }
+  constructor(cause?: unknown) {
+    super('Bundled workload authorization refused.', { cause });
+    WeakSet.prototype.add.call(errorProvenance, this);
+  }
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return !!value && typeof value === 'object' && WeakSet.prototype.has.call(errorProvenance, value);
+  }
 }
 function audience(value: string | undefined): string {
   if (!value) throw new BundledFlujoWorkloadError();
@@ -337,21 +366,36 @@ export async function assertBundledFlujoWorkloadCurrent(authorization: BundledFl
 }
 export async function withBundledFlujoWorkloadAuthorization<T>(authorization: BundledFlujoWorkloadAuthorization, request: Request, handler: () => Promise<T>): Promise<T> {
   await assertBundledFlujoWorkloadCurrent(authorization, request);
-  return context.run({ authorization, request }, handler);
+  const inherited = originalWorkloadRequest();
+  if (inherited && inherited !== request) throw new BundledFlujoWorkloadError();
+  return AsyncLocalStorage.prototype.run.call(requestCarrier, request, () => context.run({ authorization, request }, handler)) as Promise<T>;
 }
 export function getAuthorizedBundledFlujoWorkloadToolNames(): readonly string[] | undefined {
-  const selected = context.getStore(); if (!selected) return undefined;
-  if (!principals.has(selected.authorization)) throw new BundledFlujoWorkloadError();
+  const selected = context.getStore(), request = originalWorkloadRequest();
+  if (!selected && !request) return undefined;
+  if (!selected || !request || selected.request !== request || !principals.has(selected.authorization)) throw new BundledFlujoWorkloadError();
   const protocol = new Set(['listTools', 'listResources', 'listResourceTemplates', 'readResource', 'listSkills', 'getSkill']);
   return selected.authorization.inventory.filter(item => !protocol.has(item.action)).map(item => item.action);
 }
+async function selectedWorkload() {
+  const request = originalWorkloadRequest(), selected = context.getStore();
+  if (!request && !selected) return undefined;
+  if (!request) throw new BundledFlujoWorkloadError();
+  if (selected) {
+    if (selected.request !== request || !principals.has(selected.authorization)) throw new BundledFlujoWorkloadError();
+    return selected;
+  }
+  const resolved = await resolveBundledFlujoWorkloadRequest(request);
+  if (resolved.kind !== 'authorized' || originalWorkloadRequest() !== request) throw new BundledFlujoWorkloadError();
+  return { authorization: resolved.authorization, request };
+}
 /** Effect guards retain the original admitted request and private ALS principal. */
 export async function assertBundledFlujoWorkloadEffectCurrent(): Promise<void> {
-  const selected = context.getStore();
+  const selected = await selectedWorkload();
   if (selected) await assertBundledFlujoWorkloadCurrent(selected.authorization, selected.request);
 }
 export async function assertBundledFlujoWorkloadAction(action: string, method: string, route: string, args: unknown = {}): Promise<void> {
-  const selected = context.getStore(); if (!selected) return;
+  const selected = await selectedWorkload(); if (!selected) return;
   await assertBundledFlujoWorkloadCurrent(selected.authorization, selected.request);
   const definitions = await computeBundledFlujoWorkloadDefinitions();
   const definition = definitions.find(item => item.action.action === action && item.action.method === method && item.action.path === route);
