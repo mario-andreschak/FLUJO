@@ -92,7 +92,8 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
   });
 });
 
-test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context'] as const)
+test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
+  'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent'] as const)
 ('real private consent and fresh guarded workload contract: %s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
@@ -130,6 +131,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
   let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
   let primaryFailed = false;
   let primaryError: unknown;
+  const foreignDescriptors: number[] = [];
   try {
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
     process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
@@ -162,7 +164,15 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
     attachTrustedHost(transport, approved.config, undefined, capsule);
-    await timed('guarded-start', () => transport!.start());
+    const key = createHash('sha256').update(token).digest('hex');
+    let recordDescriptor: number | undefined;
+    const actualOpen = fs.openSync;
+    const opened = mode === 'retire-closed-descriptor-retry' ? jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      const fd = Reflect.apply(actualOpen, fs, args) as number;
+      if (String(args[0]).endsWith(`${key}.pending`) && typeof args[1] === 'number' && (args[1] & fs.constants.O_EXCL)) recordDescriptor = fd;
+      return fd;
+    }) : undefined;
+    try { await timed('guarded-start', () => transport!.start()); } finally { opened?.mockRestore(); }
     expect(start).toHaveBeenCalledTimes(1);
     expect((await timed('resolve-active', () => resolveBundledFlujoWorkloadRequest(request()))).kind).toBe('authorized');
     const admittedRequest = request();
@@ -231,6 +241,53 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE!;
     const namespace = createHash('sha256').update(path.resolve(ledger)).digest('hex').slice(0, 24);
     const workloadDirectory = path.join(path.dirname(ledger), `.flujo-workloads-${namespace}`);
+    let expectedCloseCount = 1;
+    if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
+      const actualUnlink = fs.unlinkSync;
+      let injected = false;
+      const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+        if (!injected && path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
+          injected = true; throw Object.assign(new Error('Owned record unlink fault.'), { code: 'EIO' });
+        }
+        return actualUnlink(filename);
+      });
+      try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); }
+      expect(injected).toBe(true);
+      expect(() => getPendingWorkloadEnvironment(approved.config, capsule)).toThrow();
+      expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+      expectedCloseCount = 2;
+      if (mode === 'retire-unknown-parent') {
+        const held = `${workloadDirectory}.held-recovery`, preserved = `${workloadDirectory}.preserved-unknown`;
+        fs.renameSync(workloadDirectory, held);
+        fs.mkdirSync(workloadDirectory, { mode: 0o700 });
+        const unknown = path.join(workloadDirectory, 'unknown.json');
+        fs.writeFileSync(unknown, '{"unknown":"preserve"}', { mode: 0o600 });
+        await expect(transport.close()).rejects.toThrow();
+        expect(fs.readFileSync(unknown, 'utf8')).toBe('{"unknown":"preserve"}');
+        fs.renameSync(workloadDirectory, preserved);
+        fs.renameSync(held, workloadDirectory);
+        expectedCloseCount = 3;
+      }
+    }
+    if (mode === 'retire-closed-descriptor-retry') {
+      expect(recordDescriptor).toBeDefined();
+      const actualClose = fs.closeSync;
+      let injected = false;
+      const fault = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
+        actualClose(fd);
+        if (!injected && fd === recordDescriptor) { injected = true; throw Object.assign(new Error('Completed owned close fault.'), { code: 'EIO' }); }
+      });
+      try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); }
+      expect(injected).toBe(true);
+      const unrelated = path.join(fixture, 'unrelated-descriptor.json');
+      fs.writeFileSync(unrelated, '{"unrelated":"preserve"}');
+      for (let count = 0; count < 64; count++) {
+        const fd = fs.openSync(unrelated, 'r'); foreignDescriptors.push(fd);
+        if (fd === recordDescriptor) break;
+      }
+      expect(foreignDescriptors).toContain(recordDescriptor);
+      expectedCloseCount = 2;
+    }
     const retire = async () => {
       await timed('durable-retire', () => transport!.close()); transport = undefined;
     };
@@ -243,9 +300,10 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     });
     expect(producer).not.toHaveBeenCalled();
     } else { await retire(); }
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(expectedCloseCount);
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
+    for (const fd of foreignDescriptors) expect(fs.fstatSync(fd).isFile()).toBe(true);
   } catch (error) {
     primaryFailed = true; primaryError = error; throw error;
   } finally {
@@ -255,6 +313,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     stamp('cleanup:start');
     try { Reflect.deleteProperty(globalThis, serviceKey); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
+    for (const fd of foreignDescriptors) { try { fs.closeSync(fd); } catch (error) { cleanupErrors.push(error); } }
     try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
     for (const [name, value] of Object.entries(saved)) {
       try { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
