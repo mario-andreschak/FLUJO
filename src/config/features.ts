@@ -197,7 +197,7 @@ export const FEATURES = {
    * the durable poll/cancel lifecycle in
    * backend/services/mcp/clientTasks.ts.
    *
-   * Default OFF: the Tasks APIs in @modelcontextprotocol/sdk 1.30.0 are still
+   * Default OFF: the Tasks APIs in @modelcontextprotocol/sdk 1.x are still
    * marked experimental, and this flag governs BOTH negotiation and durable
    * record creation so FLUJO never advertises or half-implements the extension.
    * A server that returns a schema-valid task handle anyway is still handled

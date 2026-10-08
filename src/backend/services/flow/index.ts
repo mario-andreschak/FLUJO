@@ -374,16 +374,19 @@ export class FlowService { // Add export keyword here
   /**
    * Save a flow (create new or update existing)
    */
-  async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
+  async saveFlow(flow: Flow, options: { expectedUpdatedAt?: number } = {}): Promise<FlowServiceResponse> {
     try {
-      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow)));
+      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow, options)));
     } catch (error) {
       if (error instanceof BundledFlujoWorkloadError) throw error;
       return { success: false, error: error instanceof Error ? error.message : 'Failed to save flow' };
     }
   }
 
-  private async saveFlowWithinMutation(flow: Flow): Promise<FlowServiceResponse> {
+  private async saveFlowWithinMutation(
+    flow: Flow,
+    options: { expectedUpdatedAt?: number } = {},
+  ): Promise<FlowServiceResponse> {
     try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
       const nameError = validateFlowDisplayName(flow.name);
@@ -407,6 +410,9 @@ export class FlowService { // Add export keyword here
       // the definition being replaced (skipping no-op saves). Best-effort —
       // a save must never fail because history could not be written.
       const previous = await readStoredFlow(flow.id);
+      if (options.expectedUpdatedAt !== undefined && previous?.updatedAt !== options.expectedUpdatedAt) {
+        throw new Error('Flow changed since inspection.');
+      }
       if (previous && previous.personaOwnership?.personaId !== flow.personaOwnership?.personaId) {
         throw new Error('An existing Flow cannot change or remove its Persona owner. Create a distinct copy instead.');
       }
@@ -431,7 +437,9 @@ export class FlowService { // Add export keyword here
       // to the caller/cache.
       const now = Date.now();
       flow.createdAt = previous?.createdAt ?? flow.createdAt ?? now;
-      flow.updatedAt = now;
+      flow.updatedAt = options.expectedUpdatedAt === undefined
+        ? now
+        : Math.max(now, (previous?.updatedAt ?? 0) + 1);
 
       // Write only this flow's file (no whole-collection rewrite).
       await saveCollectionItem(FLOWS_COLLECTION, flow.id, flow);

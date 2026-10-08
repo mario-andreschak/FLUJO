@@ -82,7 +82,8 @@ function parseCountObjects(output: string, fallback: number): number {
 }
 
 function gitForSnapshot(gitDir: string): SimpleGit {
-  // Only the store-owned repository selector crosses the environment guard.
+  // v4 permits this otherwise blocked environment key only on an explicit
+  // client. The value is the computed shadow repository path, never caller input.
   return simpleGit({ baseDir: path.dirname(gitDir), allowEnvironment: ['GIT_DIR'] })
     .env('GIT_DIR', gitDir);
 }

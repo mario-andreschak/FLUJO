@@ -1484,6 +1484,30 @@ export async function listActivitiesStrictForLeasePruning(): Promise<PersonaActi
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 
+/**
+ * Full owner-scoped runtime record scan for guarded absence checks. The strict
+ * storage walk rejects malformed or duplicate records instead of trusting a
+ * mutable sidecar index.
+ */
+export async function listPersonaRuntimeRecordsStrict(personaId: string): Promise<{
+  activities: PersonaActivity[];
+  mailboxItems: PersonaMailboxItem[];
+}> {
+  assertSafeCollectionId(personaId);
+  const [activityValues, mailboxValues] = await Promise.all([
+    listAllShardedCollectionItems<unknown>(ENDURING_AGENT_COLLECTIONS.activities),
+    listAllShardedCollectionItems<unknown>(ENDURING_AGENT_COLLECTIONS.mailboxItems),
+  ]);
+  return {
+    activities: activityValues
+      .map(value => parseRecord('PersonaActivity', PersonaActivitySchema, value))
+      .filter(item => item.personaId === personaId),
+    mailboxItems: mailboxValues
+      .map(value => parseRecord('PersonaMailboxItem', PersonaMailboxItemSchema, value))
+      .filter(item => item.personaId === personaId),
+  };
+}
+
 export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActivity> {
   const record = parseRecord('PersonaActivity', PersonaActivitySchema, value);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.activities, record.id, async () => {

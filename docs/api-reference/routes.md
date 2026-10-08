@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 216.
+Route files: 217.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -194,6 +194,7 @@ Route files: 216.
 | `/v1/personas/{personaId}/composition` | GET, PATCH | [source](../../src/app/v1/personas/[personaId]/composition/route.ts) |
 | `/v1/personas/{personaId}/composition/behaviors` | POST | [source](../../src/app/v1/personas/[personaId]/composition/behaviors/route.ts) |
 | `/v1/personas/{personaId}/composition/copy` | POST | [source](../../src/app/v1/personas/[personaId]/composition/copy/route.ts) |
+| `/v1/personas/{personaId}/core/reconcile` | POST | [source](../../src/app/v1/personas/[personaId]/core/reconcile/route.ts) |
 | `/v1/personas/{personaId}/deletion-preview` | GET | [source](../../src/app/v1/personas/[personaId]/deletion-preview/route.ts) |
 | `/v1/personas/{personaId}/execution-preview` | GET | [source](../../src/app/v1/personas/[personaId]/execution-preview/route.ts) |
 | `/v1/personas/{personaId}/export` | POST | [source](../../src/app/v1/personas/[personaId]/export/route.ts) |
