@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { promises as fs, type BigIntStats } from 'node:fs';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import * as persistence from '@/backend/execution/flow/persistConversationState';
 import { reportSubflowRunOutcome, type SubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
@@ -49,16 +49,42 @@ async function captureFixture(root: string, parent: string): Promise<FixtureIden
     parentDev: parentStat.dev, parentIno: parentStat.ino, parentBirthtimeNs: parentStat.birthtimeNs };
 }
 
-async function removeOwnedFixture(identity: FixtureIdentity, hasPendingOwner: () => boolean): Promise<void> {
-  if (hasPendingOwner()) throw new Error('Preserving fixture with pending recovery ownership');
+async function verifyOwnedFixture(identity: FixtureIdentity): Promise<void> {
   const current = await captureFixture(identity.root, identity.parent);
   if (current.dev !== identity.dev || current.ino !== identity.ino || current.birthtimeNs !== identity.birthtimeNs
       || current.parentDev !== identity.parentDev || current.parentIno !== identity.parentIno
       || current.parentBirthtimeNs !== identity.parentBirthtimeNs) {
     throw new Error('Preserving replaced fixture root');
   }
+}
+
+async function removeOwnedFixture(identity: FixtureIdentity, hasPendingOwner: () => boolean): Promise<void> {
   if (hasPendingOwner()) throw new Error('Preserving fixture with pending recovery ownership');
-  await fs.rm(current.root, { recursive: true, force: false });
+  await verifyOwnedFixture(identity);
+  if (hasPendingOwner()) throw new Error('Preserving fixture with pending recovery ownership');
+  await fs.rm(identity.root, { recursive: true, force: false });
+}
+
+async function withIndependentCleanup(
+  task: () => Promise<void>, steps: Array<() => void | Promise<void>>, faultContext: () => unknown[] = () => [],
+): Promise<void> {
+  const errors: unknown[] = [];
+  try { await task(); } catch (error) { errors.push(error); }
+  for (const step of steps) {
+    try { await step(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length) errors.unshift(...faultContext());
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Recovery fixture operation and cleanup failed');
+}
+
+async function assertAbsent(file: string): Promise<void> {
+  try { await fs.lstat(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('Preserving occupied restoration destination');
 }
 
 function family(): { parent: SharedState; outcome: SubflowRunOutcome } {
@@ -125,16 +151,43 @@ describe('parent resume lease with real storage', () => {
     // Do not restore mocks/env, clear live state, or remove data beneath an
     // unsettled writer. Preserve the fixture and make that uncertainty fail.
     if (hasPendingOwner()) throw new Error(`Pending recovery ownership; fixture preserved at ${root}`);
-    jest.restoreAllMocks();
-    try {
-      await removeOwnedFixture(identity, hasPendingOwner);
-    } finally {
-      for (const workspace of workspaces) runWithWorkspace(workspace, () => FlowExecutor.conversationStates.clear());
-      if (priorData === undefined) delete process.env.FLUJO_DATA_DIR;
-      else process.env.FLUJO_DATA_DIR = priorData;
-      if (priorParentData === undefined) delete process.env.FLUJO_PARENT_DATA_DIR;
-      else process.env.FLUJO_PARENT_DATA_DIR = priorParentData;
-    }
+    await withIndependentCleanup(() => removeOwnedFixture(identity, hasPendingOwner), [
+      () => { jest.restoreAllMocks(); },
+      ...workspaces.map(workspace => () => runWithWorkspace(workspace, () => FlowExecutor.conversationStates.clear())),
+      () => {
+        if (priorData === undefined) delete process.env.FLUJO_DATA_DIR;
+        else process.env.FLUJO_DATA_DIR = priorData;
+      },
+      () => {
+        if (priorParentData === undefined) delete process.env.FLUJO_PARENT_DATA_DIR;
+        else process.env.FLUJO_PARENT_DATA_DIR = priorParentData;
+      },
+    ]);
+  });
+
+  it('retains the primary refusal and each independent restoration failure while attempting later steps', async () => {
+    const primary = new Error('primary removal refusal');
+    const clearFailure = new Error('workspace clear failed');
+    const restoreFailure = new Error('first environment restoration failed');
+    const observed: string[] = [];
+    const failure: unknown = await withIndependentCleanup(async () => { throw primary; }, [
+      () => { observed.push('clear'); throw clearFailure; },
+      () => { observed.push('env-data'); throw restoreFailure; },
+      () => { observed.push('env-parent'); },
+    ]).catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([primary, clearFailure, restoreFailure]);
+    expect(observed).toEqual(['clear', 'env-data', 'env-parent']);
+  });
+
+  it('preserves a lone primary error after all restoration steps succeed', async () => {
+    const primary = new Error('original fault assertion');
+    const restored: string[] = [];
+    await expect(withIndependentCleanup(async () => { throw primary; }, [
+      () => { restored.push('remove-blocker'); },
+      () => { restored.push('restore-snapshot'); },
+    ])).rejects.toBe(primary);
+    expect(restored).toEqual(['remove-blocker', 'restore-snapshot']);
   });
 
   it('refuses recursive cleanup outside the captured temporary parent or with a pending owner', async () => {
@@ -152,22 +205,25 @@ describe('parent resume lease with real storage', () => {
     expect(path.basename(displaced).startsWith(fixturePrefix)).toBe(true);
     await fs.rename(root, displaced);
     let replacement: FixtureIdentity | undefined;
-    try {
+    await withIndependentCleanup(async () => {
       await fs.mkdir(root);
       replacement = await captureFixture(root, identity.parent);
       await fs.writeFile(path.join(root, 'replacement-proof.txt'), 'preserve me');
       await expect(removeOwnedFixture(identity, () => false)).rejects.toThrow('replaced fixture root');
       expect(await fs.readFile(path.join(root, 'replacement-proof.txt'), 'utf8')).toBe('preserve me');
-    } finally {
-      if (replacement) await removeOwnedFixture(replacement, () => false);
-      const original = await captureFixture(displaced, identity.parent);
-      expect(original.dev).toBe(identity.dev);
-      expect(original.ino).toBe(identity.ino);
-      expect(original.birthtimeNs).toBe(identity.birthtimeNs);
-      // Both resolved paths remain direct children of the captured owned parent.
-      expect(path.dirname(path.resolve(root))).toBe(identity.parent);
-      await fs.rename(displaced, root);
-    }
+    }, [
+      async () => { if (replacement) await removeOwnedFixture(replacement, () => false); },
+      async () => {
+        const original = await captureFixture(displaced, identity.parent);
+        expect(original.dev).toBe(identity.dev);
+        expect(original.ino).toBe(identity.ino);
+        expect(original.birthtimeNs).toBe(identity.birthtimeNs);
+        // Both resolved paths remain direct children of the captured owned parent.
+        expect(path.dirname(path.resolve(root))).toBe(identity.parent);
+        await assertAbsent(root);
+        await fs.rename(displaced, root);
+      },
+    ]);
   });
 
   it('releases its lease after an actual resume-snapshot filesystem failure and permits reacquisition', async () => {
@@ -176,30 +232,64 @@ describe('parent resume lease with real storage', () => {
       const target = path.join(getWorkspaceDbDir(), 'conversations', 'lease-parent.json');
       const backup = `${target}.fixture-backup`;
       let writes = 0;
+      let storageFailure: unknown;
+      let backupIdentity: BigIntStats | undefined;
+      let blockerIdentity: BigIntStats | undefined;
+      const verifyRestoration = async () => {
+        if (hasPendingOwner()) throw new Error('Preserving snapshot with pending recovery ownership');
+        await verifyOwnedFixture(identity);
+        for (const file of [target, backup]) {
+          const relative = path.relative(identity.root, path.resolve(file));
+          if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Snapshot restoration escapes fixture');
+        }
+      };
       jest.spyOn(persistence, 'persistConversationState').mockImplementation(async (key, state) => {
         if (++writes === 2) {
           // The child-result write has succeeded. Block only the subsequent
           // leased resume snapshot, using the real atomic storage writer.
           await fs.rename(target, backup);
+          backupIdentity = await fs.lstat(backup, { bigint: true });
           await fs.mkdir(target);
+          blockerIdentity = await fs.lstat(target, { bigint: true });
         }
         await persist(key, state);
       });
-      try {
+      await withIndependentCleanup(async () => {
         const failure: unknown = await reportOutcome(outcome).then(
           () => { throw new Error('The blocked snapshot unexpectedly persisted'); },
           error => error,
         );
+        storageFailure = failure;
         expect(['EISDIR', 'EPERM', 'EACCES', 'ENOTEMPTY', 'EEXIST']).toContain((failure as NodeJS.ErrnoException).code);
         expect(writes).toBe(2);
         expect(runFlowMock).not.toHaveBeenCalled();
         expect(global.__flujo_subflow_parent_resume_leases?.has(workspaceCacheKey('lease-invocation'))).toBe(false);
         const saved = JSON.parse(await fs.readFile(backup, 'utf8')) as SharedState;
         expect(saved.subflowInvocations?.['lease-invocation'].lanes[0].outputText).toBe(outcome.outputText);
-      } finally {
-        await fs.rmdir(target);
-        await fs.rename(backup, target);
-      }
+      }, [
+        async () => {
+          if (!blockerIdentity) return;
+          await verifyRestoration();
+          const current = await fs.lstat(target, { bigint: true });
+          if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== blockerIdentity.dev
+              || current.ino !== blockerIdentity.ino || current.birthtimeNs !== blockerIdentity.birthtimeNs) {
+            throw new Error('Preserving replaced snapshot blocker');
+          }
+          await fs.rmdir(target);
+        },
+        async () => {
+          if (!backupIdentity) return;
+          await verifyRestoration();
+          const current = await fs.lstat(backup, { bigint: true });
+          if (!current.isFile() || current.isSymbolicLink() || current.dev !== backupIdentity.dev
+              || current.ino !== backupIdentity.ino || current.birthtimeNs !== backupIdentity.birthtimeNs
+              || current.size !== backupIdentity.size || current.mtimeNs !== backupIdentity.mtimeNs) {
+            throw new Error('Preserving replaced snapshot backup');
+          }
+          await assertAbsent(target);
+          await fs.rename(backup, target);
+        },
+      ], () => storageFailure === undefined ? [] : [storageFailure]);
       await reportOutcome(outcome);
       expect(runFlowMock).toHaveBeenCalledTimes(1);
       expect(parent.subflowInvocations?.['lease-invocation'].resumeRequestedAt).toEqual(expect.any(Number));
@@ -227,7 +317,7 @@ describe('parent resume lease with real storage', () => {
           sharedState: FlowExecutor.conversationStates.get('lease-parent')! };
       });
       const first = reportOutcome(outcome);
-      try {
+      await withIndependentCleanup(async () => {
         await persisting.promise;
         await reportOutcome(outcome);
         expect(runFlowMock).not.toHaveBeenCalled();
@@ -237,11 +327,11 @@ describe('parent resume lease with real storage', () => {
         await reportOutcome(outcome);
         expect(runFlowMock).toHaveBeenCalledTimes(1);
         expect(global.__flujo_subflow_parent_resume_leases?.has(workspaceCacheKey('lease-invocation'))).toBe(true);
-      } finally {
-        allowPersist.resolve();
-        allowContinuation.resolve();
-        await first;
-      }
+      }, [
+        () => { allowPersist.resolve(); },
+        () => { allowContinuation.resolve(); },
+        async () => { await first; },
+      ]);
     });
   });
 
@@ -257,7 +347,7 @@ describe('parent resume lease with real storage', () => {
         sharedState: FlowExecutor.conversationStates.get('lease-parent')! };
     });
     const first = runWithWorkspace(workspaces[0], () => reportOutcome(family().outcome));
-    try {
+    await withIndependentCleanup(async () => {
       await entered.promise;
       await runWithWorkspace(workspaces[1], async () => {
         const { outcome } = family();
@@ -270,9 +360,6 @@ describe('parent resume lease with real storage', () => {
       runWithWorkspace(workspaces[0], () => {
         expect(global.__flujo_subflow_parent_resume_leases?.has(workspaceCacheKey('lease-invocation'))).toBe(true);
       });
-    } finally {
-      release.resolve();
-      await first;
-    }
+    }, [() => { release.resolve(); }, async () => { await first; }]);
   });
 });
