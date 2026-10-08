@@ -107,7 +107,22 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
       if(event.type==='turn.completed')denialCompleted=true;
       if(event.type==='turn.failed'||event.type==='error')throw new Error('Native Codex built-in denial probe failed.');
     }
-    if(!denialCompleted||denialAnswer.trim()!=='BUILTINS_UNAVAILABLE')throw new Error('Native Codex built-in denial is unconfirmed.');
+    if(!denialCompleted||denialAnswer.trim()!=='BUILTINS_UNAVAILABLE') {
+      // Refusal is evidence, never a profile capability. Retain the exact
+      // bounded response privately so an operator can diagnose a live probe
+      // without weakening admission or silently retrying until it passes.
+      await denialThread.close();
+      const denialExit=await denialRegistration?.exit;
+      await denialRegistration?.close;
+      await writeCodexRuntimeFile(directory,path.join(directory,digest+'.'+nonce+'.qualification-refusal.json'),JSON.stringify({
+        kind:'live-source-native-codex-qualification-refusal',startedAt,observedAt:new Date().toISOString(),model,effort,
+        reason:'builtin-denial-unconfirmed',completed:denialCompleted,output:denialAnswer.slice(0,4096),
+        outputSha256:createHash('sha256').update(denialAnswer).digest('hex'),outputTruncated:denialAnswer.length>4096,
+        exit:denialExit??null,closeObserved:Boolean(denialRegistration),usage:denialUsage??null,
+        billedCostUsd:null,countsAsBusinessWork:false,countsAsRequestedSwarm:false,
+      }),guard);
+      throw new Error('Native Codex built-in denial is unconfirmed.');
+    }
     try{await fs.lstat(sentinel);throw new Error('Native Codex built-in denial sentinel exists.');}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
     await denialThread.close();if(!denialRegistration)throw new Error('Native Codex denial process identity is unavailable.');

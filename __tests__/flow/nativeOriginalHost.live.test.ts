@@ -60,6 +60,17 @@ live('completes actual Luna/medium under a genuine Persona lease and saved Origi
       await fs.writeFile(output!,JSON.stringify({kind:'live-source-persona-original-qualification',startedAt,
         observedAt:new Date().toISOString(),model:'gpt-6-luna',effort:'medium',reservation,
         output:'READY',billedCostUsd:null,countsAsRequestedSwarm:false,countsAsBusinessWork:false},null,2),{mode:0o600});
+    } catch(error) {
+      // Jest removes its private workspace after this test. Preserve only the
+      // bounded qualification refusal, never account files, before teardown.
+      const directory=path.join(getWorkspaceDataDir(),'db','codex-runtime','native-profiles');
+      const files=await fs.readdir(directory).catch(()=>[]);
+      const refusals=files.filter(file=>/^[a-f0-9]{64}\.[a-f0-9]{32}\.qualification-refusal\.json$/.test(file));
+      if(refusals.length===1) {
+        const diagnostic=JSON.parse(await fs.readFile(path.join(directory,refusals[0]),'utf8'));
+        await fs.writeFile(output!+'.refusal.json',JSON.stringify(diagnostic,null,2),{flag:'wx',mode:0o600});
+      }
+      throw error;
     } finally {await dispatcher.quiesce(persona.id);stopPersonaGoalRuntime();}
   });
 },180000);
