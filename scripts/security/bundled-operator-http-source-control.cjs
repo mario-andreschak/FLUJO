@@ -28,13 +28,16 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
   process.env.FLUJO_WORKER_MODE='1';process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN='synthetic-snapshot-worker-bearer';
   const worker=require(path.join(sourceRoot,'src/backend/services/workspace/workerMode.ts'));worker.setWorkerBootstrapStatus({state:'error',workspace:workspace.getCurrentWorkspace(),error:'Synthetic bootstrap failure state; actual failed image qualification remains separate.'});
   const {NextRequest}=require(path.join(sourceRoot,'node_modules/next/server.js')),{proxy}=require(path.join(sourceRoot,'src/proxy.ts')),route=require(path.join(sourceRoot,'src/app/api/mcp/servers/[name]/host-consent/route.ts'));
+  const {withWorkspaceRoute}=require(path.join(sourceRoot,'src/app/api/_workspace.ts'));let runtimeDispatches=0;
+  const runtimeRoute=withWorkspaceRoute(async()=>{runtimeDispatches++;return Response.json({runtimeDispatched:true});});
   server=http.createServer(async(incoming,outgoing)=>{
    try{
     const chunks=[];for await(const chunk of incoming)chunks.push(chunk);
     const init={method:incoming.method,headers:incoming.headers};if(!['GET','HEAD'].includes(incoming.method))init.body=Buffer.concat(chunks);
     const request=new NextRequest(`http://${incoming.headers.host}${incoming.url}`,init),gate=proxy(request);let response=gate;
     if(gate.headers.get('x-middleware-next')==='1'){
-     const handler=route[incoming.method];response=handler?await handler(request,{params:Promise.resolve({name:config.name})}):Response.json({error:'Unsupported method'},{status:405});
+     if(request.nextUrl.pathname==='/api/source-control/runtime')response=await runtimeRoute(request,{});
+     else{const handler=route[incoming.method];response=handler?await handler(request,{params:Promise.resolve({name:config.name})}):Response.json({error:'Unsupported method'},{status:405});}
     }
     outgoing.writeHead(response.status,Object.fromEntries(response.headers));outgoing.end(await response.text());
    }catch{outgoing.writeHead(500);outgoing.end('Source control handler failed.');}
@@ -49,6 +52,7 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
   const approved=await call('POST',owner.token,{runtimeHome:'host',reviewedDigest:preview.policyDigest,expiresAt:Date.now()+120000});assert.equal(approved.status,200,await approved.clone().text());
   const current=(await store.loadServerConfigs()).find(item=>item.name===config.name);assert.ok(current.trustedHost?.bundledInstallation);assert.equal(JSON.parse(fs.readFileSync(ledger,'utf8')).approvals[0].policyDigest,preview.policyDigest);
   assert.equal(worker.getWorkerBootstrapStatus().state,'error');
+  const runtime=await fetch(`http://127.0.0.1:${server.address().port}/api/source-control/runtime?workspace=${selected}`,{headers:{Authorization:`Bearer ${process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN}`}});assert.equal(runtime.status,503);assert.equal(runtimeDispatches,0);
   const deniedDelete=await call('DELETE',process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN);assert.equal(deniedDelete.status,401);
   const revoked=await call('DELETE',owner.token);assert.equal(revoked.status,200);assert.deepEqual(JSON.parse(fs.readFileSync(ledger,'utf8')).approvals,[]);
   console.log(JSON.stringify({sourceControl:'bundled-operator-http',actualLoopbackHttp:true,actualSourceProxyAndNextRoute:true,actualMigrationAndWorkspaceStorage:true,notReadyAssignedWorkerOwnerPreviewApproveRevoke:true,missingForgedSnapshotAndLimitedBearersRefused:true,otherAssignedWorkspaceRefused:true,missingLedgerInitializedUnderActualOwner:true,actualPrivateGrantAndSavedProfile:true,workerReadinessNeverBypassedForRuntime:true,scope:'Actual Source HTTP/proxy/handler/private owner and storage; injected not-ready status, no real worker bootstrap retry or compiled packed Next/image acceptance'}));
