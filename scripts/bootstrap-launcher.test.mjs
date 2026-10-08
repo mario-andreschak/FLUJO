@@ -17,7 +17,7 @@ function fixture(t) {
   const app = path.join(root, 'package');
   for (const relative of ['bin/flujo.mjs', 'bin/launcher-port.mjs', 'bin/node-runtime.mjs',
     'bin/node-runtime-preflight.mjs', 'scripts/bootstrap-directory.mjs', 'scripts/launch-next.mjs',
-    'scripts/local-instance.mjs', 'scripts/exposure-mode.mjs']) {
+    'scripts/local-instance.mjs', 'scripts/exposure-mode.mjs', 'scripts/canonical-data-root.mjs']) {
     const destination = path.join(app, relative);
     mkdirSync(path.dirname(destination), { recursive: true });
     writeFileSync(destination, readFileSync(path.join(repository, relative)));
