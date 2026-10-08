@@ -315,6 +315,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
         expect(fs.readFileSync(unknown, 'utf8')).toBe('{"unknown":"preserve"}');
         fs.renameSync(workloadDirectory, preserved);
         fs.renameSync(held, workloadDirectory);
+        expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
         expectedCloseCount = 3;
       }
     }
