@@ -83,12 +83,15 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   let toolCall: jest.SpyInstance;
   let expectedErrors: jest.SpyInstance;
   let firstCase = true;
+  let reviewedBashDigest: string;
 
   async function approveBash() {
     owner = installBundledFixtureOwner();
-    const preview = await previewBundledHostConsent('bash', { runtimeHome: 'host' });
+    // The same reviewed proposal may be approved again; the protected writer
+    // still rechecks the full current proposal and its final publication fence.
+    reviewedBashDigest ??= (await previewBundledHostConsent('bash', { runtimeHome: 'host' })).policyDigest;
     bashConfig = (await approveBundledHostConsent(owner.request('bash'), 'bash', {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+      runtimeHome: 'host', reviewedDigest: reviewedBashDigest, expiresAt: owner.expiresAt,
     })).config;
   }
 
@@ -105,6 +108,7 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   }, 60_000);
 
   beforeEach(async () => {
+    const preparationStarted = performance.now();
     process.env.FLUJO_DATA_DIR = privateFixture.root;
     delete process.env.FLUJO_PARENT_DATA_DIR;
     if (!firstCase) {
@@ -119,7 +123,8 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     if (!firstCase) await approveBash();
     firstCase = false;
     expect(Date.now()).toBeLessThan(owner!.expiresAt);
-    console.info(JSON.stringify({ bashFixtureGrantRemainingMs: owner!.expiresAt - Date.now() }));
+    console.info(JSON.stringify({ bashFixtureGrantRemainingMs: owner!.expiresAt - Date.now(),
+      bashFixturePreparationMs: performance.now() - preparationStarted }));
     FlowExecutor.clearFlowCache();
     FlowExecutor.conversationStates.clear();
     scheduler = new SchedulerService();
