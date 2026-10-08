@@ -1404,7 +1404,7 @@ export class MCPService {
           try { retire?.(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
         }
         if (cleanupErrors.length) {
-          throw new AggregateError([error, ...cleanupErrors], 'MCP denied startup cleanup failed');
+          throw new BundledFlujoWorkloadError(new AggregateError([error, ...cleanupErrors], 'MCP denied startup cleanup failed'));
         }
         throw error;
       }
@@ -1864,13 +1864,16 @@ export class MCPService {
         throw error;
       }
       await assertBundledFlujoWorkloadEffectCurrent();
+      if (shutdownReceipt.errorClassification === 'close_failed') return { success: false, shutdownReceipt,
+        error: 'MCP_SHUTDOWN_FAILED', statusCode: 503 };
       return { success: true, shutdownReceipt };
     }
     // A repeat request returns the same observation, without closing a new process.
     const client = this.getClient(serverName);
     if (!client && !runtime?.connectPromise) {
       const receipt = getShutdownReceipt(serverName);
-      if (receipt) return { success: true, shutdownReceipt: receipt };
+      if (receipt) return { success: receipt.errorClassification !== 'close_failed', shutdownReceipt: receipt,
+        ...(receipt.errorClassification === 'close_failed' ? { error: 'MCP_SHUTDOWN_FAILED', statusCode: 503 } : {}) };
       log.warn(
         `disconnectServer: Server ${serverName} not found in clients map`,
       );
@@ -1902,7 +1905,9 @@ export class MCPService {
         // Cleanup owns the client now and must finish even after request revocation.
         try { return await safelyCloseClient(closingClient, serverName, config); }
         catch (error) {
-          teardownFailure = error;
+          teardownFailure = teardownFailure
+            ? new BundledFlujoWorkloadError(new AggregateError([teardownFailure, error], 'MCP teardown failed'))
+            : error;
           if (error instanceof McpRuntimeAuthorityRetirementError) retirementFailure = error;
           throw error;
         }
@@ -1912,6 +1917,8 @@ export class MCPService {
         error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
       if (teardownFailure) throw teardownFailure;
       await assertBundledFlujoWorkloadEffectCurrent();
+      if (shutdownReceipt.errorClassification === 'close_failed') return { success: false, shutdownReceipt,
+        error: 'MCP_SHUTDOWN_FAILED', statusCode: 503 };
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true, shutdownReceipt };
     } catch (error) {
