@@ -74,6 +74,39 @@ it('returns null for an initially absent record', async () => {
   await fs.unlink(file);
   expect(await read()).toBeNull();
 });
+it('drains the concurrent canonical-parent read before returning a metadata refusal', async () => {
+  const priorStrictReads = jest.mocked(strictReader.readPlainFile).mock.calls.length;
+  const actualStat = fs.lstat.bind(fs);
+  const actualRealpath = fs.realpath.bind(fs);
+  const failure = new Error('filesystem metadata read refused');
+  let rootStats = 0, rootCanonicalReads = 0;
+  let entered!: () => void, resume!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const continuation = new Promise<void>(resolve => { resume = resolve; });
+  jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+    if (args[0] === root && ++rootStats === 2) throw failure;
+    return actualStat(...args);
+  });
+  jest.spyOn(fs, 'realpath').mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+    if (args[0] === root && ++rootCanonicalReads === 2) {
+      entered();
+      await continuation;
+    }
+    return actualRealpath(...args);
+  });
+  const attempt = read();
+  const refused = expect(attempt).rejects.toBe(failure);
+  let settled = false;
+  void attempt.then(() => { settled = true; }, () => { settled = true; });
+  await started;
+  try {
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(jest.mocked(strictReader.readPlainFile)).toHaveBeenCalledTimes(priorStrictReads);
+  } finally { resume(); }
+  await refused;
+  expect(settled).toBe(true);
+});
 it.each([false, true])('reads fresh cancellation state after named-file publication (%s: replacement after open)', async afterOpen => {
   const counts = opens(async attempt => { if (attempt === 1) await replace(after, afterOpen); }, afterOpen);
   expect((await read())?.content).toBe(after);

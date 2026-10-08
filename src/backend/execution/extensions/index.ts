@@ -80,6 +80,11 @@ export function executionExtensionAdapter(): ExecutionExtensionAdapter | undefin
   if (!adapter && process.env.FLUJO_EXECUTION_ADAPTER_MODULE) throw new ExecutionExtensionError('execution_adapter_not_loaded', 503);
   return adapter;
 }
+/** Arbitrary extension/access callbacks have no Persona-lock equivalence proof. */
+export function hasExecutionReadGuards(): boolean {
+  return Boolean(executionExtensionAdapter() || registry.access.getStore()
+    || registry.input.getStore()?.executionExtensionContext);
+}
 export function createExecutionExtensionContext(adapter: ExecutionExtensionAdapter, value: object): ExecutionExtensionContext {
   const context = Object.freeze({}) as ExecutionExtensionContext;
   registry.contexts.set(context, { adapter: canonicalAdapter(adapter), value });
