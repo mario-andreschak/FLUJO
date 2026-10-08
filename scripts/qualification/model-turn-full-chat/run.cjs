@@ -43,11 +43,12 @@ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const failedClose=fetch(url('ascii'),{headers}).then(async response=>{const reader=response.body.getReader();try{while(!(await reader.read()).done){/* discard bounded chunks */}}finally{reader.releaseLock();}return false;},()=>true).catch(()=>true);
   const quarantined=await until(value=>value.quarantinedReads===1);assert.equal(quarantined.activeReads,1);assert.ok(quarantined.cleanupFailures>=3);
   assert.equal(await failedClose,true);const recovered=await until(value=>value.activeReads===0&&value.quarantinedReads===0);
+  fs.writeFileSync(path.join(base,'admission-result.json'),JSON.stringify({saturated,fifthStatus:fifth.status,quarantined,recovered},null,2));
 
   browser=await chromium.launch({headless:true,executablePath:process.env.FLUJO_PROFILE_CHROMIUM||'C:/Users/Moe/AppData/Local/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe',args:['--js-flags=--max-old-space-size=128','--enable-precise-memory-info','--disable-gpu']});
   const context=await browser.newContext(),page=await context.newPage();const equal=cookie.indexOf('=');
   await context.addCookies([{name:cookie.slice(0,equal),value:cookie.slice(equal+1),url:origin,httpOnly:true,sameSite:'Strict'}]);
-  await page.route('**/*',route=>route.request().url().startsWith(origin+'/')?route.continue():route.abort());page.on('pageerror',error=>errors.push(error.message));
+  await page.route('**/*',route=>route.request().url().startsWith(origin+'/')?route.continue():route.abort());page.on('pageerror',error=>{errors.push(error.message);console.error(error.stack);});
   const system=await browser.newBrowserCDPSession(),metrics=await context.newCDPSession(page);await metrics.send('Performance.enable');
   const sample=async()=>{const info=await system.send('SystemInfo.getProcessInfo');fs.writeFileSync(path.join(base,'browser-pids.json'),JSON.stringify([...info.processInfo,{type:'backend',id:backend.pid}]));
     const measured=await metrics.send('Performance.getMetrics');for(const value of measured.metrics)if(['JSHeapUsedSize','JSHeapTotalSize','Nodes','LayoutObjects'].includes(value.name))maxima[value.name]=Math.max(maxima[value.name]||0,value.value);};

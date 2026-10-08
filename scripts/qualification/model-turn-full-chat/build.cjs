@@ -9,7 +9,7 @@ const hashes = Object.fromEntries(sourcePaths.map(p => [p,crypto.createHash('sha
 const head = cp.execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 webpack({ mode: 'production', target: 'web', context: root,
   entry: path.join(__dirname, 'entry.tsx'), output: { path: base, filename: 'bundle.js' },
-  resolve: { extensions: ['.tsx','.ts','.js','.json'], alias: { '@': path.join(root,'src') }, modules: [path.join(root,'node_modules')] },
+  resolve: { extensions: ['.tsx','.ts','.js','.json'], alias: { '@': path.join(root,'src') }, modules: ['node_modules',path.join(root,'node_modules')] },
   module: { rules: [{ test: /\.tsx?$/, use: path.join(__dirname,'loader.cjs') }, { test: /\.css$/, use: path.join(__dirname,'css-loader.cjs') }] },
   optimization: { minimize: false },
   plugins: [new webpack.DefinePlugin({ 'process.env.NODE_ENV': JSON.stringify('production'), 'process.env': '{}' })],

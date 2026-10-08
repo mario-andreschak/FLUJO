@@ -37,7 +37,7 @@ let server,secure,ownerAccess,token,session,archive,budget;
   server=http.createServer(async(req,res)=>{
     const origin=process.env.FLUJO_OWNER_BROWSER_ORIGIN,url=new URL(req.url,origin);
     if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<div id="root"></div><script src="/bundle.js"></script>');return;}
-    if(url.pathname==='/bundle.js'){res.setHeader('Content-Type','text/javascript');fs.createReadStream(path.join(base,'bundle.js')).pipe(res);return;}
+    if(/^\/(?:\d+\.)?bundle\.js$/.test(url.pathname)){res.setHeader('Content-Type','text/javascript');fs.createReadStream(path.join(base,path.basename(url.pathname))).pipe(res);return;}
     const controller=new AbortController();res.on('close',()=>{if(!res.writableEnded)controller.abort(new Error('fixture client disconnected'));});
     const headers=new Headers();for(const [name,value]of Object.entries(req.headers))if(typeof value==='string')headers.set(name,value);
     const body = ['GET','HEAD'].includes(req.method) ? undefined : Buffer.concat(await Array.fromAsync(req));
