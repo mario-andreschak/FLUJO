@@ -237,6 +237,28 @@ it('fresh large-file verification accepts exact bytes and refuses mutation after
     await expect(verifyTrustedHostMcp(config)).rejects.toThrow('package revision changed');
     expect(mutated).toBe(true); expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened);
   } finally { spy.mockRestore(); }
+  fs.writeFileSync(config.command, Buffer.alloc(2 * 1024 * 1024 + 17, 0x61));
+  const cancellation = new AbortController();
+  let aborted = false;
+  opened = 0; closed = 0;
+  const abortSpy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === config.command) {
+      opened++;
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        const result = await read(...readArgs);
+        if (result.bytesRead && !aborted) { aborted = true; cancellation.abort(new Error('Actual large-file read cancellation.')); }
+        return result;
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); closed++; };
+    }
+    return handle;
+  });
+  try {
+    await expect(verifyTrustedHostMcp(config, cancellation.signal)).rejects.toThrow('package revision changed');
+    expect(aborted).toBe(true); expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened);
+  } finally { abortSpy.mockRestore(); }
 });
 
 it('async verification yields and refuses an approval revoked while filesystem verification is pending', async () => {
