@@ -92,8 +92,9 @@ test('replacement after the final scan named observation but before canonical co
   const pending = new Promise<void>(resolve => { release = resolve; });
   const namedObserved = new Promise<void>(resolve => { observed = resolve; });
   jest.spyOn(fs.promises, 'realpath').mockImplementation((async (filename: fs.PathLike) => {
+    const finalScan = String(filename) === manifest && ++canonicalReads === 5;
     const result = await realpath(filename);
-    if (String(filename) === manifest && ++canonicalReads === 5) await pending;
+    if (finalScan) await pending;
     return result;
   }) as typeof fs.promises.realpath);
   jest.spyOn(fs.promises, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.promises.lstat>) => {
