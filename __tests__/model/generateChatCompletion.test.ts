@@ -85,7 +85,42 @@ beforeEach(() => {
   jest.mocked(testModelConnection).mockClear();
 });
 
+describe('fallback policy lifecycle', () => {
+  const policy = (): Model => ({ id: 'policy', name: 'policy/prod', ApiKey: '', fallbackPolicy: { modelIds: ['m1', 'm2'] } });
+  beforeEach(() => { store[StorageKey.MODELS] = [modelFixture(), modelFixture({ id: 'm2', displayName: 'Backup' })]; });
+  it('creates and updates a policy without a provider credential on the alias', async () => {
+    expect((await modelService.addModel(policy())).success).toBe(true);
+    expect((await modelService.updateModel({ ...policy(), displayName: 'Production' })).success).toBe(true);
+    const saved = (store[StorageKey.MODELS] as Model[]).find(item => item.id === 'policy');
+    expect(saved?.ApiKey).toBe('');
+    expect(saved?.fallbackPolicy?.modelIds).toEqual(['m1', 'm2']);
+  });
+  it('rejects dangling references and prevents deletion of members', async () => {
+    expect((await modelService.addModel({ ...policy(), fallbackPolicy: { modelIds: ['m1', 'missing'] } })).success).toBe(false);
+    await modelService.addModel(policy());
+    expect((await modelService.deleteModel('m1')).success).toBe(false);
+    expect((await modelService.deleteModel('policy')).success).toBe(true);
+    expect((await modelService.deleteModel('m1')).success).toBe(true);
+  });
+  it('resolves the policy alias independently of other display names and keeps the actual-model receipt', async () => {
+    await modelService.addModel(policy());
+    (store[StorageKey.MODELS] as Model[]).push(modelFixture({ id: 'collision', displayName: 'policy/prod' }));
+    const routing = { policyId: 'policy', selectedModelId: 'm2', attempts: [] };
+    mockCreateCompletion.mockResolvedValue({ completion: completionFixture({ model: 'actual-backup' }), routing });
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'policy/prod', messages: [] });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.completion).toMatchObject({ model: 'actual-backup', flujo_routing: routing });
+    expect(mockCreateCompletion.mock.calls[0][0]).toMatchObject({ model: { id: 'policy' }, apiKey: '' });
+  });
+});
+
 describe('/v1/models listing', () => {
+  it('discovers policies using a stable alias with no credential fields', async () => {
+    store[StorageKey.FLOWS] = [];
+    store[StorageKey.MODELS] = [{ id: 'p', name: 'policy/prod', displayName: 'Production', ApiKey: '', fallbackPolicy: { modelIds: ['m1', 'm2'] } }];
+    const response = await listModels();
+    expect(await response.json()).toEqual({ object: 'list', data: [{ id: 'policy/prod', object: 'model' }] });
+  });
   it('lists flow- and model- entries with only id/object (no secrets)', async () => {
     store[StorageKey.FLOWS] = [{ id: 'f1', name: 'MyFlow', nodes: [], edges: [] }];
     store[StorageKey.MODELS] = [modelFixture()];

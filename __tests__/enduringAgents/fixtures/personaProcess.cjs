@@ -144,6 +144,31 @@ let recoveryCheckpoint;
 async function execute(command) {
   return runWithWorkspace(workspaceId, async () => {
     switch (command.type) {
+      // Ordinary local detached launches share this real-storage process harness;
+      // killing the fixture loses their launcher, never replays their effects.
+      case 'launchDetachedTask': {
+        const { createTask } = require(path.join(repositoryRoot, 'src/backend/services/subflowTasks/index.ts'));
+        const { initializeRecovery } = require(path.join(repositoryRoot, 'src/backend/execution/flow/recoveryCheckpoint.ts'));
+        const task = await createTask({
+          originConversationId: 'restart-parent', originLogicalRunId: 'restart-parent-run',
+          flowId: 'restart-child-flow', childConversationId: command.childConversationId,
+          input: { prompt: 'harmless pending child' },
+        });
+        if (!task) throw new Error('Could not create detached fixture task');
+        const child = {
+          conversationId: task.childConversationId, flowId: task.flowId,
+          parentRunId: task.originConversationId, parentLogicalRunId: task.originLogicalRunId,
+          status: 'running', messages: [],
+          trackingInfo: { executionId: 'restart-child', startTime: Date.now(), nodeExecutionTracker: [] },
+        };
+        initializeRecovery(child, 'restart-child-run');
+        await saveItem(`conversations/${task.childConversationId}`, child);
+        return task;
+      }
+      case 'getDetachedTask':
+        return require(path.join(repositoryRoot, 'src/backend/services/subflowTasks/index.ts')).getTask(command.taskId);
+      case 'reconcileDetachedTasks':
+        return require(path.join(repositoryRoot, 'src/backend/services/subflowTasks/index.ts')).reconcileOrphanedTasks();
       case 'readFlow': return flowService.getFlow(command.flowId);
       case 'saveFlow': return flowService.saveFlow(command.flow);
       case 'previewDeletion': return enduringAgents.previewPersonaDeletion(command.personaId);

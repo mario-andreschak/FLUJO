@@ -611,7 +611,23 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         executionMode?: unknown;
         serverName?: unknown;
         argumentsJson?: unknown;
+        captureVariable?: unknown;
+        resultFormat?: unknown;
+        onError?: unknown;
       };
+      if (toolEntry.captureVariable !== undefined && toolEntry.captureVariable !== ''
+        && (typeof toolEntry.captureVariable !== 'string' || !isValidRunVarName(toolEntry.captureVariable.trim()))) {
+        add('error', 'static-capture-var-name', `Static node "${getNodeLabel(node)}": entry #${index + 1} has an invalid capture variable.`, node);
+      }
+      if (toolEntry.resultFormat !== undefined && toolEntry.resultFormat !== 'text' && toolEntry.resultFormat !== 'json') {
+        add('error', 'static-invalid-result-format', `Static node "${getNodeLabel(node)}": resultFormat must be text or json.`, node);
+      }
+      if (toolEntry.onError !== undefined && toolEntry.onError !== 'continue' && toolEntry.onError !== 'fail') {
+        add('error', 'static-invalid-onerror', `Static node "${getNodeLabel(node)}": onError must be continue or fail.`, node);
+      }
+      if (toolEntry.onError === 'fail' && toolEntry.executionMode !== 'real') {
+        add('error', 'static-mock-fail-policy', `Static node "${getNodeLabel(node)}": fail policy requires a real tool call.`, node);
+      }
       const toolName = typeof toolEntry.toolName === 'string' ? toolEntry.toolName.trim() : '';
       if (!toolName) {
         add(
@@ -948,6 +964,13 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     // Every variable name some node captures via captureVariable.
     const capturedNames = new Set<string>();
     for (const node of nodes) {
+      if (getNodeType(node) === 'static' && Array.isArray(node.data?.properties?.entries)) {
+        for (const entry of node.data.properties.entries) {
+          if (entry.kind === 'toolCall' && typeof entry.captureVariable === 'string' && entry.captureVariable.trim()) {
+            capturedNames.add(entry.captureVariable.trim());
+          }
+        }
+      }
       const capture = node.data?.properties?.captureVariable;
       if (typeof capture === 'string' && capture.trim()) {
         const name = capture.trim();
@@ -964,7 +987,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     }
 
     // Any ${var:NAME} reference to a name nothing in the flow captures.
-    const referenceFields = ['promptTemplate', 'isolatedPrompt'] as const;
+    const referenceFields = ['promptTemplate', 'isolatedPrompt', 'outputTemplate'] as const;
     const warnedRefs = new Set<string>();
     for (const node of nodes) {
       const props = node.data?.properties ?? {};

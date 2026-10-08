@@ -190,6 +190,15 @@ their existing execution-engine policy, with worker requests classified as
 unattended internal runs. This does not clone in-flight process memory or resume local
 background jobs on the cloud machine.
 
+Detached tasks launched locally after this upgrade carry installation, workspace,
+and process ownership. Startup and task reads can mark a task `failed` with
+`failureReason: process-restart` once its exact child has a durable interruption
+outcome and its launching process is proven dead. The task records that manual
+recovery is required. This never replays a child or its effects. The installation
+identity is stored outside snapshot subtrees, so copied tasks are not treated as
+local launches. Live owners, unknown ownership, and older tasks without launch
+provenance are left untouched; older task records still require manual recovery.
+
 ## Validation
 
 `node scripts/smoke-cloud-worker.mjs` starts isolated real Next instances from a

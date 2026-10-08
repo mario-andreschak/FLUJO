@@ -44,6 +44,7 @@ import { flowService } from '@/frontend/services/flow';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { navigateWorkspaceRoute } from '@/frontend/utils/workspaceNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import FallbackPolicyDialog from '@/frontend/components/models/FallbackPolicyDialog';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -73,6 +74,7 @@ export default function ModelClient() {
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+  const [policyDraft, setPolicyDraft] = useState<Model | null>(null);
   // #374: whether THIS instance pushed the current `?edit=`/`?add=` history
   // entry (vs. it being present on initial load from a deep link) — lets
   // closing prefer `router.back()` (a clean history stack) over `router.push`
@@ -508,7 +510,10 @@ export default function ModelClient() {
             }}
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
-          <>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button variant="outlined" startIcon={<AddIcon />} onClick={() => setPolicyDraft({
+              id: uuidv4(), name: 'policy/', ApiKey: '', fallbackPolicy: { modelIds: [] },
+            })}>{t('models.policy.create')}</Button>
             <ButtonGroup variant="contained" color="primary" aria-label={t('models.connectionOptionsAria')}>
               <Button startIcon={<AddIcon />} onClick={handleAdd} data-tour="add-model">
                 {t('models.connectAi')}
@@ -540,7 +545,7 @@ export default function ModelClient() {
                 <ListItemText primary={t('models.manualCreation')} secondary={t('models.manualCreationDescription')} />
               </MenuItem>
             </Menu>
-          </>
+          </Box>
         </Box>
       </Paper>
       </StickySearchBar>
@@ -592,7 +597,20 @@ export default function ModelClient() {
       />
 
       {/* Only render modal when we have a valid model ID */}
-      {isModalOpen && currentModel ? (
+      {(policyDraft || (isModalOpen && currentModel?.fallbackPolicy)) && (
+        <FallbackPolicyDialog key={(policyDraft || currentModel)!.id} model={(policyDraft || currentModel)!} models={models}
+          onClose={() => { if (policyDraft) setPolicyDraft(null); else void handleCloseModal(); }}
+          onSave={async policy => {
+            const service = getModelService();
+            const result = policyDraft ? await service.addModel(policy) : await service.updateModel(policy);
+            if (result.success) {
+              setModels(await service.loadModels());
+              if (policyDraft) setPolicyDraft(null); else await handleCloseModal();
+            }
+            return result;
+          }} />
+      )}
+      {isModalOpen && currentModel && !currentModel.fallbackPolicy ? (
           <ModelModal
             open={isModalOpen}
             model={currentModel}

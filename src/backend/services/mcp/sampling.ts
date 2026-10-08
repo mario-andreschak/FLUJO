@@ -114,7 +114,7 @@ export function createSamplingHandler(
       throw new McpError(ErrorCode.InternalError, `Sampling model not found: ${policy.modelId}`);
     }
     const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-    const apiKey = resolvedKey || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim() ? '' : null);
+    const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
     if (apiKey === null) {
       throw new McpError(ErrorCode.InternalError, 'Could not resolve the sampling model API key');
     }
@@ -131,7 +131,7 @@ export function createSamplingHandler(
     const adapter = getCompletionAdapter(model);
     // Prefer the per-policy token cap; fall back to the model's own default.
     const maxTokens = policy.maxTokens ?? normalizeMaxTokens(model.maxTokens);
-    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, maxTokens });
+    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens });
 
     const raw = completion.choices?.[0]?.message?.content;
     const text = typeof raw === 'string' ? raw : '';

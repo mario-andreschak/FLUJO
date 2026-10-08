@@ -979,7 +979,7 @@ export async function generateFlowVisually(
   const model = await modelService.getModel(input.modelId);
   if (!model) throw new Error(`Generator model not found: ${input.modelId}`);
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  const apiKey = resolvedKey || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim() ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the generator model API key.');
   const [context, storedFlows] = await Promise.all([
     gatherGenerationContext(),

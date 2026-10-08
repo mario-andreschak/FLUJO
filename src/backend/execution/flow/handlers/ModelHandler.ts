@@ -49,7 +49,7 @@ import {
   COMPACTION_PROJECTION_VERSION,
   type CompactionProjectionIdentity,
 } from '../compaction/types';
-import { normalizeMaxTokens } from '@/shared/types/model';
+import { normalizeMaxTokens, type Model } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
@@ -1139,6 +1139,7 @@ export class ModelHandler {
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
+    let modelIsFallbackPolicy = false;
     let modelAdapter: ModelAdapter | undefined;
     let modelContextWindow: number | undefined;
     let modelCompactionThreshold: number | undefined;
@@ -1150,6 +1151,7 @@ export class ModelHandler {
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
+        modelIsFallbackPolicy = Boolean(model.fallbackPolicy);
         modelAdapter = resolveModelAdapter(model.provider, model.adapter);
         modelContextWindow = model.contextWindow;
         modelCompactionThreshold = model.compactionThreshold;
@@ -1604,7 +1606,7 @@ export class ModelHandler {
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
       toolNameMap,
-      maxTurns: effectiveMaxTurns,
+      maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
       temperatureOverride: input.temperatureOverride,
       requestToolApproval,
@@ -2001,7 +2003,7 @@ export class ModelHandler {
       // key to use the host CLI's supported login; each adapter owns that auth.
       const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim() ? '' : null);
+        resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,
@@ -2452,7 +2454,8 @@ export class ModelHandler {
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
         ? normaliseOllamaRoot(model.baseUrl)
         : null;
-      const opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let routingModel = model;
       let providerAttemptOrdinal = 0;
       // One LOGICAL provider call; every retry below reuses this invocation id
       // and gets its own attempt id, so retries never look like separate calls.
@@ -2500,15 +2503,15 @@ export class ModelHandler {
         try {
           const attemptOrdinal = ++providerAttemptOrdinal;
           const attemptUsage = observation.usage ?? usageFromProviderResult(observation.result)
-            ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined);
+            ?? (routingModel.contextWindow ? { contextWindow: routingModel.contextWindow } : undefined);
           recordStatisticsEvent(createStatisticsEvent({
             type: 'model.attempt',
             runId: opts.runId,
             node: opts.nodeId ? { id: opts.nodeId } : undefined,
-            model: { id: modelId, name: model.displayName || model.name },
+            model: { id: routingModel.id, name: routingModel.displayName || routingModel.name },
             provider: {
-              id: model.provider || model.adapter || 'unknown',
-              name: model.adapter || model.provider,
+              id: routingModel.provider || routingModel.adapter || 'unknown',
+              name: routingModel.adapter || routingModel.provider,
             },
             credentialId: opaqueCredentialId,
             attempt: attemptOrdinal,
@@ -2663,6 +2666,18 @@ export class ModelHandler {
               const input = {
               model,
               apiKey: decryptedApiKey,
+              beforeModelDispatch: async () => {
+                if (opts?.executionExtensionContext) await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+                await opts?.beforeModelDispatch?.();
+              },
+              temperatureOverride: opts?.temperatureOverride !== undefined
+                ? normalizeModelTemperature(opts.temperatureOverride, model.provider, model.adapter, model.name)
+                : undefined,
+              onRoutingModel: async (member: Model) => {
+                routingModel = member;
+                const key = await modelService.resolveAndDecryptApiKey(member.ApiKey);
+                opaqueCredentialId = await credentialFingerprint(key ?? '').catch(() => undefined);
+              },
               onProviderAttempt: (observation: {
                 attempt: number;
                 durationMs: number;
@@ -2682,8 +2697,8 @@ export class ModelHandler {
                         runId: opts.runId,
                         nodeId: opts.nodeId!,
                         nodeName: opts.nodeName,
-                        modelId,
-                        modelName: model.displayName || model.name,
+                        modelId: routingModel.id,
+                        modelName: routingModel.displayName || routingModel.name,
                         adapter: snapshot.adapter,
                         operation: snapshot.operation,
                         attempt: ++sdkDispatchOrdinal,
@@ -2775,7 +2790,7 @@ export class ModelHandler {
               if (opts?.executionExtensionContext) {
                 await assertExecutionExtensionCurrent(opts.executionExtensionContext);
               }
-              await opts?.beforeModelDispatch?.();
+              if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
               return opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
                 : adapter.createCompletion(input);
@@ -3015,6 +3030,10 @@ export class ModelHandler {
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
+          // The policy has already applied its trigger and replay boundaries.
+          // An outer rate-limit replay must not restart that decision (including
+          // a disabled trigger or steering/approval activity observed inside it).
+          if (model.fallbackPolicy) return attemptResult;
           if (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter))) return attemptResult;
           if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
             log.warn('Automatic session-limit retries exhausted; returning the provider error', {

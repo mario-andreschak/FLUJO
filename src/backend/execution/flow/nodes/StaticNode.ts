@@ -1,23 +1,35 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
-import { SharedState, StaticEntry, StaticNodeParams } from '../types';
+import { SharedState, StaticEntry, StaticNodeParams, ERROR_ACTION, ErrorDetails } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { FlujoFunctionToolCall } from '@/shared/types/openai';
-import { resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolveRunVars, isValidRunVarName } from '@/utils/shared/resolveRunVars';
+import { boundStaticText, staticResultJson, staticResultText, MAX_STATIC_ERROR_CHARS } from '@/utils/shared/staticToolResult';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { FEATURES } from '@/config/features';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
+import type { MCPServiceResponse } from '@/shared/types/mcp';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { applyPresetArguments, resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
+import { redactErrorDetails } from '../normalizeError';
+import { combineAbortSignals } from '../combineAbortSignals';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   executePersonaMemoryMaintenanceCommit,
 } from '../handlers/personaMemoryGateway';
 
 const log = createLogger('backend/flow/execution/nodes/StaticNode');
+
+async function deliverResult(call: () => Promise<MCPServiceResponse>): Promise<MCPServiceResponse> {
+  try {
+    return await call();
+  } catch (cause) {
+    return { success: false, errorType: 'transport', error: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
 
 /**
  * Static node (issue #358) — a non-LLM, pass-through node that
@@ -94,6 +106,23 @@ export class StaticNode extends BaseNode<
     // can never suppress this run's injection.
     const runId = sharedState.logicalRunId ?? 'no-run';
     const alreadyInjected = sharedState.staticInjected?.[nodeId] === runId;
+    const referenceContext = {
+      conversationId: sharedState.conversationId,
+      flowId: sharedState.flowId,
+      nodeId,
+    };
+    const resolveRunText = async (value: string): Promise<string> =>
+      sharedState.executionExtensionContext ? (value ?? '') : resolveRunResourceRefs(
+        resolveRunVars(value ?? '', sharedState.variables),
+        sharedState.ephemeral ? undefined : sharedState.conversationId,
+        sharedState.emit,
+        { nodeId },
+        sharedState,
+      );
+    const resolve = async (value: string): Promise<string> => {
+      const text = await resolveRunText(value);
+      return sharedState.executionExtensionContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
+    };
 
     if (prepResult.injectOnce && alreadyInjected) {
       log.info('injectOnce: skipping repeat injection', { nodeId });
@@ -101,24 +130,6 @@ export class StaticNode extends BaseNode<
       if (!Array.isArray(sharedState.messages)) {
         sharedState.messages = [];
       }
-
-      const referenceContext = {
-        conversationId: sharedState.conversationId,
-        flowId: sharedState.flowId,
-        nodeId,
-      };
-      const resolveRunText = async (value: string): Promise<string> =>
-        sharedState.executionExtensionContext ? (value ?? '') : resolveRunResourceRefs(
-          resolveRunVars(value ?? '', sharedState.variables),
-          sharedState.ephemeral ? undefined : sharedState.conversationId,
-          sharedState.emit,
-          { nodeId },
-          sharedState,
-        );
-      const resolve = async (value: string): Promise<string> => {
-        const text = await resolveRunText(value);
-        return sharedState.executionExtensionContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
-      };
 
       const messages: FlujoChatMessage[] = [];
       for (const entry of prepResult.entries) {
@@ -189,19 +200,42 @@ export class StaticNode extends BaseNode<
 
           const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
           const serverName = (entry.serverName ?? '').trim();
+          const captureVariable = entry.captureVariable?.trim();
+          if (captureVariable && !isValidRunVarName(captureVariable)) {
+            throw new Error(`Static node ${nodeId}: invalid capture variable "${captureVariable}".`);
+          }
+          if (entry.onError !== undefined && entry.onError !== 'continue' && entry.onError !== 'fail') {
+            throw new Error(`Static node ${nodeId}: onError must be continue or fail.`);
+          }
+          if (entry.onError === 'fail' && executionMode !== 'real') {
+            throw new Error(`Static node ${nodeId}: fail policy requires a real tool call.`);
+          }
+          if (entry.resultFormat !== undefined && entry.resultFormat !== 'text' && entry.resultFormat !== 'json') {
+            throw new Error(`Static node ${nodeId}: resultFormat must be text or json.`);
+          }
           let resultContent = executionMode === 'mock' ? await resolve(entry.result ?? '') : '';
+          let resultValue: unknown = resultContent;
+          let resultDelivered = false;
+          let failure: ErrorDetails | undefined;
 
           if (executionMode === 'real') {
+            if (sharedState.isCancelled || sharedState.abortSignal?.aborted) {
+              sharedState.messages.push(...messages);
+              sharedState.lastResponse = { success: false, error: 'Execution cancelled.', errorDetails: {
+                message: 'Execution cancelled.', type: 'mcp_service_error', code: 'static_tool_cancelled',
+              } };
+              return ERROR_ACTION;
+            }
             if (!serverName) {
               throw new Error(`Static node ${nodeId}: real tool call "${toolName}" requires an MCP server.`);
             }
             const callResult = serverName === PERSONA_MEMORY_GATEWAY_SERVER
-              ? await executePersonaMemoryMaintenanceCommit(toolName, args, {
+              ? await deliverResult(() => executePersonaMemoryMaintenanceCommit(toolName, args, {
                   variables: sharedState.variables,
                   conversationId: sharedState.conversationId,
                   executionAuthority: sharedState.executionAuthority,
                   personaAttribution: sharedState.personaAttribution,
-                })
+                }))
               : await (async () => {
                   const binding = node_params?.properties?.mcpNodes?.find(
                     (candidate) => candidate.properties?.boundServer === serverName,
@@ -234,15 +268,58 @@ export class StaticNode extends BaseNode<
                     undefined,
                     binding.id,
                   ] as const;
-                  return sharedState.executionExtensionContext
-                    ? mcpService.callTool(...callArguments,
-                        (await import('@/backend/execution/extensions')).executionExtensionSignal(sharedState.executionExtensionContext),
-                        'host', undefined, undefined, sharedState.executionExtensionContext)
-                    : mcpService.callTool(...callArguments);
+                  const extensionContext = sharedState.executionExtensionContext;
+                  return extensionContext
+                    ? deliverResult(async () => mcpService.callTool(...callArguments,
+                        combineAbortSignals(sharedState.abortSignal,
+                          (await import('@/backend/execution/extensions')).executionExtensionSignal(extensionContext)),
+                        'host', undefined, undefined, extensionContext))
+                    : deliverResult(() => sharedState.abortSignal
+                      ? mcpService.callTool(...callArguments, sharedState.abortSignal)
+                      : mcpService.callTool(...callArguments));
                 })();
+            resultValue = callResult.success ? callResult.data ?? null : { success: false, error: callResult.error, errorType: callResult.errorType };
+            resultDelivered = callResult.success;
             resultContent = callResult.success
               ? JSON.stringify(callResult.data ?? null)
               : `Error: ${callResult.error || `Tool ${toolName} failed`}`;
+            // MCP delivery success is distinct from a tool-level isError flag.
+            // Never infer failure from exitCode, stderr or arbitrary application JSON.
+            const toolError = callResult.success && !!callResult.data && typeof callResult.data === 'object'
+              && (callResult.data as Record<string, unknown>).isError === true;
+            const cancelled = sharedState.isCancelled || sharedState.abortSignal?.aborted;
+            if (((!callResult.success || toolError) && entry.onError === 'fail') || cancelled) {
+              const code = cancelled ? 'static_tool_cancelled' : toolError ? 'static_mcp_tool_error'
+                : callResult.errorType === 'timeout' ? 'static_mcp_timeout'
+                : callResult.errorType === 'cancelled' ? 'static_tool_cancelled' : 'static_mcp_service_error';
+              const reason = cancelled ? 'Execution cancelled.'
+                : toolError ? staticResultText(callResult.data) || 'MCP tool returned isError: true'
+                : callResult.error || 'MCP service failed';
+              const message = boundStaticText(`Static ${serverName}/${toolName}: ${reason}`, MAX_STATIC_ERROR_CHARS);
+              failure = {
+                message: boundStaticText(String(redactErrorDetails({ message })?.message ?? 'Static MCP call failed.'), MAX_STATIC_ERROR_CHARS),
+                type: !cancelled && toolError ? 'mcp_tool_error' : 'mcp_service_error',
+                code,
+                name: boundStaticText(toolName, 200),
+                param: boundStaticText(serverName, 200),
+                status: callResult.statusCode,
+              };
+            }
+          }
+
+          if (captureVariable) {
+            // Mock JSON captures preserve authored JSON when parseable; ordinary
+            // mock text becomes a JSON string. The injected mock remains unchanged.
+            if (executionMode === 'mock' && entry.resultFormat === 'json') {
+              try { resultValue = JSON.parse(resultContent); } catch { resultValue = resultContent; }
+            }
+            sharedState.variables ??= {};
+            const captured = entry.resultFormat === 'json'
+              ? staticResultJson(resultValue)
+              : executionMode === 'mock' || !resultDelivered ? boundStaticText(resultContent) : staticResultText(resultValue);
+            Object.defineProperty(sharedState.variables, captureVariable, {
+              value: captured, configurable: true, enumerable: true, writable: true,
+            });
           }
 
           messages.push({
@@ -262,6 +339,11 @@ export class StaticNode extends BaseNode<
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);
+          if (failure) {
+            sharedState.messages.push(...messages);
+            sharedState.lastResponse = { success: false, error: failure.message, errorDetails: failure };
+            return ERROR_ACTION;
+          }
           continue;
         }
 
@@ -278,6 +360,21 @@ export class StaticNode extends BaseNode<
       markers[nodeId] = runId;
       sharedState.staticInjected = markers;
       log.info('Injected static messages', { nodeId, messageCount: messages.length });
+    }
+
+    if (typeof node_params?.properties?.outputTemplate === 'string') {
+      // Captured tool data is literal output, never another template. Resolve
+      // authored resource/dynamic references before inserting run variables.
+      const authored = node_params.properties.outputTemplate;
+      const resourceText = sharedState.executionExtensionContext ? authored : await resolveRunResourceRefs(
+        authored, sharedState.ephemeral ? undefined : sharedState.conversationId,
+        sharedState.emit, { nodeId }, sharedState,
+      );
+      const referenceText = sharedState.executionExtensionContext ? resourceText
+        : String(await resolvePromptDynamicReferences(resourceText, referenceContext));
+      const output = boundStaticText(resolveRunVars(referenceText, sharedState.variables));
+      sharedState.lastResponse = output;
+      sharedState.messages.push({ role: 'assistant', content: output, id: crypto.randomUUID(), timestamp: Date.now() } as FlujoChatMessage);
     }
 
     // Pass through to the first successor.

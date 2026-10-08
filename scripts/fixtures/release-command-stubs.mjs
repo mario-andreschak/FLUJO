@@ -3,6 +3,7 @@
 import childProcess from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import path from 'node:path';
 
 const record = (command) => appendFileSync(process.env.RELEASE_TEST_COMMAND_LOG, `${JSON.stringify(command)}\n`);
 let appBuilt = false;
@@ -20,6 +21,8 @@ childProcess.execSync = (command) => {
   if (command === 'git remote get-url --push --all origin') return process.env.RELEASE_TEST_PUSH_ORIGIN ?? 'git@github.com:mario-andreschak/FLUJO.git';
   if (command === 'git fetch origin main "+refs/tags/v*:refs/tags/v*"') return '';
   if (command === 'git rev-parse main' || command === 'git rev-parse origin/main') return 'synthetic-release-head\n';
+  if (command === 'git rev-parse HEAD') return `${process.env.RELEASE_TEST_LOCAL_HEAD ?? 'a'.repeat(40)}\n`;
+  if (command === 'git rev-parse --git-path flujo-release.json') return path.join(process.cwd(), 'flujo-release.json');
   if (command === 'gh auth status') return '';
   if (command === 'npm whoami') return 'synthetic-release-user\n';
   if (command === 'npm view flujo-ai maintainers --json') return '["synthetic-release-user <synthetic@example.invalid>"]';
@@ -38,6 +41,28 @@ childProcess.execSync = (command) => {
 childProcess.spawnSync = (command, args) => {
   record([command, ...args].join(' '));
   if (command === 'gh' && args.length === 1 && args[0] === '--version') return { status: 0 };
+  if (command === 'gh' && args[0] === 'api') {
+    if (args[1] === 'repos/mario-andreschak/FLUJO/actions/workflows/publish-npm.yml') {
+      return { status: 0, stdout: JSON.stringify({ id: 456, path: '.github/workflows/publish-npm.yml', state: 'active' }) };
+    }
+    if (/^repos\/mario-andreschak\/FLUJO\/actions\/runs\/\d+$/.test(args[1])) {
+      const sha = process.env.RELEASE_TEST_RUN_SHA ?? 'a'.repeat(40);
+      const version = process.env.RELEASE_TEST_RUN_VERSION ?? '0.0.1';
+      return { status: 0, stdout: JSON.stringify({
+        id: Number(args[1].split('/').at(-1)),
+        repository: { full_name: process.env.RELEASE_TEST_RUN_REPOSITORY ?? 'mario-andreschak/FLUJO' },
+        path: '.github/workflows/publish-npm.yml', workflow_id: 456,
+        head_branch: 'main', event: 'workflow_dispatch', head_sha: sha,
+        display_title: `Release FLUJO ${version} at ${sha}`,
+        status: 'completed', conclusion: process.env.RELEASE_TEST_RUN_CONCLUSION ?? 'failure',
+      }) };
+    }
+    if (args[1] === 'repos/mario-andreschak/FLUJO/git/ref/heads/main') {
+      return { status: 0, stdout: process.env.RELEASE_TEST_MAIN_HEAD ?? 'a'.repeat(40) };
+    }
+  }
+  if (command === 'gh' && args[0] === 'run' && args[1] === 'rerun') return { status: 0, stdout: '' };
+  if (command === 'gh' && args[0] === 'run' && args[1] === 'watch' && process.env.RELEASE_TEST_RUN_CONCLUSION === 'success') return { status: 0, stdout: '' };
   throw new Error(`Unexpected release subprocess blocked by test: ${command}`);
 };
 syncBuiltinESMExports();

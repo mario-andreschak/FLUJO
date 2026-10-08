@@ -130,7 +130,7 @@ async function askModel(modelId: string, task: string): Promise<string> {
     throw new Error(`config: The AI-check model no longer exists (${modelId})`);
   }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  const apiKey = resolvedKey || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim() ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) {
     throw new Error('config: Could not resolve the AI-check model API key');
   }
@@ -140,6 +140,7 @@ async function askModel(modelId: string, task: string): Promise<string> {
     model,
     apiKey,
     temperature: 0,
+    temperatureOverride: 0,
     maxTokens: normalizeMaxTokens(model.maxTokens),
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },

@@ -93,7 +93,7 @@ export const ModelCard = ({
   const { visualStyle } = useThemeUtils();
   const modern = visualStyle === 'modern';
   const providerProfile = getProviderProfile(model.provider, model.adapter);
-  const providerMark = (providerProfile.label.match(/[a-z0-9]+/gi) ?? [])
+  const providerMark = ((model.fallbackPolicy ? 'Fallback Policy' : providerProfile.label).match(/[a-z0-9]+/gi) ?? [])
     .slice(0, 2)
     .map((part) => part[0])
     .join('')
@@ -200,7 +200,7 @@ export const ModelCard = ({
             </Typography>
           )}
           <Chip
-            label={providerProfile.label}
+            label={model.fallbackPolicy ? `${t('models.policy.badge')} · ${model.fallbackPolicy.modelIds.length}` : providerProfile.label}
             size="small"
             sx={{
               mt: 0.45,
@@ -309,7 +309,7 @@ export const ModelCard = ({
             {model.displayName || model.name}
           </Typography>
           <Chip
-            label={providerProfile.label}
+            label={model.fallbackPolicy ? `${t('models.policy.badge')} · ${model.fallbackPolicy.modelIds.length}` : providerProfile.label}
             size="small"
             sx={{
               flexShrink: 0,

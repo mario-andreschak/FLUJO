@@ -145,7 +145,7 @@ class ModelService {
   async addModel(model: Model): Promise<ModelResult> {
     try {
       // Validate required fields
-      if (!model.provider) {
+      if (!model.provider && !model.fallbackPolicy) {
         return {
           success: false,
           error: 'Provider is required'
