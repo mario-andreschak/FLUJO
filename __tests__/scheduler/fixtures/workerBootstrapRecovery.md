@@ -47,4 +47,3 @@ and bounded trigger/Static MCP failure classifications. It emits no raw error,
 tool arguments, result, credentials, paths or run identifiers. Unavailable
 diagnostics do not replace the primary missing-effect failure. These observations
 do not identify an active engine's internal stage or prove a causal diagnosis.
-
