@@ -54,6 +54,9 @@ interface Pending { config: MCPStdioConfig; token: string; audience: string; wor
   record?: OwnedFile; marker?: OwnedFile }
 const capsules = new WeakMap<object, Pending>();
 const principals = new WeakSet<object>();
+// Reuse only this graph's opaque request binding. Every action/effect still
+// performs the full fresh durable recheck; no authority verdict is retained.
+const foreignRequestPrincipals = new WeakMap<Request, BundledFlujoWorkloadAuthorization>();
 const context = new AsyncLocalStorage<{ authorization: BundledFlujoWorkloadAuthorization; request: Request }>();
 // Next server graphs share only the original request, never an authorization
 // verdict. A receiving graph authenticates it into its own private principal.
@@ -423,8 +426,14 @@ async function selectedWorkload() {
     if (selected.request !== request || !principals.has(selected.authorization)) throw new BundledFlujoWorkloadError();
     return selected;
   }
+  const known = foreignRequestPrincipals.get(request);
+  if (known) {
+    if (!principals.has(known) || known.readRequest() !== request) throw new BundledFlujoWorkloadError();
+    return { authorization: known, request };
+  }
   const resolved = await resolveBundledFlujoWorkloadRequest(request);
   if (resolved.kind !== 'authorized' || originalWorkloadRequest() !== request) throw new BundledFlujoWorkloadError();
+  foreignRequestPrincipals.set(request, resolved.authorization);
   return { authorization: resolved.authorization, request };
 }
 /** Effect guards retain the original admitted request and private ALS principal. */
