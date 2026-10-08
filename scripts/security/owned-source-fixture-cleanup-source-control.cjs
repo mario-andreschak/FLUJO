@@ -10,10 +10,14 @@ const {closeAndRestoreFixture}=require('./owned-source-fixture-cleanup.cjs');
  const vars=['FLUJO_WORKER_MODE','FLUJO_SNAPSHOT_CONTROL_TOKEN','FLUJO_APP_ROOT','FLUJO_BASE_URL'];
  for(const simultaneousFailure of[false,true]){
   const saved=Object.fromEntries(vars.map(name=>[name,process.env[name]])),fixture=installTrustedHostProfile(),ownedPath=fixture.config.cwd,ownedOwner=process.env.FLUJO_OWNER_AUTH_FILE;
-  const closeError=new Error('Forced close rejection'),primaryError=new Error('Primary Source failure'),restoreError=new Error('Forced environment callback rejection');let restored=false;
+  const closeError=new Error('Forced close rejection'),primaryError=new Error('Primary Source failure'),restoreError=new Error('Forced environment callback rejection');let restored=false,restoreAttempted=false,secondaryError;
+  const restoreEnvironment=()=>{for(const[name,value]of Object.entries(saved)){if(value===undefined)delete process.env[name];else process.env[name]=value;}};
+  const restoreFixture=()=>{if(!restoreAttempted){restoreAttempted=true;fixture.restore();restored=true;}};
+  try{
   for(const name of vars)process.env[name]='synthetic-fault-value';
-  await assert.rejects(closeAndRestoreFixture({close:async()=>{throw closeError;}},()=>{for(const[name,value]of Object.entries(saved)){if(value===undefined)delete process.env[name];else process.env[name]=value;}if(simultaneousFailure)throw restoreError;},()=>{fixture.restore();restored=true;},simultaneousFailure?primaryError:undefined),error=>simultaneousFailure?error instanceof AggregateError&&error.cause===primaryError&&error.errors[0]===primaryError&&error.errors.includes(closeError)&&error.errors.includes(restoreError):error===closeError);
+  await assert.rejects(closeAndRestoreFixture({close:async()=>{throw closeError;}},()=>{restoreEnvironment();if(simultaneousFailure)throw restoreError;},restoreFixture,simultaneousFailure?primaryError:undefined),error=>simultaneousFailure?error instanceof AggregateError&&error.cause===primaryError&&error.errors[0]===primaryError&&error.errors.includes(closeError)&&error.errors.includes(restoreError):error===closeError);
   assert.equal(restored,true);assert.equal(fs.existsSync(ownedPath),false);assert.equal(fs.existsSync(ownedOwner),false);for(const[name,value]of Object.entries(saved))assert.equal(process.env[name],value);
+  }catch(error){secondaryError=error;throw error;}finally{await closeAndRestoreFixture(undefined,restoreEnvironment,restoreFixture,secondaryError);}
  }
  console.log(JSON.stringify({sourceControl:'owned-source-fixture-cleanup',forcedCloseFailurePreserved:true,workerTokenModeAppAudienceEnvironmentRestored:true,actualOwnedPrivateFixtureRemoved:true,simultaneousEnvironmentFailureDoesNotSkipFixtureRestore:true,primaryErrorPreservedAsAggregateCause:true,scope:'Actual Source owned-fixture cleanup with injected close failure; no SDK close-failure simulation or production authority claim'}));
 })().catch(error=>{console.error(error);process.exitCode=1;});
