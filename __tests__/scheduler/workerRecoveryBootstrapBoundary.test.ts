@@ -178,12 +178,12 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   await worker.request('create', { planId, flowId: snapshot.flowId });
   await waitEffect(snapshot.journal, 1);
   const firstRun = await waitTerminal(worker, planId);
+  await worker.request('start-again'); await worker.request('start-again');
+  expect(await effects(snapshot.journal)).toHaveLength(1);
   // Export the genuinely locally enrolled row through the production exporter.
   // Its installation-private HMAC record must not travel to the sibling.
   const localSnapshot = await worker.request('export');
   additionalStaging.push(localSnapshot.stagingDir);
-  await worker.request('start-again'); await worker.request('start-again');
-  expect(await effects(snapshot.journal)).toHaveLength(1);
   await worker.request('stop'); await worker.exit();
   // A naturally missed occurrence must be recovered by bootstrap, not runNow.
   await crossMinute();

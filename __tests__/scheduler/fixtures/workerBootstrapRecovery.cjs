@@ -40,6 +40,8 @@ let commands = Promise.resolve();
 async function shutdown() {
   stopping = true;
   const failures = [];
+  try { if (scheduler) await scheduler.stopWorker(); }
+  catch (error) { failures.push(error); }
   // Do not import/start the backend graph to clean up a seed-only failure.
   try { if (backendEntered) await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); }
   catch (error) { failures.push(error); }
@@ -101,14 +103,38 @@ async function command(message) {
       break;
     }
     case 'export': {
+      // Export a portable operator configuration, not this machine's host-home
+      // environment/attestation. Stop actual timers before temporary storage
+      // projection; restore the exact approved configuration independently.
+      await scheduler.stopWorker();
+      const configuration = source('backend/services/mcp/config.ts');
+      const configs = await configuration.loadServerConfigs();
+      if (!Array.isArray(configs)) throw new Error('Unavailable export configuration');
+      const shipped = source('backend/services/mcp/shippedServers.ts');
+      const descriptor = shipped.SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'bash');
+      const effectRoot = path.join(source('utils/workspace.ts').getWorkspaceDataDir(), 'userdata', 'worker-bootstrap');
+      const portable = { ...shipped.createShippedServerConfig(descriptor, {}), name: 'bash', disabled: false,
+        roots: [effectRoot], env: { FLUJO_BASH_ROOTS: effectRoot, FLUJO_FS_ROOTS: effectRoot } };
+      if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name,
+        config.name === 'bash' ? portable : config])))).success) throw new Error('Portable export projection failed');
+      let primary;
+      let captured;
+      try {
       const key = require('node:crypto').randomBytes(32).toString('base64');
       const archive = source('backend/services/workspace/snapshotArchive.ts');
-      const captured = await archive.captureWorkspaceSnapshot(
+      captured = await archive.captureWorkspaceSnapshot(
         source('utils/workspace.ts').getCurrentWorkspace(), 2, { recipientKey: key });
       try {
         const written = await archive.writeWorkspaceSnapshotArchive(captured);
         result = { archivePath: written.archivePath, stagingDir: written.stagingDir, sha256: written.sha256, key };
-      } finally { if (captured.dispose) await captured.dispose(); }
+      } finally { if (captured.dispose) await captured.dispose(); captured = undefined; }
+      } catch (error) { primary = error; throw error; }
+      finally {
+        if (!(await configuration.saveConfig(new Map(configs.map(config => [config.name, config])))).success) {
+          send({ phase: 'cleanup-failed', error: 'Exact approved configuration restoration failed' });
+          throw new AggregateError(primary ? [primary] : [], 'Approved configuration restoration failed');
+        }
+      }
       break;
     }
     case 'start-again': await scheduler.start(); result = await scheduler.list(); break;
@@ -194,6 +220,7 @@ async function command(message) {
     workspaceRoot, undefined, ['bash']);
   const shipped = source('backend/services/mcp/shippedServers.ts');
   const configs = await source('backend/services/mcp/config.ts').loadServerConfigs();
+  if (!Array.isArray(configs)) throw new Error('Restored MCP configuration unavailable');
   const bash = configs.find(config => config.name === 'bash');
   const descriptor = bash && shipped.shippedDescriptorForConfig(bash);
   if (!descriptor || descriptor.packageDirectory !== 'bash' || bash.transport !== 'stdio' || bash.disabled) {

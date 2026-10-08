@@ -311,6 +311,7 @@ export class SchedulerService {
   /** Pause state as of the last reconcile (for synchronous status reads). */
   private pausedCache = false;
   private started = false;
+  private workerStopped = false;
   /** Process-local joins for durable projection reconciliation; disk is source of truth. */
   private personaProjectionCompletions = new Map<string, Promise<RunRecord>>();
   /** Joins duplicate live/startup drains of the same durable file batch. */
@@ -346,6 +347,7 @@ export class SchedulerService {
       return;
     }
     this.started = true;
+    this.workerStopped = false;
     log.info('Starting scheduler');
     await this.reconcile();
     // Worker snapshots never resume Persona deliveries, file-watch intents or
@@ -356,6 +358,26 @@ export class SchedulerService {
     await this.drainTerminalPublications();
     await this.reconcileDurableFileWatchIntents(false);
     await this.reconcilePersonaSchedulerProjections(false);
+  }
+
+  /** Retire worker timers without persisting pause or changing recovery opt-in.
+   * Active runs are not assumed cancelled/drained; callers must retain that
+   * uncertainty. This lifecycle operation cannot retire a local Persona host.
+   */
+  async stopWorker(): Promise<void> {
+    if (!isWorkerMode()) throw new Error('Worker scheduler stop requires worker mode');
+    this.workerStopped = true;
+    this.started = false;
+    const failures: unknown[] = [];
+    try { await this.reconcileChain; } catch (error) { failures.push(error); }
+    for (const [id, trigger] of this.armed) {
+      try { trigger.dispose(); this.armed.delete(id); this.armedConfigurations.delete(id); }
+      catch (error) { failures.push(error); }
+    }
+    if ([...this.running.values()].some(runs => runs.size > 0) || this.workerLocalClaims.size > 0) {
+      failures.push(new Error('Worker scheduler still owns an active occurrence'));
+    }
+    if (failures.length) throw new AggregateError(failures, 'Worker scheduler retirement is unresolved');
   }
 
   /**
@@ -383,6 +405,7 @@ export class SchedulerService {
   }
 
   private async doReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
+    if (this.workerStopped) return;
     // Keep timers alive while reading storage. Disposing before this await can
     // lose a due occurrence and re-arm directly at the following cron boundary.
     const file = await this.loadFile();
@@ -400,6 +423,7 @@ export class SchedulerService {
         if (status) this.workerRecoveryStatuses.set(execution.id, status);
       }
     }
+    if (this.workerStopped) return;
     const configurations = new Map(file.executions
       .filter(execution => !file.paused && execution.enabled
         && !execution.personaRetired && !execution.personaArchived
@@ -907,6 +931,7 @@ export class SchedulerService {
   private async fireOrdinarySchedule(execution: PlannedExecution, payload: TriggerFirePayload,
     occurrenceAt: string): Promise<RunRecord> {
     if (!isWorkerMode()) return this.fire(execution, payload);
+    if (this.workerStopped) throw new Error('Worker scheduler has retired');
     const runId = uuidv4();
     // Register the local waiter before publishing its durable claim. A reconcile
     // crossing the atomic write must not mistake this live owner for a restart.
@@ -3003,7 +3028,7 @@ export class SchedulerService {
         if (isWorkerMode() && this.workerLocalClaims.has(runId)) {
           const file = await this.loadFile();
           const current = file.executions.find(candidate => candidate.id === execution.id);
-          if (file.paused || !current || !current.enabled || runtimeConfiguration(current) !== runtimeConfiguration(execution)) {
+          if (this.workerStopped || file.paused || !current || !current.enabled || runtimeConfiguration(current) !== runtimeConfiguration(execution)) {
             throw new Error('Worker schedule definition or stop controls changed before execution');
           }
           await assertWorkerOccurrenceCurrent(current, runId);
