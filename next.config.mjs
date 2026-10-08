@@ -10,6 +10,10 @@ const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Workload capabilities bind the exact loopback origin and Host. NextURL
+  // normalizes numeric loopback hosts to localhost unless Proxy sees the
+  // original URL; preserve it so the existing strict guards can verify it.
+  skipProxyUrlNormalize: true,
   /* config options here */
   // Production installs check application code; CI's root config still checks
   // the test suite. Next otherwise checks tests before hiding their diagnostics.
