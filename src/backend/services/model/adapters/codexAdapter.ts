@@ -24,7 +24,7 @@ import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
-import { createOwnedCodexThread } from './codexOwnedThread';
+import { createOwnedCodexThread, nativeCodexEnvironment } from './codexOwnedThread';
 import { paceToolCallArguments } from './toolArgumentPacing';
 import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
@@ -881,7 +881,7 @@ export class CodexAdapter implements CompletionAdapter {
         ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
       } as const;
       const ownedThread = nativeOriginalProcessHost ? createOwnedCodexThread({
-        host: nativeOriginalProcessHost, env: { ...runtime.env, ...(apiKey ? { CODEX_API_KEY: apiKey } : {}) },
+        host: nativeOriginalProcessHost, env: nativeCodexEnvironment(runtime.env, apiKey),
         config, options: threadOptions, maxTurns: input.maxTurns!, executable: privateCodexPath,
       }) : undefined;
       const thread = ownedThread ?? (resumeThreadId

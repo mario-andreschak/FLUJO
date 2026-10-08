@@ -11,6 +11,18 @@ const record = (value: unknown): Record<string, unknown> => {
 const id = (value: unknown): string => typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : unavailable();
 const count = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : unavailable();
 
+/** Only system execution paths and the managed runtime home cross Native's boundary. */
+export function nativeCodexEnvironment(runtime: NodeJS.ProcessEnv, apiKey?: string): NodeJS.ProcessEnv {
+  const names = ['PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
+    'LANG', 'LC_ALL', 'TZ', 'TERM', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+    'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+    'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+    'TMPDIR', 'TMP', 'TEMP', 'CODEX_HOME'];
+  const env = Object.fromEntries(names.flatMap(name => runtime[name] === undefined ? [] : [[name, runtime[name]]]));
+  if (apiKey) env.CODEX_API_KEY = apiKey;
+  return env;
+}
+
 /** One adapter-owned public app-server, one new thread, one Original turn.
  * No SDK private fields, process monkeypatch, resume, or replacement child. */
 export function createOwnedCodexThread(input: {

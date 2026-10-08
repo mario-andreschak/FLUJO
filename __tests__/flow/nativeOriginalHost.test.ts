@@ -92,6 +92,7 @@ process.stdin.on('end',()=>{
  require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
  process.exit(0);
 });
+fs.writeFileSync(wire+'.environment',JSON.stringify({names:Object.keys(process.env), selectedKey:process.env.CODEX_API_KEY==='offline-fixture-token', managedHome:process.env.CODEX_HOME===process.env.HOME}));
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 readline.createInterface({input:process.stdin}).on('line',line=>{
  fs.appendFileSync(wire,line+'\\n');const m=JSON.parse(line);if(!m.id)return;
@@ -299,7 +300,17 @@ async function ledger() {
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
   it('runs a genuine Codex Original through its owned public app-server and releases only after exit and pipe close', async () => {
     selectedModel = { ...modelFixture, provider: 'codex-subscription', adapter: 'codex-cli' } as Model;
+    const canaries = ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_PRIVATE_OWNER_GRANT', 'MCP_SECRET',
+      'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NODE_OPTIONS', 'NODE_PATH'];
+    const previous = canaries.map(name => process.env[name]);
+    for (const name of canaries) process.env[name] = 'offline-private-env-canary';
+    // NODE_OPTIONS is deliberately syntactically valid: it must still be absent in the child.
+    process.env.NODE_OPTIONS = '--no-warnings';
+    try {
     await withClaim(async () => {}, async (_personaId, goalId) => {
+      const environment = JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.environment'), 'utf8'));
+      expect(environment).toMatchObject({ selectedKey: true, managedHome: true });
+      for (const name of canaries) expect(environment.names).not.toContain(name);
       expect(queryMock).not.toHaveBeenCalled();
       expect(codexRegistrations).toHaveLength(1);
       expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'turn/completed' })]));
@@ -315,6 +326,9 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       const wire = (await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
       expect(wire.map(message => message.method)).toEqual(['initialize', 'initialized', 'thread/start', 'turn/start']);
     }, 'no-handoff');
+    } finally { canaries.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
+    }); }
   }, 30000);
   it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
     'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
