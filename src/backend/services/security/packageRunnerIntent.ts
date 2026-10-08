@@ -9,6 +9,7 @@ import { prepareResolvedPackageTree, revalidateResolvedPackageTree } from './pac
 import { preparePackageRunnerLookup, revalidatePackageRunnerLookup, type PackageRunnerLookupRequest } from './packageRunnerLookup';
 import { inspectPackageRunnerNativeStage } from './packageRunnerNativeStage';
 import { inspectControlledPackageRunnerAssets } from './packageRunnerShims';
+import { inspectPackageRunnerNpmEvidence } from './packageRunnerNpmEvidence';
 
 export interface PackageRunnerPreparation {
   revision: string;
@@ -66,6 +67,13 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
   if (!preparation.artifactFiles) throw new Error('Actual dependency archives are required for a runner intent');
   const tree = await prepareResolvedPackageTree(preparation.lookup.cwd, config.args[1], signal, preparation.artifactFiles);
   const lookup = await preparePackageRunnerLookup(preparation.lookup, signal);
+  // Freeze actual full upstream module/license bytes as well as the staged
+  // modified npm closure. A single replacement anchor cannot stand for either.
+  const upstreamLookup = await preparePackageRunnerLookup({ ...preparation.lookup,
+    npmRoot: preparation.upstreamNpmRoot }, signal);
+  const upstreamNpm = await inspectPackageRunnerNpmEvidence(preparation.upstreamNpmRoot, signal);
+  const stagedNpm = await inspectPackageRunnerNpmEvidence(preparation.lookup.npmRoot, signal);
+  if (JSON.stringify(upstreamNpm) !== JSON.stringify(stagedNpm)) throw new Error('Controlled npm metadata/license differs from actual upstream distribution');
   const launcher = await executable(preparation.launcher, signal);
   const node = await executable(preparation.node, signal);
   const shell = await executable(preparation.shell, signal);
@@ -75,7 +83,8 @@ async function collect(config: MCPStdioConfig, preparation: PackageRunnerPrepara
     packageName: tree.packageName, version: tree.version };
   const controlledAssets = await inspectControlledPackageRunnerAssets(controlledAssetsInput, signal);
   if (await inspectPackageRunnerNativeStage(runtime, signal) !== nativeStage) throw new Error('Native runner stage authority changed');
-  return { tree, lookup, launcher, node, shell, nativeStage, runtime, controlledAssets, controlledAssetsInput };
+  return { tree, lookup, upstreamLookup, upstreamNpm, stagedNpm, launcher, node, shell,
+    nativeStage, runtime, controlledAssets, controlledAssetsInput };
 }
 
 /** Opaque inspection intent, deliberately separate from consent/launch authority. */
@@ -103,6 +112,11 @@ export async function revalidatePackageRunnerIntent(intent: PreparedPackageRunne
   }
   await revalidateResolvedPackageTree(state.evidence.tree, signal);
   await revalidatePackageRunnerLookup(state.evidence.lookup, signal);
+  await revalidatePackageRunnerLookup(state.evidence.upstreamLookup, signal);
+  if (JSON.stringify(await inspectPackageRunnerNpmEvidence(state.preparation.upstreamNpmRoot, signal)) !== JSON.stringify(state.evidence.upstreamNpm)
+      || JSON.stringify(await inspectPackageRunnerNpmEvidence(state.preparation.lookup.npmRoot, signal)) !== JSON.stringify(state.evidence.stagedNpm)) {
+    throw new Error('Actual npm distribution identity/license changed');
+  }
   for (const prior of [state.evidence.launcher, state.evidence.node, state.evidence.shell]) {
     if (JSON.stringify(await executable(prior.path, signal)) !== JSON.stringify(prior)) throw new Error('Package runner executable changed');
   }
