@@ -27,6 +27,7 @@ RUN npm ci --include=dev
 # Build the Next.js production output.
 COPY . .
 RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only
+RUN node scripts/build-smoke-owner-issuer.mjs
 ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 

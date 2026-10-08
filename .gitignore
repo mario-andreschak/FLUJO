@@ -222,3 +222,5 @@ next-env.d.ts
 /feature-first-use-artifacts/
 /feature-browser-artifacts/
 /ci-node-runtime/
+/scripts/generated-smoke-owner-issuer.cjs
+/scripts/generated-smoke-owner-issuer.json
