@@ -1,11 +1,12 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { nativeDigest as hash } from '@/backend/execution/flow/handlers/nativeDigest';
 import { createControllerNativeSourceAdapter, type ControllerNativeTransport } from '@/backend/execution/extensions/controllerNativeAdapter';
 import { registerExecutionExtension, assertExecutionExtensionCurrent, applyExecutionRunInput,
   bindExecutionExtensionRun, executionExtensionNativeWorkerRoot, commitExecutionExtensionMutation,
+  validateExecutionLoadedState,
   type ExecutionExtensionContext, type ExecutionExtensionAdapter } from '@/backend/execution/extensions';
 
 const flow={id:'owned-flow',nodes:[],edges:[]};
-const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const plan={flowId:flow.id,flowDigest:hash(flow),modelId:'owned-luna',modelDigest:'b'.repeat(64)};
 const claim={runId:'controller-run',rootConversationId:'owned-conversation',goalId:'owned-goal',workspace:'owned-workspace'};
 // Source capability tests use deterministic transport/gateway callbacks. They
@@ -57,6 +58,18 @@ test('trusted transport mints a Source context that pins actual plan and refuses
     });
     await expect(assertExecutionExtensionCurrent(retained)).rejects.toThrow();
     await expect(e.composed.adapter.assertDispatch(undefined,'fleet','model')).rejects.toThrow();
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('loaded plan uses the native receipt digest across object key order and rejects content drift',async()=>{
+  const e=equipment();
+  try {
+    await e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      await validateExecutionLoadedState(context,{conversationId:claim.rootConversationId,flowId:plan.flowId,
+        flowSnapshot:{edges:[],nodes:[],id:flow.id}});
+      await expect(validateExecutionLoadedState(context,{conversationId:claim.rootConversationId,flowId:plan.flowId,
+        flowSnapshot:{edges:[],nodes:[{id:'foreign-node'}],id:flow.id}})).rejects.toThrow();
+    });
   }finally{e.restore();await e.composed.close();}
 });
 

@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { nativeDigest } from './nativeDigest';
+export { nativeDigest } from './nativeDigest';
 import type OpenAI from 'openai';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { DecodedTool, ToolIdentityService } from './toolNamespace';
@@ -47,14 +48,6 @@ export function assertNativeToolPort(value: unknown): asserts value is NativeToo
   }
 }
 
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`;
-}
-export const nativeDigest = (value: unknown): string => createHash('sha256').update(canonical(value)).digest('hex');
 const isHandoff = (name: string) => name === 'handoff' || name.startsWith('handoff_to_');
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {

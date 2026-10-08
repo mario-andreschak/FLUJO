@@ -1,4 +1,5 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
+import { nativeDigest as digest } from '../flow/handlers/nativeDigest';
 import { applyExecutionRunInput, createExecutionExtensionContext, ExecutionExtensionError, runWithExecutionInput,
   type ExecutionExtensionAdapter, type ExecutionExtensionContext, type ExecutionNativeWorkerRoot,
   type ExecutionNativeWorkerRootRequest } from './index';
@@ -19,7 +20,6 @@ export interface ControllerNativeTransport {
 type Gateway = Pick<ExecutionExtensionAdapter, 'isProtectedServer' | 'assertServerConfig' | 'protectedServer' |
   'authorizeHandoffs' | 'assertModelTool' | 'assertDispatch' | 'normalizeArguments' | 'requestMeta' | 'validateResult'>;
 type Active = { remote: object; claim: Claim; plan: Plan; watch: Awaited<ReturnType<ControllerNativeTransport['observe']>> };
-const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const denied = () => new ExecutionExtensionError('controller_native_source_refused');
 function checkedPlan(value: Plan): Plan {
   if (!value || Object.keys(value).sort().join() !== ['flowDigest','flowId','modelDigest','modelId'].join()
