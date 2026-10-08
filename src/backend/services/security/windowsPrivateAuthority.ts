@@ -39,14 +39,16 @@ while ($null -ne $current) {
 `;
 
 /** DACL evidence supplements stable file identity; 0600 is not a Windows ACL. */
-export function windowsPrivateAuthorityStamp(filename: string): string {
+export function windowsPrivateAuthorityStamp(filename: string | readonly string[]): string {
   if (process.platform !== 'win32') throw new Error('Windows authority inspection unavailable');
+  const filenames = typeof filename === 'string' ? [filename] : filename;
+  if (filenames.length < 1 || filenames.length > 2 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   if (!fs.statSync(executable).isFile()) throw new Error('Windows authority inspection unavailable');
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
-    input: JSON.stringify({ filename: path.resolve(filename) }), encoding: 'utf8',
+    input: JSON.stringify(typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filenames.map(item => path.resolve(item)) }), encoding: 'utf8',
     windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
     env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
   });
