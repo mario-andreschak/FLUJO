@@ -78,7 +78,9 @@ test.each(['success', 'publication-failure'] as const)('protected approval write
       expect(fs.readFileSync(ledger)).toEqual(before);
       const configs = await loadServerConfigs();
       if (!Array.isArray(configs)) throw new Error('Authoritative fixture configuration unavailable.');
-      await expect(verifyTrustedHostMcp(configs.find(item => item.name === proposed.name)!)).rejects.toThrow();
+      const savedConfig = configs.find(item => item.name === proposed.name);
+      if (!savedConfig || savedConfig.transport !== 'stdio') throw new Error('Authoritative stdio fixture configuration unavailable.');
+      await expect(verifyTrustedHostMcp(savedConfig)).rejects.toThrow();
     }
     expect(fs.readdirSync(path.dirname(ledger)).sort()).toEqual(entries);
   } catch (error) { failed = true; primary = error; throw error; }
