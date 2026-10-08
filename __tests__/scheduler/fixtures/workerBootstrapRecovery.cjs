@@ -296,7 +296,11 @@ const bootstrap = (async () => {
   phase('owner-approval-ready');
   backendEntered = true;
   phase('backend-bootstrap-enter');
-  await source('backend/init.ts').ensureBackendInitialized();
+  phase('backend-module-enter');
+  const backend = source('backend/init.ts');
+  phase('backend-module-ready');
+  await source('backend/initializationDiagnostics.ts').observeBackendInitialization(
+    event => phase(`init-${event.step}-${event.state}`), () => backend.ensureBackendInitialized());
   phase('backend-bootstrap-ready');
   const status = source('backend/services/workspace/workerMode.ts').getWorkerBootstrapStatus();
   if (status.state !== 'ready') throw new Error(`Actual bootstrap failed: ${status.state}`);

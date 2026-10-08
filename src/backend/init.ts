@@ -38,6 +38,8 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 
+import { observeInitializationAwait } from './initializationDiagnostics';
+
 const log = createLogger('backend/init');
 
 declare global {
@@ -414,14 +416,14 @@ async function runInitialization(): Promise<void> {
   // component ever reads or writes the legacy root layout mid-migration. It
   // rejects on an unresolvable source/destination conflict, which correctly
   // aborts startup rather than risking two divergent copies of the user's data.
-  await migrateWorkspaceLayout();
+  await observeInitializationAwait('layout', () => migrateWorkspaceLayout());
   if (isWorkerMode()) {
-    const { restoreConfiguredWorkerSnapshot, unlockWorkerSnapshot } = await import('@/backend/services/workspace/snapshotRestore');
-    const snapshot = await restoreConfiguredWorkerSnapshot();
+    const { restoreConfiguredWorkerSnapshot, unlockWorkerSnapshot } = await observeInitializationAwait('snapshot-import', () => import('@/backend/services/workspace/snapshotRestore'));
+    const snapshot = await observeInitializationAwait('snapshot-restore', () => restoreConfiguredWorkerSnapshot());
     if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) {
       throw new Error('Worker initialization is restricted to the restored workspace.');
     }
-    await unlockWorkerSnapshot(snapshot);
+    await observeInitializationAwait('snapshot-unlock', () => unlockWorkerSnapshot(snapshot));
   }
 
   // Arm shutdown BEFORE anything spawns a child process, so an early Ctrl+C
@@ -429,7 +431,7 @@ async function runInitialization(): Promise<void> {
   registerProcessShutdownHooks();
 
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
-  await verifyStorage();
+  await observeInitializationAwait('storage', () => verifyStorage());
   if (!isWorkerMode()) await ensureDefaultFlujoAgent();
   // Local detached launches can be reconciled in Worker mode too. Ownership and
   // exact child interruption checks protect copied snapshot records; this never
@@ -452,7 +454,7 @@ async function runInitialization(): Promise<void> {
   // encryption mode those secrets are undecryptable, so this secret-dependent
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
   // mode — or once already unlocked — it runs immediately, exactly as before.
-  if (await isEncryptionLocked()) {
+  if (await observeInitializationAwait('encryption', () => isEncryptionLocked())) {
     setWorkerBootstrapStatus({ state: 'locked', error: 'Worker workspace encryption is locked. Unlock this workspace before running jobs.' });
     log.info(
       'Encryption locked — deferring MCP/scheduler startup until unlock'
@@ -460,7 +462,7 @@ async function runInitialization(): Promise<void> {
     return;
   }
 
-  await startSecretDependentServices();
+  await observeInitializationAwait('secret-services', () => startSecretDependentServices());
 }
 
 /**
@@ -568,30 +570,30 @@ function startSecretDependentServices(): Promise<void> {
 }
 
 async function startWorkerRuntime(): Promise<void> {
-  const { restoreConfiguredWorkerSnapshot, verifyWorkerCodexAuth } = await import('@/backend/services/workspace/snapshotRestore');
-  const { reinstallWorkspaceMcpServers } = await import('@/backend/services/packages/workspaceMcpTransfer');
-  const snapshot = await restoreConfiguredWorkerSnapshot();
+  const { restoreConfiguredWorkerSnapshot, verifyWorkerCodexAuth } = await observeInitializationAwait('runtime-snapshot-import', () => import('@/backend/services/workspace/snapshotRestore'));
+  const { reinstallWorkspaceMcpServers } = await observeInitializationAwait('runtime-package-import', () => import('@/backend/services/packages/workspaceMcpTransfer'));
+  const snapshot = await observeInitializationAwait('runtime-snapshot', () => restoreConfiguredWorkerSnapshot());
   if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) throw new Error('Worker runtime workspace mismatch.');
   setWorkerBootstrapStatus({ state: 'installing', error: undefined });
-  await verifyWorkerCodexAuth(snapshot);
-  const installation = await reinstallWorkspaceMcpServers(snapshot.mcpTransfer);
+  await observeInitializationAwait('codex-auth', () => verifyWorkerCodexAuth(snapshot));
+  const installation = await observeInitializationAwait('mcp-reinstall', () => reinstallWorkspaceMcpServers(snapshot.mcpTransfer));
   const reports = installation.servers.map(server => ({
     name: server.name, status: server.status,
     ...(server.status === 'failed' ? { error: 'MCP dependency could not be prepared.' } : {}),
   }));
   setWorkerBootstrapStatus({ servers: reports });
   if (!installation.ok) throw new Error('Worker MCP dependency preparation failed. Check the worker server status.');
-  await mcpService.startEnabledServers();
-  const configs = await mcpService.loadServerConfigs();
+  await observeInitializationAwait('mcp-start', () => mcpService.startEnabledServers());
+  const configs = await observeInitializationAwait('mcp-config', () => mcpService.loadServerConfigs());
   if (!Array.isArray(configs)) throw new Error('Worker MCP configurations could not be loaded.');
-  const servers = await Promise.all(configs.map(async config => {
+  const servers = await observeInitializationAwait('mcp-status', () => Promise.all(configs.map(async config => {
     if (config.disabled) return { name: config.name, status: 'disabled' };
     const status = await mcpService.getServerStatus(config.name);
     return {
       name: config.name, status: status.status === 'connected' ? 'ready' : 'failed',
       ...(status.status !== 'connected' ? { error: 'MCP server did not connect.' } : {}),
     };
-  }));
+  })));
   setWorkerBootstrapStatus({ servers });
   if (servers.some(server => server.status === 'failed')) {
     throw new Error('Worker MCP startup failed. Every enabled server must connect before jobs are accepted.');
@@ -599,8 +601,8 @@ async function startWorkerRuntime(): Promise<void> {
   setWorkerBootstrapStatus({ state: 'ready', error: undefined });
   // This entry point preserves snapshot/Persona suppression and admits only
   // separately enrolled installation-local ordinary schedule generations.
-  const { isWorkerLocalRecoveryConfigured } = await import('@/backend/services/scheduler/workerLocalRecovery');
-  if (isWorkerLocalRecoveryConfigured()) await getSchedulerService().start();
+  const { isWorkerLocalRecoveryConfigured } = await observeInitializationAwait('scheduler-import', () => import('@/backend/services/scheduler/workerLocalRecovery'));
+  if (isWorkerLocalRecoveryConfigured()) await observeInitializationAwait('scheduler-start', () => getSchedulerService().start());
 }
 
 /**

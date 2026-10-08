@@ -49,6 +49,14 @@ This proposal is unqualified and does not change the currently frozen live run.
 
 # Failure diagnostics (Source only)
 
+Backend bootstrap additionally emits scoped enter/ready/failed categories for
+the actual awaited layout, snapshot imports/restore/unlock, storage/encryption,
+worker auth/reinstallation, MCP start/config/status and scheduler startup steps.
+The observer caps output at 128 events, catches synchronous and asynchronous
+diagnostic failures, supplies no readiness or effect authority, and changes no
+timeout or operation. These subphases remain unrun and do not establish the
+cause of an earlier bootstrap timeout.
+
 The unchanged 75-second effect wait requests at most three actual scheduler
 list/lastRun observations, with each diagnostic wait capped at 500 milliseconds
 inside the original deadline. Output contains only fixed categories: arming,
