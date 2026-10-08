@@ -235,6 +235,41 @@ describe('Persona Core provenance resolution', () => {
     });
   });
 
+  it('binds only the two opt-in Goal abilities with a stale-Flow CAS guard', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const { flowRef, flow } = await requireAuthoredFlow(setup.bundle.persona);
+      const current = await getPersona(setup.bundle.persona.id);
+      if (!current || flow.updatedAt === undefined) throw new Error('Expected saved Persona and Core.');
+      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, current.id,
+        PersonaSchema.parse({ ...current, lifecycleState: 'disabled',
+          updatedAt: Math.max(Date.now(), current.updatedAt + 1) }));
+      const input = {
+        personaId: current.id,
+        expectedCoreFlowRef: flowRef,
+        expectedActiveRevisionId: setup.binding.activeRevisionId,
+        enableGoalAbilities: {
+          expectedFlowUpdatedAt: flow.updatedAt,
+          processNodeId: processNode(flow).id,
+        },
+      };
+      await expect(reconcileDisabledPersonaCore({
+        ...input,
+        enableGoalAbilities: { ...input.enableGoalAbilities, expectedFlowUpdatedAt: flow.updatedAt - 1 },
+      })).rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+      const prepared = await reconcileDisabledPersonaCore(input);
+      const revision = await getBehaviorRevision(prepared.revisionId);
+      expect(revision).not.toBeNull();
+      const abilities = processNode(revision!.flowSnapshot).data.properties?.personaTools;
+      expect(abilities).toEqual(expect.arrayContaining([
+        'work_item_goal_create', 'work_item_runtime_read',
+      ]));
+      expect(prepared.authoredFlowUpdatedAt).toBeGreaterThan(flow.updatedAt);
+      await expect(reconcileDisabledPersonaCore(input))
+        .rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+    });
+  });
+
   it('publishes a new pinned closure after a child edit without changing the parent and preserves the previous round', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();

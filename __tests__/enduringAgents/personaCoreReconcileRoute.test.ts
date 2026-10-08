@@ -13,10 +13,10 @@ import { POST } from '@/app/v1/personas/[personaId]/core/reconcile/route';
 
 const context = { params: Promise.resolve({ personaId: 'calma_supervisor' }) };
 const body = { expectedCoreFlowRef: 'personaflow_core', expectedActiveRevisionId: 'revision_1' };
-function request(origin = 'http://localhost:4200') {
+function request(origin = 'http://localhost:4200', input: unknown = body) {
   return new NextRequest('http://localhost:4200/v1/personas/calma_supervisor/core/reconcile', {
     method: 'POST', headers: { host: 'localhost:4200', origin, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(input),
   });
 }
 
@@ -34,6 +34,18 @@ describe('disabled Persona Core reconciliation route', () => {
     expect(await response.json()).toEqual({ personaId: 'calma_supervisor', revisionId: 'revision_2',
       contentHash: 'abc', dependencyCount: 54 });
     expect(prepareMock).toHaveBeenCalledWith({ personaId: 'calma_supervisor', ...body });
+  });
+
+  it('accepts only versioned opt-in Goal ability binding input', async () => {
+    const input = { ...body, enableGoalAbilities: {
+      expectedFlowUpdatedAt: 42, processNodeId: 'core_process',
+    } };
+    expect((await POST(request(undefined, input), context)).status).toBe(200);
+    expect(prepareMock).toHaveBeenCalledWith({ personaId: 'calma_supervisor', ...input });
+    expect((await POST(request(undefined, { ...input, arbitraryFlow: {} }), context)).status).toBe(400);
+    expect((await POST(request(undefined, { ...input, enableGoalAbilities: {
+      ...input.enableGoalAbilities, expectedFlowUpdatedAt: -1,
+    } }), context)).status).toBe(400);
   });
 
   it('rejects non-loopback origin and encryption lock before reconciliation', async () => {

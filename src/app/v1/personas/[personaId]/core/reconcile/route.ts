@@ -17,6 +17,10 @@ export const dynamic = 'force-dynamic';
 const InputSchema = z.object({
   expectedCoreFlowRef: z.string().trim().min(1).max(256),
   expectedActiveRevisionId: EnduringAgentIdSchema,
+  enableGoalAbilities: z.object({
+    expectedFlowUpdatedAt: z.number().int().nonnegative(),
+    processNodeId: z.string().trim().min(1).max(256),
+  }).strict().optional(),
 }).strict();
 
 async function POST_handler(
