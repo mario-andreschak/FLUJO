@@ -22,19 +22,24 @@ import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/c
 import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
 import { readNativeHeldFile } from './nativeHeldFile';
 import { commitExecutionExtensionMutation, executionExtensionNativeWorkerRoot, executionExtensionSupportsNativeWorkerRoot, executionExtensionSignal,
+  executionExtensionNativeWorkerDescendant,isExecutionChildContext,
+  type ExecutionNativeWorkerDescendant,
   type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 type Binding = { workspace: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
   conversationId: string; runId: string; flow: Flow; planDigest: string; authority: FlowExecutionAuthority } & (
   { kind: 'persona'; personaId: string; activityId: string }
-  | { kind: 'worker'; workerId: string; targetDigest: string; context: ExecutionExtensionContext });
+  | { kind: 'worker'; workerId: string; targetDigest: string; context: ExecutionExtensionContext;
+      descendant?:ExecutionNativeWorkerDescendant & {rootFlowId:string} });
 const registryRoot = globalThis as typeof globalThis & { __flujoNativeOriginalAuthorities?: WeakMap<object, Binding> };
 const bindings = registryRoot.__flujoNativeOriginalAuthorities ??= new WeakMap<object, Binding>();
 /** Causal wrappers keep the root's hold. A child is not thereby accepted as a
  * root Original; createPersonaNativeOriginalHost rejects its different tuple. */
 export { inheritNativeOriginalAuthority } from '../nativeOriginalAuthorityInheritance';
-const held = (): never => { throw new Error('Native Original authority or reservation is held.'); };
+const held = (reason?: string): never => {
+  throw new Error(`Native Original authority or reservation is held.${reason ? ` Reason: ${reason}.` : ''}`);
+};
 const positive = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, adapter: value?.adapter,
@@ -291,26 +296,34 @@ export async function createWorkerNativeOriginalHost(input: Omit<NativeOriginalH
   const state = FlowExecutor.conversationStates.get(input.conversationId);
   if (!state?.flowSnapshot) return held();
   if (state.executionExtensionContext !== input.context || state.logicalRunId !== input.runId
-    || state.personaAttribution || state.runDepth !== 0) return held();
+    || state.personaAttribution || ![0,1].includes(state.runDepth??0)) return held();
   const flow = structuredClone(state.flowSnapshot);
   if (Buffer.byteLength(JSON.stringify(flow)) > 1024 * 1024) return held();
   const node = flow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
   if (!node || node.data.properties?.boundModel !== input.modelId) return held();
   const expected = { conversationId: input.conversationId, runId: input.runId, workspace: getCurrentWorkspace(),
     flowId: flow.id, flowDigest: nativeDigest(flow), modelId: input.modelId, modelDigest: nativeDigest(modelPlan(model)) };
-  const selected = await executionExtensionNativeWorkerRoot(input.context, expected);
+  const descendant=state.runDepth===1?await executionExtensionNativeWorkerDescendant(input.context,expected):undefined;
+  const selected = descendant?.root??await executionExtensionNativeWorkerRoot(input.context, expected);
   if (!selected) return held();
   if (model?.adapter !== 'codex-cli' || model.ApiKey?.trim() || model.fallbackPolicy) return held();
   const signal = executionExtensionSignal(input.context);
   if (!signal) return held();
   const ownerDigest = nativeDigest(selected);
+  const parent=descendant?FlowExecutor.conversationStates.get(selected.rootConversationId):undefined;
+  if(descendant&&(!parent?.flowSnapshot||!parent.executionExtensionContext
+    ||!isExecutionChildContext(input.context,parent.executionExtensionContext)
+    ||state.parentRunId!==parent.conversationId||state.subflowLane?.parentNodeId!==descendant.parentNodeId
+    ||parent.logicalRunId!==selected.logicalRunId||nativeDigest(parent.flowSnapshot)!==selected.flowDigest))return held();
   const assertCurrent = async () => {
     signal.throwIfAborted();
     if (getCurrentWorkspace() !== expected.workspace || FlowExecutor.conversationStates.get(expected.conversationId) !== state
       || state.executionExtensionContext !== input.context || state.logicalRunId !== expected.runId
       || nativeDigest(state.flowSnapshot) !== expected.flowDigest
       || nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== expected.modelDigest) return held();
-    const current = await executionExtensionNativeWorkerRoot(input.context, expected);
+    const child=descendant?await executionExtensionNativeWorkerDescendant(input.context,expected):undefined;
+    if(descendant&&nativeDigest(child)!==nativeDigest(descendant))return held();
+    const current = child?.root??await executionExtensionNativeWorkerRoot(input.context, expected);
     if (!current || nativeDigest(current) !== ownerDigest) return held();
     signal.throwIfAborted();
   };
@@ -320,8 +333,9 @@ export async function createWorkerNativeOriginalHost(input: Omit<NativeOriginalH
     }) });
   const binding: Binding = { kind: 'worker', workerId: selected.workerId, targetDigest: selected.targetDigest,
     context: input.context, workspace: selected.workspace, dispatchId: selected.fleetRunId, goalId: selected.goalId,
-    round: 1, revisionId: selected.flowDigest, leaseEpoch: selected.leaseEpoch, conversationId: selected.rootConversationId,
-    runId: selected.logicalRunId, flow, planDigest: nativeDigest([selected.flowDigest, flow]), authority };
+    round: 1, revisionId: selected.flowDigest, leaseEpoch: selected.leaseEpoch, conversationId:expected.conversationId,
+    runId:expected.runId, flow, planDigest: nativeDigest([selected.flowDigest, flow]), authority,
+    ...(descendant?{descendant:{...descendant,rootFlowId:parent!.flowId}}:{}) };
   await authority.commitWhileCurrent!(async () => {
     const prior = await readLedger(binding);
     if (prior.reservations.some(item => item.state !== 'released')) return held();
@@ -385,8 +399,10 @@ async function createBoundNativeOriginalHost(input: NativeOriginalHostInput): Pr
   const terminationProtocol=model.adapter==='codex-cli'?CODEX_HANDOFF_PROTOCOL:NATIVE_HANDOFF_PROTOCOL;
   const broker = createNativeBrokerAuthority(binding.leaseEpoch, assertCurrent);
   const root = createNativeLineageRootBinding({ workspace: binding.workspace, fleetRunId: binding.dispatchId,
-    workerId: binding.kind === 'persona' ? binding.activityId : binding.workerId, goalId: binding.goalId, rootConversationId: binding.conversationId,
-    rootLogicalRunId: binding.runId, rootFlowId: binding.flow.id }, assertCurrent);
+    workerId: binding.kind === 'persona' ? binding.activityId : binding.workerId, goalId: binding.goalId,
+    rootConversationId:binding.kind==='worker'&&binding.descendant?binding.descendant.root.rootConversationId:binding.conversationId,
+    rootLogicalRunId:binding.kind==='worker'&&binding.descendant?binding.descendant.root.logicalRunId:binding.runId,
+    rootFlowId:binding.kind==='worker'&&binding.descendant?binding.descendant.rootFlowId:binding.flow.id }, assertCurrent);
   let original: NativeInvocationSession | undefined;
   let child: ClaudeOwnedProcessRegistration | CodexOwnedProcessRegistration | undefined;
   let exited = false;
@@ -408,8 +424,15 @@ async function createBoundNativeOriginalHost(input: NativeOriginalHostInput): Pr
       const owner = descriptor.receipt.owner;
       if (owner.conversationId !== binding.conversationId || owner.runId !== binding.runId
         || owner.nodeId !== input.nodeId || owner.modelId !== input.modelId || owner.leaseEpoch !== binding.leaseEpoch
-        || descriptor.archive.adapter !== model.adapter || descriptor.lineage.edges.length
-        || descriptor.lineage.rootFlowId !== binding.flow.id) return held();
+        || descriptor.archive.adapter !== model.adapter || descriptor.lineage.rootFlowId !== root.rootFlowId) return held();
+      const descendant=binding.kind==='worker'?binding.descendant:undefined;
+      if(descendant){
+        const edge=descriptor.lineage.edges[0];
+        if(descriptor.lineage.edges.length!==1||edge?.kind!=='attached-lane'
+          ||edge.parentConversationId!==root.rootConversationId||edge.parentLogicalRunId!==root.rootLogicalRunId
+          ||edge.parentNodeId!==descendant.parentNodeId||edge.childConversationId!==binding.conversationId
+          ||edge.childLogicalRunId!==binding.runId||edge.childFlowId!==binding.flow.id)return held();
+      }else if(descriptor.lineage.edges.length)return held();
       const saved = await readSavedNativeOrigin({ invocationId: descriptor.receipt.invocationId,
         authority: broker, root, signal: authority.signal });
       if (nativeDigest(saved) !== nativeDigest(descriptor)) return held();
@@ -514,14 +537,14 @@ async function createBoundNativeOriginalHost(input: NativeOriginalHostInput): Pr
       await processHost.beforeFirstPrompt();
     },
     beforeFirstPrompt: async () => {
-      if (!child || exited || closed || !original) return held();
-      if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held();
+      if (!child || exited || closed || !original) return held('process_not_live');
+      if (nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== modelPlanDigest) return held('model_plan_changed');
       await assertCurrent();
-      if (!await probeRuntimeProcessIdentity(child.identity) || exited || closed) return held();
+      if (!await probeRuntimeProcessIdentity(child.identity) || exited || closed) return held('process_identity_unconfirmed');
       await assertCurrent();
     },
     waitForExit: async () => {
-      if (!child || !original) return held();
+      if (!child || !original) return held('process_not_registered');
       const exit = await child.exit;
       await child.close;
       exited = true; closed = true;

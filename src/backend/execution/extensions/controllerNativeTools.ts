@@ -53,7 +53,11 @@ export function createControllerNativeToolGateway(transport: ControllerNativeToo
         ||received.enableMcpApps||received.enableMcpSkills)throw refused();
     },
     protectedServer:()=>config.name,
-    authorizeHandoffs(_context,names) {if(names.length)throw new ExecutionExtensionError('controller_native_child_unavailable');},
+    authorizeHandoffs(_context,names) {
+      // The Source adapter checks actual graph targets and installed child
+      // plans. Detached/inline launches remain unavailable in this route.
+      if(names.some(name=>!name.startsWith('handoff_to_')))throw new ExecutionExtensionError('controller_native_child_unavailable');
+    },
     async assertModelTool(context,name,advertised) {
       await current(context);
       if(!name||!advertised||advertised.server!==config.name||!tools.has(advertised.tool))throw refused();

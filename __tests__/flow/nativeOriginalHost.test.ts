@@ -402,7 +402,7 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
         nodeId: 'node-worker-owned', modelId: 'model-test' };
       await expect(createWorkerNativeOriginalHost({ ...input, context: {} as never })).rejects.toThrow('trusted_execution_context_required');
       state.runDepth = 1;
-      await expect(createWorkerNativeOriginalHost(input)).rejects.toThrow('held');
+      await expect(createWorkerNativeOriginalHost(input)).rejects.toThrow('execution_native_worker_child_invalid');
       state.runDepth = 0;
       enrollment.root.modelDigest = '0'.repeat(64);
       await expect(createWorkerNativeOriginalHost(input)).rejects.toThrow('execution_native_worker_root_invalid');
