@@ -89,6 +89,7 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready' | 'connection-enter' | 'connection-ready') => {
     console.info(JSON.stringify({ shippedFixture: 'real-bash', stage, elapsedMs: performance.now() - preparationEpoch }));
   };
+  let priorConsentTrace: string | undefined;
 
   async function approveBash() {
     const approvalStarted = performance.now();
@@ -109,6 +110,8 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   }
 
   beforeAll(async () => {
+    priorConsentTrace = process.env.FLUJO_BUNDLED_CONSENT_TRACE;
+    process.env.FLUJO_BUNDLED_CONSENT_TRACE = '1';
     expect(fs.existsSync(binary)).toBe(true); // CI builds MCP packages before Jest.
     phase('private-profile-enter');
     privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
@@ -176,10 +179,15 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     } finally {
       try { owner?.restore(); } finally {
         try { await privateFixture?.restore(); } finally {
-          const resolved = path.resolve(scratch);
-          expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
-          expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
-          fs.rmSync(resolved, { recursive: true, force: true });
+          try {
+            const resolved = path.resolve(scratch);
+            expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
+            expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
+            fs.rmSync(resolved, { recursive: true, force: true });
+          } finally {
+            if (priorConsentTrace === undefined) delete process.env.FLUJO_BUNDLED_CONSENT_TRACE;
+            else process.env.FLUJO_BUNDLED_CONSENT_TRACE = priorConsentTrace;
+          }
         }
       }
     }
