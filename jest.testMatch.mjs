@@ -65,6 +65,7 @@ export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
 // the main run merely *ignores* them when the exclusion switch is on.
 // ---------------------------------------------------------------------------
 export const ISOLATED_TEST_FILES = [
+  '__tests__/flow/original520OfflineWorkload.test.ts',
   '__tests__/flow/archiveWriteQuarantineProcess.test.ts',
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/enduringAgents/personaProcessBoundary.test.ts',
