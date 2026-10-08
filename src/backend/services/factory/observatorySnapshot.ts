@@ -1,14 +1,4 @@
-/** Server-only, read-only projection of one local FACTORY swarm. */
-export interface FactoryObservatorySnapshot {
-  factoryId: string;
-  observedAt: string;
-  revision: number;
-  mission: string;
-  status: 'active' | 'paused';
-  cells: Array<{ id: string; parentId: string | null; depth: number; role: string; status: string; purpose: string }>;
-  tasks: Array<{ id: string; owner: string | null; status: string; projectId: string }>;
-  unresolvedEffects: number;
-}
+import type { FactoryObservatorySnapshot } from '@/shared/types/factoryObservatory';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 

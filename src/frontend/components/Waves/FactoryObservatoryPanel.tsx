@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Chip, Paper, Stack, Typography } from '@mui/material';
-import type { FactoryObservatorySnapshot } from '@/backend/services/factory/observatorySnapshot';
+import type { FactoryObservatorySnapshot } from '@/shared/types/factoryObservatory';
 
 const POLL_MS = 30_000;
 
