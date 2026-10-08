@@ -20,6 +20,7 @@ export interface EncryptionMetadata {
   key_id?: string;
   kdf?: string;
   kdf_iterations?: number;
+  key_protection?: 'passphrase' | 'operator-file';
 }
 
 function hex(value: unknown, bytes: number): value is string {
@@ -44,12 +45,21 @@ export function keyId(ring: Keyring): string {
   return createHash('sha256').update(Buffer.from(ring.activeKey, 'hex')).digest('hex');
 }
 
-export function serializeKeyring(ring: Keyring): string {
-  return `v2:${JSON.stringify(parseKeyring(ring))}`;
+export function metadataRevision(metadata: EncryptionMetadata): string {
+  return createHash('sha256').update(JSON.stringify(metadata)).digest('hex');
 }
 
-export function parseSessionKey(value: string): Keyring | { legacyKey: string } {
-  if (value.startsWith('v2:')) return parseKeyring(JSON.parse(value.slice(3)));
+export function serializeKeyring(ring: Keyring, revision?: string): string {
+  if (revision !== undefined && !hex(revision, 32)) throw new Error('Invalid encryption metadata revision');
+  return `v2:${JSON.stringify({ ...parseKeyring(ring), ...(revision ? { metadataRevision: revision } : {}) })}`;
+}
+
+export function parseSessionKey(value: string): (Keyring & { metadataRevision?: string }) | { legacyKey: string } {
+  if (value.startsWith('v2:')) {
+    const parsed = JSON.parse(value.slice(3));
+    if (parsed.metadataRevision !== undefined && !hex(parsed.metadataRevision, 32)) throw new Error('Invalid encryption metadata revision');
+    return { ...parseKeyring(parsed), ...(parsed.metadataRevision ? { metadataRevision: parsed.metadataRevision } : {}) };
+  }
   // v1 server/session state stored the effective AES-128 key as 32 hex chars.
   if (hex(value, 16)) return { legacyKey: value };
   throw new Error('Invalid encryption session key');
@@ -81,27 +91,33 @@ export function open(envelope: string, key: string, purpose: string): string {
   return Buffer.concat([cipher.update(Buffer.from(parts[3], 'base64')), cipher.final()]).toString('utf8');
 }
 
-export async function wrapKeyring(ring: Keyring, type: EncryptionType, password: string): Promise<EncryptionMetadata> {
+export async function wrapKeyring(ring: Keyring, type: EncryptionType, password: string,
+  protection?: EncryptionMetadata['key_protection']): Promise<EncryptionMetadata> {
+  if (protection && type !== 'user') throw new Error('Invalid private key protection');
   const salt = randomBytes(16);
   const wrappingKey = await derive(password, salt, KDF_ITERATIONS, 32, 'sha256');
   const id = keyId(ring);
   return {
     encryption_version: 2, encryption_type: type, key_id: id,
     kdf: 'pbkdf2-sha256', kdf_iterations: KDF_ITERATIONS,
+    ...(protection ? { key_protection: protection } : {}),
     data_encryption_salt: salt.toString('hex'),
-    data_encryption_key: seal(JSON.stringify(ring), wrappingKey.toString('hex'), `flujo:keyring:v2:${type}:${id}`),
+    data_encryption_key: seal(JSON.stringify(ring), wrappingKey.toString('hex'),
+      `flujo:keyring:v2:${type}:${id}${protection ? `:${protection}` : ''}`),
   };
 }
 
 export async function unwrapKeyring(metadata: EncryptionMetadata, password: string): Promise<Keyring> {
   if (metadata.encryption_version !== 2 || metadata.kdf !== 'pbkdf2-sha256'
       || metadata.kdf_iterations !== KDF_ITERATIONS || !hex(metadata.data_encryption_salt, 16)
-      || !hex(metadata.key_id, 32) || !['default', 'user'].includes(metadata.encryption_type ?? '')) {
+      || !hex(metadata.key_id, 32) || !['default', 'user'].includes(metadata.encryption_type ?? '')
+      || (metadata.key_protection !== undefined && (metadata.encryption_type !== 'user'
+        || !['passphrase', 'operator-file'].includes(metadata.key_protection)))) {
     throw new Error('Unsupported encryption metadata');
   }
   const wrappingKey = await derive(password, Buffer.from(metadata.data_encryption_salt, 'hex'), KDF_ITERATIONS, 32, 'sha256');
   const ring = parseKeyring(JSON.parse(open(metadata.data_encryption_key, wrappingKey.toString('hex'),
-    `flujo:keyring:v2:${metadata.encryption_type}:${metadata.key_id}`)));
+    `flujo:keyring:v2:${metadata.encryption_type}:${metadata.key_id}${metadata.key_protection ? `:${metadata.key_protection}` : ''}`)));
   if (keyId(ring) !== metadata.key_id) throw new Error('Encryption key identity mismatch');
   return ring;
 }

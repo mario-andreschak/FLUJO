@@ -14,9 +14,10 @@ verification notes. Do not promote the installer until every required item passe
       `MyRevision=<full commit SHA>` to Inno Setup. The bootstrapper must install
       that exact revision and report the stable channel, tag, and SHA. Untagged
       development builds must identify themselves as development builds.
-- [ ] Record the current code-signing decision. The installer is currently
-      unsigned; adding signing requires maintainer approval, repository-managed
-      certificate secrets, and a documented certificate-rotation procedure.
+- [ ] Record the current Windows Authenticode code-signing decision. The installer
+      currently has no Authenticode signature; adding it requires maintainer
+      approval, repository-managed certificate secrets, and a documented
+      certificate-rotation procedure.
 - [ ] Keep `Uninstallable=no` unless maintainers explicitly approve a discoverable
       Windows Apps entry. The supported uninstall path is `scripts/uninstall.ps1`.
 
@@ -31,6 +32,12 @@ verification notes. Do not promote the installer until every required item passe
 - [ ] CI installed the pinned Inno Setup version and successfully compiled
       `installer/flujo-setup.iss`.
 - [ ] CI retained one non-empty `flujo-setup.exe` validation artifact.
+- [ ] The tag build retained the original artifact ID, executable SHA-256,
+      `installer-release-evidence.json` and `installer-SHA256SUMS`; signing and
+      publication reused that artifact without recompiling it.
+- [ ] Both GitHub artifact attestations passed the
+      [downloaded-asset verifier](engineering-installer-provenance.md#verify-downloaded-release-assets)
+      with the independently selected source SHA, version and executable digest.
 - [ ] The version-tag run attached exactly one `flujo-setup.exe` asset to the
       matching GitHub Release; a pull request or `main` run did not modify releases.
 - [ ] Download the release asset, verify that its SHA-256 matches the recorded

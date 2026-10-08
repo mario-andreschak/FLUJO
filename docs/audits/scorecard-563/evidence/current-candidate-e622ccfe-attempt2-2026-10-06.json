@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-06T12:48:53.229Z",
+  "kind": "derived-attempt-specific-recovery-api-observation",
+  "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+  "originalAttempt1": {
+    "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06.json",
+    "sha256": "73d94432b6ec6563f7dd60ef33decab2cc46424eb939fc1ea73fc1ec0031ee8f",
+    "conclusion": "failure",
+    "immutable": true
+  },
+  "verify": {
+    "id": 37369397033,
+    "attempt": 2,
+    "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+    "status": "in_progress",
+    "conclusion": null,
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033"
+  },
+  "installerOriginal": {
+    "id": 37369397040,
+    "attempt": 1,
+    "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+    "status": "completed",
+    "conclusion": "failure",
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397040"
+  },
+  "installerRecovery": {
+    "id": 37369397040,
+    "attempt": 2,
+    "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+    "status": "in_progress",
+    "conclusion": null,
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397040"
+  },
+  "jobs": [
+    {
+      "id": 112275490930,
+      "name": "workflow-contract",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:07Z",
+      "completedAt": "2026-10-06T12:45:58Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275490930"
+    },
+    {
+      "id": 112275491255,
+      "name": "CodeQL (actions)",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:07Z",
+      "completedAt": "2026-10-06T12:45:52Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275491255"
+    },
+    {
+      "id": 112275491275,
+      "name": "CodeQL (javascript-typescript)",
+      "status": "in_progress",
+      "conclusion": null,
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:43Z",
+      "completedAt": null,
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275491275"
+    },
+    {
+      "id": 112275491301,
+      "name": "test",
+      "status": "in_progress",
+      "conclusion": null,
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:07Z",
+      "completedAt": null,
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275491301"
+    },
+    {
+      "id": 112275491305,
+      "name": "Release safety (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:07Z",
+      "completedAt": "2026-10-06T12:45:49Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275491305"
+    },
+    {
+      "id": 112275491316,
+      "name": "dependency-security",
+      "status": "completed",
+      "conclusion": "failure",
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:07Z",
+      "completedAt": "2026-10-06T12:45:58Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275491316"
+    },
+    {
+      "id": 112275491609,
+      "name": "Production build (ubuntu-latest)",
+      "status": "in_progress",
+      "conclusion": null,
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:07Z",
+      "completedAt": null,
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275491609"
+    },
+    {
+      "id": 112275492725,
+      "name": "typecheck",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-05T20:28:22Z",
+      "completedAt": "2026-10-05T20:30:15Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275492725"
+    },
+    {
+      "id": 112275493105,
+      "name": "diagnostic Persona memory profile (not release acceptance)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "runAttempt": 2,
+      "startedAt": "2026-10-06T12:45:05Z",
+      "completedAt": "2026-10-05T20:23:10Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275493105"
+    },
+    {
+      "id": 112275493323,
+      "name": "test-isolated",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-05T20:33:26Z",
+      "completedAt": "2026-10-05T20:36:27Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275493323"
+    },
+    {
+      "id": 112275493640,
+      "name": "Release safety (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-05T20:23:22Z",
+      "completedAt": "2026-10-05T20:26:06Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275493640"
+    },
+    {
+      "id": 112275539497,
+      "name": "Production build (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-05T20:23:15Z",
+      "completedAt": "2026-10-05T21:06:21Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275539497"
+    },
+    {
+      "id": 112275552427,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 2,
+      "startedAt": "2026-10-05T20:28:21Z",
+      "completedAt": "2026-10-05T20:30:48Z",
+      "reusedOriginalSuccess": false,
+      "freshExecutionClaimed": false,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033/job/112275552427"
+    }
+  ],
+  "reusedOriginalSuccessfulJobs": [],
+  "snapshotPins": [
+    {
+      "name": "verify-attempt2",
+      "bytes": 13819,
+      "sha256": "42d35622aa06ea6af48a30e6832324070c2bfac148487deb667d43fe6af71a25",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2"
+      ],
+      "startedAt": "2026-10-06T12:48:51.913Z",
+      "completedAt": "2026-10-06T12:48:52.588Z",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/verify-attempt2.json"
+    },
+    {
+      "name": "verify-jobs-attempt2",
+      "bytes": 43174,
+      "sha256": "392cd59a1bef8fcee2083e727f373a1f365fab872929d8b17a1ca17571956e65",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2/jobs?per_page=100"
+      ],
+      "startedAt": "2026-10-06T12:48:51.921Z",
+      "completedAt": "2026-10-06T12:48:53.172Z",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/verify-jobs-attempt2.json"
+    },
+    {
+      "name": "installer-attempt1",
+      "bytes": 13760,
+      "sha256": "c4c25d12dc391803e5feb19f2873392449ff531a2e1343901530f8d2ae7fcf21",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/1"
+      ],
+      "startedAt": "2026-10-06T12:48:51.925Z",
+      "completedAt": "2026-10-06T12:48:52.549Z",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/installer-attempt1.json"
+    },
+    {
+      "name": "installer-attempt2",
+      "bytes": 13842,
+      "sha256": "65dc4ab0cb91c1fcc46e6d4cb938d1daa29dfbbf0f8fda5b2530ad303042556c",
+      "command": [
+        "gh",
+        "api",
+        "repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2"
+      ],
+      "startedAt": "2026-10-06T12:48:51.929Z",
+      "completedAt": "2026-10-06T12:48:52.587Z",
+      "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/installer-attempt2.json"
+    }
+  ],
+  "qualification": {
+    "completeOriginalAttempt2ReportsReviewed": false,
+    "allRequiredSourceQualification": false,
+    "newCodeqlClearance": false,
+    "installedReleaseAcceptance": false,
+    "humanOrGradeAcceptance": false
+  },
+  "limits": [
+    "Recovery API metadata is distinct from the immutable original failed attempt. Job IDs shared with original successful attempt1 jobs are explicitly labelled reused.",
+    "GitHub may carry original successful jobs into recovery. Their presence in attempt2 metadata is not a fresh execution or a new assertion/runtime measurement.",
+    "This capture dispatched neither recovery nor tests. Original logs, annotations, artifacts and runtime controls were not downloaded or requalified.",
+    "No full recovery, native findings, selected release, sustained use, human or independent-grade acceptance is inferred from active or successful individual jobs."
+  ]
+}

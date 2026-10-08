@@ -16,6 +16,7 @@
  * Flags: --port <n> / FLUJO_PORT (default 4200); --no-open to suppress the
  * browser auto-open.
  */
+import './node-runtime-preflight.mjs';
 import process from 'node:process';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,6 +25,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import nextEnv from '@next/env';
+import { bootstrapDirectory, loadBootstrapEnvironment } from '../scripts/bootstrap-directory.mjs';
+import { launcherPort } from './launcher-port.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,10 +36,9 @@ const packageRoot = path.resolve(__dirname, '..');
 // The package installation is read-only. Load the standard Next.js dotenv
 // stack from the stable writable bootstrap directory before reading port/data
 // settings, so launcher-level variables work exactly like server-level ones.
-const bootstrapRoot = path.join(os.homedir(), '.flujo');
+const bootstrapRoot = bootstrapDirectory(path.join(os.homedir(), '.flujo'));
 fs.mkdirSync(bootstrapRoot, { recursive: true });
-process.env.FLUJO_RUNTIME_ENV_DIR = bootstrapRoot;
-nextEnv.loadEnvConfig(bootstrapRoot, false);
+loadBootstrapEnvironment(bootstrapRoot, false, nextEnv.loadEnvConfig);
 
 // --- args -----------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -53,7 +55,12 @@ function readPort() {
   }
   return process.env.FLUJO_PORT || '4200';
 }
-const port = readPort();
+let port;
+try { port = launcherPort(readPort()); }
+catch {
+  console.error('[FLUJO] Invalid port. Use an integer from 1 to 65535.');
+  process.exit(1);
+}
 
 // --- data dir --------------------------------------------------------------
 // Default writable data location for a packaged install. A git checkout keeps
@@ -63,7 +70,8 @@ if (!process.env.FLUJO_DATA_DIR || process.env.FLUJO_DATA_DIR.trim().length === 
   process.env.FLUJO_DATA_DIR = path.join(os.homedir(), '.flujo');
 }
 try {
-  fs.mkdirSync(process.env.FLUJO_DATA_DIR, { recursive: true });
+  const { prepareCanonicalDataRoot } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'canonical-data-root.mjs')).href);
+  process.env.FLUJO_DATA_DIR = prepareCanonicalDataRoot(process.env.FLUJO_DATA_DIR);
 } catch (error) {
   console.error(`[FLUJO] Could not create data directory ${process.env.FLUJO_DATA_DIR}:`, error);
   process.exit(1);
@@ -100,12 +108,13 @@ const url = `http://localhost:${port}`;
 console.log(`[FLUJO] Starting on ${url} [exposure: ${env.FLUJO_EXPOSURE_MODE}]`);
 console.log(`[FLUJO] Data directory: ${process.env.FLUJO_DATA_DIR}`);
 
-const { prepareLocalInstance, withLocalInstanceHostname } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'local-instance.mjs')).href);
+const { prepareLocalInstance, withLocalInstanceHostname, privateStorageFailureStage } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'local-instance.mjs')).href);
 const nextArgs = withLocalInstanceHostname(withExposureHostname(['start', '-p', String(port)], env), env);
 let instance;
 try { instance = await prepareLocalInstance({ env, args: nextArgs, appRoot: packageRoot }); }
-catch {
-  console.error('[FLUJO] Could not prepare a private local instance.');
+catch (error) {
+  const stage = privateStorageFailureStage(error);
+  console.error(`[FLUJO] Could not prepare a private local instance.${stage ? ` Storage stage: ${stage}.` : ''}`);
   process.exit(1);
 }
 const child = spawn(process.execPath, [nextBin, ...nextArgs], {

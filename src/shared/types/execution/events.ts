@@ -394,6 +394,8 @@ export interface ToolResultEvent extends ExecutionEventBase {
   toolCallId: string;
   name: string;
   result?: string;
+  /** Exact UTF-8 MCP tool-message content after rewriting; transport/protocol failures omit this binding. `result` can be a preview. */
+  resultContentBinding?: { serialization: 'utf8-string-v1'; sha256: string; bytes: number };
   isError?: boolean;
 }
 export interface HandoffEvent extends ExecutionEventBase {

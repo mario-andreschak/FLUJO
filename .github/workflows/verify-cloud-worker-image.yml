@@ -1,0 +1,102 @@
+name: Verify Cloud Worker Image
+
+# Local candidate execution; registry provenance and promotion stay main-only.
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: worker-image-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  worker-snapshot-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Read exact source and application version
+        id: version
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          assert.match(process.env.SOURCE_REVISION, /^[a-f0-9]{40}$/);
+          assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), process.env.SOURCE_REVISION);
+          const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build exact Linux candidate without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: flujo-worker-candidate:${{ env.SOURCE_REVISION }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ env.SOURCE_REVISION }}
+          cache-from: type=gha,scope=cloud-worker
+          cache-to: type=gha,scope=worker-image-candidate,mode=max
+      - name: Inspect immutable candidate and execute both snapshot profiles
+        env:
+          APPLICATION_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect --format '{{.Id}}' "flujo-worker-candidate:${SOURCE_REVISION}")"
+          export IMAGE_ID="$image_id"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          import { inspectTestedImage } from './scripts/image-release.mjs';
+          const inspected = inspectTestedImage((command, args) => execFileSync(command, args, { encoding: 'utf8' }),
+            process.env.IMAGE_ID, process.env.SOURCE_REVISION, process.env.APPLICATION_VERSION);
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/worker-image-inspection.json`, JSON.stringify({
+            schemaVersion: 1, kind: 'local-worker-image-candidate', sourceRevision: process.env.SOURCE_REVISION,
+            sourceLockSha256: createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex'), ...inspected,
+          }, null, 2));
+          NODE
+          docker run --rm --network none --read-only --no-healthcheck \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+            "$image_id" node scripts/smoke-cloud-worker.mjs --production \
+            2>&1 | tee "$RUNNER_TEMP/worker-image-snapshot-v2.log"
+          docker run --rm --network none --read-only --no-healthcheck \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+            "$image_id" node scripts/smoke-cloud-worker.mjs --production --snapshot-v1 \
+            2>&1 | tee "$RUNNER_TEMP/worker-image-snapshot-v1.log"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const inspected = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/worker-image-inspection.json`, 'utf8'));
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/worker-image-smoke.json`, JSON.stringify({
+            ...inspected, completedProfiles: ['snapshot-v2', 'snapshot-v1'], completedAt: new Date().toISOString(),
+          }, null, 2));
+          NODE
+      - name: Retain candidate inspection and actual smoke results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: worker-image-candidate-${{ env.SOURCE_REVISION }}
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/worker-image-inspection.json
+            ${{ runner.temp }}/worker-image-smoke.json
+            ${{ runner.temp }}/worker-image-snapshot-v*.log

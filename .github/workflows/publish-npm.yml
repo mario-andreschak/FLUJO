@@ -37,11 +37,15 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 24.17.0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,11 +65,15 @@ jobs:
     outputs:
       artifact_id: ${{ steps.artifact.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 24.17.0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,7 +85,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         id: artifact
         with:
           name: npm-release-${{ inputs.version }}-${{ inputs.expected_sha }}
@@ -93,11 +101,15 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 24.17.0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,23 +118,73 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  publish:
+  attest:
     if: ${{ !inputs.diagnose_oidc }}
     needs: [prepare, verify-main]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          merge-multiple: true
+      - name: Recheck source verification before signing the tested bytes
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Validate complete byte inventory and source-lock identity
+        run: node scripts/npm-release.mjs verify-evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+      - name: Attest tested tarballs and metadata checksums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: ${{ runner.temp }}/flujo-npm-release/SHA256SUMS
+      - name: Attest the declared source-lock SBOM for the tarballs
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/flujo-npm-release/*.tgz
+          sbom-path: ${{ runner.temp }}/flujo-npm-release/source-lock.sbom.cdx.json
+
+  publish:
+    if: ${{ !inputs.diagnose_oidc }}
+    needs: [prepare, verify-main, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
       contents: read
       actions: read
       id-token: write
+      attestations: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 24.17.0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: npm install --global npm@11.21.0 --ignore-scripts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
           path: ${{ runner.temp }}/flujo-npm-release
@@ -142,17 +204,22 @@ jobs:
     if: ${{ !inputs.diagnose_oidc }}
     needs: [prepare, publish]
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
     permissions:
       contents: write
       actions: write
+      attestations: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 24.17.0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
           package-manager-cache: false
-      - uses: actions/download-artifact@v4
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
           path: ${{ runner.temp }}/flujo-npm-release

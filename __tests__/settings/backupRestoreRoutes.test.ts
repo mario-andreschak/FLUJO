@@ -12,6 +12,12 @@ import type { NextRequest } from 'next/server';
 import JSZip from 'jszip';
 import { StorageKey } from '@/shared/types/storage';
 
+// These fixtures test archive content and Persona preflight after unlocking.
+// Real private-profile lock enforcement has its own API/lock suites.
+jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: async () => null }));
+// Keep real local/Persona checks, while owner session authorization is covered separately.
+jest.mock('@/backend/services/security/ownerAccess', () => ({ ...jest.requireActual('@/backend/services/security/ownerAccess'), assertOwnerRequest: () => null }));
+
 // Match the collection-backed fixture below at the authoring boundary as well.
 // Real filesystem locking/ownership is covered by personaOwnedFlows and its
 // process tests; this suite exercises the actual backup/restore route logic.
@@ -123,6 +129,40 @@ beforeEach(() => {
 });
 
 describe('backup route', () => {
+  it('never reads or archives the key or raw server files even when explicitly selected', async () => {
+    const response = await callBackup(['models', 'encryptionKey', 'mcpServersFolder']);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(loadItemMock).not.toHaveBeenCalledWith(StorageKey.ENCRYPTION_KEY, expect.anything());
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(Object.keys(zip.files).some(name => name.startsWith('mcp-servers/'))).toBe(false);
+    expect(zip.file(`storage/${StorageKey.ENCRYPTION_KEY}.json`)).toBeNull();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string'))).toMatchObject({
+      selections: ['models'], credentials: 'omitted',
+    });
+  });
+
+  it('strips mixed plaintext/ciphertext credentials and unknown legacy env values without changing storage', async () => {
+    const source = [{ id: 'model-1', ApiKey: 'plaintext-canary', baseUrl: 'https://user:password@host/?token=canary', nested: { value: 'encrypted_failed:canary' } }];
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.MODELS) return source;
+      if (key === StorageKey.GLOBAL_ENV_VARS) return { UNMARKED: 'legacy-canary', SECRET: { value: 'encrypted:canary', metadata: { isSecret: true } } };
+      if (key === StorageKey.MCP_SERVERS) return [{ name: 'server', transport: 'stdio', args: ['--password=arg-canary'], env: { X: 'env-canary' }, oauthTokens: { access_token: 'token-canary' }, headers: { Authorization: 'header-canary' } }];
+      return null;
+    });
+    const response = await callBackup(['models', 'mcpServers', 'globalEnvVars']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    const text = (await Promise.all(Object.values(zip.files).filter(file => !file.dir).map(file => file.async('string')))).join('');
+    expect(text).not.toContain('canary');
+    expect(JSON.parse(await zip.file('storage/models.json')!.async('string'))).toEqual([{ id: 'model-1', nested: {} }]);
+    expect(source[0].ApiKey).toBe('plaintext-canary');
+    expect(saveItemMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an export consisting only of unsupported or credential-bearing selections', async () => {
+    expect((await callBackup(['encryptionKey', 'mcpServersFolder', 'unknown'])).status).toBe(400);
+    expect(loadItemMock).not.toHaveBeenCalled();
+  });
   it('reads selections through the storage backend and zips them under storage/<key>.json', async () => {
     const response = await callBackup(['models', 'flows']);
     expect(response.status).toBe(200);

@@ -1,0 +1,7 @@
+gpg: Signature made Tue Sep  8 16:49:15 2026 WSN
+gpg:                using EDDSA key 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356
+gpg: Good signature from "Antoine du Hamel <antoine.duhamel@platformatic.dev>" [unknown]
+gpg:                 aka "Antoine du Hamel <duhamelantoine1995@gmail.com>" [unknown]
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 5BE8 A3F6 C8A5 C01D 106C  0AD8 20B1 A390 B168 D356

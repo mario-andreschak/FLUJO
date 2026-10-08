@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   Chip,
   Divider,
   Paper,
@@ -14,24 +15,17 @@ import {
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import { chatService } from '@/frontend/services/chat';
+import ModelTurnJsonPreview from './ModelTurnJsonPreview';
+import { ArchivedModelTurnValue, isModelTurnInspection, type ModelTurnView } from '@/frontend/services/chat/modelTurnInspection';
 
-export type ModelTurnInspectorTab = 'canonical' | 'wire' | 'request';
+export type ModelTurnInspectorTab = 'canonical' | 'wire' | 'request' | 'archive';
 
 interface ModelTurnInspectorProps {
-  snapshot: ModelTurnSnapshot;
+  snapshot: ModelTurnView;
   conversationId: string;
   tab: ModelTurnInspectorTab;
   onTabChange: (tab: ModelTurnInspectorTab) => void;
 }
-
-const json = (value: unknown): string => {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-};
 
 const bytes = (value: number): string => {
   if (value < 1024) return `${value} B`;
@@ -62,14 +56,17 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
  * `thread` diagnostic block, for example, although runStreamed only receives
  * input and options.
  */
-export function invocationView(snapshot: ModelTurnSnapshot): InvocationView {
-  const request = asRecord(snapshot.sdkRequest);
+export function invocationView(snapshot: ModelTurnView): InvocationView {
+  const archived = snapshot.sdkRequest instanceof ArchivedModelTurnValue ? snapshot.sdkRequest : undefined;
+  const request = archived ? undefined : asRecord(snapshot.sdkRequest);
+  const parameter = (name: string) => archived ? archived.child(name) : request?.[name];
+  const hasRequest = request || archived?.isObject;
   const operation = snapshot.entry.operation.replace(/\(stream\)$/, '');
 
-  if (snapshot.entry.adapter === 'codex-cli' && request) {
+  if (snapshot.entry.adapter === 'codex-cli' && hasRequest) {
     const parameters = [
-      { name: 'input', value: request.input },
-      { name: 'options', value: request.options },
+      { name: 'input', value: parameter('input') },
+      { name: 'options', value: parameter('options') },
     ];
     return {
       callee: 'thread.runStreamed',
@@ -78,13 +75,13 @@ export function invocationView(snapshot: ModelTurnSnapshot): InvocationView {
     };
   }
 
-  if (snapshot.entry.adapter === 'claude-cli' && request) {
+  if (snapshot.entry.adapter === 'claude-cli' && hasRequest) {
     return {
       before: 'const prompt = promptStream();',
       callee: 'query',
       parameters: [
-        { name: 'prompt', value: request.prompt },
-        { name: 'options', value: request.options },
+        { name: 'prompt', value: parameter('prompt') },
+        { name: 'options', value: parameter('options') },
       ],
       argumentSource: '{ prompt, options }',
     };
@@ -146,7 +143,7 @@ function CodeToken({
   );
 }
 
-function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnSnapshot }) {
+function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnView }) {
   const invocation = useMemo(() => invocationView(snapshot), [snapshot]);
   const [selectedName, setSelectedName] = useState(invocation.parameters[0]?.name ?? 'request');
   useEffect(() => {
@@ -211,23 +208,7 @@ function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnSnapshot }) {
           {selected?.name}
         </Typography>
       </Box>
-      <Box
-        component="pre"
-        data-testid="request-parameter-value"
-        sx={{
-          m: 0,
-          p: 1.5,
-          maxHeight: '55vh',
-          overflow: 'auto',
-          whiteSpace: 'pre-wrap',
-          overflowWrap: 'anywhere',
-          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-          fontSize: 12,
-          lineHeight: 1.55,
-        }}
-      >
-        {json(selected?.value)}
-      </Box>
+      <ModelTurnJsonPreview key={`${snapshot.entry.id}:${selected?.name}`} value={selected?.value} testId="request-parameter-value" />
     </Paper>
   );
 }
@@ -239,14 +220,19 @@ function MessageList({
   messages: ReadonlyArray<FlujoChatMessage | object>;
   provenance?: ModelTurnSnapshot['provenance'];
 }) {
-  const statusById = useMemo(
-    () => new Map((provenance ?? []).filter(item => item.id).map(item => [item.id!, item])),
-    [provenance],
-  );
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [messages]);
+  const visible = useMemo(() => messages.slice(page * 16, (page + 1) * 16), [messages, page]);
+  const statusById = useMemo(() => {
+    const ids = new Set(visible.map(message => (message as Record<string, unknown>).id));
+    const result = new Map<string, NonNullable<typeof provenance>[number]>();
+    for (const item of provenance ?? []) if (item.id && ids.has(item.id)) result.set(item.id, item);
+    return result;
+  }, [provenance, visible]);
 
   return (
     <Box sx={{ display: 'grid', gap: 1.25 }}>
-      {messages.map((message, index) => {
+      {visible.map((message, index) => {
         const record = message as unknown as Record<string, unknown>;
         const id = typeof record.id === 'string' ? record.id : undefined;
         const role = typeof record.role === 'string' ? record.role : 'unknown';
@@ -270,28 +256,21 @@ function MessageList({
                 />
               )}
               <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-                {index + 1}
+                {page * 16 + index + 1}
               </Typography>
             </Box>
             <Divider />
-            <Box
-              component="pre"
-              sx={{
-                m: 0,
-                p: 1.25,
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-                fontSize: 12,
-                lineHeight: 1.55,
-                bgcolor: 'action.hover',
-              }}
-            >
-              {json(record)}
-            </Box>
+            <ModelTurnJsonPreview value={record} />
           </Paper>
         );
       })}
+      {messages.length > 16 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Button disabled={page === 0} onClick={() => setPage(value => value - 1)}>Previous messages</Button>
+          <Typography variant="caption">Messages {page * 16 + 1}–{Math.min((page + 1) * 16, messages.length)} of {messages.length}</Typography>
+          <Button disabled={(page + 1) * 16 >= messages.length} onClick={() => setPage(value => value + 1)}>Next messages</Button>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -331,6 +310,7 @@ export default function ModelTurnInspector({
             <ToggleButton value="canonical">Canonical</ToggleButton>
             <ToggleButton value="wire">Wired</ToggleButton>
             <ToggleButton value="request">Request Detail</ToggleButton>
+            {isModelTurnInspection(snapshot) && <ToggleButton value="archive">Original JSON</ToggleButton>}
           </ToggleButtonGroup>
           <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
           <Typography variant="subtitle2">
@@ -383,7 +363,8 @@ export default function ModelTurnInspector({
           <Alert severity="info" variant="outlined" sx={{ mb: 1.25 }}>
             The canonical node-threaded conversation before provider wire shaping.
           </Alert>
-          <MessageList messages={snapshot.canonicalMessages} provenance={snapshot.provenance} />
+          {isModelTurnInspection(snapshot) ? <ModelTurnJsonPreview value={snapshot.canonical} />
+            : <MessageList messages={snapshot.canonicalMessages} provenance={snapshot.provenance} />}
         </>
       )}
 
@@ -392,8 +373,14 @@ export default function ModelTurnInspector({
           <Alert severity="info" variant="outlined" sx={{ mb: 1.25 }}>
             The final hydrated provider-neutral conversation supplied to the adapter.
           </Alert>
-          <MessageList messages={snapshot.genericWire} />
+          {isModelTurnInspection(snapshot) ? <ModelTurnJsonPreview value={snapshot.wire} />
+            : <MessageList messages={snapshot.genericWire} />}
         </>
+      )}
+
+      {tab === 'archive' && isModelTurnInspection(snapshot) && <ModelTurnJsonPreview value={snapshot.source} />}
+      {isModelTurnInspection(snapshot) && snapshot.additionalMetadata && (
+        <Alert severity="info">Additional captured metadata is available in Original JSON.</Alert>
       )}
 
       {tab === 'request' && (
@@ -434,4 +421,9 @@ export default function ModelTurnInspector({
       )}
     </Box>
   );
+}
+
+export function ArchivedModelTurnChat({ snapshot, conversationId }: { snapshot: ModelTurnView; conversationId: string }) {
+  const [tab, setTab] = useState<ModelTurnInspectorTab>('canonical');
+  return <ModelTurnInspector snapshot={snapshot} conversationId={conversationId} tab={tab} onTabChange={setTab} />;
 }

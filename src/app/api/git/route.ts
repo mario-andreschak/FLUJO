@@ -734,12 +734,7 @@ async function POST_handler(request: NextRequest) {
         log.debug(`Constructed full file path: ${fullFilePath} [${requestId}] (path is ${isAbsolutePath ? 'absolute' : 'relative'})`);
         
         try {
-          // Check if file exists
-          log.debug(`Checking if file exists: ${fullFilePath} [${requestId}]`);
-          await fs.access(fullFilePath);
-          log.debug(`File exists, reading content [${requestId}]`);
-          
-          // Read the file content
+          // Read directly so an existence preflight cannot become stale.
           const content = await fs.readFile(fullFilePath, 'utf-8');
           log.debug(`File content read successfully [${requestId}]`, {
             contentLength: content.length,

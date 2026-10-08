@@ -17,6 +17,7 @@ import {
   suggestToolsForFlowStep,
 } from '@/backend/services/flow/assistedAuthoring';
 import { json } from '../_helpers';
+import { FlowAuthoringValidationError } from '@/backend/services/flow/authoringErrors';
 
 function isFlow(value: unknown): value is Flow {
   return !!value && typeof value === 'object'
@@ -139,7 +140,8 @@ async function POST_handler(request: NextRequest) {
     }
     return json({ error: 'Unknown assistance action.' }, 400);
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 422);
+    if (error instanceof FlowAuthoringValidationError) return json({ error: error.message }, 422);
+    return json({ error: 'Flow assistance failed. Please try again.' }, 500);
   }
 }
 

@@ -2,10 +2,11 @@
 // Version locally, verify/publish through GitHub OIDC, then tag and build the
 // image and installer. No local npm login or long-lived npm secret is needed.
 import { execSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { parseReleaseArguments, releaseUsage } from './release-arguments.mjs';
 import { assertOfficialReleaseOrigin } from './release-verification.mjs';
 import { dispatchRelease, readReleaseWorkflow, RELEASE_REPOSITORY, resumeRelease, watchRelease } from './release-github.mjs';
+import { readReleaseState, writeReleaseState } from './release-state.mjs';
 
 const run = (command) => execSync(command, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const show = (command) => { console.log(`\n> ${command}`); execSync(command, { stdio: 'inherit' }); };
@@ -40,9 +41,8 @@ async function main() {
   } else {
     console.log('Fetching origin/main and release tags ...');
     run('git fetch origin main "+refs/tags/v*:refs/tags/v*"');
-    let state;
-    if (existsSync(statePath)) {
-      state = JSON.parse(readFileSync(statePath, 'utf8'));
+    let state = readReleaseState(statePath);
+    if (state) {
       if (state.sha !== run('git rev-parse HEAD') || state.version !== manifestVersion()
           || !/^[a-f0-9]{40}$/.test(state.sha ?? '') || !/^\d+\.\d+\.\d+$/.test(state.version ?? '')) {
         throw new Error('A pending release record belongs to another revision. Resolve that release before creating another version.');
@@ -57,17 +57,17 @@ async function main() {
       show('git add -u -- src README.md githubpages/index.html mcp-servers package.json package-lock.json');
       show(`git commit -m "Bump version to ${version}"`);
       state = { sha: run('git rev-parse HEAD'), version };
-      writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+      writeReleaseState(statePath, state, { createOnly: true });
     }
     show('git push origin main');
     identity = await dispatchRelease({ run: gh, sha: state.sha, version: state.version });
     state.runId = identity.runId;
-    writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+    writeReleaseState(statePath, state);
   }
   console.log(`\nRelease run: https://github.com/${RELEASE_REPOSITORY}/actions/runs/${identity.runId}`);
   watchRelease({ run: gh, identity });
-  if (existsSync(statePath)) {
-    const pending = JSON.parse(readFileSync(statePath, 'utf8'));
+  const pending = readReleaseState(statePath);
+  if (pending) {
     if (pending.sha === identity.sha && pending.version === identity.version) rmSync(statePath);
   }
   console.log(`\nReleased FLUJO ${identity.version}: https://www.npmjs.com/package/flujo-ai/v/${identity.version}`);

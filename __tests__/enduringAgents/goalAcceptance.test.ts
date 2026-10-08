@@ -22,6 +22,9 @@ import type { PersonaWorkItem } from '@/shared/types/enduringAgent';
 import { buildTestRoleDefinition, buildTestRoleVersion } from './fixtures/personaFactory';
 import fixture from '../../scripts/persona-goal-acceptance/fixture.cjs';
 import terminalFixture from '../../scripts/persona-goal-acceptance/terminal-fixture.cjs';
+import { unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
+import { installApprovedGoalMcp } from './fixtures/approvedGoalMcp';
+import { isEncryptionLocked } from '@/utils/encryption/secure';
 
 declare global {
   var __personaGoalAcceptanceNativeCodex: typeof import('@openai/codex-sdk').Codex | undefined;
@@ -152,13 +155,13 @@ function offlineCompletion(directory: string) {
     let error: unknown;
     await runWithWorkspace(workspaceId, async () => {
       let personaId: string | undefined;
+      let approvedMcp: ReturnType<typeof installApprovedGoalMcp> | undefined;
       try {
+        await unlockPrivateFixtureInCurrentWorkspace();
+        expect(await isEncryptionLocked()).toBe(false);
         await saveItem(StorageKey.MODELS, [model]);
-        await saveItem(StorageKey.MCP_SERVERS, { 'goal-acceptance': {
-          name: 'goal-acceptance', transport: 'stdio', command: process.execPath,
-          args: [path.resolve(`scripts/persona-goal-acceptance/${terminalOnly ? 'terminal-server.mjs' : 'server.mjs'}`), fixtureDir],
-          env: {}, disabled: false, rootPath: process.cwd(), source: { type: 'local' },
-        } });
+        approvedMcp = installApprovedGoalMcp(fixtureDir, terminalOnly, timeoutMs);
+        await saveItem(StorageKey.MCP_SERVERS, { 'goal-acceptance': approvedMcp.config });
         const roleDefinition = buildTestRoleDefinition();
         const roleVersion = buildTestRoleVersion();
         roleDefinition.name = 'Marketing agent';
@@ -241,9 +244,11 @@ function offlineCompletion(directory: string) {
         expect(checks).toEqual(Object.fromEntries(Object.keys(checks).map(key => [key, true])));
       } catch (caught) { error = caught; }
       finally {
-        stopPersonaGoalRuntime();
-        if (personaId) await quiescePersonaFlowDispatcher(personaId);
-        await mcpService.disconnectAll('goal acceptance finished');
+        try {
+          stopPersonaGoalRuntime();
+          if (personaId) await quiescePersonaFlowDispatcher(personaId);
+          await mcpService.disconnectAll('goal acceptance finished');
+        } finally { approvedMcp?.restore(); }
       }
     });
     await fs.mkdir(directory, { recursive: true });

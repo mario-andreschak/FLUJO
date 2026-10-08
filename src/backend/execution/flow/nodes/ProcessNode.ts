@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
+import { createPersonaNativeOriginalHost } from '../handlers/nativeOriginalHost';
 import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
@@ -52,6 +53,7 @@ import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolv
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
 import { executionExtensionSignal } from '@/backend/execution/extensions';
+import { combineAbortSignals } from '../combineAbortSignals';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -426,7 +428,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
-      { nodeId }
+      { nodeId },
+      sharedState,
     );
 
     // Resolve configuration globals at execution time. The prompt-safe resolver
@@ -651,6 +654,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   const prepResult: ProcessNodePrepResult = {
     nodeId,
     nodeType: 'process',
+    flowId: sharedState.flowId,
     currentPrompt: completePrompt,
     boundModel,
     availableTools: availableTools,
@@ -682,6 +686,18 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       ? { temperatureOverride: sharedState.temperatureOverrideOnce }
       : {}),
   };
+
+    Object.defineProperty(prepResult, 'nativeFlowSnapshot', {
+      value: sharedState.personaAttribution ? sharedState.flowSnapshot : undefined,
+      enumerable: false,
+    });
+    // runFlow's owner/cancellation-registration signal must reach the provider
+    // even when the separate execution authority remains current. Keep this
+    // live capability out of serialized preparation/debugger records.
+    Object.defineProperty(prepResult, 'abortSignal', {
+      value: sharedState.abortSignal,
+      enumerable: false,
+    });
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
     // per (conversation, node) on first render and re-send it byte-identically
@@ -818,6 +834,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
           { nodeId },
+          sharedState,
         );
         content = await resolvePromptDynamicReferences(content, {
           conversationId: sharedState.conversationId,
@@ -847,7 +864,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
             sharedState.emit,
-            { nodeId }
+            { nodeId },
+            sharedState,
           )
         : isolatedPrompt;
       if (!sharedState.executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
@@ -1189,10 +1207,21 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
             beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
             beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
+            nativeOriginalHost: await createPersonaNativeOriginalHost({
+              authority: prepResult.executionAuthority, conversationId: prepResult.conversationId,
+              runId: prepResult.runId, nodeId: prepResult.nodeId, modelId: prepResult.boundModel,
+              flowId: prepResult.flowId,
+              flowSnapshot: prepResult.nativeFlowSnapshot,
+              personaAttribution: prepResult.personaAttribution,
+            }),
             executionAuthority: prepResult.executionAuthority,
             executionExtensionContext: prepResult.executionExtensionContext,
             personaAttribution: prepResult.personaAttribution,
-            signal: prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : prepResult.executionAuthority?.signal,
+            signal: combineAbortSignals(
+              prepResult.abortSignal,
+              prepResult.executionAuthority?.signal,
+              prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : undefined,
+            ),
           });
           // Provider abort is cooperative. A response can arrive after the
           // Persona heartbeat/fence was lost, so reject it before any message,

@@ -34,6 +34,7 @@ class FakeEventSource {
   }
 
   close() {}
+  addEventListener() {}
 }
 
 describe('browser workspace propagation', () => {
@@ -68,7 +69,7 @@ describe('browser workspace propagation', () => {
     expect(FakeEventSource.urls).toEqual([
       '/v1/chat/conversations/conversation-1/events?fromSeq=7&workspace=team-a',
       '/v1/chat/conversations/conversation-2/events?fromSeq=0&replay=activity&workspace=team-a',
-      '/v1/chat/events?scope=sidebar&workspace=team-a',
+      '/v1/chat/events?scope=sidebar&cursorVersion=1&workspace=team-a',
     ]);
   });
 

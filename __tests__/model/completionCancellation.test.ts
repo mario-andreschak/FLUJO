@@ -15,6 +15,8 @@
  */
 import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
+import type { ArchiveModelDispatchInput } from '@/backend/execution/flow/modelTurnArchive';
+import { withArchiveWriteMemory, recheckArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
@@ -64,7 +66,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 }));
 
 let archiveDispatchCounter = 0;
-const archiveModelDispatchMock = jest.fn(async (input: Record<string, unknown>): Promise<Record<string, unknown>> => ({
+const archiveModelDispatchMock = jest.fn(async (input: ArchiveModelDispatchInput): Promise<Record<string, unknown>> => ({
   id: `dispatch-${++archiveDispatchCounter}`,
   conversationId: input.conversationId,
   node: { nodeId: input.nodeId },
@@ -82,7 +84,16 @@ const archiveModelDispatchMock = jest.fn(async (input: Record<string, unknown>):
 }));
 const updateModelDispatchOutcomeMock = jest.fn(async (..._args: unknown[]) => undefined);
 jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
-  archiveModelDispatch: (...args: [Record<string, unknown>]) => archiveModelDispatchMock(...args),
+  archiveModelDispatch: (input: ArchiveModelDispatchInput, prepare?: () => ArchiveModelDispatchInput) => {
+    const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
+      sdkRequest: input.sdkRequest, modelInput: input.modelInput, visualCompaction: input.visualCompaction };
+    // Production evaluates this deferred snapshot factory inside admission.
+    // Dropping it recorded a live history array that later steering mutated.
+    return withArchiveWriteMemory(payload, async () => {
+      recheckArchiveWriteMemory(payload);
+      return archiveModelDispatchMock(prepare ? prepare() : input);
+    }, input.schemaProjectionPolicy ?? 'legacy-unbounded');
+  },
   updateModelDispatchOutcome: (...args: unknown[]) => updateModelDispatchOutcomeMock(...args),
 }));
 
@@ -370,7 +381,6 @@ describe('mid-flight completion cancellation', () => {
         commitWhileCurrent,
         signal: new AbortController().signal,
       },
-      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
     });
 
     await providerStarted;

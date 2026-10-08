@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { gunzipSync } from 'node:zlib';
+import { readRuntimeModelTurnArchive } from './persona-goal-acceptance/model-turn-archive.mjs';
 import {
   enduranceAttestationKeySha256,
   writeEnduranceEvidenceAttestation,
@@ -315,16 +315,13 @@ async function writeRuntimeModelTurnEvidence() {
       && filename.split(path.sep).includes('model-turns'));
   const records = [];
   for (const filename of files.sort()) {
-    const compressed = await fs.readFile(filename);
-    const snapshot = JSON.parse(gunzipSync(compressed).toString('utf8'));
-    const turn = snapshot.entry;
+    const turn = await readRuntimeModelTurnArchive(filename);
     if (!turn?.id || !Number.isFinite(turn.timestamp)) continue;
     const epoch = epochs.find(candidate => turn.timestamp >= Date.parse(candidate.startedAt)
       && turn.timestamp <= Date.parse(candidate.endedAt));
     records.push({
       ...turn,
       source: 'runtime-model-turn-archive',
-      sourceFileSha256: createHash('sha256').update(compressed).digest('hex'),
       processEpochId: epoch?.epochId,
       processPid: epoch?.pid,
     });

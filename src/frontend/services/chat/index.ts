@@ -2,6 +2,7 @@
 
 import { createLogger } from '@/utils/logger';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
+import { EXECUTION_STREAM_CONTROL_EVENT, parseExecutionStreamControl, type ExecutionStreamControl } from '@/shared/types/execution/streamControl';
 import type {
   Conversation,
   ConversationListItem,
@@ -9,9 +10,10 @@ import type {
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
-import type { WirePreviewResponse } from '@/backend/execution/flow/types';
+import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { readModelTurnInspection, type ModelTurnInspection } from './modelTurnInspection';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -53,6 +55,9 @@ export interface CreateConversationPayload {
 // Handlers for the live execution event stream (SSE).
 export interface EventStreamHandlers {
   onEvent: (event: ExecutionEvent) => void;
+  /** Source is closed before this callback. Reload an authoritative snapshot,
+   * then create a fresh subscription; never treat a reset as an execution ACK. */
+  onReset?: (control: ExecutionStreamControl) => void;
   onOpen?: () => void;
   onError?: (err: Event) => void;
 }
@@ -126,6 +131,19 @@ export interface SubflowRecoveryResult {
 }
 
 const BASE = '/v1/chat/conversations';
+function attachStreamControl(es: EventSource, handlers: EventStreamHandlers): void {
+  let resetting = false;
+  es.addEventListener(EXECUTION_STREAM_CONTROL_EVENT, event => {
+    try {
+      const control = parseExecutionStreamControl(JSON.parse((event as MessageEvent<string>).data));
+      if (!control || resetting) return;
+      resetting = true;
+      es.close();
+      handlers.onReset?.(control);
+      if (!handlers.onReset) handlers.onError?.(new Event('error'));
+    } catch (error) { log.warn('Failed to parse execution stream control', { error }); }
+  });
+}
 // Read-only chain projection for the experimental chain-chat page (#405).
 const CHAINS_BASE = '/v1/chat/conversation-chains';
 
@@ -269,6 +287,18 @@ class ChatService {
       { cache: 'no-store', signal: options.signal },
     );
     return parse<ModelTurnSnapshot>(response);
+  }
+
+  /** Inspect complete archived bytes without materializing a large SDK graph. */
+  async getModelTurnInspection(conversationId: string, dispatchId: string,
+    options: { signal?: AbortSignal } = {}): Promise<ModelTurnInspection> {
+    const response = await fetch(withWorkspaceUrl(
+      `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}?format=chunks`,
+    ), { cache: 'no-store', signal: options.signal });
+    if (!response.ok) return parse<ModelTurnInspection>(response);
+    const inspection = await readModelTurnInspection(response, options.signal);
+    if (inspection.entry.id !== dispatchId || inspection.entry.conversationId !== conversationId) throw new Error('Model-turn inspection identity does not match the selected dispatch.');
+    return inspection;
   }
 
   modelTurnMediaUrl(conversationId: string, dispatchId: string, mediaId: string): string {
@@ -484,6 +514,7 @@ class ChatService {
     modelId: string;
     servers?: Array<{ name: string; enabledTools?: string[] }>;
     systemPrompt?: string;
+    runArtifactName?: string;
   }): Promise<{ conversationId: string; flow: Flow }> {
     log.debug('synthesizeQuickChat: Entering method', { conversationId: payload.conversationId });
     const response = await fetch('/api/flow/quick-chat', {
@@ -682,6 +713,7 @@ class ChatService {
     const query = params.size > 0 ? `?${params.toString()}` : '';
     const url = `${BASE}/${encodeURIComponent(id)}/events${query}`;
     const es = new EventSource(withWorkspaceUrl(url));
+    attachStreamControl(es, handlers);
     es.onopen = () => {
       log.debug('Execution event stream open', { conversationId: id });
       handlers.onOpen?.();
@@ -707,7 +739,8 @@ class ChatService {
    * and other high-volume execution events never reach the sidebar.
    */
   subscribeToSidebarEvents(handlers: EventStreamHandlers): EventSource {
-    const es = new EventSource(withWorkspaceUrl('/v1/chat/events?scope=sidebar'));
+    const es = new EventSource(withWorkspaceUrl('/v1/chat/events?scope=sidebar&cursorVersion=1'));
+    attachStreamControl(es, handlers);
     es.onopen = () => {
       log.debug('Sidebar lifecycle event stream open');
       handlers.onOpen?.();

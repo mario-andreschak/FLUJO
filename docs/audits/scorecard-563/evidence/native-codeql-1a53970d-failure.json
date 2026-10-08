@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-04T08:48:50.183Z",
+  "sourceSha": "1a53970d4966136095f747674f3b9e5ea58e34c2",
+  "checkRunId": 111389907950,
+  "name": "CodeQL",
+  "status": "completed",
+  "conclusion": "failure",
+  "detailsUrl": "https://github.com/mario-andreschak/FLUJO/runs/111389907950",
+  "title": "56 new alerts including 32 high severity security vulnerabilities",
+  "summary": "### New alerts in code changed by this pull request\n\nSecurity Alerts:\n * 32 high\n * 24 medium\n\n\n_Alerts not introduced by this pull request might have been detected because the code changes were too large._\n\nSee annotations below for details.\n\n[View all branch alerts](/mario-andreschak/FLUJO/security/code-scanning?query=pr%3A611+tool%3ACodeQL+is%3Aopen).",
+  "rawApiSha256": "05c7272619d70a6ad4d8a25a07aa1e364b19d21be96ac422523332e0202772c2",
+  "scope": "Actual coordinator integration-80 native CodeQL finding check, distinct from successful analysis jobs. Reports 32 high and 24 medium new alerts; its large-change caveat is retained. This is source scanning, not verified exploits, independent disposition or released-profile threat-model acceptance. The Docs intake preserves coordinator product source but does not clear this native finding gate."
+}

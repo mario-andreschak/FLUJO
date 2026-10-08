@@ -24,6 +24,10 @@
 import { EventEmitter } from "events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+let mockCurrentConfig: MCPStdioConfig | undefined;
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerConfigs: jest.fn(async () => mockCurrentConfig ? [mockCurrentConfig] : []),
+}));
 
 jest.mock("@/utils/process/killProcessTree", () => {
   const actual = jest.requireActual("@/utils/process/killProcessTree");
@@ -39,24 +43,26 @@ import {
   safelyCloseClient,
   capabilityKey,
 } from "@/backend/services/mcp/connection";
-import { MCPServerConfig } from "@/shared/types/mcp";
+import { MCPServerConfig, type MCPStdioConfig } from "@/shared/types/mcp";
 import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 
 const killProcessTreeAndWaitMock = jest.mocked(killProcessTreeAndWait);
+let approved: ReturnType<typeof installTrustedHostProfile>;
+beforeEach(() => {
+  mockCurrentConfig = undefined;
+  approved = installTrustedHostProfile({ name: 'wa-test', environmentNames: ['TOKEN'],
+    nodeSource: "process.stdin.resume(); process.stdin.on('end', () => setTimeout(() => process.exit(0), 3000));" });
+});
+afterEach(() => approved.restore());
 
 function stdioConfig(overrides: Record<string, unknown> = {}): MCPServerConfig {
-  return {
-    name: "wa-test",
-    transport: "stdio",
-    command: "node",
-    args: ["dist/index.js"],
-    env: {},
-    disabled: false,
-    rootPath: "C:/servers/wa-test",
-    _buildCommand: "",
-    _installCommand: "",
-    ...overrides,
-  } as unknown as MCPServerConfig;
+  const config = { ...approved.config, ...overrides,
+    env: { ...approved.config.env, ...(overrides.env as MCPStdioConfig['env'] ?? {}) },
+    args: [...approved.config.args!, ...(overrides.args as string[] ?? [])] } as MCPStdioConfig;
+  approved.approve(config);
+  mockCurrentConfig = config;
+  return config;
 }
 
 /** Fake client wrapping a transport; shouldRecreateClient only reads transport + cap key. */
@@ -70,7 +76,7 @@ function fakeClientFor(transport: unknown, config: MCPServerConfig): Client {
 }
 
 describe("shouldRecreateClient stdio config comparison", () => {
-  it("treats a byte-identical config as unchanged even though the spawn command was rewritten", () => {
+  it("keeps a byte-identical approved Node config unchanged and refuses a legacy bare command", () => {
     // Bare `node` is rewritten to an absolute path at transport creation time
     // (resolveNodeCommand). The old comparison read that as "parameters changed" and
     // killed a healthy server on every reconnect attempt.
@@ -80,6 +86,8 @@ describe("shouldRecreateClient stdio config comparison", () => {
 
     const result = shouldRecreateClient(client, stdioConfig());
     expect(result).toEqual({ needsNewClient: false });
+    expect(() => createStdioTransport({ ...config, command: 'node' } as MCPStdioConfig))
+      .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
   });
 
   it("detects a real args change", () => {
@@ -323,23 +331,23 @@ describe("safelyCloseClient graceful shutdown", () => {
     expect(events).toContain("client.close");
   });
 
+  it("reports unknown after unresolved forced escalation instead of certifying exit", async () => {
+    const child = new FakeChild();
+    const client = clientWithChild(child, []);
+    killProcessTreeAndWaitMock.mockResolvedValueOnce({ exited: false, forced: true, durationMs: 5 });
+    const result = await safelyCloseClient(client, "unresolved", undefined, {
+      gracePeriodMs: 5, killEscalationMs: 5,
+    });
+    expect(result).toMatchObject({ exited: false, forced: true, processOwnership: 'owned',
+      exitOutcome: 'unknown', errorClassification: 'exit_unobserved' });
+  });
+
   it("lets a REAL child with slow teardown exit naturally instead of being killed", async () => {
     // Real-process integration check for Finding B: a server that needs ~3s to shut
     // down after stdin closes (e.g. a browser teardown). The SDK's own close() ladder
     // SIGTERMs at 2s; the old safelyCloseClient invoked it immediately, so this child
     // died with a signal. The fixed version waits for the natural exit first.
-    const config = stdioConfig({
-      command: "node",
-      args: [
-        "-e",
-        "process.stdin.resume(); process.stdin.on('end', () => setTimeout(() => process.exit(0), 3000));",
-      ],
-      env: {
-        SYSTEMROOT: process.env.SystemRoot ?? "",
-        PATH: process.env.PATH ?? "",
-      },
-      rootPath: process.cwd(),
-    });
+    const config = stdioConfig();
     const transport = createStdioTransport(config);
     await transport.start();
     const child = (

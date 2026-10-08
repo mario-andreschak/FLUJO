@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID } from 'crypto';
+import { createHmac, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import {
@@ -11,6 +11,7 @@ import {
 import { createLogger } from '@/utils/logger';
 import { writeFileAtomic } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { loadInstallationKey } from './installationKey';
 
 const log = createLogger('backend/services/statistics');
 const SAFE_UTC_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -280,24 +281,6 @@ export async function readStatisticsEvents(day: string): Promise<StatisticsEvent
     log.warn('Ignored invalid statistics records', { day, count: invalidRecords });
   }
   return events;
-}
-
-async function loadInstallationKey(directory: string): Promise<Buffer> {
-  const keyFile = path.join(directory, '.installation-key');
-  await fs.mkdir(directory, { recursive: true });
-  try {
-    return await fs.readFile(keyFile);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
-  const generated = randomBytes(32);
-  try {
-    await fs.writeFile(keyFile, generated, { flag: 'wx', mode: 0o600 });
-    return generated;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return fs.readFile(keyFile);
-    throw error;
-  }
 }
 
 /** Stable installation-local grouping. Neither the credential nor HMAC key is serialized. */

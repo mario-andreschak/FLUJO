@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -34,6 +33,7 @@ import {
   getProviderFromBaseUrl
 } from './provider';
 import { modelCache, filterModels } from './cache';
+import { sameCatalogueEndpoint } from './catalogueDestination';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getCompletionAdapter } from './adapters';
@@ -418,11 +418,10 @@ class ModelService {
     profileId?: string,
   ): Promise<NormalizedModel[]> {
     log.debug('fetchProviderModels: Fetching provider catalogue', {
-      baseUrl,
-      modelId,
-      profileId,
+      hasModelId: Boolean(modelId),
+      hasProfile: Boolean(profileId),
       hasApiKey: Boolean(apiKey),
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      hasSearch: Boolean(searchTerm),
     });
 
     try {
@@ -456,12 +455,22 @@ class ModelService {
       }
 
       // Resolve the credential before consulting the cache because catalogue
-      // visibility can vary by account. Only its one-way digest enters the key.
+      // visibility can vary by account. Only its cache-lifetime keyed fingerprint enters the key.
       let resolvedApiKey: string | null = null;
       if (apiKey && apiKey !== MASKED_API_KEY) {
         resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
         log.debug('Using directly supplied API key for provider fetch');
       } else if (storedModel) {
+        const storedProvider = storedModel.provider ?? getProviderFromBaseUrl(storedModel.baseUrl ?? '');
+        const storedNativeGemini = storedProvider === 'gemini' && storedModel.adapter === 'gemini';
+        // A masked/missing key cannot authorize sending the stored credential to
+        // an unsaved URL or another native provider. Native Gemini's SDK has a
+        // fixed destination; HTTP-compatible adapters share the saved endpoint.
+        if (provider !== storedProvider || usesNativeGemini !== storedNativeGemini
+          || (!usesNativeGemini && !sameCatalogueEndpoint(storedModel.baseUrl, baseUrl))) {
+          log.warn('Stored catalogue credential cannot be reused for a changed destination or provider');
+          return [];
+        }
         resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
         log.debug('Resolved stored API key for provider fetch');
       } else if (modelId) {
@@ -470,9 +479,7 @@ class ModelService {
         log.warn('Provider fetch will be unauthenticated');
       }
 
-      const credentialFingerprint = createHash('sha256')
-        .update(resolvedApiKey ?? '')
-        .digest('hex');
+      const credentialFingerprint = modelCache.credentialFingerprint(resolvedApiKey ?? '');
       const cacheIdentity = {
         baseUrl,
         provider,
@@ -511,14 +518,9 @@ class ModelService {
       }
 
       return allModels;
-    } catch (error) {
-      log.error('fetchProviderModels: Provider catalogue fetch failed', {
-        baseUrl,
-        modelId,
-        profileId,
-        message: error instanceof Error ? error.message : 'Unknown provider error',
-      });
-      throw error;
+    } catch {
+      log.error('fetchProviderModels: Provider catalogue fetch failed');
+      throw new Error('Provider catalogue request failed');
     }
   }
 

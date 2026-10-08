@@ -1,25 +1,18 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import path from 'path';
 import JSZip from 'jszip';
 import { assertSafeCollectionId, listCollectionItems, loadItem } from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
-import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 import { WORKSPACE_LAYOUT_VERSION } from '@/backend/services/workspace/layoutVersion';
-import { addFolderToZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
+import { ordinaryBackupData, ORDINARY_BACKUP_SELECTIONS } from '@/backend/services/workspace/backupExport';
 
 const log = createLogger('app/api/backup/route');
-
-// Workspaces (#406): a backup covers exactly ONE workspace — the selected one.
-// Aggregating every workspace into a single archive would make restore a
-// far more destructive operation than it is today, so that is deliberately out
-// of scope here. Resolved per call because the workspace is per-request.
-const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -50,11 +43,14 @@ async function POST_handler(request: NextRequest) {
   log.info(`Handling backup request [RequestID: ${requestId}]`);
   
   try {
-    const { selections } = await request.json();
-    log.debug(`Backup selections [${requestId}]:`, selections);
+    const { selections: requestedSelections } = await request.json();
+    const selections = Array.isArray(requestedSelections)
+      ? [...new Set(requestedSelections.filter((selection): selection is string =>
+        typeof selection === 'string' && (ORDINARY_BACKUP_SELECTIONS as readonly string[]).includes(selection)))]
+      : [];
     
     if (!selections || !Array.isArray(selections) || selections.length === 0) {
-      log.error(`Invalid selections [${requestId}]:`, selections);
+      log.error(`Invalid selections [${requestId}]`);
       return NextResponse.json({ error: 'Invalid selections' }, { status: 400 });
     }
 
@@ -99,6 +95,8 @@ async function POST_handler(request: NextRequest) {
       version: '1.0',
       timestamp: new Date().toISOString(),
       selections,
+      credentials: 'omitted',
+      omittedSelections: ['encryptionKey', 'mcpServersFolder'],
       // #406: which workspace this archive was taken from, and which on-disk
       // layout it assumes. An archive WITHOUT these fields is a legacy,
       // pre-workspace backup and restores into the selected workspace.
@@ -131,9 +129,6 @@ async function POST_handler(request: NextRequest) {
         case 'globalEnvVars':
           storageKey = StorageKey.GLOBAL_ENV_VARS;
           break;
-        case 'encryptionKey':
-          storageKey = StorageKey.ENCRYPTION_KEY;
-          break;
       }
       
       if (storageKey) {
@@ -156,10 +151,10 @@ async function POST_handler(request: NextRequest) {
           
           // Keep the zip entry layout storage/<key>.json — restore and
           // previously created backups depend on it.
-          zip.file(`storage/${storageKey}.json`, JSON.stringify(data, null, 2));
+          zip.file(`storage/${storageKey}.json`, JSON.stringify(ordinaryBackupData(selection, data), null, 2));
           log.debug(`Added file to backup [${requestId}]:`, `storage/${storageKey}.json`);
-        } catch (error) {
-          log.error(`Error adding file to backup [${requestId}]:`, error);
+        } catch {
+          log.error(`Error adding file to backup [${requestId}]`);
           // Continue with other files
         }
       }
@@ -174,7 +169,7 @@ async function POST_handler(request: NextRequest) {
           const conversationId = conversation.conversationId as string;
           zip.file(
             `storage/conversations/${conversationId}.json`,
-            JSON.stringify(conversation, null, 2),
+            JSON.stringify(ordinaryBackupData('chatHistory', conversation), null, 2),
           );
         }
       } catch (error) {
@@ -182,24 +177,6 @@ async function POST_handler(request: NextRequest) {
       }
     }
 
-    // Add MCP servers folder if selected
-    if (selections.includes('mcpServersFolder')) {
-      try {
-        log.debug(`Adding MCP servers folder to backup [${requestId}]`);
-        await addFolderToZipLinkSafe(
-          zip,
-          mcpServersDir(),
-          'mcp-servers',
-          getWorkspaceDataDir(),
-          (entryPath, reason) => log.warn(`Skipped unsafe MCP backup entry ${entryPath}: ${reason}`),
-        );
-        log.debug(`Added MCP servers folder to backup [${requestId}]`);
-      } catch (error) {
-        log.error(`Error adding MCP servers folder to backup [${requestId}]:`, error);
-        // Continue with other files
-      }
-    }
-    
     // Generate the zip file
     log.debug(`Generating zip file [${requestId}]`);
     const zipBuffer = await zip.generateAsync({
@@ -216,11 +193,12 @@ async function POST_handler(request: NextRequest) {
     return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
+        'Cache-Control': 'no-store',
         'Content-Disposition': 'attachment; filename=flujo-backup.zip'
       }
     });
-  } catch (error) {
-    log.error(`Error creating backup [${requestId}]:`, error);
+  } catch {
+    log.error(`Error creating backup [${requestId}]`);
     return NextResponse.json({ error: 'Failed to create backup' }, { status: 500 });
   }
 }
