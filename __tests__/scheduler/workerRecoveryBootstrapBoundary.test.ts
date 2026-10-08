@@ -2,15 +2,19 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 // New natural-clock acceptance fixture, independent of the existing 45s ledger
 // witness. This deadline includes real minute boundaries and real MCP startup.
 jest.setTimeout(420_000);
 type Reply = Record<string, any>;
 const children: ChildProcess[] = [];
+const lifecycle = new WeakMap<ChildProcess, {
+  exited: boolean; closed: boolean; stdoutEnded: boolean; stderrEnded: boolean; error?: Error;
+}>();
 let sandbox: string;
 let stagingDir: string | undefined;
+const additionalStaging: string[] = [];
 
 function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   const child = spawn(process.execPath, [path.resolve(__dirname, 'fixtures/workerBootstrapRecovery.cjs'),
@@ -20,6 +24,17 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
       TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: 'test',
       FLUJO_EXPOSURE_MODE: 'localhost', FLUJO_DATA_DIR: data, ...env } });
   children.push(child);
+  const observed = { exited: false, closed: false, stdoutEnded: false, stderrEnded: false,
+    error: undefined as Error | undefined };
+  lifecycle.set(child, observed);
+  // Install all lifecycle/error observers immediately, before protocol waits.
+  child.on('error', error => { observed.error = error; });
+  child.on('exit', () => { observed.exited = true; });
+  child.on('close', () => { observed.closed = true; });
+  child.stdout!.on('end', () => { observed.stdoutEnded = true; });
+  child.stderr!.on('end', () => { observed.stderrEnded = true; });
+  child.stdout!.on('error', error => { observed.error = error; });
+  child.stderr!.on('error', error => { observed.error = error; });
   const messages: Reply[] = [];
   let diagnostic = '';
   child.stderr!.on('data', chunk => { diagnostic = (diagnostic + String(chunk)).slice(-16_384); });
@@ -29,6 +44,7 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   async function wait(predicate: (reply: Reply) => boolean, timeout = 60_000): Promise<Reply> {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
+      if (observed.error) throw observed.error;
       const failed = messages.find(reply => reply.phase === 'failed' || reply.phase === 'cleanup-failed');
       if (failed) throw new Error(failed.error);
       const index = messages.findIndex(predicate);
@@ -40,17 +56,21 @@ function launch(data: string, env: NodeJS.ProcessEnv, phase?: string) {
   }
   async function request(action: string, fields: Reply = {}) {
     const id = randomUUID();
-    child.send({ id, action, ...fields });
+    child.send({ id, action, ...fields }, error => { if (error) observed.error = error; });
     const reply = await wait(message => message.id === id);
     if (reply.error) throw new Error(reply.error);
     return reply.result;
   }
   async function exit(timeout = 15_000) {
     const end = Date.now() + timeout;
-    while (child.exitCode === null && child.signalCode === null && Date.now() < end) {
+    while ((!observed.exited || !observed.closed || !observed.stdoutEnded || !observed.stderrEnded)
+        && Date.now() < end) {
+      if (observed.error) throw observed.error;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    if (child.exitCode === null && child.signalCode === null) throw new Error('Shutdown ACK did not produce OS exit');
+    if (!observed.exited || !observed.closed || !observed.stdoutEnded || !observed.stderrEnded) {
+      throw new Error('Shutdown ACK did not produce observed OS exit, child close and drained stdio');
+    }
     expect(child.exitCode).toBe(0);
   }
   return { child, wait, request, exit };
@@ -93,14 +113,23 @@ afterEach(async () => {
     if (child.exitCode === null && child.signalCode === null && child.connected) child.disconnect();
   }
   const end = Date.now() + 15_000;
-  while (children.some(child => child.exitCode === null && child.signalCode === null) && Date.now() < end) {
+  const incomplete = (child: ChildProcess) => {
+    const observed = lifecycle.get(child)!;
+    // Failed spawn has no exit event; its error and close are still observed.
+    const failedSpawn = observed.error && child.pid === undefined;
+    return !observed.closed || (!observed.exited && !failedSpawn)
+      || (!observed.stdoutEnded && !(failedSpawn && child.stdout?.destroyed))
+      || (!observed.stderrEnded && !(failedSpawn && child.stderr?.destroyed));
+  };
+  while (children.some(incomplete) && Date.now() < end) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  if (children.some(child => child.exitCode === null && child.signalCode === null)) {
-    throw new Error(`Owned child still live; preserving fixture at ${sandbox}`);
+  if (children.some(incomplete)) {
+    throw new Error(`Owned child exit/close/stdio unresolved; preserving fixture at ${sandbox}`);
   }
   children.length = 0;
-  for (const [directory, prefix] of [[sandbox, 'flujo-worker-bootstrap-'], [stagingDir, 'flujo-hot-clone-']] as const) {
+  for (const [directory, prefix] of [[sandbox, 'flujo-worker-bootstrap-'], [stagingDir, 'flujo-hot-clone-'],
+    ...additionalStaging.map(directory => [directory, 'flujo-hot-clone-'] as const)] as const) {
     if (!directory) continue;
     const resolved = path.resolve(directory);
     if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith(prefix)
@@ -108,6 +137,7 @@ afterEach(async () => {
     await fs.rm(resolved, { recursive: true, force: true });
   }
   stagingDir = undefined;
+  additionalStaging.length = 0;
 });
 
 it('boots real snapshots, recovers a local schedule once, and keeps copied, sibling, paused and disabled schedules inert', async () => {
@@ -130,6 +160,10 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   await worker.request('create', { planId, flowId: snapshot.flowId });
   await waitEffect(snapshot.journal, 1);
   const firstRun = await waitTerminal(worker, planId);
+  // Export the genuinely locally enrolled row through the production exporter.
+  // Its installation-private HMAC record must not travel to the sibling.
+  const localSnapshot = await worker.request('export');
+  additionalStaging.push(localSnapshot.stagingDir);
   await worker.request('start-again'); await worker.request('start-again');
   expect(await effects(snapshot.journal)).toHaveLength(1);
   await worker.request('stop'); await worker.exit();
@@ -155,9 +189,59 @@ it('boots real snapshots, recovers a local schedule once, and keeps copied, sibl
   await crossMinute();
   expect(await effects(snapshot.journal)).toHaveLength(2);
   await worker.request('stop'); await worker.exit();
-  const sibling = launch(path.join(sandbox, 'sibling'), { ...workerEnv, FLUJO_WORKER_RECOVERY_ID: 'owned-sibling' });
-  await sibling.wait(message => message.phase === 'bootstrapped');
+  const sibling = launch(path.join(sandbox, 'sibling'), { ...workerEnv, FLUJO_WORKER_RECOVERY_ID: 'owned-sibling',
+    FLUJO_WORKER_SNAPSHOT: localSnapshot.archivePath, FLUJO_WORKER_SNAPSHOT_SHA256: localSnapshot.sha256,
+    FLUJO_WORKER_SNAPSHOT_KEY: localSnapshot.key });
+  const siblingBoot = await sibling.wait(message => message.phase === 'bootstrapped');
+  expect(siblingBoot.plans.find((row: Reply) => row.execution.id === planId).status.workerRecovery.reason)
+    .toBe('no-local-provenance');
   await crossMinute();
   expect(await effects(snapshot.journal)).toHaveLength(2);
   await sibling.request('stop'); await sibling.exit();
 });
+
+it.each(['invalid-provenance', 'generation-changed', 'retired', 'not-opted-in'] as const)(
+  'keeps a real enrolled worker schedule inert after %s on genuine bootstrap', async reason => {
+    sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-worker-bootstrap-'));
+    const scratch = path.join(sandbox, 'effects'); await fs.mkdir(scratch);
+    const seed = launch(path.join(sandbox, 'seed'), { FLUJO_BOOTSTRAP_EFFECT_ROOT: scratch }, 'seed');
+    const snapshot = await seed.wait(message => message.phase === 'seeded');
+    stagingDir = snapshot.stagingDir; await seed.exit();
+    const data = path.join(sandbox, 'worker');
+    const env = { FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: snapshot.archivePath,
+      FLUJO_WORKER_SNAPSHOT_SHA256: snapshot.sha256, FLUJO_WORKER_SNAPSHOT_KEY: snapshot.key,
+      FLUJO_WORKER_RECOVERY_ID: 'owned-negative-worker', FLUJO_WORKER_RECOVERY_EPOCH: '1',
+      FLUJO_SNAPSHOT_CONTROL_TOKEN: randomUUID() };
+    let worker = launch(data, env);
+    const boot = await worker.wait(message => message.phase === 'bootstrapped');
+    // Pause before creation/enrollment so setup cannot itself schedule an effect.
+    await worker.request('pause', { paused: true });
+    const planId = randomUUID();
+    await worker.request('create', { planId, flowId: snapshot.flowId });
+    if (reason === 'not-opted-in') await worker.request('withdraw', { planId });
+    await worker.request('stop'); await worker.exit();
+    // Negative controls deliberately alter only owned offline fixture objects.
+    // Neither provenance nor a generation is forged to grant admission.
+    const planFile = path.join(boot.workspaceDataDir, 'db', 'planned_executions.json');
+    const stored = JSON.parse(await fs.readFile(planFile, 'utf8'));
+    stored.paused = false;
+    const plan = stored.executions.find((row: Reply) => row.id === planId);
+    if (reason === 'generation-changed') plan.generationId = randomUUID();
+    if (reason === 'retired') plan.personaRetired = true;
+    await fs.writeFile(planFile, JSON.stringify(stored));
+    if (reason === 'invalid-provenance') {
+      const key = createHash('sha256').update(`${snapshot.workspace}\0${planId}`).digest('hex');
+      const recordFile = path.join(data, '.worker-local-recovery', snapshot.workspace, `${key}.json`);
+      const record = JSON.parse(await fs.readFile(recordFile, 'utf8'));
+      record.signature = '0'.repeat(64);
+      await fs.writeFile(recordFile, JSON.stringify(record));
+    }
+    worker = launch(data, env);
+    const rejected = await worker.wait(message => message.phase === 'bootstrapped');
+    const status = rejected.plans.find((row: Reply) => row.execution.id === planId).status;
+    expect(status.workerRecovery.reason).toBe(reason);
+    expect(status.armed).toBe(false);
+    await crossMinute();
+    expect(await effects(snapshot.journal)).toHaveLength(0);
+    await worker.request('stop'); await worker.exit();
+  });

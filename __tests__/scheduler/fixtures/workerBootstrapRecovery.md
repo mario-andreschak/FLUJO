@@ -12,9 +12,15 @@ for actual terminal run publication as well as the effect before stopping.
 
 The intended assertions cover copied suppression, ordinary local one-minute
 schedule recovery after a naturally missed minute, repeated `start`, paused
-and disabled restart suppression, and a new sibling receiving the original
-snapshot. Shutdown ACK and observed OS exit are separate observations. A live
-child prevents recursive fixture cleanup. The 420-second deadline belongs only
+and disabled restart suppression, and a new sibling receiving an actual export
+containing the locally enrolled row without installation-private provenance.
+Additional real-bootstrap cases check corrupt signatures, changed generation,
+retirement and explicit enrollment withdrawal across a natural minute.
+Shutdown ACK, observed OS exit, child close, and drained stdout/stderr are
+separate observations. Spawn/protocol errors have immediate owned observers.
+Backend shutdown and private owner cleanup are attempted independently and
+aggregate failures; cleanup failure withholds the successful ACK. An unresolved
+child exit/close/drain prevents recursive fixture cleanup. The 420-second deadline belongs only
 to this new natural-clock scenario; existing deadlines are unchanged.
 
 Qualification prerequisites: exact frozen Source and matching built Bash
@@ -24,9 +30,10 @@ for this candidate. Loader source transpilation is not installed-build proof.
 Any real startup/reinstallation/consent failure must be preserved and fixed;
 do not substitute readiness, MCP, scheduler, flow, storage or occurrence mocks.
 
-Still outside this fixture: copying locally enrolled rows to a sibling without
-private provenance; corrupt/changed-generation/retired/stop controls under the
-full bootstrap; interrupted live descendants; watchdog owned cancellation and
-OS-exit uncertainty; the original fifteen-minute coordinator reproduction.
+Still outside this fixture: interrupted live descendants; watchdog owned
+cancellation and OS-exit uncertainty; the original fifteen-minute coordinator
+reproduction. Child close/stdio drain alone does not prove Bash descendants
+have exited. That requires actual descendant ownership/exit evidence in the
+separate watchdog acceptance fixture, not a simulated ACK or readiness flag.
 These remain separate #553 acceptance gaps. Package-runner review commitments
 also remain separate from actual protected resolver/launch enforcement.

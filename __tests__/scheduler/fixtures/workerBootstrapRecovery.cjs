@@ -34,8 +34,18 @@ let commands = Promise.resolve();
 
 async function shutdown() {
   stopping = true;
-  await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture');
-  if (owner) { owner.restore(); owner = undefined; }
+  const failures = [];
+  try { await source('backend/init.ts').shutdownBackendServices('owned worker bootstrap fixture'); }
+  catch (error) { failures.push(error); }
+  // Private owner cleanup is independent of backend shutdown success.
+  if (owner) {
+    try { owner.restore(); owner = undefined; }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length) {
+    stopping = false; // Disconnect may retry actual cleanup; an ACK is withheld.
+    throw new AggregateError(failures, 'Worker fixture shutdown/owner cleanup failed');
+  }
 }
 
 async function command(message) {
@@ -62,6 +72,27 @@ async function command(message) {
     }
     case 'pause': await scheduler.setPaused(message.paused === true); result = await scheduler.list(); break;
     case 'disable': result = await scheduler.update(message.planId, { enabled: false }); break;
+    case 'withdraw': {
+      const execution = await scheduler.get(message.planId);
+      if (!execution) throw new Error('Missing enrolled execution');
+      await scheduler.setWorkerLocalRecovery(execution.id, { enabled: false,
+        expectedGenerationId: execution.generationId,
+        expectedDefinitionSha256: source('backend/services/scheduler/workerLocalRecovery.ts')
+          .workerRecoveryDefinitionSha256(execution) });
+      result = await scheduler.list();
+      break;
+    }
+    case 'export': {
+      const key = require('node:crypto').randomBytes(32).toString('hex');
+      const archive = source('backend/services/workspace/snapshotArchive.ts');
+      const captured = await archive.captureWorkspaceSnapshot(
+        source('utils/workspace.ts').getCurrentWorkspace(), 2, { recipientKey: key });
+      try {
+        const written = await archive.writeWorkspaceSnapshotArchive(captured);
+        result = { archivePath: written.archivePath, stagingDir: written.stagingDir, sha256: written.sha256, key };
+      } finally { if (captured.dispose) await captured.dispose(); }
+      break;
+    }
     case 'start-again': await scheduler.start(); result = await scheduler.list(); break;
     case 'stop': await shutdown(); send({ id: message.id, result: { shutdownCompleted: true } });
       // The parent must separately observe OS exit/close; this reply is an ACK.
@@ -153,7 +184,8 @@ async function command(message) {
       send({ id: message && message.id, error: String(error.stack || error) });
     });
   });
-  send({ phase: 'bootstrapped', status, plans: await scheduler.list() });
+  send({ phase: 'bootstrapped', status, plans: await scheduler.list(),
+    workspaceDataDir: source('utils/workspace.ts').getWorkspaceDataDir() });
 })().catch(async error => {
   send({ phase: 'failed', error: String(error.stack || error) });
   try { await shutdown(); } catch (cleanup) { send({ phase: 'cleanup-failed', error: String(cleanup) }); }
