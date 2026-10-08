@@ -8,7 +8,7 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
-import { saveConfig } from '@/backend/services/mcp/config';
+import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
 
 let mockWorkspace = '';
@@ -366,6 +366,37 @@ it('refuses to replace a pinned workspace runtime with a different worker build'
   expect(updateConfig).not.toHaveBeenCalled();
   expect(connect).not.toHaveBeenCalled();
 });
+
+it('preserves genuine bundled approval on retry and refuses a revoked grant without saving', async () => {
+  const descriptor = SHIPPED_MCP_SERVERS.find(value => value.packageDirectory === 'filesystem')!;
+  await ensureShippedWorkspacePackages(mockWorkspace, undefined, [descriptor.packageDirectory]);
+  const config = { ...createShippedServerConfig(descriptor), roots: [mockWorkspace], env: { FLUJO_FS_ROOTS: mockWorkspace } };
+  const plan = buildWorkspaceMcpTransferPlan([{ ...config, disabled: false }], mockWorkspace);
+  await saveConfig(new Map([[config.name, { ...config, disabled: false }]]));
+  const owner = installBundledFixtureOwner();
+  try {
+    const { previewBundledHostConsent, approveBundledHostConsent, revokeBundledHostConsent } = await import('@/backend/services/security/bundledMcpConsent');
+    const preview = await previewBundledHostConsent(config.name, { runtimeHome: 'host' });
+    await approveBundledHostConsent(owner.request(config.name), config.name, {
+      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+    });
+    const loaded = await loadServerConfigs();
+    if (!Array.isArray(loaded)) throw new Error('Could not load the genuine approved fixture.');
+    const approved = loaded.find(value => value.name === config.name)!;
+    loadConfigs.mockResolvedValue([approved]);
+    expect(await reinstallWorkspaceMcpServers(plan)).toEqual({ ok: true, servers: [{ name: config.name, status: 'ready' }] });
+    expect(updateConfig.mock.calls[0][1]).toEqual(approved);
+    expect(updateConfig.mock.calls[0][1].command).toBe(process.execPath);
+    expect(await loadServerConfigs()).toEqual(loaded);
+    await revokeBundledHostConsent(owner.request(config.name), config.name);
+    updateConfig.mockClear();
+    connect.mockClear();
+    expect(await reinstallWorkspaceMcpServers(plan)).toMatchObject({ ok: false, servers: [{ name: config.name, status: 'failed' }] });
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(await loadServerConfigs()).toEqual(loaded);
+  } finally { owner.restore(); }
+}, 30_000);
 
 it('starts the rebuilt bundled filesystem process and reads/writes only the target workspace', async () => {
   const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-transfer-source-'));
