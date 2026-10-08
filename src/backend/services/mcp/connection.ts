@@ -135,7 +135,26 @@ export interface TransportWithConfigKey {
 }
 
 /** Process-wide authority uncertainty survives another service/module instance. */
-export class McpRuntimeAuthorityRetirementError extends AggregateError {}
+const retirementErrorKey = Symbol.for('FLUJO:mcp-authority-retirement-errors:v1');
+const retirementErrorDescriptor = Object.getOwnPropertyDescriptor(globalThis, retirementErrorKey);
+if (retirementErrorDescriptor && (!('value' in retirementErrorDescriptor)
+    || retirementErrorDescriptor.configurable || retirementErrorDescriptor.writable
+    || !(retirementErrorDescriptor.value instanceof WeakSet))) {
+  throw new Error('MCP retirement error provenance refused.');
+}
+const retirementErrorProvenance: WeakSet<object> = retirementErrorDescriptor?.value ?? new WeakSet<object>();
+if (!retirementErrorDescriptor) Object.defineProperty(globalThis, retirementErrorKey, {
+  value: retirementErrorProvenance, writable: false, configurable: false, enumerable: false,
+});
+export class McpRuntimeAuthorityRetirementError extends AggregateError {
+  constructor(errors: Iterable<unknown>, message?: string, options?: ErrorOptions) {
+    super(errors, message, options);
+    WeakSet.prototype.add.call(retirementErrorProvenance, this);
+  }
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return !!value && typeof value === 'object' && WeakSet.prototype.has.call(retirementErrorProvenance, value);
+  }
+}
 interface AuthorityRetirementQuarantine {
   owner: unknown;
   error: McpRuntimeAuthorityRetirementError;
