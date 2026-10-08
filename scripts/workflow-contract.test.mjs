@@ -187,7 +187,7 @@ test('production qualification reuses only CI-only changes and fails closed on a
   assert.equal(rejected.output, '');
 });
 
-test('Worker publisher scripts parse in Bash and reject the nested heredoc indentation regression', () => {
+test('Worker publisher scripts parse in Bash and reject the nested heredoc indentation regression', t => {
   const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true });
   assert.equal(git.status, 0, git.stderr);
   const bash = process.platform === 'win32' ? path.resolve(git.stdout.trim(), '..', '..', '..', 'bin', 'bash.exe') : 'bash';
@@ -202,4 +202,18 @@ test('Worker publisher scripts parse in Bash and reject the nested heredoc inden
   const broken = spawnSync(bash, ['-n'], { input: publish.replace('\nNODE\n', '\n  NODE\n'), encoding: 'utf8', windowsHide: true, timeout: 10_000 });
   assert.ifError(broken.error);
   assert.notEqual(broken.status, 0);
+  const tempRoot = realpathSync.native(os.tmpdir());
+  const checkerTemp = realpathSync.native(mkdtempSync(path.join(tempRoot, 'flujo-publisher-syntax-')));
+  t.after(() => {
+    const relative = path.relative(tempRoot, realpathSync.native(checkerTemp));
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    rmSync(checkerTemp, { recursive: true, force: true });
+  });
+  const checker = readWorkflows()['verify.yml'].jobs['production-build'].steps.find(step => step.name === 'Validate Worker publisher shell syntax').run;
+  const checked = spawnSync(bash, ['-e', '-c', checker], {
+    cwd: new URL('../', import.meta.url), encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    env: { ...process.env, RUNNER_TEMP: checkerTemp },
+  });
+  assert.ifError(checked.error);
+  assert.equal(checked.status, 0, checked.stderr);
 });

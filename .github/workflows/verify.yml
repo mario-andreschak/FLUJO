@@ -76,8 +76,8 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import path from 'node:path';
-          import { parse } from 'yaml';
-          const workflow = parse(fs.readFileSync('.github/workflows/publish-cloud-worker.yml', 'utf8'));
+          import YAML from 'yaml';
+          const workflow = YAML.parse(fs.readFileSync('.github/workflows/publish-cloud-worker.yml', 'utf8'));
           let count = 0;
           for (const step of workflow.jobs.publish.steps) {
             if (step.shell !== 'bash' || typeof step.run !== 'string') continue;
