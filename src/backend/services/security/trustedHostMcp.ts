@@ -485,13 +485,14 @@ async function assertLinkFreeAsync(filename: string): Promise<void> {
   if (canonical(await fs.promises.realpath(filename)) !== canonical(filename)) throw new Error();
 }
 
-async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal): Promise<{ digest: string; size: number }> {
+async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal, expected?: BigIntStats): Promise<{ digest: string; size: number }> {
   if (signal?.aborted) throw new Error();
   const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   let buffer: Buffer | undefined;
   try {
     const opened = await handle.stat({ bigint: true });
     if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)) throw new Error();
+    if (expected && !sameIdentity(expected, opened)) throw new Error();
     await assertLinkFreeAsync(filename);
     if (!sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new Error();
     const hash = createHash('sha256');
@@ -530,21 +531,41 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
     if (!before.isDirectory()) throw new Error();
     tree.update(JSON.stringify(['directory', path.relative(root, directory).split(path.sep).join('/'), String(before.mode)]));
     const names = (await fs.promises.readdir(directory)).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    // Keep the established ordered digest and every held-file/link check, but
+    // overlap independent sibling reads. No shared verification cache is used.
+    // Reserve bytes before opening a batch and drain every reader on refusal.
+    const pending: Array<{ filename: string; stat: BigIntStats }> = [];
+    const flush = async (): Promise<void> => {
+      const batch = pending.splice(0);
+      const results = await Promise.allSettled(batch.map(({ filename, stat }) =>
+        hashStableFileAsync(filename, Number(stat.size), signal, stat)));
+      if (signal?.aborted || results.some(result => result.status === 'rejected')) throw new Error();
+      for (const [index, result] of results.entries()) {
+        if (result.status !== 'fulfilled') throw new Error();
+        const { filename, stat } = batch[index];
+        if (result.value.size !== Number(stat.size)) throw new Error();
+        tree.update(JSON.stringify(['file', path.relative(root, filename).split(path.sep).join('/'), String(stat.mode), result.value.digest]));
+      }
+    };
     for (const name of names) {
+      if (signal?.aborted) throw new Error();
       const filename = path.join(directory, name);
       const stat = await fs.promises.lstat(filename, { bigint: true });
       if (stat.isSymbolicLink()) {
+        await flush();
         const admitted = dependencyLinks.find(item => canonical(item.link) === canonical(filename));
         if (!admitted || canonical(await fs.promises.realpath(filename)) !== canonical(admitted.target)) throw new Error();
         tree.update(JSON.stringify(['approved-dependency-link', path.relative(root, filename).split(path.sep).join('/'), canonical(admitted.target)]));
         continue;
       }
-      if (stat.isDirectory() && !stat.isSymbolicLink()) { await visit(filename); continue; }
+      if (stat.isDirectory() && !stat.isSymbolicLink()) { await flush(); await visit(filename); continue; }
       if (++members > MAX_MEMBERS || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== BigInt(1)) throw new Error();
-      const admitted = await hashStableFileAsync(filename, MAX_SOURCE_BYTES - bytes, signal);
-      bytes += admitted.size;
-      tree.update(JSON.stringify(['file', path.relative(root, filename).split(path.sep).join('/'), String(stat.mode), admitted.digest]));
+      if (stat.size < BigInt(0) || stat.size > BigInt(MAX_SOURCE_BYTES - bytes)) throw new Error();
+      bytes += Number(stat.size);
+      pending.push({ filename, stat });
+      if (pending.length === 8) await flush();
     }
+    await flush();
     await assertLinkFreeAsync(directory);
     if (!sameIdentity(before, await fs.promises.lstat(directory, { bigint: true }))) throw new Error();
   };
