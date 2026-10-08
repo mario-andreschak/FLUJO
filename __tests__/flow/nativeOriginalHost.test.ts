@@ -31,8 +31,8 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
   return { ...actual, startOwnedCodexAppServer: async (input: Parameters<typeof actual.startOwnedCodexAppServer>[0]) => {
     const wire = path.join(directory, 'codex-wire.jsonl');
     return actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
-      args: ['-e', codexChildFixture, wire],
-      register: async registration => { codexRegistrations.push(registration); await input.register(registration); },
+      args: ['-e', codexChildFixture, wire, codexForeignScope],
+      register: async registration => { codexRegistrations.push(registration); await input.register(registration); await beforePrompt?.(); },
       onNotification: message => {
         codexFrames.push(message);
         input.onNotification(message);
@@ -76,6 +76,7 @@ let lateResultFirst = false;
 let offeredLateUsage: unknown;
 let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
 let codexFrames: unknown[] = [];
+let codexForeignScope = '';
 const codexChildFixture = `
 const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
 process.stdin.on('end',()=>{
@@ -88,9 +89,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(m.method==='initialize')send({id:m.id,result:{userAgent:'offline'}});
  else if(m.method==='thread/start')send({id:m.id,result:{model:m.params.model,thread:{id:'native_codex_thread'}}});
  else if(m.method==='turn/start'){
-  const threadId=m.params.threadId,turnId='native_codex_turn';
+  let threadId=m.params.threadId,turnId='native_codex_turn';
   send({id:m.id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId,turn:{id:turnId}}});
   const tick=setInterval(()=>{if(!fs.existsSync(wire+'.events'))return;clearInterval(tick);
+   if(process.argv[2]==='thread')threadId='foreign_thread';
+   if(process.argv[2]==='turn')turnId='foreign_turn';
    send({method:'item/completed',params:{threadId,turnId,item:{id:'native_codex_item',type:'agentMessage',text:'offline codex done'}}});
    send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0}}}});
    send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
@@ -108,7 +111,7 @@ beforeEach(async () => {
   afterPrompt = undefined; transcriptText = 'done';
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
-  codexRegistrations = []; codexFrames = [];
+  codexRegistrations = []; codexFrames = []; codexForeignScope = "";
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -173,11 +176,11 @@ afterEach(async () => {
 });
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
-  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' = false) {
+  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' | 'no-handoff-refusal' = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
-    if (production === 'no-handoff' || production === 'child' || production === 'child-refusal') {
+    if (production === 'no-handoff' || production === 'no-handoff-refusal' || production === 'child' || production === 'child-refusal') {
       await ensureTestRole();
       const version = buildTestRoleVersion();
       version.id = 'rolever_native_no_handoff_v2';
@@ -215,7 +218,7 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
         await task(input, goal.id);
         if (production) {
           const result = await runFlow(input);
-          expect(result.status).toBe(production === 'handoff-refusal' || production === 'child-refusal' ? 'error' : 'completed');
+          expect(result.status).toBe(production === 'handoff-refusal' || production === 'child-refusal' || production === 'no-handoff-refusal' ? 'error' : 'completed');
           return result;
         }
       } catch (error) { failure = error; }
@@ -226,13 +229,13 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       await dispatcher.submit({ personaId: persona.id, idempotencyKey: 'native-host-round', kind: 'assignment',
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
       { startPump: false });
-      if (production === 'handoff-refusal') {
+      if (production === 'handoff-refusal' || production === 'no-handoff-refusal') {
         try { await dispatcher.pump(persona.id); }
         catch (error) { expect(error).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' }); }
       } else await dispatcher.pump(persona.id);
       expect(observed).toBe(true);
       if (failure) {
-        if (production === 'handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+        if (production === 'handoff-refusal' || production === 'no-handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
         else throw failure;
       }
       await after?.(persona.id, goal.id);
@@ -284,6 +287,41 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(wire.map(message => message.method)).toEqual(['initialize', 'initialized', 'thread/start', 'turn/start']);
     }, 'no-handoff');
   }, 30000);
+  it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
+    'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
+      selectedModel = { ...modelFixture, provider: 'codex-subscription', adapter: 'codex-cli' } as Model;
+      codexForeignScope = mode === 'foreign-thread' ? 'thread' : mode === 'foreign-turn' ? 'turn' : '';
+      const events: string[] = [];
+      const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+      try {
+        await withClaim(async (input, goalId) => {
+          const revoke = async () => {
+            expect((await ledger()).reservations[0].state).toBe('registered');
+            const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+            await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+          };
+          if (mode === 'before-prompt') beforePrompt = revoke;
+          if (mode === 'after-prompt') afterPrompt = revoke;
+        }, async () => {
+          expect(queryMock).not.toHaveBeenCalled();
+          expect(codexRegistrations).toHaveLength(1);
+          const reservation = (await ledger()).reservations[0];
+          expect(reservation.state).not.toBe('released');
+          expect(reservation.sdkUsage).toBeUndefined();
+          expect(events.join('\n')).not.toContain('offline codex done');
+          const saved = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+          expect(JSON.stringify(saved?.messages)).not.toContain('offline codex done');
+          if (mode === 'before-prompt') {
+            await expect(fs.access(path.join(directory, 'codex-wire.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+          } else {
+            expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'item/completed',
+              params: expect.objectContaining({ item: expect.objectContaining({ text: 'offline codex done' }) }) })]));
+            const wire = await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8');
+            expect(wire).toContain('turn/start');
+          }
+        }, 'no-handoff-refusal');
+      } finally { unsubscribe(); }
+    }, 30000);
   it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
     let rootConversation: string | undefined;
     let rootRun: string | undefined;
