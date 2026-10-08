@@ -1,9 +1,25 @@
 # Offline large-history workload equipment for #520
 
-This is Source equipment on qualified owned-schema baseline
-`269579ab103a06cb16dc806be1debe36fbb55072`. All new execution, compiler, SDK,
-memory and operational controls are **UNRUN**. The scenario does not reproduce
+This equipment builds on qualified owned-schema baseline
+`269579ab103a06cb16dc806be1debe36fbb55072`. On 2026-10-08, canonical TypeScript,
+changed-file lint, all six lexer controls, and both complete workload controls
+passed on Node 22.23.3 / Windows with the default 4,345,298,944-byte heap limit.
+The scenario does not reproduce
 the unavailable original transcript or establish the cause of its fatal OOM.
+
+The complete comparison took 110.945 seconds. Both children exited with code
+zero, no signal or timeout, and independently observed stdout/stderr ends and
+close. The guarded run refused two queued jobs before HTTP; the comparison
+completed all four queued jobs but retained three actual production archive-read
+LIMIT refusals after independent streamed history witnesses. Both archive write
+ledgers drained to zero bytes, writers, and quarantines. Raw logs, samples,
+archives and receipts remain in the qualification fixtures.
+
+The 127 guarded samples observed maximum RSS 615,493,632 bytes and heap used
+427,861,048 bytes; the 179 comparison samples observed RSS 605,945,856 bytes and
+heap used 411,242,080 bytes. These sampled maxima are not exact peaks and do not
+demonstrate a memory reduction, OOM prevention, original-workload support, or
+readability of the refused comparison archives.
 
 The first actual integrated run failed both controls: guarded execution reached
 proof emission but Jest could not resolve the unexported `openai/package.json`
