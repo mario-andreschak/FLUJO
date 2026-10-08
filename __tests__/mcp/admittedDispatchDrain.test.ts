@@ -52,28 +52,46 @@ describe('admitted dispatch settlement', () => {
       held.release();
       const failures: unknown[] = [];
       try { await operation; } catch (error) { failures.push(error); }
-      // Environment restoration and identity-guarded owner cleanup are
-      // independent of task rejection; never let it skip owner.restore.
-      try { owner.restore(); } catch (error) { failures.push(error); }
-      if (handle) failures.push(new Error('Actual held file close remains unresolved'));
-      if (failures.length) throw Object.assign(new AggregateError(failures, 'Held-FD task/owner cleanup failed'), { handle });
+      // Restore environment independently. Directory deletion requires actual
+      // FD settlement and is withheld when close remains live or uncertain.
+      try { owner.restoreEnvironment(); } catch (error) { failures.push(error); }
+      if (handle) failures.push(new Error('Actual held file close remains unresolved; owned directory preserved'));
+      else try { owner.removeDirectory(); } catch (error) { failures.push(error); }
+      if (failures.length) throw Object.assign(new AggregateError(failures, 'Held-FD task/owner cleanup failed'), {
+        handle, ownerDirectory: owner.directory,
+      });
     }
   });
 
   it('records actual read failure in a nonrejecting drain witness', async () => {
     const owner = installBundledFixtureOwner();
     const drain = new AdmittedDispatchDrain();
+    let handle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+    let operation: Promise<void> | undefined;
     try {
-      const operation = drain.admit(async () => {
-        const handle = await fs.promises.open(process.env.FLUJO_OWNER_AUTH_FILE!, 'r');
+      operation = drain.admit(async () => {
+        handle = await fs.promises.open(process.env.FLUJO_OWNER_AUTH_FILE!, 'r');
         await handle.close();
-        await handle.readFile(); // genuine closed-descriptor failure
+        const closed = handle;
+        handle = undefined; // Only after the actual close resolved.
+        await closed.readFile(); // genuine closed-descriptor failure
       });
       const settlement = drain.seal();
       await expect(operation).rejects.toThrow();
       await settlement;
       expect(drain.pending).toBe(0);
       expect(drain.failures).toHaveLength(1);
-    } finally { owner.restore(); }
+    } finally {
+      const failures: unknown[] = [];
+      // Expected read rejection is asserted above; actual close uncertainty
+      // still withholds recursive directory cleanup.
+      try { await operation; } catch { /* Asserted actual read failure. */ }
+      try { owner.restoreEnvironment(); } catch (error) { failures.push(error); }
+      if (handle) failures.push(new Error('Actual held file close remains unresolved; owned directory preserved'));
+      else try { owner.removeDirectory(); } catch (error) { failures.push(error); }
+      if (failures.length) throw Object.assign(new AggregateError(failures, 'Read-failure fixture cleanup unresolved'), {
+        handle, ownerDirectory: owner.directory,
+      });
+    }
   });
 });

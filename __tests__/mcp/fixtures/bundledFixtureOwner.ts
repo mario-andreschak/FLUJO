@@ -11,12 +11,13 @@ export function installBundledFixtureOwner() {
   const directoryOwnership = captureOwnedFixtureDirectory(directory);
   const names = ['FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE'];
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
-  const restore = () => {
+  const restoreEnvironment = () => {
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name]; else process.env[name] = value;
     }
-    removeOwnedFixtureDirectory(directoryOwnership, parent, 'flujo-bundled-owner-');
   };
+  const removeDirectory = () => removeOwnedFixtureDirectory(directoryOwnership, parent, 'flujo-bundled-owner-');
+  const restore = () => { restoreEnvironment(); removeDirectory(); };
   try {
     const expiresAt = Date.now() + 120_000;
     const issued = issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], expiresAt);
@@ -31,6 +32,9 @@ export function installBundledFixtureOwner() {
     delete process.env.FLUJO_MCP_ISOLATION_FILE;
     return {
       expiresAt,
+      directory,
+      restoreEnvironment,
+      removeDirectory,
       request(serverName: string) {
         return new Request(`http://localhost:4200/api/mcp/servers/${encodeURIComponent(serverName)}/host-consent`, {
           method: 'POST', headers: { host: 'localhost:4200', authorization: `Bearer ${issued.token}` },

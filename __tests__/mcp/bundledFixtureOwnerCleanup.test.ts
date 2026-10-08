@@ -25,3 +25,29 @@ it('refuses replacement owner directory cleanup and preserves its actual sentine
     owner.restore();
   }
 });
+
+it('restores environment independently while preserving the root until actual FD close', async () => {
+  const previousOwner = process.env.FLUJO_OWNER_AUTH_FILE;
+  const owner = installBundledFixtureOwner();
+  const filename = process.env.FLUJO_OWNER_AUTH_FILE!;
+  let handle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+  try {
+    handle = await fs.promises.open(filename, 'r');
+    owner.restoreEnvironment();
+    expect(process.env.FLUJO_OWNER_AUTH_FILE).toBe(previousOwner);
+    expect(fs.existsSync(owner.directory)).toBe(true);
+    expect((await handle.stat()).isFile()).toBe(true);
+    await handle.close();
+    handle = undefined;
+    owner.removeDirectory();
+    expect(fs.existsSync(owner.directory)).toBe(false);
+  } finally {
+    owner.restoreEnvironment();
+    if (handle) {
+      // No removal after an uncertain close. Preserve the actual handle/root
+      // for inspection, even when this test body fails.
+      throw Object.assign(new Error('Owned FD remains live; fixture root preserved'), { handle, directory: owner.directory });
+    }
+    if (fs.existsSync(owner.directory)) owner.removeDirectory();
+  }
+});
