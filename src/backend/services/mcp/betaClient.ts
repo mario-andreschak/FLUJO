@@ -1,3 +1,4 @@
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
@@ -20,6 +21,9 @@ import {
   flattenCustomHeaders,
   httpConfigKey,
   resolveStdioLaunch,
+  McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired,
+  retireMcpRuntimeAuthority,
   stdioConfigKey,
   capabilityKey,
   ClientWithBetaMarker,
@@ -296,14 +300,11 @@ export function createBetaTransport(
   const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
   let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
   let workload: PendingBundledFlujoWorkload | undefined;
-  const retireRuntimeAuthority = () => {
-    const errors: unknown[] = [];
-    try { if (workload) revokePendingWorkload(workload); } catch (error) { errors.push(error); }
-    try { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, 'MCP runtime authority retirement failed.', { cause: errors[0] });
-  };
+  const workloadWorkspace = getCurrentWorkspace();
+  const retireRuntimeAuthority = () => retireMcpRuntimeAuthority(config.name, workloadWorkspace, workload, runtimeBroker);
   let transport: BetaStdioClientTransport;
   try {
+    assertMcpRuntimeAuthorityRetired(config.name);
     workload = prepareBundledFlujoWorkload(config);
     runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
@@ -328,12 +329,13 @@ export function createBetaTransport(
     const cleanupErrors: unknown[] = [];
     try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
     try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
-    if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
+    if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
   const keyed = transport as unknown as TransportWithConfigKey;
   keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
   keyed.__flujoBundledWorkload = workload;
+  keyed.__flujoRetireRuntimeAuthority = retireRuntimeAuthority;
   keyed.__flujoStdioKey = stdioConfigKey(
     config,
     options?.isolateRuntimeHome === true,
