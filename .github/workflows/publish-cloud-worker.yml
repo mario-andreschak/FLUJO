@@ -135,7 +135,7 @@ jobs:
             import { inspectTestedImage } from './scripts/image-release.mjs';
             inspectTestedImage((command, args) => execFileSync(command, args, { encoding: 'utf8' }),
               process.env.IMAGE_ID, process.env.GITHUB_SHA, process.env.APPLICATION_VERSION);
-            NODE
+          NODE
             docker run --rm --network none --read-only --no-healthcheck \
               --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
               --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \

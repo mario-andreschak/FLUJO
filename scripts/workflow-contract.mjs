@@ -2,6 +2,9 @@ import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.
 import { CI_NODE_PROFILES } from './verify-ci-node.mjs';
 import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
 
+const APPLICATION_CHANGED = "steps.application-change.outputs.changed == 'true'";
+const isApplicationSelection = (file, id, condition) => file === 'verify.yml' && id === 'production-build' && condition === APPLICATION_CHANGED;
+
 export function assertNodeRuntimeWorkflowContract(workflows) {
   const profiles = Object.values(CI_NODE_PROFILES);
   for (const [file, workflow] of Object.entries(workflows)) {
@@ -20,7 +23,8 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
         const historical = file === 'verify.yml' && id === 'production-build' && position === 0;
         const guard = steps[index + 1];
         const command = `node scripts/verify-ci-node.mjs ${version}${historical ? ' --historical-build' : ''} --record`;
-        if (steps[index].if !== undefined || steps[index]['continue-on-error'] || guard?.run !== command || guard.if !== undefined || guard['continue-on-error']) {
+        const selected = !historical && isApplicationSelection(file, id, steps[index].if) && guard?.if === steps[index].if;
+        if ((!selected && (steps[index].if !== undefined || guard?.if !== undefined)) || steps[index]['continue-on-error'] || guard?.run !== command || guard['continue-on-error']) {
           throw new Error(`${file}/${id} must verify official binary identity immediately after every runtime selection.`);
         }
       }
@@ -57,7 +61,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
     const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record`);
     const qualification = steps[index + 1];
     if (index < 0 || qualification?.shell !== 'bash' || qualification.run !== command
-        || qualification.if !== undefined || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
+        || (qualification.if !== undefined && qualification.if !== APPLICATION_CHANGED) || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
       throw new Error(`Node ${version} must enforce build, types and actual packed-process acceptance with shell failure propagation.`);
     }
   }
@@ -191,7 +195,7 @@ export function assertWorkflowContract(workflows) {
     if (!job || job.if !== undefined || job['continue-on-error']) throw new Error(`Required job ${id} cannot be conditional or optional.`);
     for (const step of job.steps ?? []) {
       if (!step.run) continue;
-      if (step.if !== undefined) throw new Error(`Required command in ${id} cannot be conditional.`);
+      if (step.if !== undefined && !isApplicationSelection('verify.yml', id, step.if)) throw new Error(`Required command in ${id} cannot be conditional.`);
       if (step['continue-on-error'] && !['npm run test:ci', 'npm run test:isolated'].includes(step.run)) {
         throw new Error(`Unapproved optional command in ${id}.`);
       }
@@ -212,6 +216,17 @@ export function assertWorkflowContract(workflows) {
   });
   if (JSON.stringify(names) !== JSON.stringify(REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
   const build = workflow.jobs['production-build'].steps;
+  if (build.some(step => step.if === APPLICATION_CHANGED)) {
+    const selection = build.find(step => step.id === 'application-change');
+    const syntax = build.find(step => step.name === 'Validate Worker publisher shell syntax');
+    if (!selection || selection.if !== undefined || selection['continue-on-error'] || selection.shell !== 'bash'
+        || selection.env?.BASE_REVISION !== '${{ github.event.pull_request.base.sha }}'
+        || selection.env?.HEAD_REVISION !== '${{ github.event.pull_request.head.sha }}'
+        || !selection.run?.includes("['diff', '--name-only', '-z', base, head]")
+        || !syntax || syntax.if !== undefined || syntax['continue-on-error'] || !syntax.run?.includes('bash -n')) {
+      throw new Error('Workflow-only qualification requires the exact Git revision comparison and mandatory publisher shell syntax validation.');
+    }
+  }
   for (const command of ['npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', 'npm run smoke:mcp-artifacts']) {
     if (!build.some((step) => step.run?.split('\n').includes(command))) throw new Error(`Production checks omitted ${command}.`);
   }
