@@ -132,7 +132,7 @@ without network access, host-data mounts or published ports, with capabilities
 dropped and no new privileges. A fresh private owner policy contains credential
 hashes; the short-lived bearer and USER passphrase stay in memory and enter the
 container through protected environment or stdin. The policy is installed before
-startup with preserved UID/mode, then verified by the image user. The image's
+startup with preserved UID/mode, then compared without rewriting by the image user. The image's
 compiled owner issuer must match the source used by the host operator.
 
 The probe requires locked storage to return HTTP 423 and fail readiness, including
@@ -144,11 +144,17 @@ distinct from liveness: a locked profile is not a reason to restart the service.
 Linux process receipts bind PID, start identity, UID, PPid, SID and process group.
 They verify the genuine Tini-to-launcher-to-Next chain. An independent process
 started through Docker exec creates a held descendant; its direct parent must
-exit and be reaped, the live descendant must be adopted by the image's Tini, and
+exit and be reaped, the live descendant must be adopted by namespace PID 1, and
 its listener must close before its process entry disappears. The genuine FLUJO
 healthcheck must remain successful throughout. Independent shared-group and
 detached controls must retain their identities and receive no SIGTERM during
 this reaping sequence.
+
+Docker exec starts outside the inner Tini's ancestry. Its orphan therefore goes
+to the image Tini in the default row and Docker's outer init in the nested row.
+Both adopters require live identity checks. The earlier synthetic init rows
+start their fixture under the image's command and independently test inner
+subreaper adoption; use those rows against the same image to qualify that path.
 
 After the fixture finishes, Docker sends SIGTERM to the real application. The
 container must stop within nine seconds, before the launcher's ten-second
@@ -158,6 +164,14 @@ container ID before removal, and reports success only after container and privat
 operator cleanup. Commands, requests and polls have deadlines; an uncertain
 failure retains the exact owned handles and bounded, redacted private diagnostics.
 
+The disposable environment enables Next's built-in `next:start-server` debug
+trace. Ordered cleanup-start and cleanup-finished markers must appear after
+SIGTERM, before removal, and be absent before the signal. These show that the
+genuine Next cleanup handler reached completion, beyond observing container
+exit alone. Next catches some cleanup errors internally, so the finished marker
+does not establish that every cleanup operation was error-free. Only marker
+receipts are exported, and raw logs must not contain the test credentials.
+
 This exercises an actual locally built application image. The descendant is an
 exec-origin process fixture, not a provider, authored Flow or managed MCP worker.
 An isolated container namespace stopping does not independently establish host
@@ -165,3 +179,6 @@ port closure; surviving detached processes are not expected after PID 1 exits.
 Registry signatures, publication, deployment, worker recovery and paid provider
 acceptance remain separate work. Preserve both row receipts, the build log,
 source SHA and image ID with the review evidence.
+Host-probe SHA-256 is recorded separately from the image's application source
+revision: a host-only probe correction can qualify the same frozen application
+image without another build. Never report its image revision as a later commit.

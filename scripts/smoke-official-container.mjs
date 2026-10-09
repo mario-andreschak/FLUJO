@@ -3,7 +3,7 @@
 // its real CMD/ENTRYPOINT; the exec fixture is a generic process probe, not a Flow.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -61,7 +61,8 @@ const execJson = async (...parameters) => JSON.parse((await exec(...parameters))
 
 // Docker cp -a preserves these numeric owners. Seed before startup: production
 // instrumentation validates authority before serving any request. The same bytes
-// are then written/verified by UID 1000 through exec stdin before HTTP probes.
+// are then compared by UID 1000 through exec stdin before HTTP probes. Never
+// truncate a policy that the genuine startup may already be reading.
 function tarEntry(filename, content, mode, type = '0') {
   const body = Buffer.from(content), header = Buffer.alloc(512);
   const write = (offset, length, value) => header.write(String(value), offset, length, 'ascii');
@@ -204,7 +205,8 @@ try {
   operator = await createSmokeOperator();
   const policy = await fs.readFile(operator.env.FLUJO_OWNER_AUTH_FILE);
   const environment = { FLUJO_OWNER_AUTH_FILE: `${fixture}/owner.json`, FLUJO_HEALTHCHECK_TOKEN: operator.token,
-    FLUJO_DATA_DIR: '/app/data', FLUJO_EXPOSURE_MODE: 'localhost', NEXT_TELEMETRY_DISABLED: '1' };
+    FLUJO_DATA_DIR: '/app/data', FLUJO_EXPOSURE_MODE: 'localhost', NEXT_TELEMETRY_DISABLED: '1',
+    DEBUG: 'next:start-server', DEBUG_COLORS: '0' };
   createAttempted = true;
   const created = (await docker(['create', '--pull=never', '--name', name, '--label', `${label}=${owner}`,
     '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', ...(outerInit ? ['--init'] : []),
@@ -219,7 +221,8 @@ try {
 const fs=require('node:fs'),crypto=require('node:crypto');const root='/app/data/.official-smoke';
 if(process.getuid()!==1000)throw Error('Expected image UID 1000');
 for(const [file,mode]of [[root,448],[root+'/owner.json',384]]){const s=fs.lstatSync(file);if(s.isSymbolicLink()||s.uid!==1000||(s.mode&511)!==mode)throw Error('Private policy ownership mismatch');}
-const input=JSON.parse(fs.readFileSync(0,'utf8'));fs.writeFileSync(root+'/owner.json',input.policy,{mode:384});
+const input=JSON.parse(fs.readFileSync(0,'utf8'));
+if(fs.readFileSync(root+'/owner.json','utf8')!==input.policy)throw Error('Seeded owner policy bytes mismatch');
 const b=JSON.parse(fs.readFileSync('/app/scripts/generated-smoke-owner-issuer.json','utf8'));
 const digest=crypto.createHash('sha256').update(fs.readFileSync('/app/scripts/generated-smoke-owner-issuer.cjs')).digest('hex');
 if(b.schemaVersion!==1||digest!==b.compiledSha256)throw Error('Image issuer binding mismatch');
@@ -227,6 +230,8 @@ console.log(JSON.stringify({sourceSha256:b.sourceSha256,compiledSha256:digest,ui
   assert.equal(binding.sourceSha256, operator.issuerSourceSha256);
   evidence.imageId = imageId; evidence.issuer = binding;
   evidence.revision = image.Config.Labels?.['org.opencontainers.image.revision'] || null;
+  assert.match(evidence.revision, /^[a-f0-9]{40}$/, 'Require the full image application revision.');
+  evidence.hostProbeSha256 = createHash('sha256').update(await fs.readFile(new URL(import.meta.url))).digest('hex');
   await poll(() => execJson(apiCode, { path: '/api/encryption/secure', action: 'status' }), value => value.status === 200, 60_000);
   assert.equal((await execJson(apiCode, { path: '/api/cwd' })).status, 423);
   assert.equal(await health('correct'), false);
@@ -249,6 +254,10 @@ console.log(JSON.stringify({sourceSha256:b.sourceSha256,compiledSha256:digest,ui
   assert.ok(next && next.uid === 1000);
   if (outerInit) { assert.notEqual(tini.pid, 1); assert.equal(tini.ppid, 1); }
   else assert.equal(tini.pid, 1);
+  const namespaceInit = graph.processes.find(value => value.pid === 1);
+  assert.ok(namespaceInit && namespaceInit.uid === 1000);
+  if (outerInit) assert.match(namespaceInit.cmd[0], /(?:^|\/)docker-init$/);
+  else assert.equal(namespaceInit.birth, tini.birth);
   evidence.application = { tini, launcher, next };
   await exec(String.raw`
 const fs=require('node:fs'),root='/app/data/.official-smoke';const files=JSON.parse(fs.readFileSync(0,'utf8'));
@@ -271,8 +280,9 @@ for(const[name,code]of Object.entries(files))fs.writeFileSync(root+'/'+name,code
  console.log(JSON.stringify(response.ok&&(await response.text())==='generic exec fixture'));})().catch(()=>console.log('false'));`), true);
   await release('parent');
   const adopted = await poll(snapshot, value => value.receipts['parent.exit']
-    && !value.receipts.parent.process && value.receipts.orphan.process?.ppid === tini.pid);
+    && !value.receipts.parent.process && value.receipts.orphan.process?.ppid === namespaceInit.pid);
   assert.deepEqual(adopted.receipts['parent.exit'], { pid: receipt('parent').pid, code: 0, signal: null });
+  assert.ok(sameLive(namespaceInit, adopted.processes.find(value => value.pid === namespaceInit.pid)));
   assert.ok(sameLive(receipt('orphan'), adopted.receipts.orphan.process));
   assert.equal(await health('correct'), true);
   await release('orphan');
@@ -287,6 +297,7 @@ socket.once('timeout',()=>{console.log('false');socket.destroy()});`), true);
   }
   assert.equal(await health('correct'), true);
   evidence.execLifecycle = { before: before.receipts, adopted: adopted.receipts, reaped: reaped.receipts,
+    adopter: namespaceInit, adoptionScope: 'exec-origin namespace init; outside inner subreaper ancestry',
     directWait: true, sameBirthAdoption: true, listenerClosed: true, pidAbsent: true, independentControlsUnsignalled: true };
   for (const tag of ['sibling', 'control', 'manager']) await release(tag);
   await poll(snapshot, value => ['manager', 'sibling', 'control'].every(tag => !value.receipts[tag].process));
@@ -299,6 +310,12 @@ socket.once('timeout',()=>{console.log('false');socket.destroy()});`), true);
   for (const original of [tini, launcher, next]) {
     assert.ok(sameLive(original, finalGraph.processes.find(value => value.pid === original.pid)));
   }
+  const cleanupMarkers = async () => {
+    const logs = (await docker(['logs', '--tail', '200', container], { timeout: 5000, combineOutput: true })).toString();
+    assert.ok(!logs.includes(operator.token) && !logs.includes(password), 'Application logs must not expose test credentials.');
+    return logs.split(/\r?\n/).map(line => line.match(/\bnext:start-server\s+(start-server process cleanup(?: finished)?)(?:\s+\+\S+)?\s*$/)?.[1]).filter(Boolean);
+  };
+  assert.deepEqual(await cleanupMarkers(), []);
   const shutdownStarted = Date.now();
   await docker(['kill', '--signal=TERM', container]);
   const stopped = await poll(inspectOwned, record => !record.State.Running, 20_000);
@@ -307,8 +324,10 @@ socket.once('timeout',()=>{console.log('false');socket.destroy()});`), true);
   assert.notEqual(stopped.State.FinishedAt, '0001-01-01T00:00:00Z');
   const shutdownElapsed = Date.now() - shutdownStarted;
   assert.ok(shutdownElapsed < 9000, 'Shutdown must precede the launcher 10-second SIGKILL fallback.');
+  assert.deepEqual(await cleanupMarkers(), ['start-server process cleanup', 'start-server process cleanup finished']);
   evidence.shutdown = { signal: 'SIGTERM', exitCode: stopped.State.ExitCode, oomKilled: false,
-    elapsedMs: shutdownElapsed, healthClosed: 'application process chain and isolated network namespace stopped' };
+    elapsedMs: shutdownElapsed, nextCleanupStarted: true, nextCleanupFinished: true,
+    healthClosed: 'application process chain and isolated network namespace stopped' };
   await inspectOwned();
   await docker(['rm', container]);
   // Verify removal by the unique ownership label, including uncertain rm reply.
