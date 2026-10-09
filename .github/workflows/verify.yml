@@ -242,6 +242,15 @@ jobs:
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
+      - name: Preserve clean release checkout after dependency install
+        run: >-
+          node --input-type=module -e
+          "import { execFileSync } from 'node:child_process';
+          const git = args => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          if (process.platform === 'win32') {
+            git(['diff', '--exit-code']);
+            if (git(['ls-files', '--others', '--exclude-standard'])) process.exitCode = 1;
+          } else if (git(['status', '--porcelain'])) process.exitCode = 1;"
       # Tests intercept every release subprocess before execution.
       - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs scripts/installer-release.test.mjs
       - run: node --test tests/installer-repository.test.mjs
