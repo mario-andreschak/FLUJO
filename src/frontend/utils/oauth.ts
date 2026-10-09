@@ -138,7 +138,11 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
     const deadlineTimer = setTimeout(() => {
       if (settled) return;
       stopMonitoring();
-      if (!popup.closed) {
+      if (popup.closed) {
+        log.info('OAuth popup was closed by user');
+        onClose?.();
+        reject(new Error('OAuth popup was closed by user'));
+      } else {
         popup.close();
         const error = 'OAuth authentication timed out';
         log.error(error);

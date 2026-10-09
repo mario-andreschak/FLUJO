@@ -78,3 +78,22 @@ it('stops monitoring when a cross-origin popup reaches the deadline', async () =
   expect(popup.close).toHaveBeenCalledTimes(1);
   expect(jest.getTimerCount()).toBe(0);
 });
+
+it('settles a closure first observed by the deadline before the poll runs', async () => {
+  const timeout = jest.spyOn(globalThis, 'setTimeout');
+  const popup = { closed: false, location: { href: 'about:blank' }, focus: jest.fn(), close: jest.fn() };
+  const onClose = jest.fn();
+  const onError = jest.fn();
+  const result = openOAuthPopup({ url: 'https://oauth.example/authorize', popup: popup as unknown as Window, onClose, onError });
+  const deadline = timeout.mock.calls.find(([, delay]) => delay === 300000)?.[0];
+  expect(deadline).toEqual(expect.any(Function));
+  popup.closed = true;
+  const rejection = expect(result).rejects.toThrow('OAuth popup was closed by user');
+  (deadline as () => void)();
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onError).not.toHaveBeenCalled();
+  expect(jest.getTimerCount()).toBe(0);
+  await rejection;
+  (deadline as () => void)();
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
