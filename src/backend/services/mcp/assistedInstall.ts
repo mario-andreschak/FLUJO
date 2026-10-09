@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import path from 'node:path';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { modelService } from '@/backend/services/model';
 import {
@@ -43,6 +44,7 @@ import { shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServer
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { discoveryRelevance, hasKnownDiscoveryIntent } from '@/shared/mcpDiscoverySearch';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/assistedInstall');
 const FETCH_TIMEOUT_MS = 12_000;
@@ -460,7 +462,15 @@ async function existingShippedCandidates(query: string): Promise<McpAssistantCan
     // Current user-edited arguments may contain secrets. Only the unchanged
     // shipped launch shape is safe to show; configuration opens the actual
     // record in the existing editor, which already owns secret masking.
-    const standardLaunch = config.command === 'node' && JSON.stringify(config.args) === JSON.stringify(['./dist/index.js']);
+    const workspaceRoot = getWorkspaceDataDir();
+    const bundledRoot = path.resolve(workspaceRoot, 'mcp-servers', descriptor.packageDirectory);
+    const isBundledRoot = (value: unknown) => typeof value === 'string' && path.resolve(workspaceRoot, value) === bundledRoot;
+    // Relative Node entrypoints execute in rootPath, cwd, or the name-based
+    // default. A retained package source does not identify a redirected launch.
+    const launchRoot = config.rootPath || config.cwd || `mcp-servers/${config.name || name}`;
+    const unchangedRoots = [config.rootPath, config.cwd].every(value => !value || isBundledRoot(value));
+    const standardLaunch = config.command === 'node' && JSON.stringify(config.args) === JSON.stringify(['./dist/index.js'])
+      && unchangedRoots && isBundledRoot(launchRoot);
     const requiredInputs = Object.keys(config.env ?? {}).filter(key => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key));
     return [{
       id: `existing::${name}`, registryName: descriptor.packageId,
@@ -535,7 +545,7 @@ export async function researchMcpServers(input: {
       .slice(0, MAX_CANDIDATES).map((candidate, index) => ({ ...candidate, recommended: index === 0 }));
     return {
       query,
-      summary: `Existing bundled-source option: ${candidates[0].title}. Open its configuration and review readiness and execution consent. ${candidates[0].cost?.kind === 'free' ? 'Unchanged bundled local core operations have no FLUJO per-call service charge; model, connected-service and infrastructure costs remain separate.' : 'The stored launch was customized; its current operation and service costs have not been verified.'} No research model or public discovery source was contacted.`,
+      summary: `Already added: ${candidates[0].title}. Open its settings before connecting. ${candidates[0].cost?.kind === 'free' ? 'The bundled tools are free to use; models and connected services may charge separately.' : 'Its settings were changed, so costs are unconfirmed.'} No model or public search was used.`,
       candidates,
       recommendedId: candidates[0].id,
       sources: [{ id: 'workspace', label: 'Workspace bundled servers', url: 'https://github.com/mario-andreschak/FLUJO/tree/main/mcp-servers', status: 'searched', detail: `${candidates.length} relevant configured bundled server${candidates.length === 1 ? '' : 's'} inspected; no process was started or enabled.` }],
@@ -550,11 +560,11 @@ export async function researchMcpServers(input: {
     await input.onProgress?.({ type: 'progress', stage, message });
   };
 
-  await progress('planning', 'Turning your request into focused server searches…');
+  await progress('planning', 'Understanding what you need…');
   const plan = await planResearch(query, input.modelId, signal);
   const discoveryQuery = plan.service && !hasKnownDiscoveryIntent(query) ? plan.service : query;
   if (discoveryQuery !== query && !existingCandidates.length) existingCandidates = await existingShippedCandidates(discoveryQuery);
-  await progress('web', 'Checking GitHub, npm, and community MCP lists…');
+  await progress('web', 'Looking for useful connections…');
   const discoveries = await discoverWeb(discoveryQuery, signal);
   signal.throwIfAborted();
 
@@ -565,7 +575,7 @@ export async function researchMcpServers(input: {
   ].map((term) => term.trim()).filter(Boolean);
   const searchTerms = Array.from(new Set(derivedTerms)).slice(0, 6);
 
-  await progress('registry', `Searching the official MCP Registry with ${searchTerms.length} focused quer${searchTerms.length === 1 ? 'y' : 'ies'}…`);
+  await progress('registry', 'Checking available options…');
   const registrySettled = await Promise.allSettled([searchRegistry(discoveryQuery, 30, signal, searchTerms)]);
   signal.throwIfAborted();
   const hitByName = new Map<string, RegistrySearchHit>();
@@ -594,14 +604,14 @@ export async function researchMcpServers(input: {
     Boolean(entry.result?.server && (curatedNames.includes(entry.result.server.name) || discoveryRelevance(discoveryQuery, entry.result.server) > 0)));
   signal.throwIfAborted();
 
-  await progress('auth', 'Probing hosted candidates for OAuth 2.1 and dynamic client registration…');
+  await progress('auth', 'Checking how to connect…');
   const remoteUrls = Array.from(new Set(entries.flatMap(({ result }) =>
     getInstallOptions(result.server).flatMap((option) => option.kind === 'remote' ? [option.remote.url] : []),
   ))).slice(0, MAX_CANDIDATES);
   const authResults = await Promise.all(remoteUrls.map(async (url) => [url, await probeOAuthSupport(url, { publicOnly: true, signal })] as const));
   const remoteAuth = new Map(authResults);
 
-  await progress('ranking', 'Ranking relevant FLUJO integrations, local review evidence, hosting and verified pricing…');
+  await progress('ranking', 'Choosing the best matches…');
   const drafts = entries.flatMap(({ hit, result }) => chooseOptionDrafts(
     result.server,
     hit,
@@ -694,7 +704,7 @@ export async function researchMcpServers(input: {
     .slice(0, MAX_CANDIDATES).map((candidate, index) => ({ ...candidate, recommended: index === 0 }));
   signal.throwIfAborted();
   const summary = candidates[0]
-    ? `First option: ${candidates[0].title}. Relevant FLUJO-supported integrations come first, then reviewed local options and hosted options; unreviewed local packages remain clearly identified. Within each group, verified free, bring-your-own API key (BYOK) and paid pricing precede unknown pricing. BYOK describes a required credential and does not establish provider fees. Popularity and authentication friction only break ties. These signals do not establish safety or execution permission.`
+    ? `First option: ${candidates[0].title}. FLUJO connections come first. Check the price and setup details before connecting.`
     : `I could not find an installable Registry-backed or already configured bundled server for “${query}”.`;
   const registryAvailable = registrySettled.some((entry) => entry.status === 'fulfilled');
   const sources: McpAssistantSource[] = [

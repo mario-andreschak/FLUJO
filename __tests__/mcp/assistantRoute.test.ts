@@ -17,10 +17,11 @@ jest.mock('@/backend/services/mcp/assistedInstall', () => ({
 import { NextRequest } from 'next/server';
 import { POST } from '@/app/api/mcp/assistant/route';
 
-const request = (body: unknown) => new NextRequest('http://localhost/api/mcp/assistant', {
+const request = (body: unknown, signal?: AbortSignal) => new NextRequest('http://localhost/api/mcp/assistant', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
+  signal,
 });
 const install = { registryName: 'io.example/server', serverName: 'example', transport: 'stdio', approved: true, reviewedPlan: {} };
 const context = { modelId: 'model-1', config: { name: 'example' } };
@@ -74,11 +75,63 @@ describe('MCP assistant public failure boundary', () => {
     expect(await response.text()).toBe(`${JSON.stringify({ type: 'complete', result })}\n`);
   });
 
-  it('passes the genuine request cancellation signal to research', async () => {
-    researchMock.mockResolvedValueOnce({ candidates: [] });
+  it('stops deferred research when the genuine request disconnects', async () => {
+    const controller = new AbortController();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const aborted = jest.fn(() => release());
+    const laterWork = jest.fn();
+    researchMock.mockImplementationOnce(async ({ signal }) => {
+      signal.addEventListener('abort', aborted, { once: true });
+      await pending;
+      signal.throwIfAborted();
+      laterWork();
+      return { candidates: [] };
+    });
+    const req = request({ action: 'research', query: 'browse websites', modelId: 'model-1' }, controller.signal);
+    const response = await POST(req);
+    try {
+      expect(req.signal.aborted).toBe(false);
+      controller.abort();
+      expect(aborted).toHaveBeenCalledTimes(1);
+      expect(researchMock.mock.calls[0][0].signal.aborted).toBe(true);
+    } finally { release(); }
+    expect(await response.text()).toBe('{"type":"error","error":"MCP server research failed. Please try again."}\n');
+    expect(laterWork).not.toHaveBeenCalled();
+  });
+
+  it('stops deferred research when the response reader cancels while the request stays live', async () => {
+    let release!: () => void;
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    const aborted = jest.fn(() => release());
+    const laterWork = jest.fn();
+    researchMock.mockImplementationOnce(async ({ signal, onProgress }) => {
+      signal.addEventListener('abort', aborted, { once: true });
+      onProgress({ type: 'progress', stage: 'registry', message: 'Finding options' });
+      try {
+        await pending;
+        signal.throwIfAborted();
+        laterWork();
+        return { candidates: [] };
+      } finally { finish(); }
+    });
     const req = request({ action: 'research', query: 'browse websites', modelId: 'model-1' });
-    await (await POST(req)).text();
-    expect(researchMock).toHaveBeenCalledWith(expect.objectContaining({ signal: req.signal }));
+    const response = await POST(req);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(
+      '{"type":"progress","stage":"registry","message":"Finding options"}\n',
+    );
+    try {
+      await reader.cancel();
+      expect(req.signal.aborted).toBe(false);
+      expect(researchMock.mock.calls[0][0].signal.aborted).toBe(true);
+      expect(aborted).toHaveBeenCalledTimes(1);
+    } finally { release(); }
+    await finished;
+    expect(laterWork).not.toHaveBeenCalled();
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
   });
 
   it('admits explicit model-free lookup of existing bundled options', async () => {

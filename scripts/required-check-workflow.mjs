@@ -43,6 +43,7 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/mcp/registryIconsRoute.test.ts',
   '__tests__/mcp/registryDiscoveryClient.test.ts',
   '__tests__/mcp/registryDiscoveryRoute.test.ts',
+  '__tests__/mcp/registryWorkspaceIsolation.test.ts',
   '__tests__/mcp/quality/orchestrator.test.ts',
   '__tests__/mcp/installBestAssistedTool.test.ts',
   '__tests__/mcp/assistedDiscoveryBody.test.ts',

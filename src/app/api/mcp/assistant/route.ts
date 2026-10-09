@@ -36,11 +36,11 @@ async function POST_handler(request: NextRequest) {
       return json({ error: 'query and modelId are required.' }, 400);
     }
     return createJsonEventStreamResponse<McpAssistantResearchEvent>(
-      async (emit) => {
+      async (emit, signal) => {
         const result = await researchMcpServers({
           query: body.query as string,
           modelId: body.modelId as string,
-          signal: request.signal,
+          signal,
           onProgress: emit,
         });
         await emit({ type: 'complete', result });

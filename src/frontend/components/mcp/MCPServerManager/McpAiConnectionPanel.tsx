@@ -378,7 +378,7 @@ export default function McpAiConnectionPanel({
                         {candidate.cost ? <Chip size="small" variant="outlined" label={t(`mcp.ai.cost.${candidate.cost.kind}`)} /> : null}
                         {candidate.githubStars !== undefined ? <Chip size="small" icon={<GitHubIcon />} label={formatCount(candidate.githubStars)} /> : null}
                         {candidate.weeklyDownloads !== undefined ? <Chip size="small" icon={<DownloadRoundedIcon />} label={`${formatCount(candidate.weeklyDownloads)}/wk`} /> : null}
-                        {candidate.authMode === 'oauth-dcr' ? <Chip size="small" color="success" label="OAuth 2.1 DCR" /> : null}
+                        {candidate.authMode === 'oauth-dcr' ? <Chip size="small" color="success" label={t('mcp.ai.signIn')} /> : null}
                         {candidate.authMode === 'none' && candidate.plan.transport !== 'stdio' ? <Chip size="small" color="success" label={t('mcp.ai.noOAuth')} /> : null}
                       </Box>
                     </Paper>
@@ -392,7 +392,7 @@ export default function McpAiConnectionPanel({
                     <Box>
                       <Typography variant="h6">{t('mcp.ai.reviewTitle')}</Typography>
                       <Typography variant="body2" color="text.secondary">{selected.freeNote}</Typography>
-                      {selected.cost?.evidence ? <Typography variant="body2" color="text.secondary">{selected.cost.evidence}</Typography> : null}
+                      {selected.cost?.evidence && selected.cost.evidence !== selected.freeNote ? <Typography variant="body2" color="text.secondary">{selected.cost.evidence}</Typography> : null}
                     </Box>
                     <Box component="ul" sx={{ pl: 2.4, my: 0 }}>
                       {selected.reasons.map((reason) => <Typography component="li" variant="body2" key={reason}>{reason}</Typography>)}

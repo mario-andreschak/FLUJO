@@ -8,6 +8,7 @@ import { rankRegistryResults } from '@/backend/services/mcp/registryInstall';
 import { RegistryServerResult } from '@/utils/mcp/registry';
 import { discoverRegistryServers } from '@/backend/services/mcp/registryDiscovery';
 import { canonicalDiscoveryQuery } from '@/shared/mcpDiscoverySearch';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('app/api/mcp-registry/route');
 
@@ -106,7 +107,11 @@ async function GET_handler(request: NextRequest) {
   if (search) upstream.searchParams.set('search', search);
   if (cursor) upstream.searchParams.set('cursor', cursor);
 
-  const cacheKey = `${upstream.toString()}#${iconsOnly ? 'icons' : 'ranked'}`;
+  // Public logo metadata is shared; ranking reads the selected workspace's
+  // provider settings and must never reuse another workspace's result.
+  const cacheKey = iconsOnly
+    ? `${upstream.toString()}#icons`
+    : workspaceCacheKey('registry-ranked', upstream.toString());
   const cached = getCached(cacheKey);
   if (cached !== null) {
     log.debug(`Cache hit for registry query [${requestId}]`, cacheKey);
@@ -159,7 +164,10 @@ async function GET_handler(request: NextRequest) {
 /** Search pagination freezes one bounded candidate set and its quality order.
  * No alias fetch or ranking occurs on later pages, even if upstream changes. */
 async function discoveryPage(search: string, cursor: string, limit: number, requestId: string) {
-  const key = `discovery:${canonicalDiscoveryQuery(search)}`;
+  // Use the admitted workspace context, including execution-adapter selection,
+  // rather than re-reading the caller's workspace query/header here. This also
+  // isolates in-flight ranking and binds snapshot cursors to their workspace.
+  const key = workspaceCacheKey('registry-discovery', canonicalDiscoveryQuery(search));
   let snapshot = getCached(key) as DiscoverySnapshot | null;
   let offset = 0;
   if (cursor) {

@@ -32,11 +32,16 @@ export function canonicalDiscoveryQuery(query: string): string {
   return normalized.includes('/') ? normalized : normalized.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
 }
 
-/** Whether deterministic vocabulary can preserve a requested capability/brand. */
+/** Whether deterministic vocabulary covers the entire requested capability/brand. */
 export function hasKnownDiscoveryIntent(query: string): boolean {
   const normalized = normalizeDiscoveryQuery(query);
-  return /^[a-z0-9._-]+\/[a-z0-9._-]+$/.test(normalized)
-    || words(normalized).some(token => CAPABILITIES.some(group => group.words.includes(token) || group.terms.includes(token)));
+  const isKnown = (token: string) => CAPABILITIES.some(group => group.words.includes(token) || group.terms.includes(token));
+  if (/^[a-z0-9._-]+\/[a-z0-9._-]+$/.test(normalized) || isKnown(normalized)) return true;
+  // A familiar word in a larger task does not explain the whole request.
+  // Use the same meaningful groups as relevance, including text-to-speech,
+  // so the assistant can interpret tasks without overriding known identities.
+  const groups = intent(normalized);
+  return groups.length > 0 && groups.every(group => isKnown(group[0]));
 }
 
 function words(value: string): string[] {

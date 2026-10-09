@@ -31,6 +31,18 @@ describe('deterministic capability discovery', () => {
     expect(discoverySearchTerms('please give me a useful MCP server')).toEqual([]);
   });
 
+  it.each(['search the latest news', 'send email to customers', 'browser for lunar waves', 'postgres customer reports'])('requires interpretation when only part of the task is known: %s', query => {
+    expect(hasKnownDiscoveryIntent(query)).toBe(false);
+  });
+
+  it.each(['', 'please give me a useful MCP server'])('does not treat empty meaningful intent as covered: %s', query => {
+    expect(hasKnownDiscoveryIntent(query)).toBe(false);
+  });
+
+  it.each(['io.github.Acme/Server', 'connect my notion', 'postgres database', 'office-word', 'web search', 'turn text into speech', 'text-to-speech'])('preserves known complete capabilities and service identities: %s', query => {
+    expect(hasKnownDiscoveryIntent(query)).toBe(true);
+  });
+
   it('bounds expansion, keeps exact identities, and normalizes unicode accents', () => {
     expect(discoverySearchTerms('io.github.Acme/Server')).toEqual(['io.github.acme/server']);
     expect(discoverySearchTerms('FÍLES')).toContain('filesystem');

@@ -13,6 +13,8 @@ jest.mock('@/utils/mcp/oauthProbe', () => ({ probeOAuthSupport: (...args: unknow
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ warn: jest.fn() }) }));
 
 import { researchMcpServers } from '@/backend/services/mcp/assistedInstall';
+import path from 'node:path';
+import { getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { compareMcpRecommendationPreferences, recommendationCost, recommendationSupport, recommendationTier, supportedRegistrySearches } from '@/shared/mcpRecommendationPreferences';
 import type { RegistryServer, InstallOption } from '@/utils/mcp/registry';
 
@@ -154,7 +156,7 @@ describe('actual assisted preference discovery, without candidate execution', ()
   });
 
   it('retains known-free scope for the unchanged configured core launch and offers only configuration', async () => {
-    loadMock.mockResolvedValue({ files: { transport: 'stdio', command: 'node', args: ['./dist/index.js'], source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' }, env: { FLUJO_FS_ROOTS: 'C:/fixture' } } });
+    loadMock.mockResolvedValue({ files: { transport: 'stdio', command: 'node', args: ['./dist/index.js'], cwd: 'mcp-servers/filesystem', rootPath: 'mcp-servers/filesystem', source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' }, env: { FLUJO_FS_ROOTS: 'C:/fixture' } } });
     const result = await researchMcpServers({ query: 'local files', modelId: '' });
     expect(result.candidates[0]).toMatchObject({ action: 'configure-existing', existingServerName: 'files', cost: { kind: 'free' }, plan: { command: 'node', args: ['./dist/index.js'], requiredEnvNames: ['FLUJO_FS_ROOTS'] } });
     expect(JSON.stringify(result)).not.toContain('C:/fixture');
@@ -163,6 +165,54 @@ describe('actual assisted preference discovery, without candidate execution', ()
     expect(completionMock).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { cwd: 'mcp-servers/custom', rootPath: 'mcp-servers/filesystem' },
+    { cwd: 'mcp-servers/filesystem', rootPath: 'mcp-servers/custom' },
+    { cwd: 'mcp-servers/custom' },
+    { rootPath: 'mcp-servers/custom' },
+    {},
+  ])('treats redirected or ambiguous renamed core paths as customized: %j', async roots => {
+    const config = { name: 'files', transport: 'stdio', command: 'node', args: ['./dist/index.js'], disabled: true, ...roots, source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' } };
+    loadMock.mockResolvedValue({ files: config });
+
+    const result = await researchMcpServers({ query: 'local files', modelId: '' });
+
+    expect(result.candidates[0]).toMatchObject({ action: 'configure-existing', existingServerName: 'files', cost: { kind: 'unknown' } });
+    expect(result.candidates[0].plan.command).toBeUndefined();
+    expect(result.candidates[0].plan.args).toBeUndefined();
+    expect(result.candidates[0].warnings).toContain('The launch configuration was customized; open the existing editor to review it.');
+    expect(result.summary).toContain('costs are unconfirmed');
+    expect(config.disabled).toBe(true);
+    expect(installMock).not.toHaveBeenCalled();
+    expect(modelMock).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('recognizes equivalent portable or absolute bundled paths in the selected workspace', async () => {
+    await runWithWorkspace('research-path-fixture', async () => {
+      const bundledRoot = path.join(getWorkspaceDataDir(), 'mcp-servers', 'filesystem');
+      loadMock.mockResolvedValue({ renamed: { name: 'renamed', transport: 'stdio', command: 'node', args: ['./dist/index.js'], cwd: path.join('.', 'mcp-servers', 'filesystem'), rootPath: bundledRoot, source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' } } });
+
+      const result = await researchMcpServers({ query: 'local files', modelId: '' });
+
+      expect(result.candidates[0]).toMatchObject({ action: 'configure-existing', existingServerName: 'renamed', cost: { kind: 'free' }, plan: { command: 'node', args: ['./dist/index.js'] } });
+      expect(installMock).not.toHaveBeenCalled();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not attribute another workspace bundled path to the current workspace', async () => {
+    const previousRoot = path.join(getWorkspaceDataDir(), 'mcp-servers', 'filesystem');
+    loadMock.mockResolvedValue({ filesystem: { transport: 'stdio', command: 'node', args: ['./dist/index.js'], rootPath: previousRoot, source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' } } });
+
+    const result = await runWithWorkspace('research-other-workspace', () => researchMcpServers({ query: 'local files', modelId: '' }));
+
+    expect(result.candidates[0]).toMatchObject({ action: 'configure-existing', cost: { kind: 'unknown' } });
+    expect(result.candidates[0].plan.command).toBeUndefined();
+    expect(installMock).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('without a model an unknown capability stays manual and sends no public request', async () => {
@@ -196,6 +246,43 @@ describe('actual assisted preference discovery, without candidate execution', ()
     expect(result.candidates[0].registryName).toBe('io.browser/automation');
     expect(result.summary).toContain('interpreted your request as “browser”');
     expect(completionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { query: 'search the latest news', service: 'web search', name: 'io.example/brave-search', title: 'Web search' },
+    { query: 'send email to customers', service: 'email', name: 'io.example/gmail', title: 'Email' },
+  ])('retains useful interpreted candidates for mixed task intent: $query', async ({ query, service, name, title }) => {
+    completionMock.mockResolvedValueOnce({ completion: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ service, searches: [service] }) } }] } });
+    searchMock.mockResolvedValue([{ name, installable: true, requiredEnv: [] }]);
+    resolveMock.mockImplementation(async (identity: string) => identity === name
+      ? { server: { ...remote(name), title, description: title } } : null);
+
+    const result = await researchMcpServers({ query, modelId: 'fixture' });
+
+    expect(searchMock).toHaveBeenCalledTimes(1);
+    expect(searchMock).toHaveBeenCalledWith(service, 30, expect.any(AbortSignal), expect.any(Array));
+    expect(result.query).toBe(query);
+    expect(result.candidates).toEqual([expect.objectContaining({ registryName: name })]);
+    expect(result.summary).toContain(`interpreted your request as “${service}”`);
+    expect(completionMock).toHaveBeenCalledTimes(1);
+    expect(installMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { query: 'io.example/tts', name: 'io.example/tts', title: 'Text to speech' },
+    { query: 'turn text into speech', name: 'io.example/tts', title: 'Text to speech' },
+    { query: 'connect my notion', name: 'io.example/notion', title: 'Notion' },
+  ])('keeps complete known identity despite a different model interpretation: $query', async ({ query, name, title }) => {
+    searchMock.mockResolvedValue([{ name, installable: true, requiredEnv: [] }]);
+    resolveMock.mockImplementation(async (identity: string) => identity === name
+      ? { server: { ...remote(name), title, description: title } } : null);
+
+    const result = await researchMcpServers({ query, modelId: 'fixture' });
+
+    expect(searchMock).toHaveBeenCalledWith(query, 30, expect.any(AbortSignal), expect.any(Array));
+    expect(result.candidates).toEqual([expect.objectContaining({ registryName: name })]);
+    expect(result.summary).not.toContain('interpreted your request');
+    expect(installMock).not.toHaveBeenCalled();
   });
 
   it('chooses hosted transport over the same unreviewed local package without calling it trusted', async () => {

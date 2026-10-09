@@ -30,7 +30,7 @@ const provider = http.createServer(async (request, response) => {
     response.setHeader('content-type', 'application/json');
     response.end(JSON.stringify({ id: 'local-discovery', object: 'chat.completion', created: 1, model: body.model,
       choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
-        searches: ['filesystem'], service: 'local files', suggestedName: 'filesystem', summary: 'Fixture narrative is advisory.', notes: {},
+        searches: ['web search'], service: 'web search', suggestedName: 'web-search', summary: 'Fixture narrative is advisory.', notes: {},
       }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
   } catch { response.statusCode = 500; response.end('Discovery fixture contract failed.'); }
 });
@@ -95,6 +95,18 @@ try {
   assert.equal((await fs.readFile(operator.env.FLUJO_OWNER_AUTH_FILE)).equals(originalPolicy), true);
   await assert.rejects(fs.access(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE), { code: 'ENOENT' });
   assert.equal(modelRequests, 0);
+  const interpreted = await fetch(`${base}/api/mcp/assistant`, { method: 'POST', headers,
+    body: JSON.stringify({ action: 'research', query: 'search the latest news', modelId: 'discovery-local-fixture' }), signal: AbortSignal.timeout(110_000) });
+  assert.equal(interpreted.status, 200);
+  const interpretedEvents = (await interpreted.text()).trim().split('\n').map(line => JSON.parse(line));
+  const interpretedResult = interpretedEvents.find(event => event.type === 'complete')?.result;
+  assert.ok(interpretedResult, 'Mixed-intent research must complete');
+  assert.match(interpretedResult.summary, /interpreted your request as “web search”/);
+  assert.ok(interpretedResult.candidates.length > 0, 'Model interpretation must preserve useful generic web-search integrations');
+  assert.equal(modelRequests, 1, 'Completed wider research sends exactly one tool-free model request');
+  assert.deepEqual(await (await fetch(`${base}/api/mcp/servers`, { headers, signal: AbortSignal.timeout(20_000) })).json(), before);
+  assert.equal((await fs.readFile(operator.env.FLUJO_OWNER_AUTH_FILE)).equals(originalPolicy), true);
+  await assert.rejects(fs.access(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE), { code: 'ENOENT' });
   hold = true;
   const started = new Promise(resolve => { providerStarted = resolve; });
   const disconnected = new Promise(resolve => { providerDisconnected = resolve; });
@@ -105,9 +117,11 @@ try {
   await Promise.race([started, delay(10_000, undefined, { ref: false }).then(() => { throw new Error('Provider was not actually running before disconnect'); })]);
   controller.abort(); assert.equal(await pending, true);
   await Promise.race([disconnected, delay(10_000, undefined, { ref: false }).then(() => { throw new Error('Provider did not receive actual cancellation'); })]);
-  await delay(200); assert.equal(modelRequests, 1);
+  await delay(200); assert.equal(modelRequests, 2);
   receipt = { actualPublicRegistry: snapshots, researchFirstCandidate: { action: candidate.action, server: candidate.existingServerName, cost: candidate.cost, tier: candidate.recommendationTier },
-    resultSha256: createHash('sha256').update(JSON.stringify(result)).digest('hex'), modelRequests, actualRunningProviderDisconnect: true,
+    resultSha256: createHash('sha256').update(JSON.stringify(result)).digest('hex'), modelRequests,
+    mixedIntent: { query: interpretedResult.query, candidates: interpretedResult.candidates.map(value => value.registryName),
+      summary: interpretedResult.summary, completedModelRequests: 1 }, actualRunningProviderDisconnect: true,
     model: 'deterministic local transport fixture; not real-model recommendation accuracy', noInstallOrEnable: true, consentAuthorityUnchanged: true };
 } catch (error) { await retain(); throw error; }
 finally {
