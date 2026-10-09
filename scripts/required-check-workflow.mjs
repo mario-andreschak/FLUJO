@@ -4,6 +4,7 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/workspace/workspaceCreateMcpRecords.test.ts',
   '__tests__/workspace/workspaceRouteWrapper.test.ts',
   '__tests__/flow/conversationLogReadAdmission.test.ts',
+  '__tests__/flow/conversationSnapshotAdmission.test.ts',
   '__tests__/mcp/toolDiscoveryPagination.test.ts',
   '__tests__/mcp/storedTransportAdmission.test.ts',
   '__tests__/packages/workspaceMcpPreparationMarker.test.ts',

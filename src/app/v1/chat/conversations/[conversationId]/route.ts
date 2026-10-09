@@ -131,6 +131,7 @@ async function GET_handler(
           log.info(`Conversation state not found in storage`, { requestId, conversationId });
         }
       } catch (storageError) {
+        if (storageError instanceof ConversationLogReadPressureError) throw storageError;
         log.warn(`Error loading conversation state from storage`, { requestId, conversationId, error: storageError });
         // Continue, maybe it's just not created yet or error is transient
       }

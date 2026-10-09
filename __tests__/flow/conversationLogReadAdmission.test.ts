@@ -3,8 +3,9 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import * as v8 from 'node:v8';
-import { _setConversationLogDirForTests, readConversationLog, withConversationLogEvents } from '@/backend/execution/flow/conversationLog';
-import { getConversationLogReadAdmission } from '@/backend/execution/flow/conversationLogReadAdmission';
+import { _setConversationLogDirForTests, readConversationLog, withConversationLogEvents, recoverMessagesFromLog } from '@/backend/execution/flow/conversationLog';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { getConversationLogReadAdmission, withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
 let directory: string; let previous: string;
 beforeEach(() => { jest.mocked(v8.getHeapStatistics).mockImplementation(jest.requireActual('node:v8').getHeapStatistics); });
 beforeAll(async () => { directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-canonical-admission-')); previous = _setConversationLogDirForTests(directory); });
@@ -70,4 +71,45 @@ it('keeps the legacy read-I/O fallback and releases the reservation', async () =
   const close = jest.fn(async () => {});
   jest.spyOn(fs, 'open').mockResolvedValueOnce({ stat: async () => ({ isFile: () => true, size: 100 }), read: async () => { throw Object.assign(new Error('disk'), { code: 'EIO' }); }, close } as never);
   expect(await readConversationLog('io')).toBeUndefined(); expect(close).toHaveBeenCalledTimes(1);
+});
+
+it('shares one root slot for nested recovery across four simultaneous hydrations', async () => {
+  await Promise.all([0,1,2,3].map(i => write(`nested${i}`, JSON.stringify(entry(i)))));
+  let release!: () => void; const gate = new Promise<void>(r => { release = r; });
+  let entered = 0; let ready!: () => void; const all = new Promise<void>(r => { ready = r; });
+  const roots = [0,1,2,3].map(i => withConversationLogReadAdmission(100, token => withConversationLogEvents(`nested${i}`, async events => {
+    if (++entered === 4) ready(); await gate; return events?.[0].seq;
+  }, token)));
+  await all;
+  expect(getConversationLogReadAdmission().active).toBe(4);
+  release(); expect(await Promise.all(roots)).toEqual([0,1,2,3]);
+});
+it('rejects forged and expired token identities instead of bypassing root admission', async () => {
+  await expect(withConversationLogReadAdmission(1, async () => true, {} as ConversationReadReservation)).rejects.toThrow('invalid');
+  let expired!: ConversationReadReservation;
+  await withConversationLogReadAdmission(1, async token => { expired = token; });
+  await expect(withConversationLogReadAdmission(1, async () => true, expired)).rejects.toThrow('expired');
+});
+it('retains root ownership until outstanding nested work settles, including a failed outer callback', async () => {
+  let release!: () => void; const gate = new Promise<void>(r => { release = r; });
+  let entered!: () => void; const ready = new Promise<void>(r => { entered = r; });
+  const root = withConversationLogReadAdmission(1, async token => {
+    void withConversationLogReadAdmission(1, async () => { entered(); await gate; }, token);
+    throw new Error('outer failure');
+  });
+  const observed = expect(root).rejects.toThrow('outer failure');
+  await ready; expect(getConversationLogReadAdmission().active).toBe(1);
+  release(); await observed;
+});
+
+it('recovers full parent messages using an explicit snapshot reservation with all root slots occupied', async () => {
+  await Promise.all([0,1,2,3].map(i => write(`recovery${i}`, JSON.stringify({ type: 'message', seq: 0, timestamp: 1, conversationId: `recovery${i}`, message: { id: `m${i}`, role: 'user', content: `history${i}`, timestamp: 1 } }))));
+  let release!: () => void; const gate = new Promise<void>(r => { release = r; });
+  let entered = 0; let ready!: () => void; const all = new Promise<void>(r => { ready = r; });
+  const states = [0,1,2,3].map(i => ({ conversationId: `recovery${i}`, messages: [] } as unknown as SharedState));
+  const roots = states.map(state => withConversationLogReadAdmission(100, async token => {
+    if (++entered === 4) ready(); await gate; return recoverMessagesFromLog(state, token);
+  }));
+  await all; release(); expect(await Promise.all(roots)).toEqual([true,true,true,true]);
+  expect(states.map(state => state.messages[0].content)).toEqual(['history0','history1','history2','history3']);
 });
