@@ -8,6 +8,8 @@ import {
   FlowListResponse
 } from '@/shared/types/flow';
 import {
+  loadItem,
+  listCollectionItemEntriesStrict,
   saveCollectionItem,
   loadCollectionItem,
   deleteCollectionItem,
@@ -220,6 +222,27 @@ export class FlowService { // Add export keyword here
       log.error('Failed to load flows', error);
       return [];
     }
+  }
+
+  /** Read authoritative backup data without tolerant listings, migration writes, or UI caches. */
+  async loadFlowsForBackup(): Promise<Flow[]> {
+    const legacy = await loadItem<unknown>(StorageKey.FLOWS, null);
+    if (legacy !== null && !Array.isArray(legacy)) throw new Error('Invalid legacy flow collection');
+    const entries = await listCollectionItemEntriesStrict<unknown>(FLOWS_COLLECTION);
+    const flows = new Map<string, Flow>();
+    for (const value of (legacy ?? []) as unknown[]) {
+      const flow = canonicalizeFlow(value);
+      assertSafeCollectionId(flow.id);
+      flows.set(flow.id, flow);
+    }
+    for (const { id, item } of entries) {
+      const flow = canonicalizeFlow(item);
+      if (flow.id !== id) throw new Error('Flow identity does not match stored filename');
+      flows.set(id, flow);
+    }
+    const visible: Flow[] = [];
+    for (const flow of flows.values()) if (await this.ownerExists(flow)) visible.push(flow);
+    return visible;
   }
 
   /** Find a flow by its authored display name. */
