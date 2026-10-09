@@ -4,6 +4,9 @@ import type { MessageRow } from '../schema';
 const localized = (...messages: MessageRow): MessageRow => messages;
 
 export const personasMessageRows = {
+  'personas.roleCard.immutable': localized('Immutable', 'Inmutable', 'Unveränderlich', 'Immuable', 'Immutabile', 'Imutável', '不可变'),
+  'personas.roleCard.behaviorSlots.one': localized('{count} behavior slot', '{count} espacio de comportamiento', '{count} Verhaltensplatz', '{count} emplacement de comportement', '{count} slot di comportamento', '{count} espaço de comportamento', '{count} 个行为槽'),
+  'personas.roleCard.behaviorSlots.other': localized('{count} behavior slots', '{count} espacios de comportamiento', '{count} Verhaltensplätze', '{count} emplacements de comportement', '{count} slot di comportamento', '{count} espaços de comportamento', '{count} 个行为槽'),
   'nav.personas': localized('Personas', 'Personas', 'Personas', 'Personas', 'Personas', 'Personas', '角色'),
   'personas.eyebrow': localized('Your AI teammates', 'Tus compañeros de IA', 'Dein KI-Team', 'Vos collègues IA', 'I tuoi collaboratori IA', 'Sua equipe de IA', '你的 AI 队友'),
   'personas.title': localized('Persona desks', 'Escritorios de Personas', 'Persona-Arbeitsplätze', 'Bureaux des Personas', 'Postazioni delle Persona', 'Mesas das Personas', '角色工作台'),

@@ -27,6 +27,7 @@
  */
 
 /** Extension identifier, used for logging/documentation and capability gating. */
+import { CreateTaskResultV2Schema, GetTaskResultV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
 import { CreateMessageRequestSchema, ElicitRequestSchema, ListRootsRequestSchema, CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
 export const MCP_TASKS_EXTENSION_ID = 'io.modelcontextprotocol/tasks';
@@ -155,9 +156,10 @@ export function isValidTaskToolResult(value: unknown): value is Record<string, u
   return CallToolResultSchema.safeParse(sdkResult).success;
 }
 
-function parseModernTask(value: unknown, creation: boolean): McpTaskParseResult {
+export function parseModernTask(value: unknown, creation = false): McpTaskParseResult {
   const invalid = (reason: string): McpTaskParseResult => ({ ok: false, reason });
   if (!isPlainObject(value) || !isBoundedTaskJson(value)) return invalid('unbounded or invalid modern task');
+  if (!(creation ? CreateTaskResultV2Schema : GetTaskResultV2Schema).safeParse(value).success) return invalid('invalid official modern task schema');
   if (value.resultType !== (creation ? 'task' : 'complete') || 'task' in value || 'ttl' in value || 'pollInterval' in value) return invalid('invalid modern discriminator or mixed generation');
   if (creation && ('content' in value || 'structuredContent' in value)) return invalid('invalid creation payload');
   if (!(value.ttlMs === null || (Number.isSafeInteger(value.ttlMs) && Number(value.ttlMs) >= 0))) return invalid('invalid ttlMs');

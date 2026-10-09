@@ -89,6 +89,7 @@ const nextConfig = {
     '@emotion/react',
     '@emotion/styled',
     'mcp-stdio-oauth',
+    '@modelcontextprotocol/ext-tasks',
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {

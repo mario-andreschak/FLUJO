@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from '@mui/material';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import MCPNodeToolList from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodeToolList';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -32,6 +32,7 @@ export default function PersonaAppToolsDialog({
   onSave,
 }: PersonaAppToolsDialogProps) {
   const { t } = useI18n();
+  const helpId = useId();
   const serverName = open && grant ? grant.mcpServerName : null;
   const { tools, toolsServerName, isLoading, error, retryLoadTools } = useServerTools(serverName);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
@@ -83,13 +84,13 @@ export default function PersonaAppToolsDialog({
   }, [saveFailure, pending]);
 
   return (
-    <Dialog open={open} fullWidth maxWidth="lg" onClose={pending ? undefined : onClose}>
+    <Dialog open={open} fullWidth maxWidth="lg" onClose={pending ? undefined : onClose} aria-describedby={helpId}>
       <DialogTitle>
         {t('personas.apps.toolsTitle', { server: grant?.mcpServerName ?? '' })}
       </DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2}>
-          <Typography color="text.secondary">{t('personas.apps.toolsHelp')}</Typography>
+          <Typography id={helpId} color="text.secondary">{t('personas.apps.toolsHelp')}</Typography>
           {saveFailure && <Alert severity="error" ref={saveErrorRef} tabIndex={-1}>{saveError || saveFailure}</Alert>}
           {isLoading && (
             <Stack direction="row" spacing={1.5} alignItems="center" role="status">

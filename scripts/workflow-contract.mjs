@@ -261,7 +261,7 @@ export function assertWorkflowContract(workflows) {
   for (const [name, workflow] of Object.entries(workflows)) {
     if (name !== 'verify.yml' && (Object.hasOwn(workflow.on ?? {}, 'pull_request') || Object.hasOwn(workflow.on ?? {}, 'pull_request_target'))) throw new Error('Only focused verification may run on pull requests: ' + name);
   }
-  const { 'verify.yml': focused, 'verify-full.yml': full, ...other } = workflows;
+  const { 'verify-full.yml': full, ...other } = workflows;
   if (!full) throw new Error('Manual broad qualification is missing.');
   assertFullWorkflowContract({ ...other, 'verify.yml': full });
 }

@@ -10,6 +10,10 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/mcp/storedTransportAdmission.test.ts',
   '__tests__/mcp/tasksGenerationsProtocol.test.ts',
   '__tests__/mcp/clientTasksLifecycle.test.ts',
+  '__tests__/mcp/tasksExtensionSession.test.ts',
+  '__tests__/mcp/serverTasks.test.ts',
+  '__tests__/mcp/flowsTasksServer.test.ts',
+  '__tests__/mcp/flowsTasksRouteClassification.test.ts',
   '__tests__/mcp/protectedPackageRunner.test.ts',
   '__tests__/model/orcarouterProvider.test.ts',
   '__tests__/packages/workspaceMcpPreparationMarker.test.ts',
@@ -20,6 +24,9 @@ export const CRITICAL_TEST_FILES = Object.freeze([
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
 export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
   '__tests__/frontend/components/ModelConnectionWizard.test.tsx',
+  '__tests__/frontend/components/CardPickerGrid.test.tsx',
+  '__tests__/frontend/components/PersonaCreationWizard.test.tsx',
+  '__tests__/frontend/components/RoleVersionCardLocalization.test.tsx',
 ]);
 export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {
