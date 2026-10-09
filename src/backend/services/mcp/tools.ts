@@ -13,9 +13,12 @@ import {
   buildTaskAugmentation,
   decideTaskAugmentation,
   mcpTasksClientEnabled,
+  modernToolResultSchema,
 } from "./tasksProtocol";
 import { runRemoteTaskLifecycle } from "./clientTasks";
 import { resolveServerIdentity } from "./remoteTaskStore";
+import { getElicitationContext } from './elicitationContext';
+import { dispatchTaskInputRequest } from './taskInputHandlers';
 import {
   checkToolCallVisibility,
   filterToolsForAudience,
@@ -294,11 +297,9 @@ export async function callTool(
       },
     };
     // MCP Tasks negotiation (issue #404). Task-augmented execution is
-    // requested per request through `params.task` and ONLY when: the client
-    // feature flag is on, the LIVE server advertised
-    // `capabilities.tasks.requests.tools.call`, and the tool itself declares
-    // `execution.taskSupport` (required/optional). Classic or incompatible
-    // servers therefore never receive any Tasks metadata.
+    // requested only after the live connection advertises the corresponding
+    // generation and the feature flag is on. Legacy requests use params.task
+    // and per-tool taskSupport; modern requests carry extension capabilities.
     const taskDecision = privateExecution
       ? { request: false, reason: 'private synchronous profile' } as Awaited<ReturnType<typeof decideTaskAugmentation>>
       : await decideTaskAugmentation(client, toolName);
@@ -316,24 +317,24 @@ export async function callTool(
     // or transcript payloads, and every actual dispatch receives fresh metadata.
     const privateMeta = privateExecution
       ? await executionToolRequestMeta(executionExtensionContext!, serverName, toolName, normalizedArgs) : undefined;
+    const taskGeneration = taskDecision.negotiation?.generation;
+    const augmentation = taskDecision.request ? buildTaskAugmentation(taskDecision.ttlMs, taskGeneration) : {};
+    const callerMeta = privateMeta ?? (callerNodeId || ownerScope ? {
+      flujo: { ...(callerNodeId ? { callerNodeId } : {}), ...(ownerScope ? { ownerScope } : {}) },
+    } : undefined);
+    const runContext = getElicitationContext(serverName);
+    const dispatchIdentity = taskDecision.request ? await resolveServerIdentity(serverName) : undefined;
     const requestParams = {
       name: toolName,
       arguments: normalizedArgs,
-      ...(taskDecision.request ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
-      ...(privateMeta ? { _meta: privateMeta } : callerNodeId || ownerScope
-        ? {
-            _meta: {
-              flujo: {
-                ...(callerNodeId ? { callerNodeId } : {}),
-                ...(ownerScope ? { ownerScope } : {}),
-              },
-            },
-          }
-        : {}),
+      ...augmentation,
+      ...(augmentation._meta || callerMeta ? { _meta: { ...augmentation._meta, ...callerMeta } } : {}),
     };
     await assertMcpIsolationDispatch(client, serverName);
     await assertBundledFlujoWorkloadEffectCurrent();
-    const response = isBetaClient(client)
+    const response = taskDecision.request && taskGeneration === '2026-07-28'
+      ? await client.request({ method: 'tools/call', params: requestParams }, modernToolResultSchema, callOptions)
+      : isBetaClient(client)
       ? await (
           client.callTool as unknown as (
             params: typeof requestParams,
@@ -349,14 +350,15 @@ export async function callTool(
 
     // -----------------------------------------------------------------------
     // MCP Tasks extension (io.modelcontextprotocol/tasks)
-    // A task-augmented tools/call answers with `CreateTaskResult` ({ task })
-    // instead of a CallToolResult. The full lifecycle (durable record, polling,
+    // A task-augmented tools/call answers with a legacy { task } or a modern
+    // resultType:task handle. The full lifecycle (durable record, polling,
     // input_required, cancellation, terminal mapping) lives in clientTasks.ts;
     // classification is strict, so a normal tool payload that merely contains a
     // `task` key is never reinterpreted as a task handle.
     // -----------------------------------------------------------------------
     const classified = classifyToolCallResult(response, {
       taskRequested: taskDecision.request,
+      generation: taskGeneration,
     });
 
     if (classified.kind === "protocol-invalid") {
@@ -378,8 +380,22 @@ export async function callTool(
       // read) when a record is actually going to be persisted.
       const persist = mcpTasksClientEnabled();
       const serverIdentity = persist
-        ? await resolveServerIdentity(serverName)
+        ? dispatchIdentity ?? await resolveServerIdentity(serverName)
         : "unnegotiated";
+      const assertCurrent = async () => {
+        await assertMcpIsolationDispatch(client, serverName);
+        await assertBundledFlujoWorkloadEffectCurrent();
+        if (persist) {
+          const { mcpService } = await import('@/backend/services/mcp');
+          if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== client ||
+              await resolveServerIdentity(serverName) !== serverIdentity) {
+            throw new Error('MCP task server connection identity changed');
+          }
+        }
+        if (runContext && getElicitationContext(serverName) !== runContext) {
+          throw new Error('MCP task originating run is no longer current');
+        }
+      };
       const taskResult = await runRemoteTaskLifecycle({
         client,
         serverName,
@@ -387,10 +403,14 @@ export async function callTool(
         toolName,
         args: normalizedArgs,
         task: classified.task,
+        generation: taskGeneration,
+        assertCurrent,
+        handleInputRequest: (request, options) => dispatchTaskInputRequest(client, request, options),
         timeoutMs,
         ...(signal ? { signal } : {}),
         ...(onProgress ? { onProgress } : {}),
         ownership: {
+          ...(runContext ? { conversationId: runContext.conversationId } : {}),
           ...(callerNodeId ? { nodeId: callerNodeId } : {}),
           ...(ownerScope ? { ownerScope } : {}),
           source,

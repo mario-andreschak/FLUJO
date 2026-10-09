@@ -33,6 +33,8 @@ import {
   computeTaskExpiresAt,
   isTerminalMcpTaskStatus,
   type McpTask,
+  type McpTaskGeneration,
+  type McpTaskInputRequest,
 } from '@/shared/types/mcp/tasks';
 import type {
   McpRemoteTaskDiagnostic,
@@ -45,7 +47,7 @@ import {
   getMcpRemoteTaskSettings,
   patchRemoteTaskRecord,
 } from './remoteTaskStore';
-import { cancelRemoteTask, fetchTaskPayload, fetchTaskStatus } from './tasksProtocol';
+import { cancelRemoteTask, fetchTaskPayload, fetchTaskStatus, updateRemoteTask } from './tasksProtocol';
 import { getElicitationContext } from './elicitationContext';
 import {
   clearTaskInputState,
@@ -55,6 +57,18 @@ import {
 
 const log = createLogger('backend/services/mcp/clientTasks');
 
+/** Bound even an input implementation that fails to settle after cancellation. */
+async function boundedInput(pending: Promise<unknown>, signal: AbortSignal): Promise<unknown> {
+  let onAbort: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error('Task input expired or cancelled'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+  try { return await Promise.race([pending, aborted]); }
+  finally { signal.removeEventListener('abort', onAbort); }
+}
+
 export interface ToolCallProgressLike {
   progress: number;
   total?: number;
@@ -62,6 +76,11 @@ export interface ToolCallProgressLike {
 }
 
 export interface RemoteTaskLifecycleOptions {
+  generation?: McpTaskGeneration;
+  /** Recheck caller authority, live client and immutable server identity before I/O. */
+  assertCurrent?: () => void | Promise<void>;
+  /** Existing per-client, policy-checked attended input bridge. */
+  handleInputRequest?: (request: McpTaskInputRequest, options: { signal: AbortSignal; assertCurrent: () => Promise<void> }) => Promise<unknown>;
   client: Client;
   serverName: string;
   serverIdentity: string;
@@ -90,7 +109,8 @@ function terminalResponseFor(
   if (task.status === 'failed') {
     return {
       success: false,
-      error: task.statusMessage ?? `Task ${task.taskId} failed`,
+      error: task.error?.message ?? task.statusMessage ?? `Task ${task.taskId} failed`,
+      ...(task.error ? { data: task.error } : {}),
       errorType: 'task-failed',
       progressToken: task.taskId,
       toolName,
@@ -123,6 +143,13 @@ export async function runRemoteTaskLifecycle(
     ownership,
     persist,
   } = options;
+  const generation = options.generation ?? initialTask.generation ?? '2025-11-25';
+  const assertCurrent = async () => {
+    await options.assertCurrent?.();
+    if (initialTask.generation && initialTask.generation !== generation) {
+      throw new Error('Remote task protocol generation changed');
+    }
+  };
 
   const settings = await getMcpRemoteTaskSettings();
   const startedAt = Date.now();
@@ -148,7 +175,10 @@ export async function runRemoteTaskLifecycle(
     log.warn(
       `Refusing to poll task ${initialTask.taskId}: poll concurrency limit reached for ${serverName}`,
     );
-    if (options.supportsCancel) await cancelRemoteTask(client, initialTask.taskId);
+    if (options.supportsCancel) {
+      await assertCurrent();
+      await cancelRemoteTask(client, initialTask.taskId, 10_000, generation);
+    }
     return {
       success: false,
       error: `Too many concurrent MCP tasks are being polled; task ${initialTask.taskId} was not started.`,
@@ -160,11 +190,12 @@ export async function runRemoteTaskLifecycle(
 
   // Durable record BEFORE any follow-up request.
   let record: McpRemoteTaskRecord | null = null;
-  if (persist) {
-    record = await createRemoteTaskRecord({
+  try {
+    if (persist) record = await createRemoteTaskRecord({
       remoteTaskId: initialTask.taskId,
       serverName,
       serverIdentity,
+      generation,
       toolName,
       ownership,
       status: initialTask.status,
@@ -172,6 +203,9 @@ export async function runRemoteTaskLifecycle(
       pollIntervalMs: basePollMs,
       ...(expiresAt !== undefined ? { expiresAt, ttlMs: expiresAt - startedAt } : {}),
     });
+  } catch (error) {
+    slot.release();
+    throw error;
   }
 
   const patch = async (
@@ -193,18 +227,23 @@ export async function runRemoteTaskLifecycle(
           );
           return undefined;
         }
-        return cancelRemoteTask(client, initialTask.taskId);
+        await assertCurrent();
+        return cancelRemoteTask(client, initialTask.taskId, 10_000, generation);
       })();
     }
     return cancelPromise;
   };
 
   const onAbort = () => {
-    void cancelOnce();
+    void cancelOnce().catch(error => log.warn('Remote task cancellation stopped', error));
   };
   signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
+    if (signal?.aborted) {
+      await cancelOnce();
+      return { success: false, error: 'Remote task caller was cancelled.', errorType: 'cancelled', toolName };
+    }
     // A server may hand back an already-terminal task.
     if (isTerminalMcpTaskStatus(initialTask.status)) {
       return await finalize(initialTask);
@@ -215,6 +254,7 @@ export async function runRemoteTaskLifecycle(
     let pollMs = basePollMs;
     let inputRequiredSince: number | undefined;
     let pollCount = 0;
+    const answeredInputKeys = new Set<string>();
 
     while (true) {
       if (signal?.aborted) {
@@ -268,8 +308,11 @@ export async function runRemoteTaskLifecycle(
 
       let status: Awaited<ReturnType<typeof fetchTaskStatus>>;
       try {
+        await assertCurrent();
         status = await fetchTaskStatus(client, currentTask.taskId, {
           timeout: Math.min(pollMs * 4 + 10_000, timeoutMs),
+          signal,
+          generation,
         });
         transientFailures = 0;
         pollMs = basePollMs;
@@ -321,6 +364,13 @@ export async function runRemoteTaskLifecycle(
         };
       }
 
+      await assertCurrent();
+
+      if (status.task.taskId !== initialTask.taskId || (status.task.generation ?? '2025-11-25') !== generation) {
+        await cancelOnce('protocol-invalid');
+        await patch({ status: 'failed', diagnostic: 'protocol-invalid', errorMessage: 'Task identity or protocol generation changed in tasks/get.' });
+        return { success: false, error: 'Remote task identity changed.', errorType: 'task-protocol-invalid', toolName };
+      }
       currentTask = status.task;
       pollCount++;
       const elapsed = Date.now() - startedAt;
@@ -368,6 +418,47 @@ export async function runRemoteTaskLifecycle(
             toolName,
           };
         }
+        if (generation === '2026-07-28' && currentTask.inputRequests) {
+          const ctx = getElicitationContext(serverName);
+          if (!options.handleInputRequest || !ownership.conversationId || ctx?.conversationId !== ownership.conversationId) {
+            await cancelOnce('input-required-unattended');
+            return { success: false, error: 'The originating attended run cannot answer task input.', errorType: 'task-input-required-unattended', toolName };
+          }
+          const keys = Object.keys(currentTask.inputRequests).filter(key => !answeredInputKeys.has(key));
+          if (answeredInputKeys.size + keys.length > 32) {
+            await cancelOnce('protocol-invalid');
+            return { success: false, error: 'Task input request limit exceeded.', errorType: 'task-protocol-invalid', toolName };
+          }
+          const controller = new AbortController();
+          const abortInput = () => controller.abort();
+          signal?.addEventListener('abort', abortInput, { once: true });
+          const remaining = Math.max(1, Math.min(settings.inputRequiredTimeoutMs - (Date.now() - inputRequiredSince), timeoutMs - (Date.now() - startedAt), expiresAt === undefined ? Infinity : expiresAt - Date.now()));
+          const timer = setTimeout(abortInput, remaining);
+          try {
+            const responses: Record<string, unknown> = Object.create(null);
+            for (const key of keys) {
+              await assertCurrent();
+              if (signal?.aborted || controller.signal.aborted) throw new Error('Task input expired or cancelled');
+              responses[key] = await boundedInput(options.handleInputRequest(currentTask.inputRequests[key], { signal: controller.signal, assertCurrent }), controller.signal);
+            }
+            await assertCurrent();
+            if (signal?.aborted || controller.signal.aborted) throw new Error('Task input expired or cancelled');
+            const updateRemaining = Math.min(settings.inputRequiredTimeoutMs - (Date.now() - inputRequiredSince), timeoutMs - (Date.now() - startedAt), expiresAt === undefined ? Infinity : expiresAt - Date.now());
+            if (updateRemaining <= 0) throw new Error('Task input deadline elapsed');
+            if (keys.length) await updateRemoteTask(client, currentTask.taskId, responses, { generation, signal: controller.signal, timeout: Math.min(30_000, updateRemaining) });
+            await assertCurrent();
+            keys.forEach(key => answeredInputKeys.add(key));
+            await patch({ outstandingInputKeys: Object.keys(currentTask.inputRequests).filter(key => !answeredInputKeys.has(key)) });
+          } catch (error) {
+            await cancelOnce('input-required-unattended');
+            await patch({ status: 'failed', diagnostic: 'input-required-unattended', errorMessage: String(error) });
+            return { success: false, error: 'Task input could not be answered by the originating run.', errorType: signal?.aborted ? 'cancelled' : 'task-input-timeout', toolName };
+          } finally {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', abortInput);
+            controller.abort();
+          }
+        }
         // Keep polling: answering the related elicitation is what advances the
         // task, and the poll loop observes the resulting status change.
       } else {
@@ -384,7 +475,7 @@ export async function runRemoteTaskLifecycle(
   async function finalize(task: McpTask): Promise<MCPServiceResponse> {
     if (task.status !== 'completed') {
       await patch({
-        status: task.status,
+        ...(record?.status === task.status ? {} : { status: task.status }),
         statusMessage: task.statusMessage,
         ...(task.status === 'failed'
           ? { errorMessage: task.statusMessage ?? 'Remote MCP task failed.' }
@@ -394,15 +485,21 @@ export async function runRemoteTaskLifecycle(
     }
 
     try {
+      await assertCurrent();
       const payload = await fetchTaskPayload(client, task.taskId, {
         timeout: Math.min(60_000, timeoutMs),
+        generation,
+        terminalTask: task,
+        signal,
       });
-      await patch({ status: 'completed', resultRetrieved: true });
+      await assertCurrent();
+      if (signal?.aborted) throw new Error('Task result caller was cancelled');
+      await patch({ ...(record?.status === 'completed' ? {} : { status: 'completed' as const }), resultRetrieved: true });
       onProgress?.({ progress: 100, message: `Task ${task.taskId}: completed` });
       return terminalResponseFor(task, toolName, payload);
     } catch (error) {
       await patch({
-        status: 'completed',
+        ...(record?.status === 'completed' ? {} : { status: 'completed' as const }),
         resultRetrieved: false,
         errorMessage: `tasks/result failed: ${String(error)}`,
       });

@@ -8,6 +8,8 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/flow/modelTurnArchiveWriteBudget.test.ts',
   '__tests__/mcp/toolDiscoveryPagination.test.ts',
   '__tests__/mcp/storedTransportAdmission.test.ts',
+  '__tests__/mcp/tasksGenerationsProtocol.test.ts',
+  '__tests__/mcp/clientTasksLifecycle.test.ts',
   '__tests__/packages/workspaceMcpPreparationMarker.test.ts',
   '__tests__/security/ownerAccess.test.ts',
 ]);

@@ -34,7 +34,7 @@ import {
   patchRemoteTaskRecord,
   serverIdentityFingerprint,
 } from './remoteTaskStore';
-import { fetchTaskStatus, mcpTasksClientEnabled } from './tasksProtocol';
+import { cancelRemoteTask, discoverTaskNegotiation, fetchTaskStatus, getTaskNegotiation, mcpTasksClientEnabled } from './tasksProtocol';
 
 const log = createLogger('backend/services/mcp/remoteTaskResume');
 
@@ -100,6 +100,11 @@ export async function resumeRemoteMcpTasks(): Promise<ResumeSummary> {
       summary.skipped++;
       continue;
     }
+    if ((await discoverTaskNegotiation(client)).generation !== (record.generation ?? '2025-11-25')) {
+      await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'generation-mismatch', errorMessage: 'Remote task protocol generation changed; resume refused.' });
+      summary.failedClosed++;
+      continue;
+    }
 
     summary.resumed++;
     void pollResumedRecord(record, client).catch(error =>
@@ -131,6 +136,25 @@ async function pollResumedRecord(
     defaultMs: settings.defaultPollIntervalMs,
   });
   let transientFailures = 0;
+  const generation = record.generation ?? '2025-11-25';
+  const stillCurrent = async () => {
+    const { mcpService } = await import('@/backend/services/mcp');
+    const configs = await mcpService.loadServerConfigs();
+    const config = Array.isArray(configs) ? (configs as MCPServerConfig[]).find(c => c.name === record.serverName) : undefined;
+    if (!config || serverIdentityFingerprint(config) !== record.serverIdentity) {
+      await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'identity-mismatch' });
+      return false;
+    }
+    if (mcpService.getClient(record.serverName) !== client) {
+      await patchRemoteTaskRecord(record.recordId, { diagnostic: 'server-disconnected' });
+      return false;
+    }
+    if (getTaskNegotiation(client).generation !== generation) {
+      await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'generation-mismatch' });
+      return false;
+    }
+    return true;
+  };
 
   try {
     await patchRemoteTaskRecord(record.recordId, {
@@ -155,7 +179,8 @@ async function pollResumedRecord(
 
       let status: Awaited<ReturnType<typeof fetchTaskStatus>>;
       try {
-        status = await fetchTaskStatus(client, record.remoteTaskId, { timeout: 30_000 });
+        if (!await stillCurrent()) return;
+        status = await fetchTaskStatus(client, record.remoteTaskId, { timeout: 30_000, generation });
         transientFailures = 0;
       } catch (error) {
         transientFailures++;
@@ -179,6 +204,12 @@ async function pollResumedRecord(
         return;
       }
 
+      if (!await stillCurrent()) return;
+      if (status.task.taskId !== record.remoteTaskId || (status.task.generation ?? '2025-11-25') !== generation) {
+        await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'protocol-invalid', errorMessage: 'Resumed task identity or generation changed in tasks/get.' });
+        return;
+      }
+
       const updated = await patchRemoteTaskRecord(record.recordId, {
         status: status.task.status,
         statusMessage: status.task.statusMessage,
@@ -191,6 +222,15 @@ async function pollResumedRecord(
           : {}),
       });
       if (updated) record = updated;
+      if (status.task.status === 'input_required') {
+        // Restarted runs have no attended owner to answer input. Do not prompt a
+        // different conversation or silently keep an undeliverable task alive.
+        if (getTaskNegotiation(client).supportsCancel && await stillCurrent()) {
+          await cancelRemoteTask(client, record.remoteTaskId, 10_000, generation);
+        }
+        await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'input-required-unattended', errorMessage: 'Originating attended run is unavailable after restart.' });
+        return;
+      }
       if (isTerminalMcpTaskStatus(status.task.status)) {
         log.info(
           `Resumed remote MCP task ${record.remoteTaskId} reached terminal state ${status.task.status}`,

@@ -1,3 +1,4 @@
+import { registerTaskInputHandler } from './taskInputHandlers';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -162,15 +163,19 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
     },
   );
 
-  client.setRequestHandler("roots/list", createRootsListHandler(config, client));
+  const rootsHandler = createRootsListHandler(config, client);
+  registerTaskInputHandler(client, 'roots/list', rootsHandler);
+  client.setRequestHandler("roots/list", rootsHandler);
   if (serverHasSampling) {
     const handler = createSamplingHandler(config);
+    registerTaskInputHandler(client, 'sampling/createMessage', handler);
     client.setRequestHandler("sampling/createMessage", async (request) =>
       handler(request),
     );
   }
   if (serverHasStdioOAuth || serverHasElicitation) {
     const handler = createElicitationHandler(config);
+    registerTaskInputHandler(client, 'elicitation/create', handler);
     client.setRequestHandler("elicitation/create", async (request) =>
       handler(request),
     );

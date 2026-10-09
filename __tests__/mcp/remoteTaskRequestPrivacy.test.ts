@@ -33,6 +33,15 @@ function input(args?: Record<string, unknown>): CreateRemoteTaskInput {
     ownership: { conversationId: 'public-conversation' }, status: 'working', pollIntervalMs: 1000 };
 }
 
+it('persists immutable protocol generation and leaves historical missing generation legacy', async () => {
+  const modern = (await createRemoteTaskRecord({ ...input(), generation: '2026-07-28' }))!;
+  const forged = await patchRemoteTaskRecord(modern.recordId, { generation: '2025-11-25' } as unknown as RemoteTaskPatch);
+  expect(forged?.generation).toBe('2026-07-28');
+  const legacy = (await createRemoteTaskRecord(input()))!;
+  const patched = await patchRemoteTaskRecord(legacy.recordId, { generation: '2026-07-28', pollCount: 1 } as unknown as RemoteTaskPatch);
+  expect(patched?.generation).toBeUndefined();
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   records.clear();

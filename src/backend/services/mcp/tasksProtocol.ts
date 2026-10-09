@@ -12,20 +12,24 @@
  *    `tasks/cancel`; `tasks/list` is optional and unused by the lifecycle;
  *  - `notifications/tasks/status` and `subscriptions/listen` are deferred.
  *
- * Deliberate deviation from the planning note: the resolved SDK/spec has no
+ * Legacy-generation compatibility: the resolved SDK core contract has no
  * `resultType: "task"` discriminator, no `pollIntervalMs`, and no
  * `tasks/update`. Task support is negotiated through the SERVER capability
  * `capabilities.tasks.requests.tools.call` plus the per-request `task` param —
  * FLUJO therefore declares no `tasks` CLIENT capability, because it hosts no
- * tasks of its own (that capability describes client-side task creation for
+ * legacy tasks of its own (that capability describes client-side task creation for
  * sampling/elicitation, which remains out of scope).
  */
 
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { z } from 'zod';
 import {
   CancelTaskResultSchema,
   GetTaskPayloadResultSchema,
   GetTaskResultSchema,
+  ElicitResultSchema,
+  CreateMessageResultSchema,
+  ListRootsResultSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { FEATURES } from '@/config/features';
@@ -34,6 +38,10 @@ import {
   MCP_TASKS_EXTENSION_ID,
   parseTaskStatusResult,
   type McpTask,
+  type McpTaskGeneration,
+  parseCreateTaskResult,
+  isBoundedTaskJson,
+  isValidTaskToolResult,
 } from '@/shared/types/mcp/tasks';
 import { getMcpRemoteTaskSettings } from './remoteTaskStore';
 
@@ -50,6 +58,7 @@ export function mcpTasksServerEnabled(): boolean {
 }
 
 export interface TaskNegotiation {
+  generation?: McpTaskGeneration;
   /** Feature flag on AND the live server advertised tools/call task support. */
   supported: boolean;
   supportsToolsCall: boolean;
@@ -68,10 +77,44 @@ interface ClientWithCapabilities {
  * connection identity it was captured from.
  */
 const negotiationCache = new WeakMap<object, TaskNegotiation>();
+const discoveryCache = new WeakMap<object, Promise<void>>();
+const discoveredCapabilitiesSchema = z.custom<{ capabilities: { extensions?: Record<string, unknown> } }>(value => {
+  if (!isBoundedTaskJson(value) || !value || typeof value !== 'object' || !('capabilities' in value)) return false;
+  const capabilities = value.capabilities;
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return false;
+  if (!('extensions' in capabilities)) return true;
+  return !!capabilities.extensions && typeof capabilities.extensions === 'object' && !Array.isArray(capabilities.extensions);
+});
+
+/** Discovery is attempted once per live connection with a bounded request. */
+export async function discoverTaskNegotiation(client: Client | undefined): Promise<TaskNegotiation> {
+  if (!client || !mcpTasksClientEnabled()) return getTaskNegotiation(client);
+  if (getTaskNegotiation(client).generation === '2026-07-28') return getTaskNegotiation(client);
+  let pending = discoveryCache.get(client);
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const raw = await (client as unknown as RequestCapableClient).request({ method: 'server/discover', params: {} }, discoveredCapabilitiesSchema, { timeout: 5_000 });
+        const parsed = discoveredCapabilitiesSchema.safeParse(raw);
+        const extension = parsed.success ? parsed.data.capabilities.extensions?.[MCP_TASKS_EXTENSION_ID] : undefined;
+        if (extension && typeof extension === 'object' && !Array.isArray(extension) && discoveryCache.get(client) === pending) negotiationCache.set(client, {
+          generation: '2026-07-28', supported: true, supportsToolsCall: true, supportsCancel: true, supportsList: false,
+        });
+      } catch { /* MethodNotFound or unavailable discovery preserves legacy/classic. */ }
+    })();
+    discoveryCache.set(client, pending);
+  }
+  await pending;
+  return getTaskNegotiation(client);
+}
 
 function readServerTasksCapability(client: Client): Record<string, unknown> | undefined {
   try {
     const caps = (client as unknown as ClientWithCapabilities).getServerCapabilities?.();
+    const extensions = caps?.extensions as Record<string, unknown> | undefined;
+    if (extensions && Object.hasOwn(extensions, MCP_TASKS_EXTENSION_ID)
+      && typeof extensions[MCP_TASKS_EXTENSION_ID] === 'object' && extensions[MCP_TASKS_EXTENSION_ID] !== null
+      && !Array.isArray(extensions[MCP_TASKS_EXTENSION_ID])) return { modern: true };
     const tasks = caps?.tasks;
     return typeof tasks === 'object' && tasks !== null
       ? (tasks as Record<string, unknown>)
@@ -104,12 +147,17 @@ export function getTaskNegotiation(client: Client | undefined): TaskNegotiation 
     negotiationCache.set(client as unknown as object, none);
     return none;
   }
+  if (tasks.modern === true) {
+    const modern: TaskNegotiation = { generation: '2026-07-28', supported: true, supportsToolsCall: true, supportsCancel: true, supportsList: false };
+    negotiationCache.set(client, modern); return modern;
+  }
 
   const requests = (tasks.requests ?? undefined) as Record<string, unknown> | undefined;
   const tools = (requests?.tools ?? undefined) as Record<string, unknown> | undefined;
   const supportsToolsCall = typeof tools?.call === 'object' && tools.call !== null;
 
   const negotiation: TaskNegotiation = {
+    generation: '2025-11-25',
     supported: supportsToolsCall,
     supportsToolsCall,
     supportsCancel: typeof tasks.cancel === 'object' && tasks.cancel !== null,
@@ -122,7 +170,7 @@ export function getTaskNegotiation(client: Client | undefined): TaskNegotiation 
 
 /** Drop a cached negotiation (used by tests and explicit reconnect paths). */
 export function invalidateTaskNegotiation(client: Client | undefined): void {
-  if (client) negotiationCache.delete(client as unknown as object);
+  if (client) { negotiationCache.delete(client as unknown as object); discoveryCache.delete(client); }
 }
 
 /** Per-tool `execution.taskSupport` declaration, cached briefly per client. */
@@ -186,7 +234,7 @@ export async function decideTaskAugmentation(
   client: Client | undefined,
   toolName: string,
 ): Promise<TaskAugmentationDecision> {
-  const negotiation = getTaskNegotiation(client);
+  const negotiation = await discoverTaskNegotiation(client);
   if (!client || !negotiation.supportsToolsCall) {
     return {
       request: false,
@@ -196,6 +244,7 @@ export async function decideTaskAugmentation(
         : 'MCP Tasks client support disabled',
     };
   }
+  if (negotiation.generation === '2026-07-28') return { request: true, negotiation, reason: 'server advertises Tasks extension' };
 
   const support = await getToolTaskSupport(client, toolName);
   if (support !== 'required' && support !== 'optional') {
@@ -216,9 +265,19 @@ export async function decideTaskAugmentation(
 }
 
 /** Build the per-request task augmentation params fragment. */
-export function buildTaskAugmentation(ttlMs?: number): { task: { ttl?: number } } {
+export function buildTaskAugmentation(ttlMs?: number, generation: McpTaskGeneration = '2025-11-25'): { task?: { ttl?: number }; _meta?: Record<string, unknown> } {
+  if (generation === '2026-07-28') return { _meta: { 'io.modelcontextprotocol/clientCapabilities': { extensions: { [MCP_TASKS_EXTENSION_ID]: {} } } } };
   return { task: { ...(typeof ttlMs === 'number' && ttlMs > 0 ? { ttl: ttlMs } : {}) } };
 }
+
+export const modernToolResultSchema = z.custom<Record<string, unknown>>(value => {
+  if (!isBoundedTaskJson(value) || !value || typeof value !== 'object') return false;
+  return 'resultType' in value && value.resultType === 'task'
+    ? parseCreateTaskResult(value, '2026-07-28').ok : isValidTaskToolResult(value);
+});
+const modernStatusSchema = z.custom<Record<string, unknown>>(value => parseTaskStatusResult(value, '2026-07-28').ok);
+const modernAckSchema = z.custom<Record<string, unknown>>(value => isBoundedTaskJson(value) && !!value && typeof value === 'object'
+  && 'resultType' in value && value.resultType === 'complete' && !('task' in value) && !('taskId' in value));
 
 interface RequestCapableClient {
   request: (req: unknown, schema?: unknown, opts?: unknown) => Promise<unknown>;
@@ -234,10 +293,10 @@ async function taskRequest(
   method: string,
   taskId: string,
   schema: unknown,
-  options?: { signal?: AbortSignal; timeout?: number },
+  options?: { signal?: AbortSignal; timeout?: number; generation?: McpTaskGeneration },
 ): Promise<unknown> {
   return (client as unknown as RequestCapableClient).request(
-    { method, params: { taskId } },
+    { method, params: { taskId, ...(options?.generation === '2026-07-28' ? buildTaskAugmentation(undefined, options.generation) : {}) } },
     schema,
     { ...(options?.signal ? { signal: options.signal } : {}), ...(options?.timeout ? { timeout: options.timeout } : {}) },
   );
@@ -251,10 +310,11 @@ export type TaskStatusOutcome =
 export async function fetchTaskStatus(
   client: Client,
   taskId: string,
-  options?: { signal?: AbortSignal; timeout?: number },
+  options?: { signal?: AbortSignal; timeout?: number; generation?: McpTaskGeneration },
 ): Promise<TaskStatusOutcome> {
-  const raw = await taskRequest(client, MCP_TASK_METHODS.get, taskId, GetTaskResultSchema, options);
-  const parsed = parseTaskStatusResult(raw);
+  const raw = await taskRequest(client, MCP_TASK_METHODS.get, taskId, options?.generation === '2026-07-28' ? modernStatusSchema : GetTaskResultSchema, options);
+  const parsed = parseTaskStatusResult(raw, options?.generation);
+  if (parsed.ok && parsed.task.taskId !== taskId) return { ok: false, reason: 'task identity mismatch' };
   return parsed.ok ? { ok: true, task: parsed.task } : { ok: false, reason: parsed.reason };
 }
 
@@ -262,8 +322,13 @@ export async function fetchTaskStatus(
 export async function fetchTaskPayload(
   client: Client,
   taskId: string,
-  options?: { signal?: AbortSignal; timeout?: number },
+  options?: { signal?: AbortSignal; timeout?: number; generation?: McpTaskGeneration; terminalTask?: McpTask },
 ): Promise<unknown> {
+  if (options?.generation === '2026-07-28') {
+    const outcome = options.terminalTask?.result !== undefined ? { ok: true as const, task: options.terminalTask } : await fetchTaskStatus(client, taskId, options);
+    if (!outcome.ok || outcome.task.taskId !== taskId || outcome.task.generation !== options.generation || outcome.task.status !== 'completed' || !isValidTaskToolResult(outcome.task.result)) throw new Error('Modern task has no validated terminal result');
+    return outcome.task.result;
+  }
   return taskRequest(
     client,
     MCP_TASK_METHODS.result,
@@ -282,15 +347,29 @@ export async function cancelRemoteTask(
   client: Client,
   taskId: string,
   timeoutMs = 10_000,
-): Promise<TaskStatusOutcome | undefined> {
+  generation: McpTaskGeneration = '2025-11-25',
+): Promise<TaskStatusOutcome | { ok: true; acknowledged: true } | undefined> {
   try {
-    const raw = await taskRequest(client, MCP_TASK_METHODS.cancel, taskId, CancelTaskResultSchema, {
+    const raw = await taskRequest(client, MCP_TASK_METHODS.cancel, taskId, generation === '2026-07-28' ? modernAckSchema : CancelTaskResultSchema, {
       timeout: timeoutMs,
+      generation,
     });
+    if (generation === '2026-07-28') return modernAckSchema.safeParse(raw).success ? { ok: true, acknowledged: true } : { ok: false, reason: 'invalid modern cancellation acknowledgement' };
     const parsed = parseTaskStatusResult(raw);
     return parsed.ok ? { ok: true, task: parsed.task } : { ok: false, reason: parsed.reason };
   } catch (error) {
     log.warn(`Best-effort tasks/cancel failed for task ${taskId}:`, error);
     return undefined;
   }
+}
+
+export async function updateRemoteTask(client: Client, taskId: string, inputResponses: Record<string, unknown>,
+  options: { signal?: AbortSignal; timeout?: number; generation?: McpTaskGeneration } = {}): Promise<void> {
+  if (options.generation !== '2026-07-28' || !isBoundedTaskJson(inputResponses) || Object.keys(inputResponses).length > 32
+    || Object.keys(inputResponses).some(key => !key || key.length > 512)
+    || Object.values(inputResponses).some(value => !ElicitResultSchema.safeParse(value).success && !CreateMessageResultSchema.safeParse(value).success && !ListRootsResultSchema.safeParse(value).success)) throw new Error('Invalid modern task input responses');
+  const raw = await (client as unknown as RequestCapableClient).request({ method: 'tasks/update', params: {
+    taskId, inputResponses, ...buildTaskAugmentation(undefined, options.generation),
+  } }, modernAckSchema, { signal: options.signal, timeout: options.timeout });
+  if (!modernAckSchema.safeParse(raw).success) throw new Error('Invalid modern task update acknowledgement');
 }
