@@ -210,6 +210,7 @@ test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mand
   const resolveInActualNode = () => execFileSync(process.execPath, ['-e',
     "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('owned-probe-dependency'))", entryPoint], {
     encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'pipe'], env: {
+      NODE_ENV: 'test',
       HOME: path.join(directory, 'resolution-home'), USERPROFILE: path.join(directory, 'resolution-home'),
       ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot! } : {}),
     },

@@ -78,7 +78,8 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
   for (const [name, value] of Object.entries(workerRuntimeCredentials(config))) environment.set(name, value);
   if (authority.policy.packageRunner) {
     const runner = authority.policy.packageRunner;
-    try { assertPackageRunnerResolution(authority.policy.sourceRoot, authority.policy.entryPoint, config.cwd!, runner, trustedHostPackageRunnerContext(config)); }
+    try { assertPackageRunnerResolution(authority.policy.sourceRoot, authority.policy.entryPoint, config.cwd!, runner,
+      { ...trustedHostPackageRunnerContext(config), inspectClosure: false }); }
     catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
     const cache = [...environment].find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];
     if (!cache) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
@@ -219,7 +220,8 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
         if (!sameTrustedHostConsent(finalConfig, captured)
             || await resolveRuntimeHomeIsolation(finalConfig) !== (initial.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
         checkLive();
-        try { assertPackageRunnerResolution(initial.policy.sourceRoot, initial.policy.entryPoint, captured.cwd!, initial.policy.packageRunner, trustedHostPackageRunnerContext(captured)); }
+        try { assertPackageRunnerResolution(initial.policy.sourceRoot, initial.policy.entryPoint, captured.cwd!, initial.policy.packageRunner,
+          { ...trustedHostPackageRunnerContext(captured), inspectClosure: false }); }
         catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
       }
       await start();
