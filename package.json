@@ -63,6 +63,7 @@
     "dockerbuild": "gh workflow run publish-image.yml -R mario-andreschak/FLUJO --ref main",
     "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
     "typecheck": "next typegen && tsc --noEmit -p tsconfig.json",
+    "verify:avatar-sdk": "node scripts/verify-avatar-sdk.mjs",
     "typecheck:mcp": "npm run typecheck --workspaces --if-present",
     "test:mcp": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/mcp",
     "test:mcp-process-boundary": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts",
