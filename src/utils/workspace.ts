@@ -626,8 +626,10 @@ async function createWorkspaceWithinNamespaceLock(workspace: string): Promise<Wo
 
   try {
     await ensureWorkspaceDirs(name);
-    const { ensureShippedWorkspacePackages } = await import('@/backend/services/mcp/shippedWorkspacePackages');
-    await ensureShippedWorkspacePackages(dir);
+    // Package bytes and persisted launch records are one creation contract.
+    // Provision under the new namespace without starting secret-dependent services.
+    const { migrateShippedMcpServers } = await import('@/backend/services/mcp/shippedServerMigration');
+    await runWithWorkspace(name, () => migrateShippedMcpServers());
   } catch (error) {
     // This call created `dir`, so a failed layout initialization can safely
     // roll it back without touching any pre-existing workspace.

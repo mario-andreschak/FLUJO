@@ -1,6 +1,7 @@
 /** The hosted contract is deliberately focused; broad coverage remains local/manual. */
 export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/workspace/workspaceListRoute.test.ts',
+  '__tests__/workspace/workspaceCreateMcpRecords.test.ts',
   '__tests__/workspace/workspaceRouteWrapper.test.ts',
   '__tests__/mcp/toolDiscoveryPagination.test.ts',
   '__tests__/mcp/storedTransportAdmission.test.ts',
