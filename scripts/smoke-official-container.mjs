@@ -246,11 +246,12 @@ console.log(JSON.stringify({sourceSha256:b.sourceSha256,compiledSha256:digest,ui
   evidence.health.cliSilentExitContract = true;
 
   const graph = await snapshot();
-  const launcher = graph.processes.find(value => value.cmd.some(argument => argument.endsWith('scripts/launch-next.mjs')));
+  const launcher = graph.processes.find(value => /(?:^|\/)node$/.test(value.cmd[0])
+    && value.cmd[1]?.endsWith('scripts/launch-next.mjs'));
   assert.ok(launcher && launcher.uid === 1000);
   const tini = graph.processes.find(value => value.pid === launcher.ppid);
   assert.ok(tini && tini.uid === 1000 && tini.cmd[0] === '/usr/bin/tini' && tini.cmd.includes('-s'));
-  const next = graph.processes.find(value => value.ppid === launcher.pid && value.cmd.some(argument => argument.startsWith('next-server')));
+  const next = graph.processes.find(value => value.ppid === launcher.pid && value.cmd[0]?.startsWith('next-server'));
   assert.ok(next && next.uid === 1000);
   if (outerInit) { assert.notEqual(tini.pid, 1); assert.equal(tini.ppid, 1); }
   else assert.equal(tini.pid, 1);
