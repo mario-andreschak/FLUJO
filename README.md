@@ -10,6 +10,15 @@
  </picture>
 </a>
 
+# Soon(tm)
+world. one avatar, one voice, and work that happens in the background. 
+<img width="960" height="879" alt="image" src="https://github.com/user-attachments/assets/87532478-460c-4439-b635-f7b9020e181a" />
+one virtual home to bring everything into one place.
+
+swarms. bring flujo into the cloud. 1 machine, 10 machines, 100 machines. 10000 Agents working together
+<img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/bee2aa60-ab8f-46b8-9e57-225529bda2fe" />
+swarms of agents - deployed with your claude/codex subscription, and a copy of your local MCP configuration.
+
 # FLUJO
 
 ### Build private AI agents visually. Run them your way.
