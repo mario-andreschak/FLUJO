@@ -54,6 +54,10 @@ Review the configured server through
 `GET /api/mcp/servers/<name>/host-consent?runtimeHome=isolated` (or `host`), using
 the installation's private owner bearer and selected workspace. Inspect the
 returned package revision, source, cwd, capabilities and `revision.launchArgs`.
+`revision.dependencyGraph` lists the local npm/package runtime dependency and
+peer graph, including optional dependencies that are absent. Mandatory missing
+dependencies, mismatched package identities and ambient Node dependency search
+directories refuse inspection even if the remaining bytes were fingerprinted.
 Approve that exact `policyDigest` using POST to the same endpoint with
 `runtimeHome`, `reviewedDigest` and a future `expiresAt` within 30 days. The
 existing owner approval transaction rechecks the proposal, private authority
