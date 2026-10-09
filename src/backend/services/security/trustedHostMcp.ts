@@ -40,6 +40,19 @@ export const TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES = [
   ...(process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH'] : []),
 ] as const;
 
+/** The child module search roots follow the reviewed effective home, never the
+ * inspecting FLUJO process's unrelated HOME. No ambient NODE_PATH is inherited. */
+export function trustedHostPackageRunnerContext(config: MCPStdioConfig, runtimeHome?: 'host' | 'isolated') {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  const mode = runtimeHome ?? policy.runtimeHome;
+  const environment = trustedHostEnvironment(config);
+  const homeName = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+  const configured = [...environment].find(([name]) => process.platform === 'win32' ? name.toUpperCase() === homeName : name === homeName)?.[1];
+  const home = mode === 'isolated' ? path.join(getWorkspaceDataDir(), 'userdata', 'mcp-runtime',
+    createHash('sha256').update(config.name).digest('hex').slice(0, 24), 'home') : configured ?? '';
+  return { command: config.command, home };
+}
+
 /** A request for explicit host trust, never effective approval or an OS sandbox. */
 export const trustedHostMcpPolicySchema = z.object({
   schemaVersion: z.literal(1),
@@ -414,7 +427,7 @@ export function assertTrustedHostMcpAllowed(config: MCPStdioConfig): z.infer<typ
     if (fingerprintTrustedHostExecutable(config.command) !== policy.executableDigest
         || fingerprintTrustedHostSource(policy.sourceRoot) !== policy.sourceDigest) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
     if (policy.packageRunner) {
-      assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, config.cwd!, policy.packageRunner);
+      assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, config.cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config));
       if (fingerprintTrustedHostExecutable(policy.packageRunner.shell) !== policy.packageRunner.shellDigest) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
     }
     // Fingerprinting can take time. An approval that expired meanwhile cannot
@@ -643,10 +656,10 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
     check(source === before.policy.sourceDigest, 'source-digest');
     if (before.policy.packageRunner) {
       const runner = before.policy.packageRunner;
-      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner);
+      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));
       const shell = await hashStableFileAsync(runner.shell, MAX_EXECUTABLE_BYTES, signal);
       check(shell.digest === runner.shellDigest, 'executable-digest');
-      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner);
+      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));
     }
   } catch {
     try {

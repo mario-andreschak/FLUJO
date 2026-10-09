@@ -9,9 +9,16 @@ import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource,
 /** Materialize genuine installed npm and an offline synthetic package; no installer runs. */
 export function materializeProtectedPackageRunner(serverName: string, sourceCode: string): MCPStdioConfig {
   const sourceRoot = path.join(getWorkspaceDataDir(), 'mcp-servers', 'reviewed-runner-' + createHash('sha256').update(serverName).digest('hex').slice(0, 12));
-  const npmSource = process.env.npm_execpath ? path.dirname(path.dirname(process.env.npm_execpath))
-    : process.platform === 'win32' ? path.join(process.env.ProgramFiles!, 'nodejs', 'node_modules', 'npm')
-      : path.dirname(require.resolve('npm/package.json'));
+  const candidates = [
+    ...(process.env.npm_execpath ? [path.dirname(path.dirname(process.env.npm_execpath))] : []),
+    path.resolve(path.dirname(process.execPath), '..', 'lib', 'node_modules', 'npm'),
+    path.join(path.dirname(process.execPath), 'node_modules', 'npm'),
+    ...(process.platform === 'win32' && process.env.ProgramFiles
+      ? [path.join(process.env.ProgramFiles, 'nodejs', 'node_modules', 'npm')] : []),
+  ];
+  const npmSource = candidates.find(candidate => fs.existsSync(path.join(candidate, 'package.json'))
+    && fs.existsSync(path.join(candidate, 'bin', 'npx-cli.js')));
+  if (!npmSource) throw new Error('A genuine installed npm closure is required for this fixture');
   fs.mkdirSync(sourceRoot, { recursive: true });
   fs.cpSync(npmSource, path.join(sourceRoot, 'npm'), { recursive: true, dereference: true });
   const packageDirectory = path.join(sourceRoot, 'project');
@@ -22,7 +29,13 @@ export function materializeProtectedPackageRunner(serverName: string, sourceCode
   fs.writeFileSync(path.join(packageDirectory, 'package.json'), JSON.stringify({ name: 'reviewed-project',
     version: '1.0.0', private: true, dependencies: { 'owned-probe': '1.0.0' } }));
   fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'owned-probe',
-    version: '1.0.0', bin: { 'owned-probe': 'server.cjs' } }));
+    version: '1.0.0', bin: { 'owned-probe': 'server.cjs' },
+    dependencies: { 'owned-probe-dependency': '1.0.0' } }));
+  const dependency = path.join(packageDirectory, 'node_modules', 'owned-probe-dependency');
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(path.join(dependency, 'package.json'), JSON.stringify({
+    name: 'owned-probe-dependency', version: '1.0.0', main: 'index.cjs' }));
+  fs.writeFileSync(path.join(dependency, 'index.cjs'), "module.exports = 'reviewed-dependency';\n");
   fs.writeFileSync(path.join(packageRoot, 'server.cjs'), sourceCode, { mode: 0o700 });
   // Source-bound regular files, rather than links or an unreviewed shim generator.
   fs.writeFileSync(path.join(bins, 'owned-probe'), `#!/bin/sh\nbasedir=\${0%/*}\nexec "${process.execPath}" "$basedir/../owned-probe/server.cjs" "$@"\n`, { mode: 0o700 });
@@ -34,7 +47,13 @@ export function materializeProtectedPackageRunner(serverName: string, sourceCode
   const runtimeHome = path.join(getWorkspaceDataDir(), 'userdata', 'mcp-runtime',
     createHash('sha256').update(serverName).digest('hex').slice(0, 24), 'home');
   const cwdDirectory = path.join(path.dirname(runtimeHome), 'cwd');
-  fs.mkdirSync(cwdDirectory, { recursive: true });
+  // Production requires an already occupied per-server anchor to be private.
+  // A recursive mkdir without a mode materializes that anchor as 0755 on Linux.
+  // These are newly owned fixture paths; do not weaken admission or repair an
+  // existing directory with chmod.
+  fs.mkdirSync(path.dirname(runtimeHome), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(runtimeHome, { mode: 0o700 });
+  fs.mkdirSync(cwdDirectory, { mode: 0o700 });
   const cwd = cwdDirectory;
   const env = { NPM_CONFIG_CACHE: path.join(runtimeHome, '.npm'),
     PATH: [bins, path.dirname(process.execPath)].join(path.delimiter),
