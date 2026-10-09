@@ -656,7 +656,8 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
     check(source === before.policy.sourceDigest, 'source-digest');
     if (before.policy.packageRunner) {
       const runner = before.policy.packageRunner;
-      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));
+      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner,
+        { ...trustedHostPackageRunnerContext(captured), inspectClosure: false });
       const shell = await hashStableFileAsync(runner.shell, MAX_EXECUTABLE_BYTES, signal);
       check(shell.digest === runner.shellDigest, 'executable-digest');
       assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));

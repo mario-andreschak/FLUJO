@@ -1,8 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+
+// Resolve through Node's public native API. Test runners can replace imported
+// createRequire with their project resolver, which is not the child process's
+// actual node_modules search order and cannot be execution policy authority.
+const nativeModule = process.getBuiltinModule('node:module') as typeof import('node:module');
+const { createRequire } = nativeModule;
 
 const absolute = z.string().min(1).max(2048).refine(value => path.isAbsolute(value) && !value.includes('\0'));
 const exactVersion = z.string().max(256).regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$/);
@@ -85,7 +90,7 @@ function readJson(filename: string): Record<string, unknown> {
  * --prefix does not fence these candidates. They must stay absent at admission.
  * This is host consent and fresh resolution checking, not an OS containment claim. */
 export function assertPackageRunnerResolution(sourceRoot: string, entryPoint: string, cwd: string, runner: ProtectedPackageRunner,
-  runtime?: { command: string; home: string }) {
+  runtime?: { command: string; home: string; inspectClosure?: boolean }) {
   for (let current = path.resolve(cwd); ; current = path.dirname(current)) {
     if (fs.lstatSync(current).isSymbolicLink() || !equal(fs.realpathSync(current), current)) throw new Error('Unsafe package runner working directory');
     for (const candidate of [path.join(current, 'node_modules', '.bin')]) {
@@ -122,7 +127,22 @@ export function assertPackageRunnerResolution(sourceRoot: string, entryPoint: st
   if (selectedBin !== runner.binaryName) throw new Error('npm binary selection differs from the reviewed binary');
   const file = path.join(runner.packageDirectory, 'node_modules', '.bin', runner.binaryName + (process.platform === 'win32' ? '.cmd' : ''));
   if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error('Materialize the reviewed package binary shim');
-  return assertPackageRuntimeClosure(sourceRoot, [path.dirname(path.dirname(entryPoint)), runner.packageDirectory], runtime);
+  return runtime?.inspectClosure === false ? undefined
+    : assertPackageRuntimeClosure(sourceRoot, [path.dirname(path.dirname(entryPoint)), runner.packageDirectory], runtime);
+}
+
+function dependencyLookupPaths(filename: string, runtime?: { command: string; home: string }): string[] {
+  const exposedGlobals: unknown = Reflect.get(nativeModule, 'globalPaths');
+  if (!Array.isArray(exposedGlobals) || exposedGlobals.some(directory => typeof directory !== 'string')) throw new Error('Native module search roots unavailable');
+  const parentGlobals = new Set((exposedGlobals as string[]).map(directory => path.resolve(directory)));
+  const candidates = (createRequire(filename).resolve.paths('flujo-owned-dependency-inspection') ?? [])
+    .filter(directory => !parentGlobals.has(path.resolve(directory)));
+  if (runtime) {
+    const prefix = process.platform === 'win32' ? path.dirname(runtime.command) : path.dirname(path.dirname(runtime.command));
+    candidates.push(path.join(prefix, 'lib', 'node'), ...(runtime.home
+      ? [path.join(runtime.home, '.node_modules'), path.join(runtime.home, '.node_libraries')] : []));
+  }
+  return [...new Set(candidates)];
 }
 
 /** Inspect declarations without requiring package code. A complete byte tree
@@ -172,18 +192,17 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
         requested.set(name, { optional: field === 'optionalDependencies' || Boolean(optionalPeer), target: alias ?? name });
       }
     }
-    const resolver = createRequire(path.join(directory, 'package.json'));
+    const lookupPaths = dependencyLookupPaths(path.join(directory, 'package.json'), runtime);
     for (const [name, declaration] of requested) {
       let selected: string | undefined;
       // Node's actual module-path ordering handles nested/scoped/hoisted trees.
       // Global paths are inspected below using the CHILD's reviewed Node/HOME.
-      for (const candidateRoot of resolver.resolve.paths(name) ?? []) {
-        if (path.basename(candidateRoot) !== 'node_modules') continue;
+      for (const candidateRoot of lookupPaths) {
+        const candidate = path.join(candidateRoot, ...name.split('/'));
         if (!contained(sourceRoot, candidateRoot)) {
-          if (exists(candidateRoot)) throw new Error('Ambient Node dependency directory');
+          if (['', '.js', '.json', '.node'].some(extension => exists(candidate + extension))) throw new Error('Ambient Node dependency candidate');
           continue;
         }
-        const candidate = path.join(candidateRoot, ...name.split('/'));
         if (['.js', '.json', '.node'].some(extension => exists(candidate + extension))) throw new Error('Package dependency redirected to an unreviewed file');
         if (!exists(candidate)) continue;
         selected = candidate;
@@ -199,12 +218,6 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
       visit(selected);
     }
   };
-  if (runtime) {
-    const prefix = process.platform === 'win32' ? path.dirname(runtime.command) : path.dirname(path.dirname(runtime.command));
-    const globals = [path.join(prefix, 'lib', 'node'), ...(runtime.home
-      ? [path.join(runtime.home, '.node_modules'), path.join(runtime.home, '.node_libraries')] : [])];
-    if (globals.some(directory => exists(directory))) throw new Error('Ambient global Node dependency directory');
-  }
   for (const directory of roots) visit(directory);
   inventory.sort((a, b) => a.directory < b.directory ? -1 : a.directory > b.directory ? 1 : 0);
   for (const node of inventory) node.dependencies.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);

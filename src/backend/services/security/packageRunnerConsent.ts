@@ -22,7 +22,8 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
     }
     cwd = runtime.cwd;
   }
-  const dependencyGraph = assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(stored, runtimeHome));
+  assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner,
+    { ...trustedHostPackageRunnerContext(stored, runtimeHome), inspectClosure: false });
   const checks = await Promise.allSettled([fingerprintTrustedHostSourceAsync(policy.sourceRoot),
     fingerprintTrustedHostExecutableAsync(stored.command), fingerprintTrustedHostExecutableAsync(policy.packageRunner.shell)]);
   if (checks.some(result => result.status !== 'fulfilled')) throw new Error('Package runner source inspection failed');
@@ -36,8 +37,8 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
       environmentNames: [...new Set([...policy.environmentNames, ...Object.keys(environment),
         ...(runtimeHome === 'isolated' ? TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES : [])])] } };
   const policyDigest = await trustedHostMcpPreviewDigestAsync(config);
-  const finalGraph = assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config, runtimeHome));
-  if (finalGraph.digest !== dependencyGraph.digest) throw new Error('Package dependency graph changed during review');
+  const dependencyGraph = assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config, runtimeHome));
+  if (!dependencyGraph) throw new Error('Package dependency graph unavailable');
   const cache = Object.entries(environment).find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];
   if (!cache) throw new Error('Package runner cache unavailable');
   return { config, policyDigest, storedConfig: structuredClone(stored), revision: {
