@@ -80,12 +80,37 @@ managed runner provides an outer init. Signals still go to the launcher;
 FLUJO's generation-bound process ownership and shutdown behavior remain in
 the application.
 
-Run `node scripts/test-container-init.mjs IMAGE` against a locally built image
-and repeat with `--outer-init`. The probe starts a synthetic HTTP process and
-an independently exiting parent/descendant, verifies the live descendant's
-process identity, requires its `/proc` entry to disappear after termination,
-checks the listener stays alive, and checks graceful SIGTERM forwarding.
-It uses an owned disposable container without network or host data. This
-qualifies init behavior; it does not substitute for the FLUJO startup and
-snapshot recovery smoke above. `--expect-zombie` provides a negative control
-for an image that starts Node directly without an init.
+Run the three rows against one locally built image with its non-root default:
+
+```sh
+node scripts/test-container-init.mjs IMAGE --direct-node --expect-zombie
+node scripts/test-container-init.mjs IMAGE
+node scripts/test-container-init.mjs IMAGE --outer-init
+node scripts/test-container-init-cleanup.mjs IMAGE
+```
+
+The probe resolves the local image ID before creating its disposable container
+and prohibits pulling. It holds a detached descendant alive until its parent
+exits, checks PID/start identity and actual non-root UIDs, and requires adoption
+by the image's Tini. The nested row specifically requires the inner Tini to
+adopt the descendant, exercising `-s`; adoption by Docker's outer init alone
+does not pass. [Tini documents this subreaper behavior](https://github.com/krallin/tini#subreaping).
+
+After explicitly releasing the descendant, the probe checks its exit receipt
+and closed listener, then distinguishes a same-identity zombie from an absent
+`/proc` entry. The main listener must stay alive through reaping. During a
+held cooperative SIGTERM shutdown, an independent detached session must keep
+its live identity and receive no signal. The main listener closes and the
+container exits with code zero only after the shutdown gate is released.
+Detached processes are not expected to survive container exit.
+
+Each observation has a wall deadline that also bounds its Docker commands.
+Containers use no network, ports or host-data mounts, a read-only filesystem,
+an owned `/tmp` tmpfs, dropped capabilities and no new privileges. Cleanup
+uses the created container ID and verifies its ownership label and image ID;
+the cleanup fault probe discards a real creation reply and verifies recovery.
+The init probe
+overrides the image command with a synthetic listener; it qualifies init
+behavior and does not substitute for actual FLUJO startup, worker-launch,
+provider shutdown or snapshot recovery acceptance above. The direct-Node row
+is the expected-zombie negative control. See the [local lifecycle evidence](audits/2026-10-09-container-init-lifecycle.md).

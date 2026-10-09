@@ -1,50 +1,126 @@
-// Local lifecycle acceptance: real adopted orphan, proc identity and signal forwarding.
+// Local init acceptance. This synthetic listener is not a FLUJO image smoke.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
-const image = process.argv[2];
-assert.ok(image && !image.startsWith('-'), 'Usage: node scripts/test-container-init.mjs IMAGE [--outer-init] [--expect-zombie]');
-const name = `flujo-init-test-${randomUUID()}`;
-const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: 30_000 }).trim();
-const expectZombie = process.argv.includes('--expect-zombie');
-const child = `const fs=require('fs');fs.writeFileSync('/tmp/orphan.pid',String(process.pid));setTimeout(()=>process.exit(0),1500);`;
-const parent = `const {spawn}=require('child_process');const child=spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'});child.unref();`;
-const main = `const {spawn}=require('child_process');const server=require('http').createServer((q,s)=>s.end('alive')).listen(4200,'127.0.0.1');server.on('listening',()=>spawn(process.execPath,['-e',${JSON.stringify(parent)}],{stdio:'ignore'}));process.on('SIGTERM',()=>server.close(()=>{console.log('GRACEFUL_SHUTDOWN');process.exit(0)}));`;
+const [image, ...flags] = process.argv.slice(2);
+assert.ok(image && !image.startsWith('-'), 'Usage: node scripts/test-container-init.mjs IMAGE [--outer-init] [--expect-zombie] [--direct-node]');
+const allowed = new Set(['--outer-init', '--expect-zombie', '--direct-node']);
+assert.ok(flags.every(flag => allowed.has(flag)) && new Set(flags).size === flags.length, 'Unknown or duplicate option');
+const expectZombie = flags.includes('--expect-zombie');
+const directNode = flags.includes('--direct-node');
+const owner = randomUUID();
+const name = `flujo-init-test-${owner}`;
+let activeDeadline;
+const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: activeDeadline ? Math.max(1, Math.min(30_000, activeDeadline - Date.now())) : 30_000, maxBuffer: 1024 * 1024 }).trim();
+const imageId = JSON.parse(docker('image', 'inspect', image))[0].Id;
+const child = `const fs=require('fs');const server=require('http').createServer((q,s)=>s.end('descendant alive')).listen(4202,'127.0.0.1');server.on('listening',()=>{fs.writeFileSync('/tmp/orphan.pid',String(process.pid));const timer=setInterval(()=>{if(fs.existsSync('/tmp/orphan.release')){clearInterval(timer);server.close(()=>{fs.writeFileSync('/tmp/orphan.exit','listener closed');process.exit(0)})}},25)});`;
+const parent = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/parent.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'}).unref();setInterval(()=>{if(fs.existsSync('/tmp/parent.release'))process.exit(0)},25);`;
+const control = `const fs=require('fs');fs.writeFileSync('/tmp/control.pid',String(process.pid));process.on('SIGTERM',()=>fs.writeFileSync('/tmp/control.term','received'));setInterval(()=>{},1000);`;
+const main = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/main.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(control)}],{detached:true,stdio:'ignore'}).unref();const server=require('http').createServer((q,s)=>s.end('alive')).listen(4200,'127.0.0.1');server.on('listening',()=>spawn(process.execPath,['-e',${JSON.stringify(parent)}],{stdio:'ignore'}).once('exit',(code,signal)=>fs.writeFileSync('/tmp/parent.exit',JSON.stringify({code,signal}))));process.on('SIGTERM',()=>{fs.writeFileSync('/tmp/main.term','received');server.close(()=>{console.log('LISTENER_CLOSED');setInterval(()=>{if(fs.existsSync('/tmp/main.release')){console.log('GRACEFUL_SHUTDOWN');process.exit(0)}},25)})});`;
 const pause = () => new Promise(resolve => setTimeout(resolve, 100));
-const inspect = () => JSON.parse(docker('inspect', name))[0];
+async function until(read, accepts, description) {
+  const deadline = Date.now() + 15_000;
+  const previousDeadline = activeDeadline;
+  activeDeadline = deadline;
+  let last;
+  try {
+    do { last = read(); if (accepts(last)) return last; await pause(); } while (Date.now() < deadline);
+    assert.fail(`Timed out: ${description}; last=${JSON.stringify(last)}`);
+  } finally { activeDeadline = previousDeadline; }
+}
+let containerId;
+const inspect = () => JSON.parse(docker('inspect', containerId))[0];
+const execute = code => docker('exec', containerId, 'node', '-e', code);
+const readFile = file => execute(`const fs=require('fs');try{process.stdout.write(fs.readFileSync(${JSON.stringify(file)},'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}`);
+const snapshot = pid => {
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, 'Invalid process ID');
+  return JSON.parse(execute(`const fs=require('fs');try{const raw=fs.readFileSync('/proc/${pid}/stat','utf8');const f=raw.slice(raw.lastIndexOf(')')+2).trim().split(/\\s+/);const status=fs.readFileSync('/proc/${pid}/status','utf8');process.stdout.write(JSON.stringify({pid:${pid},state:f[0],ppid:Number(f[1]),pgid:Number(f[2]),sid:Number(f[3]),birth:f[19],uid:Number(status.match(/^Uid:\\s+(\\d+)/m)[1]),command:fs.readFileSync('/proc/${pid}/cmdline','utf8').split('\\0').filter(Boolean)}))}catch(e){if(e.code!=='ENOENT')throw e;process.stdout.write('null')}`));
+};
+const sameLive = (current, original, label) => {
+  assert.ok(current && current.birth === original.birth && !['Z', 'X', 'x'].includes(current.state), `${label} is absent, replaced or terminated`);
+  assert.ok(current.uid > 0, `${label} is running as root`);
+};
+const release = label => execute(`require('fs').writeFileSync('/tmp/${label}.release','release')`);
 try {
-  docker('run', '-d', '--name', name, '--network', 'none', '--read-only', '--no-healthcheck',
+  containerId = docker('run', '-d', '--pull=never', '--name', name, '--label', `io.flujo.init-test-owner=${owner}`, '--network', 'none', '--read-only', '--no-healthcheck',
     '--tmpfs', '/tmp:rw,nosuid,nodev,size=16777216', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    ...(process.argv.includes('--outer-init') ? ['--init'] : []), image, 'node', '-e', main);
-  let pid;
-  for (let attempt = 0; attempt < 40 && !pid; attempt++) {
-    const value = docker('exec', name, 'node', '-e', "const fs=require('fs');if(fs.existsSync('/tmp/orphan.pid'))process.stdout.write(fs.readFileSync('/tmp/orphan.pid')); ");
-    if (value) pid = Number(value);
-    else await pause();
+    ...(flags.includes('--outer-init') ? ['--init'] : []), ...(directNode ? ['--entrypoint', 'node'] : []), imageId,
+    ...(directNode ? ['-e', main] : ['node', '-e', main]));
+  const pids = {};
+  for (const label of ['main', 'parent', 'orphan', 'control']) {
+    pids[label] = Number(await until(() => readFile(`/tmp/${label}.pid`), value => /^\d+$/.test(value), `${label} readiness`));
   }
-  assert.ok(Number.isInteger(pid) && pid > 1, 'Orphan did not start');
-  const readStat = () => docker('exec', name, 'node', '-e', `const fs=require('fs');try{process.stdout.write(fs.readFileSync('/proc/${pid}/stat','utf8'))}catch(e){if(e.code!=='ENOENT')throw e}`);
-  const before = readStat();
-  assert.ok(before, 'Orphan exited before live identity observation');
-  const beforeFields = before.slice(before.lastIndexOf(')') + 2).split(' ');
-  const identity = beforeFields[19];
-  let after;
-  for (let attempt = 0; attempt < 50; attempt++) {
-    after = readStat();
-    if (!after || after.slice(after.lastIndexOf(')') + 2).split(' ')[0] === 'Z') break;
-    await pause();
+  const before = Object.fromEntries(Object.entries(pids).map(([label, pid]) => [label, snapshot(pid)]));
+  for (const [label, current] of Object.entries(before)) sameLive(current, current, label);
+  assert.equal(before.orphan.ppid, pids.parent, 'Held orphan was not the transient parent\'s descendant');
+  assert.equal(before.parent.ppid, pids.main, 'Transient parent did not belong to the main process');
+  assert.equal(before.control.ppid, pids.main, 'Independent control did not belong to the main process');
+  for (const label of ['orphan', 'control']) {
+    assert.equal(before[label].sid, pids[label], `${label} did not create a detached session`);
+    assert.equal(before[label].pgid, pids[label], `${label} did not create a detached process group`);
   }
-  // Give the init a bounded opportunity to reap, never equate zombie with absent PID.
-  if (!expectZombie) for (let attempt = 0; attempt < 20 && after; attempt++) { await pause(); after = readStat(); }
+  assert.equal(execute("require('http').get('http://127.0.0.1:4202',r=>r.pipe(process.stdout)).on('error',e=>{throw e})"), 'descendant alive');
+  release('parent');
+  assert.deepEqual(JSON.parse(await until(() => readFile('/tmp/parent.exit'), value => value !== '', 'direct parent exit receipt')), {code: 0, signal: null});
+  assert.equal(snapshot(pids.parent), null, 'Main did not reap its direct child');
+  const adopted = await until(() => snapshot(pids.orphan), value => value && value.ppid !== pids.parent, 'live descendant adoption');
+  sameLive(adopted, before.orphan, 'Adopted orphan');
+  const adopter = snapshot(adopted.ppid);
+  assert.ok(adopter, 'Adopter is absent');
   if (expectZombie) {
-    const fields = after.slice(after.lastIndexOf(')') + 2).split(' ');
-    assert.equal(fields[0], 'Z'); assert.equal(fields[19], identity);
-  } else assert.equal(after, '', 'Terminated orphan remains in /proc');
-  assert.equal(inspect().State.Running, true, 'Main application stopped while reaping');
-  assert.equal(docker('exec', name, 'node', '-e', "require('http').get('http://127.0.0.1:4200',r=>r.pipe(process.stdout))"), 'alive');
-  docker('stop', '--time', '5', name);
-  assert.equal(inspect().State.ExitCode, 0, 'SIGTERM did not reach application');
-  assert.match(docker('logs', name), /GRACEFUL_SHUTDOWN/);
-  console.log(JSON.stringify({ image, nonRootUser: inspect().Config.User, orphan: expectZombie ? 'same-identity zombie (negative control)' : 'reaped', gracefulShutdown: true }));
-} finally { docker('rm', '-f', name); }
+    assert.equal(adopted.ppid, pids.main, 'Negative control did not adopt into the Node main process');
+    assert.equal(pids.main, 1, 'Negative control requires Node PID 1 without an init');
+  } else {
+    assert.ok(adopter.command[0]?.endsWith('/tini'), 'Held descendant was not adopted by the image\'s Tini');
+    assert.ok(adopter.uid > 0, 'Image Tini is running as root');
+    assert.equal(before.main.ppid, adopted.ppid, 'Descendant was adopted outside the image\'s inner init');
+    if (flags.includes('--outer-init')) assert.notEqual(adopted.ppid, 1, 'Nested case did not exercise inner subreaper adoption');
+  }
+  release('orphan');
+  assert.equal(await until(() => readFile('/tmp/orphan.exit'), value => value === 'listener closed', 'descendant listener closure receipt'), 'listener closed');
+  assert.equal(execute("require('http').get('http://127.0.0.1:4202',r=>{r.resume();process.stdout.write('open')}).on('error',e=>{if(e.code!=='ECONNREFUSED')throw e;process.stdout.write('closed')})"), 'closed');
+  const after = await until(() => {
+    const current = snapshot(pids.orphan);
+    if (current) assert.equal(current.birth, before.orphan.birth, 'Descendant PID was reused during exit observation');
+    return current;
+  }, value => expectZombie ? value?.state === 'Z' : value === null,
+    expectZombie ? 'same-identity zombie negative control' : 'terminated descendant reaping');
+  if (expectZombie) {
+    assert.equal(after.birth, before.orphan.birth, 'Negative control observed a reused PID');
+    assert.equal(after.ppid, pids.main, 'Zombie has the wrong adopter');
+  }
+  assert.equal(inspect().State.Running, true, 'Main stopped during orphan reaping');
+  sameLive(snapshot(pids.main), before.main, 'Main after orphan termination');
+  sameLive(snapshot(pids.control), before.control, 'Detached control after orphan termination');
+  assert.equal(execute("require('http').get('http://127.0.0.1:4200',r=>r.pipe(process.stdout)).on('error',e=>{throw e})"), 'alive');
+  docker('kill', '--signal', 'TERM', containerId);
+  await until(() => readFile('/tmp/main.term'), value => value === 'received', 'main SIGTERM forwarding');
+  await until(() => execute("require('http').get('http://127.0.0.1:4200',r=>{r.resume();process.stdout.write('open')}).on('error',e=>{if(e.code!=='ECONNREFUSED')throw e;process.stdout.write('closed')})"), value => value === 'closed', 'listener closure');
+  sameLive(snapshot(pids.main), before.main, 'Main during cooperative shutdown');
+  sameLive(snapshot(pids.control), before.control, 'Independent detached control during shutdown');
+  assert.equal(readFile('/tmp/control.term'), '', 'SIGTERM was broadcast to the independent detached session');
+  release('main');
+  await until(() => inspect().State, state => state.Running === false, 'graceful container exit');
+  assert.equal(inspect().State.ExitCode, 0, 'Main/init did not preserve the graceful exit code');
+  assert.match(docker('logs', containerId), /GRACEFUL_SHUTDOWN/);
+  console.log(JSON.stringify({ image, imageId, outerInit: flags.includes('--outer-init'), directNode, nonRootUid: before.main.uid,
+    descendantBirth: before.orphan.birth, adopterPid: adopted.ppid, adopterExecutable: adopter.command[0],
+    orphan: expectZombie ? 'same-identity zombie (negative control)' : 'absent /proc entry after termination',
+    listener: 'alive after reaping, closed after SIGTERM', detachedControl: 'same identity and unsignalled until container exit', gracefulExitCode: 0,
+    qualification: 'synthetic init lifecycle; not full FLUJO startup/recovery' }));
+} finally {
+  if (!containerId) {
+    const recovered = docker('ps', '--all', '--filter', `label=io.flujo.init-test-owner=${owner}`, '--filter', `name=^/${name}$`, '--format', '{{.ID}}');
+    if (recovered) {
+      assert.ok(!recovered.includes('\n'), 'Ambiguous container ownership during creation recovery');
+      containerId = JSON.parse(docker('inspect', recovered))[0].Id;
+    }
+  }
+  if (containerId) {
+    const current = inspect();
+    assert.equal(current.Config.Labels['io.flujo.init-test-owner'], owner, 'Refusing cleanup of a container with different ownership');
+    assert.equal(current.Image, imageId, 'Refusing cleanup of a container with a different image');
+    docker('rm', '-f', containerId);
+  }
+}
