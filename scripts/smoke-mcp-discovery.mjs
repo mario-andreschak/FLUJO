@@ -84,7 +84,15 @@ try {
   }
   assert.deepEqual(snapshots[0].names, snapshots[1].names);
   const configsResponse = await fetch(`${base}/api/mcp/servers`, { headers, signal: AbortSignal.timeout(20_000) }); assert.equal(configsResponse.status, 200);
-  const before = await configsResponse.json(); assert.ok(before.some(config => config.name === 'filesystem' && config.disabled));
+  const initialConfigs = await configsResponse.json(); assert.ok(initialConfigs.some(config => config.name === 'filesystem'));
+  // Fresh installations seed enabled records; host execution still needs
+  // separate consent. Explicitly arrange this private fixture's disabled case
+  // before taking the configuration baseline for read-only discovery.
+  const disable = await fetch(`${base}/api/mcp/servers/filesystem`, { method: 'PUT', headers,
+    body: JSON.stringify({ disabled: true }), signal: AbortSignal.timeout(20_000) });
+  assert.equal(disable.status, 200); await disable.json();
+  const before = await (await fetch(`${base}/api/mcp/servers`, { headers, signal: AbortSignal.timeout(20_000) })).json();
+  assert.ok(before.some(config => config.name === 'filesystem' && config.disabled));
   const model = await fetch(`${base}/api/model`, { method: 'POST', headers, body: JSON.stringify({ id: 'discovery-local-fixture', name: 'discovery-fixture', provider: 'openai', adapter: 'openai', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, ApiKey: key }), signal: AbortSignal.timeout(20_000) }); assert.equal(model.status, 201); await model.json();
   const research = await fetch(`${base}/api/mcp/assistant`, { method: 'POST', headers, body: JSON.stringify({ action: 'research', query: 'work with local files', modelId: '' }), signal: AbortSignal.timeout(110_000) }); assert.equal(research.status, 200);
   const events = (await research.text()).trim().split('\n').map(line => JSON.parse(line));
@@ -122,7 +130,8 @@ try {
     resultSha256: createHash('sha256').update(JSON.stringify(result)).digest('hex'), modelRequests,
     mixedIntent: { query: interpretedResult.query, candidates: interpretedResult.candidates.map(value => value.registryName),
       summary: interpretedResult.summary, completedModelRequests: 1 }, actualRunningProviderDisconnect: true,
-    model: 'deterministic local transport fixture; not real-model recommendation accuracy', noInstallOrEnable: true, consentAuthorityUnchanged: true };
+    model: 'deterministic local transport fixture; not real-model recommendation accuracy', disabledFixtureArrangedBeforeBaseline: true,
+    noInstallOrEnable: true, consentAuthorityUnchanged: true };
 } catch (error) { await retain(); throw error; }
 finally {
   let cleanupError;
