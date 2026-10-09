@@ -34,6 +34,8 @@ jobs:
       - run: npm run validate:mcp-release
       - name: Critical API, MCP and transfer regressions
         run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/workspace/workspaceListRoute.test.ts __tests__/workspace/workspaceCreateMcpRecords.test.ts __tests__/workspace/workspaceRouteWrapper.test.ts __tests__/flow/conversationLogReadAdmission.test.ts __tests__/flow/conversationSnapshotAdmission.test.ts __tests__/flow/modelTurnArchiveWriteBudget.test.ts __tests__/mcp/toolDiscoveryPagination.test.ts __tests__/mcp/storedTransportAdmission.test.ts __tests__/mcp/tasksGenerationsProtocol.test.ts __tests__/mcp/clientTasksLifecycle.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/model/orcarouterProvider.test.ts __tests__/packages/workspaceMcpPreparationMarker.test.ts __tests__/security/ownerAccess.test.ts __tests__/security/isolatedMcp.test.ts __tests__/mcp/isolatedMcpTransport.test.ts
+      - name: Critical model setup regressions
+        run: node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath __tests__/frontend/components/ModelConnectionWizard.test.tsx
       - name: Retain exact runtime measurement
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

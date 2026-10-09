@@ -18,6 +18,10 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/mcp/isolatedMcpTransport.test.ts',
 ]);
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
+export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
+  '__tests__/frontend/components/ModelConnectionWizard.test.tsx',
+]);
+export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {
   if (!Object.hasOwn(workflow?.on ?? {}, 'pull_request') || workflow.on.pull_request != null
       || !workflow.on.push?.branches?.includes('main') || workflow.on.push.paths || workflow.on.push['paths-ignore']) {
@@ -43,12 +47,12 @@ export function assertRequiredCheckWorkflow(workflow) {
   if (steps[setupIndex + 1]?.run !== 'node scripts/verify-ci-node.mjs 24.21.0 --record'
       || steps.slice(0, setupIndex).some(step => step.run)) throw new Error('Verify official Node before commands.');
   const commands = steps.flatMap(step => (step.run ?? '').split('\n')).filter(Boolean);
-  for (const command of ['npm ci --include=dev', 'npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', CRITICAL_TEST_COMMAND]) {
+  for (const command of ['npm ci --include=dev', 'npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', CRITICAL_TEST_COMMAND, CRITICAL_FRONTEND_TEST_COMMAND]) {
     if (commands.filter(value => value === command).length !== 1) throw new Error('Missing or duplicated critical command: ' + command);
   }
   const install = commands.indexOf('npm ci --include=dev');
   const build = commands.indexOf('npm run build');
-  if (install >= build || build >= commands.indexOf('npm run validate:mcp-release') || build >= commands.indexOf(CRITICAL_TEST_COMMAND)) throw new Error('Install, build and test the same artifacts in order.');
+  if (install >= build || build >= commands.indexOf('npm run validate:mcp-release') || build >= commands.indexOf(CRITICAL_TEST_COMMAND) || build >= commands.indexOf(CRITICAL_FRONTEND_TEST_COMMAND)) throw new Error('Install, build and test the same artifacts in order.');
   const contracts = steps.find(step => step.name === 'Verify workflow and release contracts')?.run?.split(/\s+/) ?? [];
   for (const file of ['verification-contract', 'workflow-contract', 'required-check-workflow', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security', 'require-release-verification', 'release-verification']) {
     if (!contracts.includes('scripts/' + file + '.test.mjs')) throw new Error('Missing contract regression: ' + file);
