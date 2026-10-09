@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createWorkspace, getWorkspaceDir, renameWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
-import { ensureShippedWorkspacePackages, shippedWorkspacePackageRuntimeDigest } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { ensureShippedWorkspacePackages, shippedWorkspacePackagePortableRuntimeDigest, shippedWorkspacePackageRuntimeDigest } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { attachShippedWorkspaceReadiness, resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
@@ -262,6 +262,22 @@ describe('workspace copies of shipped application packages', () => {
     await expect(shippedWorkspacePackageRuntimeDigest(root)).resolves.toMatch(/^[a-f0-9]{64}$/);
     await fs.writeFile(path.join(root, 'src/index.ts'), 'local customization');
     await expect(shippedWorkspacePackageRuntimeDigest(root)).rejects.toThrow('local changes');
+  });
+
+  it('matches shipped text across checkout newlines but still rejects changed runtime code', async () => {
+    const runtime = 'mcp-servers/bash/dist/index.js';
+    await write(runtime, 'export const first = 1;\nexport const second = 2;\n');
+    await createWorkspace('lf-runtime');
+    await write(runtime, 'export const first = 1;\r\nexport const second = 2;\r\n');
+    await createWorkspace('crlf-runtime');
+    const lf = copied('lf-runtime', 'bash');
+    const crlf = copied('crlf-runtime', 'bash');
+    expect(await shippedWorkspacePackageRuntimeDigest(lf)).not.toBe(await shippedWorkspacePackageRuntimeDigest(crlf));
+    expect(await shippedWorkspacePackagePortableRuntimeDigest(lf)).toBe(await shippedWorkspacePackagePortableRuntimeDigest(crlf));
+    await write(runtime, 'export const first = 1;\r\nexport const second = 3;\r\n');
+    await createWorkspace('changed-runtime');
+    expect(await shippedWorkspacePackagePortableRuntimeDigest(copied('changed-runtime', 'bash')))
+      .not.toBe(await shippedWorkspacePackagePortableRuntimeDigest(lf));
   });
 
   it('retries interrupted mixed dependency repair without changing package code or publishing partial links', async () => {
