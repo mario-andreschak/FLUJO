@@ -24,6 +24,7 @@ import { materializeProtectedPackageRunner } from './fixtures/protectedPackageRu
 const serverSource = `#!/usr/bin/env node
 const readline = require('node:readline');
 const dependency = require('owned-probe-dependency');
+if (process.env.SYNTHETIC_STARTUP_MARKER) require('node:fs').writeFileSync(process.env.SYNTHETIC_STARTUP_MARKER, 'started');
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   if (request.id === undefined) return;
@@ -204,10 +205,11 @@ test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mand
   const dependency = path.join(packageDirectory, 'node_modules', 'owned-probe-dependency');
   const backup = path.join(directory, 'dependency-backup');
   const ambient = path.join(path.dirname(policy.sourceRoot), 'node_modules', 'owned-probe-dependency');
+  const ambientParentExisted = fs.existsSync(path.dirname(ambient));
   const entryPoint = path.join(packageDirectory, 'node_modules', 'owned-probe', 'server.cjs');
   const resolveInActualNode = () => execFileSync(process.execPath, ['-e',
     "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('owned-probe-dependency'))", entryPoint], {
-    encoding: 'utf8', timeout: 5_000, env: {
+    encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'pipe'], env: {
       HOME: path.join(directory, 'resolution-home'), USERPROFILE: path.join(directory, 'resolution-home'),
       ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot! } : {}),
     },
@@ -232,9 +234,48 @@ test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mand
     const resolved = path.resolve(ambient);
     if (!resolved.startsWith(path.resolve(directory) + path.sep)) throw new Error('Unsafe ambient dependency cleanup');
     fs.rmSync(resolved, { recursive: true, force: true });
+    if (!ambientParentExisted && fs.existsSync(path.dirname(ambient))) fs.rmdirSync(path.dirname(ambient));
     fs.renameSync(backup, dependency);
   }
 });
+
+test.each(['isolated', 'host'] as const)('a %s approval cannot survive an override flip during the actual source reader', async initialMode => {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  const marker = path.join(directory, 'late-mode-startup-marker');
+  const home = path.join(directory, 'late-mode-host-home');
+  const hostCwd = path.join(directory, 'late-mode-host-cwd');
+  fs.mkdirSync(hostCwd, { recursive: true });
+  const current = { ...config, runtimeHomeMode: 'inherit' as const,
+    cwd: initialMode === 'host' ? hostCwd : config.cwd,
+    env: { ...config.env, SYNTHETIC_STARTUP_MARKER: marker,
+      ...(initialMode === 'host' ? { HOME: home, USERPROFILE: home, NPM_CONFIG_CACHE: path.join(home, '.npm') } : {}) },
+    trustedHost: { ...policy, runtimeHome: initialMode,
+      environmentNames: [...policy.environmentNames, 'SYNTHETIC_STARTUP_MARKER'] } };
+  process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION = initialMode;
+  approve(current);
+  expect(await saveConfig(new Map([[current.name, current]]))).toMatchObject({ success: true });
+  const transport = createStdioTransport(current, { isolateRuntimeHome: initialMode === 'isolated' });
+  const source = path.join(policy.packageRunner!.packageDirectory, 'node_modules', 'owned-probe', 'server.cjs');
+  const actualOpen = fs.promises.open.bind(fs.promises);
+  let flipped = false;
+  const reader = jest.spyOn(fs.promises, 'open').mockImplementation(async (filename, flags, mode) => {
+    const handle = await actualOpen(filename, flags, mode);
+    if (String(filename) === source && !flipped) {
+      flipped = true;
+      process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION = initialMode === 'isolated' ? 'host' : 'isolated';
+    }
+    return handle;
+  });
+  try {
+    await expect(transport.start()).rejects.toThrow();
+    expect(flipped).toBe(true);
+    expect(fs.existsSync(marker)).toBe(false);
+  } finally {
+    reader.mockRestore();
+    delete process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION;
+    await transport.close();
+  }
+}, 25_000);
 
 test.each(['expired', 'wrong-owner', 'imported'])('real authority refuses %s approvals', async state => {
   if (state === 'expired') ledger.approvals[0].expiresAt = Date.now() - 1;

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 
 const absolute = z.string().min(1).max(2048).refine(value => path.isAbsolute(value) && !value.includes('\0'));
 const exactVersion = z.string().max(256).regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$/);
@@ -84,7 +85,7 @@ function readJson(filename: string): Record<string, unknown> {
  * --prefix does not fence these candidates. They must stay absent at admission.
  * This is host consent and fresh resolution checking, not an OS containment claim. */
 export function assertPackageRunnerResolution(sourceRoot: string, entryPoint: string, cwd: string, runner: ProtectedPackageRunner,
-  runtime?: { command: string; home: string }): void {
+  runtime?: { command: string; home: string }) {
   for (let current = path.resolve(cwd); ; current = path.dirname(current)) {
     if (fs.lstatSync(current).isSymbolicLink() || !equal(fs.realpathSync(current), current)) throw new Error('Unsafe package runner working directory');
     for (const candidate of [path.join(current, 'node_modules', '.bin')]) {
@@ -121,20 +122,25 @@ export function assertPackageRunnerResolution(sourceRoot: string, entryPoint: st
   if (selectedBin !== runner.binaryName) throw new Error('npm binary selection differs from the reviewed binary');
   const file = path.join(runner.packageDirectory, 'node_modules', '.bin', runner.binaryName + (process.platform === 'win32' ? '.cmd' : ''));
   if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error('Materialize the reviewed package binary shim');
-  assertPackageRuntimeClosure(sourceRoot, [path.dirname(path.dirname(entryPoint)), runner.packageDirectory], runtime);
+  return assertPackageRuntimeClosure(sourceRoot, [path.dirname(path.dirname(entryPoint)), runner.packageDirectory], runtime);
 }
 
 /** Inspect declarations without requiring package code. A complete byte tree
  * cannot substitute for a complete local runtime dependency graph. */
-function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtime?: { command: string; home: string }): void {
+function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtime?: { command: string; home: string }) {
   const manifests = new Map<string, Record<string, unknown>>();
   const visited = new Set<string>();
+  const inventory: Array<{ directory: string; name: string; version: string; dependencies: Array<{
+    name: string; target: string; optional: boolean; directory: string | null;
+  }> }> = [];
   let edges = 0;
   const manifestAt = (directory: string) => {
     let manifest = manifests.get(directory);
     if (!manifest) {
       if (manifests.size >= 1024) throw new Error('Package graph exceeds inspection bounds');
-      manifest = readJson(path.join(directory, 'package.json')); manifests.set(directory, manifest);
+      manifest = readJson(path.join(directory, 'package.json'));
+      if (typeof manifest.name !== 'string' || manifest.name.length > 214 || !exactVersion.safeParse(manifest.version).success) throw new Error('Package graph revision unavailable');
+      manifests.set(directory, manifest);
     }
     return manifest;
   };
@@ -146,6 +152,10 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
     if (visited.has(directory)) return;
     visited.add(directory);
     const manifest = manifestAt(directory);
+    const node = { directory: path.relative(sourceRoot, directory).split(path.sep).join('/'),
+      name: manifest.name as string, version: manifest.version as string,
+      dependencies: [] as Array<{ name: string; target: string; optional: boolean; directory: string | null }> };
+    inventory.push(node);
     const requested = new Map<string, { optional: boolean; target: string }>();
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
       const values = manifest[field];
@@ -181,9 +191,11 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
       }
       if (!selected) {
         if (!declaration.optional) throw new Error(`Materialized runtime dependency missing: ${name}`);
+        node.dependencies.push({ name, ...declaration, directory: null });
         continue;
       }
       if (manifestAt(selected).name !== declaration.target) throw new Error('Package dependency identity differs from its declaration');
+      node.dependencies.push({ name, ...declaration, directory: path.relative(sourceRoot, selected).split(path.sep).join('/') });
       visit(selected);
     }
   };
@@ -194,6 +206,9 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
     if (globals.some(directory => exists(directory))) throw new Error('Ambient global Node dependency directory');
   }
   for (const directory of roots) visit(directory);
+  inventory.sort((a, b) => a.directory < b.directory ? -1 : a.directory > b.directory ? 1 : 0);
+  for (const node of inventory) node.dependencies.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return { inventory, digest: createHash('sha256').update('flujo:mcp:local-npx-dependencies:v1\0').update(JSON.stringify(inventory)).digest('hex') };
 }
 
 export function packageRunnerArguments(sourceRoot: string, runner: ProtectedPackageRunner, entryPoint: string, args: readonly string[], cache: string): string[] {
