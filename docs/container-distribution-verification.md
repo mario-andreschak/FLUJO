@@ -182,3 +182,6 @@ source SHA and image ID with the review evidence.
 Host-probe SHA-256 is recorded separately from the image's application source
 revision: a host-only probe correction can qualify the same frozen application
 image without another build. Never report its image revision as a later commit.
+See the [local official-image acceptance record](audits/2026-10-09-official-container-acceptance.md)
+for observed application and synthetic rows, exact image/source identities and
+remaining worker, provider and publication limits.
