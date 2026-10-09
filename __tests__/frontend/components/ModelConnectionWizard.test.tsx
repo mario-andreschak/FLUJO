@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
 
@@ -32,15 +32,134 @@ function renderWizard(overrides?: Partial<React.ComponentProps<typeof ModelConne
     onCreateModels,
     ...overrides,
   };
-  render(
+  const view = render(
     <ThemeProvider theme={createTheme()}>
       <ModelConnectionWizard {...props} />
     </ThemeProvider>,
   );
-  return props;
+  return { ...props, setOpen: (open: boolean) => view.rerender(<ThemeProvider theme={createTheme()}><ModelConnectionWizard {...props} open={open} /></ThemeProvider>) };
 }
 
 describe('ModelConnectionWizard', () => {
+  it('does not let an old save completion unlock a new pending save', async () => {
+    const completions: Array<(value: { success: boolean; created: Model[]; existing: Model[] }) => void> = [];
+    const onCreateModels = jest.fn((_models: Model[]) => new Promise<{ success: boolean; created: Model[]; existing: Model[] }>(resolve => completions.push(resolve)));
+    const props = renderWizard({ onCreateModels });
+    const save = () => {
+      fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+      fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+      fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+      fireEvent.click(screen.getByRole('heading', { name: 'OpenRouter' }).closest('button')!);
+      fireEvent.change(screen.getByLabelText('OpenRouter API key', { exact: true }), { target: { value: 'sk-or-test' } });
+      fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    };
+    save();
+    props.setOpen(false);
+    props.setOpen(true);
+    save();
+    expect(onCreateModels).toHaveBeenCalledTimes(2);
+    await act(async () => completions[0]({ success: true, created: onCreateModels.mock.calls[0][0], existing: [] }));
+    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    expect(screen.queryByText(/AI connections saved/i)).not.toBeInTheDocument();
+    await act(async () => completions[1]({ success: true, created: onCreateModels.mock.calls[1][0], existing: [] }));
+    expect(await screen.findByText(/AI connections saved/i)).toBeInTheDocument();
+  });
+
+  it('locks Back during a model pull and ignores its failure after reopening', async () => {
+    let complete!: (value: Response) => void;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => url === '/api/local-models/pull'
+      ? new Promise<Response>(resolve => { complete = resolve; })
+      : Promise.resolve({ ok: true, json: async () => url === '/api/local-models/capability'
+        ? { enabled: true, ollamaReachable: true, ollamaUrl: 'http://localhost:11434', platform: 'win32', suggestedModel: 'fixture-model', installedModels: [] }
+        : { platform: 'win32', installMode: 'git', oneClickInstall: true } }));
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download fixture-model and connect' }));
+    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    props.setOpen(false);
+    props.setOpen(true);
+    await act(async () => complete({ ok: false } as Response));
+    expect(screen.getByRole('button', { name: /no idea/i })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(props.onCreateModels).not.toHaveBeenCalled();
+  });
+
+  it('ignores an old Ollama capability response after reopening', async () => {
+    let complete!: (value: Response) => void;
+    let capabilityCalls = 0;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => url === '/api/local-models/capability'
+      ? ++capabilityCalls === 1 ? new Promise<Response>(resolve => { complete = resolve; })
+        : Promise.resolve({ ok: true, json: async () => ({ enabled: true, ollamaReachable: true, ollamaUrl: 'http://localhost:11434', platform: 'win32', suggestedModel: 'current-model', installedModels: ['current-model'] }) })
+      : Promise.resolve({ ok: true, json: async () => ({ platform: 'win32', installMode: 'git', oneClickInstall: true }) }));
+    const props = renderWizard();
+    const chooseLocal = () => {
+      fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+      fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+      fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
+    };
+    chooseLocal();
+    await waitFor(() => expect(capabilityCalls).toBe(1));
+    props.setOpen(false);
+    props.setOpen(true);
+    chooseLocal();
+    expect(await screen.findByRole('button', { name: 'Connect current-model' })).toBeEnabled();
+    await act(async () => complete({ ok: true, json: async () => ({ enabled: true, ollamaReachable: true, ollamaUrl: 'http://old:11434', platform: 'win32', suggestedModel: 'obsolete-model', installedModels: ['obsolete-model'] }) } as Response));
+    expect(screen.getByRole('button', { name: 'Connect current-model' })).toBeEnabled();
+    expect(screen.queryByText(/obsolete-model/)).not.toBeInTheDocument();
+  });
+
+  it('ignores a saved result from a closed wizard session', async () => {
+    let complete!: (value: { success: boolean; created: Model[]; existing: Model[] }) => void;
+    const onCreateModels = jest.fn((_models: Model[]) => new Promise<{ success: boolean; created: Model[]; existing: Model[] }>(resolve => { complete = resolve; }));
+    const props = renderWizard({ onCreateModels });
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+    fireEvent.click(screen.getByRole('heading', { name: 'OpenRouter' }).closest('button')!);
+    fireEvent.change(screen.getByLabelText('OpenRouter API key', { exact: true }), { target: { value: 'sk-or-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    await waitFor(() => expect(onCreateModels).toHaveBeenCalledTimes(1));
+    props.setOpen(false);
+    props.setOpen(true);
+    await act(async () => complete({ success: true, created: onCreateModels.mock.calls[0][0], existing: [] }));
+    expect(screen.getByRole('button', { name: /no idea/i })).toBeEnabled();
+    expect(screen.queryByText(/AI connections saved/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps Back disabled during a pending CLI installation', async () => {
+    let complete!: (value: Response) => void;
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation((url: string, options?: RequestInit) => options?.method === 'POST'
+      ? new Promise<Response>(resolve => { complete = resolve; })
+      : Promise.resolve({ ok: true, json: async () => ({ platform: 'win32', installMode: 'git', oneClickInstall: true }) }));
+    renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: /ChatGPT/i }).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install with WinGet' }));
+    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    await act(async () => complete({ ok: false, json: async () => ({ error: 'fixture install unavailable' }) } as Response));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeEnabled());
+  });
+
+  it('keeps the selected setup visible while its model save is pending', async () => {
+    let complete!: (value: { success: boolean; created: Model[]; existing: Model[] }) => void;
+    const onCreateModels = jest.fn((_models: Model[]) => new Promise<{ success: boolean; created: Model[]; existing: Model[] }>(resolve => { complete = resolve; }));
+    renderWizard({ onCreateModels });
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+    fireEvent.click(screen.getByRole('heading', { name: 'OpenRouter' }).closest('button')!);
+    fireEvent.change(screen.getByLabelText('OpenRouter API key', { exact: true }), { target: { value: 'sk-or-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    await waitFor(() => expect(onCreateModels).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    await act(async () => complete({ success: true, created: onCreateModels.mock.calls[0][0], existing: [] }));
+    expect(await screen.findByText(/AI connections saved/i)).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ platform: 'win32', installMode: 'git', oneClickInstall: true }) } as Response));
   });
