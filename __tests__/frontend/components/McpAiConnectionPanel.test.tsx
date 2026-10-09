@@ -149,12 +149,59 @@ describe('McpAiConnectionPanel', () => {
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
     await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: /research options/i }));
-    fireEvent.click(await screen.findByLabelText(/approve saving and connecting/i));
+    fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
     fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
     fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
     expect(configure).toHaveBeenCalledWith('search');
     expect(installed).not.toHaveBeenCalled(); expect(authenticate).not.toHaveBeenCalled();
     expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+
+  it('clears an existing-server conflict when the connection name changes', async () => {
+    researchMcpConnectionMock.mockResolvedValue(result);
+    installMcpRecommendationMock.mockResolvedValue({ installed: false, needsConfiguration: true, existingServerName: 'search' });
+    const configure = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} onConfigureExisting={configure} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
+    fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
+    await screen.findByRole('button', { name: /configure existing server/i });
+    fireEvent.change(screen.getByLabelText(/connection name/i), { target: { value: 'other-search' } });
+    expect(screen.queryByRole('button', { name: /configure existing server/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(configure).not.toHaveBeenCalled();
+  });
+
+  it('blocks manual navigation and model reload while a model-free handoff is pending', async () => {
+    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    researchMcpConnectionMock.mockResolvedValue({ ...result, candidates: [{ ...result.candidates[0],
+      action: 'configure-existing', existingServerName: 'filesystem' }] });
+    let finish!: () => void;
+    const configure = jest.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const manual = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={manual} onConfigureExisting={configure} />
+    </ThemeProvider>);
+    await screen.findByText(/choose a saved text model for research/i);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'local files' } });
+    fireEvent.click(screen.getByRole('button', { name: /find bundled options/i }));
+    const handoff = await screen.findByRole('button', { name: /configure existing server/i });
+    act(() => {
+      fireEvent.click(handoff);
+      fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
+      fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
+    });
+    expect(screen.getByRole('button', { name: /open manual setup/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /retry loading models/i })).toBeDisabled();
+    expect(manual).not.toHaveBeenCalled();
+    expect(modelService.loadModels).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(); });
+    fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
+    expect(manual).toHaveBeenCalledTimes(1);
   });
 
   it('claims research synchronously when click and Enter arrive in the same update', async () => {

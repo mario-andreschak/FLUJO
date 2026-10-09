@@ -170,6 +170,11 @@ export default function McpAiConnectionPanel({
     setExistingConflict(null);
   };
 
+  const openManual = () => {
+    if (!mountedRef.current || installingRef.current || abortRef.current) return;
+    onManual();
+  };
+
   const configureExisting = async (name: string) => {
     if (!mountedRef.current || !onConfigureExisting || installingRef.current || abortRef.current) return;
     installingRef.current = true;
@@ -296,10 +301,13 @@ export default function McpAiConnectionPanel({
         <Alert severity={modelsFailed ? 'error' : 'info'}>
           {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noTextModels')}
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button onClick={() => setModelLoadAttempt((attempt) => attempt + 1)} disabled={working}>
+            <Button onClick={() => {
+              if (installingRef.current || abortRef.current) return;
+              setModelLoadAttempt((attempt) => attempt + 1);
+            }} disabled={working || installing}>
               {t('mcp.ai.retryModels')}
             </Button>
-            <Button onClick={onManual} disabled={working}>{t('mcp.ai.openManual')}</Button>
+            <Button onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
           </Stack>
         </Alert>
       ) : null}
@@ -327,7 +335,7 @@ export default function McpAiConnectionPanel({
           <Alert severity={result.candidates.length ? 'info' : 'warning'}>{result.summary}</Alert>
 
           {result.candidates.length === 0 ? (
-            <Button variant="outlined" onClick={onManual}>{t('mcp.ai.openManual')}</Button>
+            <Button variant="outlined" onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
           ) : (
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, .9fr) minmax(0, 1.1fr)' }, gap: 1.5 }}>
               <Stack spacing={1}>
@@ -408,6 +416,8 @@ export default function McpAiConnectionPanel({
                       onChange={(event) => {
                         setServerName(event.target.value);
                         setApproved(false);
+                        if (existingConflict) setError(null);
+                        setExistingConflict(null);
                       }}
                       error={!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(serverName)}
                       helperText={t('mcp.ai.connectionNameHelper')}

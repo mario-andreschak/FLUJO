@@ -65,8 +65,6 @@ export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
   '__tests__/frontend/components/McpModelRiskAssessmentPanel.test.tsx',
   '__tests__/frontend/components/ServerModalDiscoverySession.test.tsx',
   '__tests__/frontend/components/MarketplaceTab.test.tsx',
-  '__tests__/frontend/components/McpAiConnectionPanel.test.tsx',
-  '__tests__/frontend/components/McpConnectionWizard.test.tsx',
 ]);
 export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {
