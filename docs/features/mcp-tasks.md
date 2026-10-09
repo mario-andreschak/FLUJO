@@ -1,10 +1,11 @@
 # MCP Tasks extension (issue #404)
 
-FLUJO can consume the official MCP **Tasks** extension as a *client*: a
+FLUJO can consume the pinned SDK's legacy MCP **Tasks** contract as a *client*: a
 long-running tool call may return a task handle immediately, and FLUJO then
 polls the task to completion, durably, across restarts.
 
-Everything below is implemented behind feature flags and defaults to **off**.
+The delivered client lifecycle is behind a feature flag and defaults to **off**.
+Server-side Tasks and the newer extension generation remain unfinished (#404).
 
 ## Pinned protocol contract
 
@@ -15,6 +16,13 @@ unstable SDK surface is isolated in
 [`src/backend/services/mcp/tasksProtocol.ts`](../../src/backend/services/mcp/tasksProtocol.ts);
 the wire types and validators live in
 [`src/shared/types/mcp/tasks.ts`](../../src/shared/types/mcp/tasks.ts).
+
+This is the 2025-11-25 core Tasks generation. The
+[2026-07-28 Tasks extension](https://modelcontextprotocol.github.io/ext-tasks/specification/2026-07-28/tasks.html)
+uses per-request extension capabilities, `resultType: "task"`, `ttlMs`,
+`pollIntervalMs`, keyed `tasks/update` inputs and inline terminal `tasks/get`
+results. FLUJO does not yet negotiate or translate that generation. These field
+names must not be mixed with the pinned contract below.
 
 | Concern | Contract |
 | --- | --- |
@@ -153,16 +161,17 @@ creating a poll storm. An hourly cron sweeps expiry and retention per workspace.
 
 FLUJO's own MCP endpoints (`/mcp-proxy/[server]`, `/mcp-flows`) do **not**
 advertise or implement Tasks. Both build a fresh `Server` per request on a
-stateless Streamable HTTP transport and have no authenticated caller identity:
-`/mcp-proxy` only enforces localhost + explicit exposure, and `/mcp-flows` has
-no caller boundary at all. Since task `get`/`result`/`cancel` would then be
-reachable by task id alone, enabling server-side Tasks before a caller-bound
-ownership mechanism exists would be an authorization hole.
+stateless Streamable HTTP transport. Their workspace route wrapper now admits
+owner/scoped-bearer requests and rechecks authorization while streaming. That
+request admission does not yet bind a durable server task to its caller: server
+construction and task handlers do not receive the admitted owner authorization.
 
-Per the plan's security review gate, server-side Tasks therefore stay disabled
-until (a) a stable caller identity can be bound to each task record, and (b) one
-specific long-running FLUJO operation is approved as the first exposed task.
-The durable store here is already endpoint-agnostic and can back that work.
+Server-side delivery still needs caller/workspace-bound durable records and
+fresh authorization checks for status, results, input, cancellation and execution
+effects. Task IDs alone must never grant access. It also needs an authored
+long-running operation, bounded execution and interoperable lifecycle handlers.
+`ENABLE_MCP_TASKS_SERVER` remains off because those pieces are not implemented.
+The delivered remote-client store does not establish server-task caller ownership.
 
 ## Observability
 
