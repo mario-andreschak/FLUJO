@@ -58,6 +58,28 @@ const persist = () => fs.writeFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!,
 const approve = (value = config) => { ledger.approvals = [{ workspace: getCurrentWorkspace(),
   serverName: value.name, policyDigest: trustedHostMcpPolicyDigest(value), expiresAt: Date.now() + 120_000 }]; persist(); };
 
+// The 2026-10-09 isolated Windows run took 206.13s: closure cases took
+// 13.05/13.17s and four launch/home/writer cases exceeded the old 25s budget.
+// Allow full fresh fingerprint/ACL work and cleanup; SDK connect/call remain 10s.
+const caseTimeout = process.platform === 'win32' ? 60_000 : 25_000;
+const closureTimeout = process.platform === 'win32' ? 60_000 : 15_000;
+const cleanupTimeout = process.platform === 'win32' ? 120_000 : 15_000;
+const ownedCases = new Set<Promise<void>>();
+function ownedCase(operation: () => Promise<void>): Promise<void> {
+  const pending = operation();
+  ownedCases.add(pending);
+  // Returning the original promise keeps every assertion failure visible to Jest.
+  void pending.then(() => ownedCases.delete(pending), () => ownedCases.delete(pending));
+  return pending;
+}
+
+afterEach(async () => {
+  // Jest timeouts do not cancel async tests. Drain their finally blocks before
+  // another case restores credentials or renames this shared dependency tree.
+  const results = await Promise.allSettled([...ownedCases]);
+  for (const result of results) if (result.status === 'rejected') throw result.reason;
+}, cleanupTimeout);
+
 beforeAll(() => {
   saved = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
   parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA! : os.tmpdir());
@@ -76,10 +98,12 @@ beforeAll(() => {
 }, 30_000);
 
 beforeEach(async () => {
+  if (ownedCases.size) throw new Error('A prior owned package-runner case has not finished cleanup.');
   approve();
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });
 });
 afterAll(() => {
+  if (ownedCases.size) throw new Error('Cannot mutate package-runner fixture settings or files while an owned case is active.');
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
@@ -89,7 +113,7 @@ afterAll(() => {
   fs.rmSync(resolved, { recursive: true, force: true });
 });
 
-test.each(['v1', 'beta'])('%s starts the reviewed package via genuine offline npx within the original deadline', async era => {
+test.each(['v1', 'beta'])('%s starts the reviewed package via genuine offline npx within the original deadline', era => ownedCase(async () => {
   const ignoredConfig = path.join(config.cwd!, '.npmrc');
   fs.writeFileSync(ignoredConfig, 'script-shell=unreviewed-shell-that-does-not-exist\nregistry=https://example.invalid\n');
   const transport = era === 'v1' ? createStdioTransport(config, { isolateRuntimeHome: true })
@@ -109,7 +133,7 @@ test.each(['v1', 'beta'])('%s starts the reviewed package via genuine offline np
     await expect(getManagedTrustedHost(transport)!.assertCurrent(config))
       .rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
   } finally { await client.close(); fs.unlinkSync(ignoredConfig); }
-}, 25_000);
+}), caseTimeout);
 
 test.each(['v1', 'beta'])('%s refuses durable revocation before genuine SDK startup', async era => {
   const transport = era === 'v1' ? createStdioTransport(config, { isolateRuntimeHome: true })
@@ -119,7 +143,7 @@ test.each(['v1', 'beta'])('%s refuses durable revocation before genuine SDK star
   finally { await transport.close(); }
 });
 
-test.each(['v1', 'beta'])('%s honors a genuinely approved package-runner host-home mode', async era => {
+test.each(['v1', 'beta'])('%s honors a genuinely approved package-runner host-home mode', era => ownedCase(async () => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
   const home = path.join(directory, 'reviewed-host-home');
   const cwd = path.join(directory, 'reviewed-host-cwd');
@@ -140,9 +164,9 @@ test.each(['v1', 'beta'])('%s honors a genuinely approved package-runner host-ho
     expect(JSON.parse((result as { content: Array<{ text: string }> }).content[0].text))
       .toMatchObject({ marker: 'reviewed-package', cwd, home });
   } finally { await client.close(); }
-}, 25_000);
+}), caseTimeout);
 
-test('the production owner-bearer writer publishes an exact package-runner approval', async () => {
+test('the production owner-bearer writer publishes an exact package-runner approval', () => ownedCase(async () => {
   const owner = installBundledFixtureOwner();
   try {
     const preview = await previewBundledHostConsent(config.name, { runtimeHome: 'isolated' });
@@ -153,7 +177,7 @@ test('the production owner-bearer writer publishes an exact package-runner appro
     expect(JSON.parse(fs.readFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!, 'utf8')).approvals)
       .toEqual([expect.objectContaining({ serverName: config.name, policyDigest: preview.policyDigest })]);
   } finally { owner.restore(); }
-}, 25_000);
+}), caseTimeout);
 
 test('effective runtime-home precedence uses actual workspace settings and server/process preferences', async () => {
   const inherited = { ...config, runtimeHomeMode: 'inherit' as const };
@@ -199,7 +223,7 @@ test('package manifest drift cannot be covered by reusing the source digest', as
   } finally { fs.writeFileSync(manifest, original); }
 });
 
-test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mandatory dependency closure', async state => {
+test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mandatory dependency closure', state => ownedCase(async () => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
   const packageDirectory = policy.packageRunner!.packageDirectory;
   const dependency = path.join(packageDirectory, 'node_modules', 'owned-probe-dependency');
@@ -238,7 +262,7 @@ test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mand
     if (!ambientParentExisted && fs.existsSync(path.dirname(ambient))) fs.rmdirSync(path.dirname(ambient));
     fs.renameSync(backup, dependency);
   }
-});
+}), closureTimeout);
 
 test.each(['isolated', 'host'] as const)('a %s approval cannot survive an override flip during the actual source reader', async initialMode => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);

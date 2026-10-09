@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 const spawnMock = jest.fn();
 jest.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }));
-import { runSkillSpector, scannerSourceArchive } from '@/backend/services/mcp/securityReview/runner';
+import { runSkillSpector, scannerSourceArchive, ScannerUnavailableError } from '@/backend/services/mcp/securityReview/runner';
 
 const image = `sha256:${'a'.repeat(64)}`, seedId = 'b'.repeat(64), scannerId = 'c'.repeat(64);
 const files = [{ path: 'SKILL.md', content: Buffer.from('Untrusted bytes only') }];
@@ -137,13 +137,15 @@ it('times out a hanging attached client and waits for cleanup before rejecting',
   } finally { jest.useRealTimers(); }
 });
 it.each([
-  [{ path: '../x', content: Buffer.alloc(0) }],
-  [{ path: 'x', content: Buffer.alloc(0) }, { path: 'X', content: Buffer.alloc(0) }],
-  [{ path: 'Dir/a', content: Buffer.alloc(0) }, { path: 'dir/b', content: Buffer.alloc(0) }],
-  [{ path: 'x', content: Buffer.alloc(0) }, { path: 'x/a', content: Buffer.alloc(0) }],
-  [{ path: 'x', content: Buffer.alloc(1024 * 1024 + 1) }],
-])('refuses invalid archive before Docker effects', async bad => {
-  expect(() => scannerSourceArchive(bad)).toThrow();
-  await expect(runSkillSpector(bad, new AbortController().signal)).rejects.toThrow();
+  { name: 'path traversal', files: [{ path: '../x', content: Buffer.alloc(0) }], reason: 'Unsupported source archive entry.' },
+  { name: 'case-colliding files', files: [{ path: 'x', content: Buffer.alloc(0) }, { path: 'X', content: Buffer.alloc(0) }], reason: 'Unsupported source archive entry.' },
+  { name: 'case-colliding directories', files: [{ path: 'Dir/a', content: Buffer.alloc(0) }, { path: 'dir/b', content: Buffer.alloc(0) }], reason: 'Conflicting source directories.' },
+  { name: 'file/directory collision', files: [{ path: 'x', content: Buffer.alloc(0) }, { path: 'x/a', content: Buffer.alloc(0) }], reason: 'Conflicting source archive entries.' },
+  { name: 'oversized file', files: [{ path: 'x', content: Buffer.alloc(1024 * 1024 + 1) }], reason: 'Unsupported source archive entry.' },
+])('refuses $name before Docker effects', async ({ files: invalidFiles, reason }) => {
+  expect(() => scannerSourceArchive(invalidFiles)).toThrow(ScannerUnavailableError);
+  expect(() => scannerSourceArchive(invalidFiles)).toThrow(reason);
+  await expect(runSkillSpector(invalidFiles, new AbortController().signal)).rejects.toThrow(ScannerUnavailableError);
+  await expect(runSkillSpector(invalidFiles, new AbortController().signal)).rejects.toThrow(reason);
   expect(spawnMock).not.toHaveBeenCalled();
 });

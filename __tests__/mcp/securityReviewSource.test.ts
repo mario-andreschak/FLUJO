@@ -6,7 +6,7 @@ const signal = () => new AbortController().signal;
 const content = Buffer.from('console.log("untrusted source is never executed")\n');
 const blobSha = createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex');
 const entry = () => ({ path: 'index.js', type: 'blob', mode: '100644', sha: blobSha, size: content.length });
-const fixtures = (overrides: Record<string, unknown> = {}) => [
+const fixtures = (overrides: Record<string, unknown> = {}): Record<string, unknown>[] => [
   { sha: revision, commit: { tree: { sha: treeSha } } },
   { sha: treeSha, truncated: false, tree: [entry()], ...overrides },
   { sha: blobSha, encoding: 'base64', size: content.length, content: content.toString('base64') },
