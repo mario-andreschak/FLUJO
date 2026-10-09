@@ -25,6 +25,7 @@ jest.mock('@/frontend/components/AvatarWorld/useAvatarWork', () => ({ useAvatarW
 jest.mock('@/frontend/components/AvatarWorld/useWorldPanel', () => ({ useWorldPanel: jest.fn() }));
 jest.mock('@flujo-ai/avatar-sdk/native-voice', () => ({
   DEFAULT_LOCALE: 'en',
+  usePocketSpeech: jest.requireActual('@flujo-ai/avatar-sdk/native-voice').usePocketSpeech,
   useNativeRouterVoice: jest.fn(),
   voiceHeaders: () => ({ 'Content-Type': 'application/json', 'x-flujo-avatar-client': '00000000-0000-4000-8000-000000000001' }),
 }));
