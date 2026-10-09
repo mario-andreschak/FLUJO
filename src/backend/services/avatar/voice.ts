@@ -9,6 +9,7 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { recoverConversationTranscript, flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { completedForegroundDispatch } from './foreground-reply.mjs';
+import { streamWaitingAudio } from './waiting-audio.mjs';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { loadItem } from '@/utils/storage/backend';
 import type { StorageKey } from '@/shared/types/storage';
@@ -285,7 +286,7 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
         if (!('audio' in value)) throw new PublicError(400, 'invalid_voice_request', 'Send a WAV recording.');
         started = session.ledger.begin(value, owner, owned);
         const turn = session.ledger.claimObserver({ audio: value.audio, format: 'wav', locale: value.locale, turnId: started.turn.id }, owned);
-        const result = await abortable(transcribe({ audio: value.audio, format: 'wav', language: value.locale }, config(), scopedFetch, owned.signal), owned.signal); await check();
+        const result = await abortable(transcribe({ audio: value.audio, format: 'wav' }, config(), scopedFetch, owned.signal), owned.signal); await check();
         if (!session.ledger.observed(turn, result.text)) throw new PublicError(409, 'native_turn_ended', 'This recording is no longer current.');
         return Response.json(result);
       } finally { if (started) session.ledger.finish(started.turn, null); clearTimeout(timer); release(); }
@@ -296,7 +297,7 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
       try {
         const value = validateTranscription({ audio: body.audio, format: body.format });
         turn = session.ledger.claimObserver(body, owned);
-        const result = await abortable(transcribe({ ...value, language: body.locale }, config(), scopedFetch, owned.signal), owned.signal); await check();
+        const result = await abortable(transcribe(value, config(), scopedFetch, owned.signal), owned.signal); await check();
         if (!session.ledger.observed(turn, result.text)) throw new PublicError(409, 'native_turn_ended', 'This recording is no longer current.');
         return Response.json(result);
       } finally { if (turn) session.ledger.observerFailed(turn); clearTimeout(timer); release(); }
@@ -332,7 +333,8 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
         catch (error) { owned.abort(); throw error; }
       };
       streaming = true;
-      void streamNativeTurn(value, config(), scopedFetch, owned.signal, emit, { turnId: started.turn.id, history: result || selected?.ready ? [] : started.history, backendResult: result, setupFacts,
+      const narrator = !result && 'message' in value && value.message === '__o_waiting__' ? streamWaitingAudio : streamNativeTurn;
+      void narrator(value, config(), scopedFetch, owned.signal, emit, { turnId: started.turn.id, history: result || selected?.ready ? [] : started.history, backendResult: result, setupFacts,
         onQualifiedResult: async (qualified: unknown) => { await checkResult(); currentSession.ledger.qualify(started.turn, qualified); } }).then(async outcome => {
         await checkResult(); currentSession.ledger.finish(started.turn, outcome); await writer.close().catch(() => {});
       }).catch(async error => {
