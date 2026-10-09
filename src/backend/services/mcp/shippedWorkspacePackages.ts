@@ -74,11 +74,11 @@ async function packageDigests(root: string, distributedOnly = false): Promise<{ 
   const hash = createHash('sha256');
   const runtimeHash = createHash('sha256');
   const portableRuntimeHash = createHash('sha256');
-  const update = (entry: string, runtime: boolean, portableEntry = entry) => {
+  const update = (entry: string, runtime: boolean, portableEntry = entry, portable = true) => {
     hash.update(entry);
     if (runtime) {
       runtimeHash.update(entry);
-      portableRuntimeHash.update(portableEntry);
+      if (portable) portableRuntimeHash.update(portableEntry);
     }
   };
   const walk = async (directory: string, prefix: string, parentRuntime: boolean) => {
@@ -107,7 +107,10 @@ async function packageDigests(root: string, distributedOnly = false): Promise<{ 
         const portableBytes = runtime && textAsset
           ? Buffer.from(bytes.toString('latin1').replace(/\r\n/g, '\n'), 'latin1') : bytes;
         const portableDigest = createHash('sha256').update(portableBytes).digest('hex');
-        update(`file:${relative}\0${rawDigest}\0`, runtime, `file:${relative}\0${portableDigest}\0`);
+        // npm omits test scripts from the packed Source while the OCI image
+        // retains them. They cannot be launched as a bundled server runtime.
+        const portable = !/^scripts\/.*\.test\.[cm]?[jt]s$/i.test(relative);
+        update(`file:${relative}\0${rawDigest}\0`, runtime, `file:${relative}\0${portableDigest}\0`, portable);
       } else throw new Error('A copied package contains an unsupported asset.');
     }
   };

@@ -280,6 +280,20 @@ describe('workspace copies of shipped application packages', () => {
       .not.toBe(await shippedWorkspacePackagePortableRuntimeDigest(lf));
   });
 
+  it('matches a packed Source without a test script to the Worker image runtime', async () => {
+    const script = 'mcp-servers/browser/scripts/install-browser.test.mjs';
+    await write('mcp-servers/browser/scripts/install-browser.mjs', 'export const install = true;\n');
+    await write(script, 'throw new Error("test only");\n');
+    await createWorkspace('image-runtime');
+    await fs.rm(path.join(application, script));
+    await createWorkspace('packed-runtime');
+    const image = copied('image-runtime', 'browser');
+    const packed = copied('packed-runtime', 'browser');
+    expect(await shippedWorkspacePackageRuntimeDigest(image)).not.toBe(await shippedWorkspacePackageRuntimeDigest(packed));
+    expect(await shippedWorkspacePackagePortableRuntimeDigest(image))
+      .toBe(await shippedWorkspacePackagePortableRuntimeDigest(packed));
+  });
+
   it('retries interrupted mixed dependency repair without changing package code or publishing partial links', async () => {
     await write('mcp-servers/filesystem/node_modules/nested-dependency/package.json', '{"name":"nested-dependency"}');
     await write('mcp-servers/filesystem/package.json', JSON.stringify({
