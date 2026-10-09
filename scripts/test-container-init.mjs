@@ -16,8 +16,8 @@ const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', tim
 const imageId = JSON.parse(docker('image', 'inspect', image))[0].Id;
 const child = `const fs=require('fs');const server=require('http').createServer((q,s)=>s.end('descendant alive')).listen(4202,'127.0.0.1');server.on('listening',()=>{fs.writeFileSync('/tmp/orphan.pid',String(process.pid));const timer=setInterval(()=>{if(fs.existsSync('/tmp/orphan.release')){clearInterval(timer);server.close(()=>{fs.writeFileSync('/tmp/orphan.exit','listener closed');process.exit(0)})}},25)});`;
 const parent = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/parent.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'}).unref();setInterval(()=>{if(fs.existsSync('/tmp/parent.release'))process.exit(0)},25);`;
-const control = `const fs=require('fs');fs.writeFileSync('/tmp/control.pid',String(process.pid));process.on('SIGTERM',()=>fs.writeFileSync('/tmp/control.term','received'));setInterval(()=>{},1000);`;
-const main = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/main.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(control)}],{detached:true,stdio:'ignore'}).unref();const server=require('http').createServer((q,s)=>s.end('alive')).listen(4200,'127.0.0.1');server.on('listening',()=>spawn(process.execPath,['-e',${JSON.stringify(parent)}],{stdio:'ignore'}).once('exit',(code,signal)=>fs.writeFileSync('/tmp/parent.exit',JSON.stringify({code,signal}))));process.on('SIGTERM',()=>{fs.writeFileSync('/tmp/main.term','received');server.close(()=>{console.log('LISTENER_CLOSED');setInterval(()=>{if(fs.existsSync('/tmp/main.release')){console.log('GRACEFUL_SHUTDOWN');process.exit(0)}},25)})});`;
+const control = label => `const fs=require('fs');fs.writeFileSync('/tmp/${label}.pid',String(process.pid));process.on('SIGTERM',()=>fs.writeFileSync('/tmp/${label}.term','received'));setInterval(()=>{},1000);`;
+const main = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/main.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(control('control'))}],{detached:true,stdio:'ignore'}).unref();spawn(process.execPath,['-e',${JSON.stringify(control('sibling'))}],{stdio:'ignore'}).unref();const server=require('http').createServer((q,s)=>s.end('alive')).listen(4200,'127.0.0.1');server.on('listening',()=>spawn(process.execPath,['-e',${JSON.stringify(parent)}],{stdio:'ignore'}).once('exit',(code,signal)=>fs.writeFileSync('/tmp/parent.exit',JSON.stringify({code,signal}))));process.on('SIGTERM',()=>{fs.writeFileSync('/tmp/main.term','received');server.close(()=>{console.log('LISTENER_CLOSED');setInterval(()=>{if(fs.existsSync('/tmp/main.release')){console.log('GRACEFUL_SHUTDOWN');process.exit(0)}},25)})});`;
 const pause = () => new Promise(resolve => setTimeout(resolve, 100));
 async function until(read, accepts, description) {
   const deadline = Date.now() + 15_000;
@@ -48,7 +48,7 @@ try {
     ...(flags.includes('--outer-init') ? ['--init'] : []), ...(directNode ? ['--entrypoint', 'node'] : []), imageId,
     ...(directNode ? ['-e', main] : ['node', '-e', main]));
   const pids = {};
-  for (const label of ['main', 'parent', 'orphan', 'control']) {
+  for (const label of ['main', 'parent', 'orphan', 'control', 'sibling']) {
     pids[label] = Number(await until(() => readFile(`/tmp/${label}.pid`), value => /^\d+$/.test(value), `${label} readiness`));
   }
   const before = Object.fromEntries(Object.entries(pids).map(([label, pid]) => [label, snapshot(pid)]));
@@ -56,6 +56,9 @@ try {
   assert.equal(before.orphan.ppid, pids.parent, 'Held orphan was not the transient parent\'s descendant');
   assert.equal(before.parent.ppid, pids.main, 'Transient parent did not belong to the main process');
   assert.equal(before.control.ppid, pids.main, 'Independent control did not belong to the main process');
+  assert.equal(before.sibling.ppid, pids.main, 'Independent sibling did not belong to the main process');
+  assert.equal(before.sibling.pgid, before.main.pgid, 'Independent sibling did not share the main process group');
+  assert.equal(before.sibling.sid, before.main.sid, 'Independent sibling did not share the main session');
   for (const label of ['orphan', 'control']) {
     assert.equal(before[label].sid, pids[label], `${label} did not create a detached session`);
     assert.equal(before[label].pgid, pids[label], `${label} did not create a detached process group`);
@@ -93,6 +96,7 @@ try {
   assert.equal(inspect().State.Running, true, 'Main stopped during orphan reaping');
   sameLive(snapshot(pids.main), before.main, 'Main after orphan termination');
   sameLive(snapshot(pids.control), before.control, 'Detached control after orphan termination');
+  sameLive(snapshot(pids.sibling), before.sibling, 'Independent sibling after orphan termination');
   assert.equal(execute("require('http').get('http://127.0.0.1:4200',r=>r.pipe(process.stdout)).on('error',e=>{throw e})"), 'alive');
   docker('kill', '--signal', 'TERM', containerId);
   await until(() => readFile('/tmp/main.term'), value => value === 'received', 'main SIGTERM forwarding');
@@ -100,6 +104,8 @@ try {
   sameLive(snapshot(pids.main), before.main, 'Main during cooperative shutdown');
   sameLive(snapshot(pids.control), before.control, 'Independent detached control during shutdown');
   assert.equal(readFile('/tmp/control.term'), '', 'SIGTERM was broadcast to the independent detached session');
+  sameLive(snapshot(pids.sibling), before.sibling, 'Independent sibling during shutdown');
+  assert.equal(readFile('/tmp/sibling.term'), '', 'SIGTERM was broadcast to an independent sibling in the main process group');
   release('main');
   await until(() => inspect().State, state => state.Running === false, 'graceful container exit');
   assert.equal(inspect().State.ExitCode, 0, 'Main/init did not preserve the graceful exit code');
@@ -107,7 +113,7 @@ try {
   console.log(JSON.stringify({ image, imageId, outerInit: flags.includes('--outer-init'), directNode, nonRootUid: before.main.uid,
     descendantBirth: before.orphan.birth, adopterPid: adopted.ppid, adopterExecutable: adopter.command[0],
     orphan: expectZombie ? 'same-identity zombie (negative control)' : 'absent /proc entry after termination',
-    listener: 'alive after reaping, closed after SIGTERM', detachedControl: 'same identity and unsignalled until container exit', gracefulExitCode: 0,
+    listener: 'alive after reaping, closed after SIGTERM', independentControls: 'detached and shared-group controls retain identity and receive no SIGTERM before container exit', gracefulExitCode: 0,
     qualification: 'synthetic init lifecycle; not full FLUJO startup/recovery' }));
 } finally {
   if (!containerId) {

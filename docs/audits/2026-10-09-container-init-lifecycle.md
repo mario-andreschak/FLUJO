@@ -45,8 +45,9 @@ All three rows passed with runtime UID 1000:
 Each row also observed the direct parent's zero-exit receipt and absent proc
 entry. Detached descendant/control SID and PGID equalled their own PIDs.
 The main listener stayed alive after orphan termination. SIGTERM reached the
-main process and closed its listener, while an independent detached control
-retained its live start identity and received no SIGTERM. The main then
+main process and closed its listener, while independent detached and
+shared-group controls retained their live start identities and received no
+SIGTERM. The main then
 exited with code zero after the explicit shutdown gate. Processes are not
 expected to survive exit of the container's PID namespace.
 
@@ -57,6 +58,14 @@ Its nested-init row was rejected because Docker's outer init adopted the
 descendant instead of the image's inner Tini. Merely observing eventual
 reaping by an outer init would therefore not qualify the intended subreaper.
 [Tini documents the difference](https://github.com/krallin/tini#subreaping).
+
+A third image enabled process-group forwarding with `tini -s -g --`
+(config ID
+`sha256:47c7fe68f5012f4459d516ea1d92d97e71377b00cde774e8bc966f190785654e`).
+The probe rejected its SIGTERM broadcast because the independent shared-group
+control recorded a received signal. The detached control alone would not have
+detected that change. [Tini documents immediate-child versus process-group
+forwarding](https://github.com/krallin/tini#process-group-killing).
 
 The cleanup fault probe created a real owned container, then injected loss
 of the successful Docker creation reply at the host API boundary. The init

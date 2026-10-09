@@ -99,8 +99,8 @@ does not pass. [Tini documents this subreaper behavior](https://github.com/krall
 After explicitly releasing the descendant, the probe checks its exit receipt
 and closed listener, then distinguishes a same-identity zombie from an absent
 `/proc` entry. The main listener must stay alive through reaping. During a
-held cooperative SIGTERM shutdown, an independent detached session must keep
-its live identity and receive no signal. The main listener closes and the
+held cooperative SIGTERM shutdown, independent detached and shared-group
+controls must keep their live identities and receive no signal. The main listener closes and the
 container exits with code zero only after the shutdown gate is released.
 Detached processes are not expected to survive container exit.
 
