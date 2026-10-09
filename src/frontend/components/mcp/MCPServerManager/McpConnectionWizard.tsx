@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Chip,
@@ -144,8 +144,12 @@ export default function McpConnectionWizard({
   const { t } = useI18n();
   const [step, setStep] = useState<WizardStep>('welcome');
   const [history, setHistory] = useState<WizardStep[]>([]);
+  const [installing, setInstalling] = useState(false);
+  const installingRef = useRef(false);
 
   useEffect(() => {
+    installingRef.current = false;
+    setInstalling(false);
     if (!open) return;
     setStep('welcome');
     setHistory([]);
@@ -157,11 +161,16 @@ export default function McpConnectionWizard({
   };
 
   const back = () => {
+    if (installingRef.current) return;
     setHistory((current) => {
       const previous = current[current.length - 1];
       if (previous) setStep(previous);
       return current.slice(0, -1);
     });
+  };
+
+  const close = () => {
+    if (!installingRef.current) onClose();
   };
 
   const progress = step === 'welcome' ? 18 : step === 'ai' ? 76 : 62;
@@ -219,6 +228,10 @@ export default function McpConnectionWizard({
           onConfigureExisting={onConfigureExisting}
           onAuthenticate={onAuthenticate}
           onManual={onManualCreation}
+          onInstallingChange={(value) => {
+            installingRef.current = value;
+            setInstalling(value);
+          }}
         />
       );
     }
@@ -288,7 +301,7 @@ export default function McpConnectionWizard({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth={step === 'ai' ? 'lg' : 'md'} aria-label={t('mcp.wizard.welcomeTitle')}>
+    <Dialog open={open} onClose={close} fullWidth maxWidth={step === 'ai' ? 'lg' : 'md'} aria-label={t('mcp.wizard.welcomeTitle')}>
       <DialogContent
         data-tour="mcp-setup-wizard"
         sx={{
@@ -331,7 +344,7 @@ export default function McpConnectionWizard({
         <Box sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             {history.length ? (
-              <IconButton onClick={back} aria-label={t('mcp.wizard.backAria')}>
+              <IconButton onClick={back} disabled={installing} aria-label={t('mcp.wizard.backAria')}>
                 <ArrowBackRoundedIcon />
               </IconButton>
             ) : (
@@ -343,7 +356,7 @@ export default function McpConnectionWizard({
             <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
               <AskFlujoButton />
               <BugReportButton variant="icon" />
-              <IconButton onClick={onClose} aria-label={t('mcp.modal.close')}>
+              <IconButton onClick={close} disabled={installing} aria-label={t('mcp.modal.close')}>
                 <CloseRoundedIcon />
               </IconButton>
             </Box>
@@ -356,7 +369,7 @@ export default function McpConnectionWizard({
               '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
             }}
           >
-            {renderBody()}
+            {open ? renderBody() : null}
           </Box>
         </Box>
       </DialogContent>

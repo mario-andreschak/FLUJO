@@ -1,5 +1,7 @@
 /** The hosted contract is deliberately focused; broad coverage remains local/manual. */
 export const CRITICAL_TEST_FILES = Object.freeze([
+  '__tests__/settings/backupRestoreRoutes.test.ts',
+  '__tests__/settings/backupStrictStorage.test.ts',
   '__tests__/workspace/workspaceListRoute.test.ts',
   '__tests__/workspace/workspaceCreateMcpRecords.test.ts',
   '__tests__/workspace/workspaceRouteWrapper.test.ts',
@@ -47,7 +49,15 @@ export const CRITICAL_TEST_FILES = Object.freeze([
 ]);
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
 export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
+  '__tests__/frontend/components/ChatHistory.test.tsx',
+  '__tests__/frontend/components/PersonaGoalCard.test.tsx',
+  '__tests__/frontend/components/PersonaGoalValidation.test.tsx',
+  '__tests__/frontend/components/BackupSettings.test.tsx',
   '__tests__/frontend/components/ModelConnectionWizard.test.tsx',
+  '__tests__/frontend/components/McpConnectionWizard.test.tsx',
+  '__tests__/frontend/components/McpAiConnectionPanel.test.tsx',
+  '__tests__/frontend/components/McpServerManagerWizardOwnership.test.tsx',
+  '__tests__/frontend/components/oauthPopup.test.ts',
   '__tests__/frontend/components/CardPickerGrid.test.tsx',
   '__tests__/frontend/components/PersonaCreationWizard.test.tsx',
   '__tests__/frontend/components/RoleVersionCardLocalization.test.tsx',
