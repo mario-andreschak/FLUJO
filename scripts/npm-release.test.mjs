@@ -696,6 +696,15 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   }
   const upload = prepare.steps.find(({ uses }) => uses?.startsWith('actions/upload-artifact@'));
   assert.equal(prepare.outputs.artifact_id, `\${{ steps.${upload.id}.outputs.artifact-id }}`);
+  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify.yml', import.meta.url), 'utf8'));
+  const isolationSetup = verification.jobs.test.steps.find(({ name }) => name === 'Prepare real Linux MCP isolation image');
+  const releaseIsolationSetup = prepare.steps.find(({ name }) => name === 'Prepare real Linux MCP isolation image for release verification');
+  const releasePrepare = prepare.steps.find(({ run }) => run === 'node scripts/npm-release.mjs prepare');
+  assert.equal(releaseIsolationSetup?.run, isolationSetup?.run,
+    'release verification must use the same pinned real Linux MCP isolation image as main CI');
+  assert.ok(prepare.steps.indexOf(releaseIsolationSetup) < prepare.steps.indexOf(releasePrepare));
+  assert.equal(releasePrepare.env.FLUJO_RUN_ISOLATION_SOURCE_PROBE, '1',
+    'release baseline must execute the real MCP isolation tests instead of silently skipping them');
   for (const job of [attest, publish, finalize]) {
     const download = job.steps.find(({ uses }) => uses?.startsWith('actions/download-artifact@'));
     assert.equal(download.with['artifact-ids'], '${{ needs.prepare.outputs.artifact_id }}');
