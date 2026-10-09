@@ -16,6 +16,7 @@ const createJestConfig = nextJest({ dir: "./" });
 
 // Shared across both projects: the "@/" alias.
 const moduleNameMapper = {
+  '^@flujo-ai/avatar-sdk/native-voice$': '<rootDir>/node_modules/@flujo-ai/avatar-sdk/dist/native-voice.js',
   "^@/(.*)$": "<rootDir>/src/$1",
   "^uuid$": "<rootDir>/__tests__/uuidJestAdapter.ts",
   // Direct backend compatibility tests retain their existing mocked policy

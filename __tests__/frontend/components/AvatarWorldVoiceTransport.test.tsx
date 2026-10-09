@@ -23,7 +23,8 @@ jest.mock('@/frontend/contexts/I18nContext', () => {
 });
 jest.mock('@/frontend/components/AvatarWorld/useAvatarWork', () => ({ useAvatarWork: jest.fn() }));
 jest.mock('@/frontend/components/AvatarWorld/useWorldPanel', () => ({ useWorldPanel: jest.fn() }));
-jest.mock('@/vendor/avatar/client/useNativeRouterVoice', () => ({
+jest.mock('@flujo-ai/avatar-sdk/native-voice', () => ({
+  DEFAULT_LOCALE: 'en',
   useNativeRouterVoice: jest.fn(),
   voiceHeaders: () => ({ 'Content-Type': 'application/json', 'x-flujo-avatar-client': '00000000-0000-4000-8000-000000000001' }),
 }));
@@ -31,7 +32,7 @@ jest.mock('@/vendor/avatar/client/useNativeRouterVoice', () => ({
 import AvatarWorld from '@/frontend/components/AvatarWorld';
 import { useAvatarWork } from '@/frontend/components/AvatarWorld/useAvatarWork';
 import { useWorldPanel } from '@/frontend/components/AvatarWorld/useWorldPanel';
-import { useNativeRouterVoice, type NativeVoiceTransport } from '@/vendor/avatar/client/useNativeRouterVoice';
+import { useNativeRouterVoice, type NativeVoiceTransport } from '@flujo-ai/avatar-sdk/native-voice';
 import type { AvatarWorldSnapshot } from '@/shared/types/avatar';
 
 const snapshot: AvatarWorldSnapshot = { checkedAt: 1, workModel: { modelId: 'model', label: 'My AI', verifiedAt: 1, ready: true },

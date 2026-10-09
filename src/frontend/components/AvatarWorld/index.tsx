@@ -13,12 +13,13 @@ import Watershed, { PLACE_ROUTES, PLACE_KINDS, LANDMARK_POSITIONS, type WorldPla
 import ConnectionSetup from './ConnectionSetup';
 import { useAvatarWork } from './useAvatarWork';
 import { useWorldPanel } from './useWorldPanel';
-import { useNativeRouterVoice, voiceHeaders, type NativeVoiceTransport } from '@/vendor/avatar/client/useNativeRouterVoice';
-import { DEFAULT_LOCALE } from '@/vendor/avatar/client/locale';
+import { useNativeRouterVoice, voiceHeaders, type NativeVoiceTransport } from '@flujo-ai/avatar-sdk/native-voice';
+import { DEFAULT_LOCALE } from '@flujo-ai/avatar-sdk/native-voice';
 import ResourcePreview from './ResourcePreview';
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
 import WorldLink from './WorldLink';
 import WorldScene from './WorldScene';
+import '@flujo-ai/avatar-sdk/styles.css';
 import styles from './world.module.css';
 
 export default function AvatarWorld({ voiceTransport }: { voiceTransport?: NativeVoiceTransport } = {}) {
