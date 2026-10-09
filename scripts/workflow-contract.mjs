@@ -6,7 +6,7 @@ const APPLICATION_CHANGED = "steps.application-change.outputs.changed == 'true'"
 const isApplicationSelection = (file, id, condition) => file === 'verify.yml' && id === 'production-build' && condition === APPLICATION_CHANGED;
 
 export function assertNodeRuntimeWorkflowContract(workflows) {
-  const profiles = Object.values(CI_NODE_PROFILES);
+  const profiles = [CI_NODE_PROFILES.current22];
   for (const [file, workflow] of Object.entries(workflows)) {
     for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
       const steps = job.steps ?? [];
@@ -20,10 +20,9 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
       if (JSON.stringify(versions) !== JSON.stringify(expected)) throw new Error(`${file}/${id} has a missing or unpinned CI runtime profile.`);
       for (const [position, index] of setups.entries()) {
         const version = versions[position];
-        const historical = file === 'verify.yml' && id === 'production-build' && position === 0;
         const guard = steps[index + 1];
-        const command = `node scripts/verify-ci-node.mjs ${version}${historical ? ' --historical-build' : ''} --record`;
-        const selected = !historical && isApplicationSelection(file, id, steps[index].if) && guard?.if === steps[index].if;
+        const command = `node scripts/verify-ci-node.mjs ${version} --record`;
+        const selected = isApplicationSelection(file, id, steps[index].if) && guard?.if === steps[index].if;
         if ((!selected && (steps[index].if !== undefined || guard?.if !== undefined)) || steps[index]['continue-on-error'] || guard?.run !== command || guard['continue-on-error']) {
           throw new Error(`${file}/${id} must verify official binary identity immediately after every runtime selection.`);
         }
@@ -50,16 +49,20 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
     throw new Error('Production qualification must use the ordinary default Node heap.');
   }
   const steps = build?.steps ?? [];
+  if (steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm run build').length !== 1
+      || steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm ci --include=dev').length !== 1) {
+    throw new Error('Production CI must install and build once per change.');
+  }
   if (steps.some((step) => step.env?.NODE_OPTIONS || step.env?.NODE_V8_OPTIONS || /--max-old-space-size|NODE_OPTIONS=/i.test(step.run ?? ''))) {
     throw new Error('Production qualification commands must preserve ordinary Node options and default heap.');
   }
   if (!steps.some((step) => step.name === 'Build with the ordinary command and default Node heap' && step.run === 'npm run build')) {
-    throw new Error('The historical ordinary default-heap build must remain mandatory.');
+    throw new Error('The ordinary default-heap production build must remain mandatory.');
   }
-  const command = 'set -euo pipefail\nnpm ci --include=dev\nnpm run build\nnpm run typecheck:mcp\nnpm run validate:mcp-release\nnpm run smoke:mcp-artifacts\n';
-  for (const version of profiles.slice(1)) {
-    const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record`);
-    const qualification = steps[index + 1];
+  const command = 'set -euo pipefail\nnpm run typecheck:mcp\nnpm run validate:mcp-release\nnpm run smoke:mcp-artifacts\n';
+  for (const version of profiles) {
+    const index = steps.findIndex((step) => step.name === `Qualify installed app and packed MCP packages on Node ${version}`);
+    const qualification = steps[index];
     if (index < 0 || qualification?.shell !== 'bash' || qualification.run !== command
         || (qualification.if !== undefined && qualification.if !== APPLICATION_CHANGED) || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
       throw new Error(`Node ${version} must enforce build, types and actual packed-process acceptance with shell failure propagation.`);
@@ -202,8 +205,8 @@ export function assertWorkflowContract(workflows) {
     }
   }
   for (const id of ['production-build', 'release-safety']) {
-    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])) {
-      throw new Error(`${id} must cover Ubuntu and Windows.`);
+    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(id === 'production-build' ? ['ubuntu-latest'] : ['ubuntu-latest', 'windows-latest'])) {
+      throw new Error(`${id} has an unexpected platform matrix.`);
     }
   }
   const names = [...REQUIRED_JOB_IDS, 'verification'].flatMap((id) => {

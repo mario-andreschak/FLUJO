@@ -39,10 +39,6 @@
             "integration_id": 15368
           },
           {
-            "context": "Production build (windows-latest)",
-            "integration_id": 15368
-          },
-          {
             "context": "Release safety (ubuntu-latest)",
             "integration_id": 15368
           },

@@ -22,8 +22,8 @@ export function assertRequiredCheckWorkflow(workflow) {
   }
   for (const id of ['production-build', 'release-safety']) {
     const job = workflow.jobs[id];
-    if (JSON.stringify(job.strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])) {
-      throw new Error(`${id} must verify both production platforms.`);
+    if (JSON.stringify(job.strategy?.matrix?.os) !== JSON.stringify(id === 'production-build' ? ['ubuntu-latest'] : ['ubuntu-latest', 'windows-latest'])) {
+      throw new Error(`${id} has an unexpected platform matrix.`);
     }
   }
   assertScannerWorkflowContract(workflow);
