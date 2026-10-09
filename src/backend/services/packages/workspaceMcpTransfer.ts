@@ -14,7 +14,7 @@ import { sameTrustedHostConsent, verifyTrustedHostMcp } from '@/backend/services
 import { prepareGithubServerRuntime } from '@/backend/services/mcp/githubInstall';
 import { prepareRegistryServerRuntime } from '@/backend/services/mcp/registryInstall';
 import { createShippedServerConfig, shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
-import { ensureShippedWorkspacePackages, shippedWorkspacePackageRuntimeDigest } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { ensureShippedWorkspacePackages, shippedWorkspacePackagePortableRuntimeDigest, shippedWorkspacePackageRuntimeDigest, shippedWorkspacePackageRuntimeDigests } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { assertLinkFreeFileParent, atomicWriteWithoutLinks } from '@/backend/services/workspace/backupRestoreFs';
 
 export interface WorkspaceMcpTransferServer {
@@ -24,6 +24,8 @@ export interface WorkspaceMcpTransferServer {
   installOrigin?: McpInstallOrigin;
   /** Runtime identity of an unmodified workspace copy; edits are not included in snapshots. */
   bundledRuntimeSha256?: string;
+  /** Text-newline-independent runtime identity for a different OS image. */
+  bundledPortableRuntimeSha256?: string;
   /** Disabled, unsupported configurations are retained but never started on the worker. */
   reason?: string;
 }
@@ -242,7 +244,11 @@ export async function pinWorkspaceMcpTransferPlan(
       const packageRoot = absolute(entry.sourceRootPath) ? entry.sourceRootPath
         : pathApi(plan.sourceWorkspaceRoot).resolve(plan.sourceWorkspaceRoot, entry.sourceRootPath);
       if (relativeInside(plan.sourceWorkspaceRoot, packageRoot) !== undefined) {
-        try { entry.bundledRuntimeSha256 = await shippedWorkspacePackageRuntimeDigest(packageRoot); }
+        try {
+          const digests = await shippedWorkspacePackageRuntimeDigests(packageRoot);
+          entry.bundledRuntimeSha256 = digests.runtimeSha256;
+          entry.bundledPortableRuntimeSha256 = digests.portableRuntimeSha256;
+        }
         catch (error) { fail(entry.name, error instanceof Error ? error.message : 'The copied package could not be inspected.'); }
       }
       continue;
@@ -343,6 +349,14 @@ function preparationIdentity(entry: WorkspaceMcpTransferServer, plan: WorkspaceM
   };
 }
 
+async function bundledRuntimeDiffers(entry: WorkspaceMcpTransferServer, targetRoot: string): Promise<boolean> {
+  if (entry.bundledPortableRuntimeSha256) {
+    return await shippedWorkspacePackagePortableRuntimeDigest(targetRoot) !== entry.bundledPortableRuntimeSha256;
+  }
+  return Boolean(entry.bundledRuntimeSha256
+    && await shippedWorkspacePackageRuntimeDigest(targetRoot) !== entry.bundledRuntimeSha256);
+}
+
 async function runtimePathExists(target: string, file = false): Promise<boolean> {
   const workspace = getWorkspaceDataDir();
   const relative = path.relative(workspace, target);
@@ -379,8 +393,7 @@ async function existingRuntime(
       || !targetRoot || canonical(verified.policy.sourceRoot) !== canonical(targetRoot)) {
       throw new Error('The approved bundled runtime does not belong to this worker package.');
     }
-    if (entry.bundledRuntimeSha256
-      && await shippedWorkspacePackageRuntimeDigest(targetRoot) !== entry.bundledRuntimeSha256) {
+    if (await bundledRuntimeDiffers(entry, targetRoot)) {
       throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
     }
     // Read authoritative storage after the awaited provenance checks. A snapshot
@@ -452,9 +465,9 @@ async function prepareConfig(
     // Snapshots omit MCP checkouts: materialize the target distribution, not
     // the source machine's edited package or its dependency junction.
     await ensureShippedWorkspacePackages(targetWorkspaceRoot, undefined, [descriptor.packageDirectory]);
-    if (entry.bundledRuntimeSha256) {
+    if (entry.bundledRuntimeSha256 || entry.bundledPortableRuntimeSha256) {
       const restoredRoot = path.join(targetWorkspaceRoot, 'mcp-servers', descriptor.packageDirectory);
-      if (await shippedWorkspacePackageRuntimeDigest(restoredRoot) !== entry.bundledRuntimeSha256) {
+      if (await bundledRuntimeDiffers(entry, restoredRoot)) {
         throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
       }
     }
@@ -525,7 +538,9 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
     || typeof plan.sourceWorkspaceRoot !== 'string' || !absolute(plan.sourceWorkspaceRoot)
     || plan.servers.some(entry => !entry || typeof entry.name !== 'string' || !entry.name
       || typeof entry.sourceRootPath !== 'string' || !kinds.has(entry.kind)
-      || (entry.bundledRuntimeSha256 !== undefined && (typeof entry.bundledRuntimeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.bundledRuntimeSha256))))
+      || (entry.bundledRuntimeSha256 !== undefined && (typeof entry.bundledRuntimeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.bundledRuntimeSha256)))
+      || (entry.bundledPortableRuntimeSha256 !== undefined && (entry.bundledRuntimeSha256 === undefined
+        || typeof entry.bundledPortableRuntimeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.bundledPortableRuntimeSha256))))
     || new Set(plan.servers.map(entry => entry.name)).size !== plan.servers.length) {
     throw new Error('Unsupported MCP workspace transfer plan.');
   }

@@ -351,6 +351,7 @@ it('pins an unchanged workspace package and rejects source edits instead of sile
   const plan = buildWorkspaceMcpTransferPlan([config], mockWorkspace);
   const pinned = await pinWorkspaceMcpTransferPlan(plan);
   expect(pinned.servers[0].bundledRuntimeSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(pinned.servers[0].bundledPortableRuntimeSha256).toMatch(/^[a-f0-9]{64}$/);
   await fs.writeFile(path.join(mockWorkspace, 'mcp-servers/filesystem/local-customization.ts'), '// custom source');
   await expect(pinWorkspaceMcpTransferPlan(plan)).rejects.toThrow('local changes');
 });
@@ -359,7 +360,7 @@ it('refuses to replace a pinned workspace runtime with a different worker build'
   await ensureShippedWorkspacePackages(mockWorkspace, undefined, ['filesystem']);
   const config = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'filesystem')!);
   const plan = await pinWorkspaceMcpTransferPlan(buildWorkspaceMcpTransferPlan([config], mockWorkspace));
-  plan.servers[0].bundledRuntimeSha256 = '0'.repeat(64);
+  plan.servers[0].bundledPortableRuntimeSha256 = '0'.repeat(64);
   loadConfigs.mockResolvedValue([config]);
   const result = await reinstallWorkspaceMcpServers(plan);
   expect(result.ok).toBe(false);
