@@ -31,6 +31,19 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/mcp/modelRiskAssessment.test.ts',
   '__tests__/mcp/modelRiskAssessmentRoute.test.ts',
   '__tests__/model/readOnlyAssessmentAdapter.test.ts',
+  '__tests__/mcp/discoverySearch.test.ts',
+  '__tests__/mcp/registryDiscovery.test.ts',
+  '__tests__/mcp/assistedPreferences.test.ts',
+  '__tests__/mcp/assistedRanking.test.ts',
+  '__tests__/mcp/assistedInstall.test.ts',
+  '__tests__/mcp/assistantRoute.test.ts',
+  '__tests__/mcp/registryInstall.test.ts',
+  '__tests__/mcp/registryIconsRoute.test.ts',
+  '__tests__/mcp/registryDiscoveryClient.test.ts',
+  '__tests__/mcp/registryDiscoveryRoute.test.ts',
+  '__tests__/mcp/quality/orchestrator.test.ts',
+  '__tests__/mcp/installBestAssistedTool.test.ts',
+  '__tests__/mcp/assistedDiscoveryBody.test.ts',
 ]);
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
 export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
@@ -40,6 +53,10 @@ export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
   '__tests__/frontend/components/RoleVersionCardLocalization.test.tsx',
   '__tests__/frontend/components/McpSecurityReviewPanel.test.tsx',
   '__tests__/frontend/components/McpModelRiskAssessmentPanel.test.tsx',
+  '__tests__/frontend/components/ServerModalDiscoverySession.test.tsx',
+  '__tests__/frontend/components/MarketplaceTab.test.tsx',
+  '__tests__/frontend/components/McpAiConnectionPanel.test.tsx',
+  '__tests__/frontend/components/McpConnectionWizard.test.tsx',
 ]);
 export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {

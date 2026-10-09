@@ -74,6 +74,33 @@ describe('MCP assistant public failure boundary', () => {
     expect(await response.text()).toBe(`${JSON.stringify({ type: 'complete', result })}\n`);
   });
 
+  it('passes the genuine request cancellation signal to research', async () => {
+    researchMock.mockResolvedValueOnce({ candidates: [] });
+    const req = request({ action: 'research', query: 'browse websites', modelId: 'model-1' });
+    await (await POST(req)).text();
+    expect(researchMock).toHaveBeenCalledWith(expect.objectContaining({ signal: req.signal }));
+  });
+
+  it('admits explicit model-free lookup of existing bundled options', async () => {
+    researchMock.mockResolvedValueOnce({ candidates: [] });
+    const response = await POST(request({ action: 'research', query: 'work with local files', modelId: '' }));
+    expect(response.status).toBe(200); await response.text();
+    expect(researchMock).toHaveBeenCalledWith(expect.objectContaining({ modelId: '' }));
+  });
+
+  it.each([
+    { action: 'research', query: 'x'.repeat(401), modelId: 'model-1' },
+    { action: 'research', query: 'files', modelId: 'x'.repeat(257) },
+    { action: 'research', query: 'files', modelId: ' ' },
+    { action: 'research', query: 'files', modelId: 'model-1', padding: 'x'.repeat(64 * 1024) },
+    [],
+  ])('bounds research/body admission before any model or install effect', async body => {
+    expect((await POST(request(body))).status).toBe(400);
+    expect(researchMock).not.toHaveBeenCalled();
+    expect(installMock).not.toHaveBeenCalled();
+    expect(troubleshootMock).not.toHaveBeenCalled();
+  });
+
   it('preserves install results, including an explicit service validation error', async () => {
     const result = { installed: false, error: 'Approval is required before installation.' };
     installMock.mockResolvedValueOnce(result);

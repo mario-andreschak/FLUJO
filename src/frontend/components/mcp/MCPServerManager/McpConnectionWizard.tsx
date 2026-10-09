@@ -38,6 +38,7 @@ export interface McpConnectionWizardProps {
   onChooseSetup: (tab: ServerSetupTab) => void;
   onManualCreation: () => void;
   onInstalled: (serverName: string) => void | Promise<void>;
+  onConfigureExisting?: (serverName: string) => void | Promise<void>;
   onAuthenticate: (serverName: string) => Promise<void>;
 }
 
@@ -136,6 +137,7 @@ export default function McpConnectionWizard({
   onChooseSetup,
   onManualCreation,
   onInstalled,
+  onConfigureExisting,
   onAuthenticate,
 }: McpConnectionWizardProps) {
   const theme = useTheme();
@@ -214,6 +216,7 @@ export default function McpConnectionWizard({
       return (
         <McpAiConnectionPanel
           onInstalled={onInstalled}
+          onConfigureExisting={onConfigureExisting}
           onAuthenticate={onAuthenticate}
           onManual={onManualCreation}
         />

@@ -36,18 +36,17 @@ function isScoped(name: string): boolean {
 }
 
 async function npmGet(path: string, signal: AbortSignal): Promise<Response | null> {
+  signal.throwIfAborted();
   const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(`${NPM_API}${path}`, { signal: controller.signal, cache: 'no-store' });
+    return await fetch(`${NPM_API}${path}`, { signal: AbortSignal.any([controller.signal, signal]), cache: 'no-store' });
   } catch (error) {
+    signal.throwIfAborted();
     log.warn(`npm request failed (${path})`, error instanceof Error ? error.message : error);
     return null;
   } finally {
     clearTimeout(timer);
-    signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -65,6 +64,7 @@ export const npmDownloadsProvider: QualitySignalProvider = {
   },
 
   async prefetch(_query, candidates, signal) {
+    signal.throwIfAborted();
     const names = candidates
       .map(npmPackageName)
       .filter((n): n is string => Boolean(n) && !downloads.has(n as string));
@@ -73,6 +73,7 @@ export const npmDownloadsProvider: QualitySignalProvider = {
 
     // Bulk endpoint for unscoped names (one request per chunk).
     for (let i = 0; i < unscoped.length; i += BULK_CHUNK) {
+      signal.throwIfAborted();
       const chunk = unscoped.slice(i, i + BULK_CHUNK);
       const res = await npmGet(`/downloads/point/last-week/${chunk.join(',')}`, signal);
       if (!res || !res.ok) continue;
@@ -89,18 +90,21 @@ export const npmDownloadsProvider: QualitySignalProvider = {
           }
         }
       } catch (error) {
+        signal.throwIfAborted();
         log.warn('Failed to parse npm bulk downloads response', error);
       }
     }
 
     // Scoped names one at a time (bulk endpoint rejects them).
     for (const name of scoped) {
+      signal.throwIfAborted();
       const res = await npmGet(`/downloads/point/last-week/${name}`, signal);
       if (!res || !res.ok) continue;
       try {
         const body = (await res.json()) as { downloads?: number };
         if (typeof body.downloads === 'number') downloads.set(name, body.downloads);
       } catch {
+        signal.throwIfAborted();
         /* skip unparseable */
       }
     }

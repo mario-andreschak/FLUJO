@@ -57,6 +57,106 @@ const result: McpAssistantResearchResult = {
 };
 
 describe('McpAiConnectionPanel', () => {
+  it('shows the recommendation category and evidenced service cost before consent', async () => {
+    researchMcpConnectionMock.mockResolvedValue({
+      ...result,
+      candidates: [{ ...result.candidates[0], recommendationTier: 'flujo-supported',
+        cost: { kind: 'byok', evidence: 'The service requires your own provider account; usage charges may apply.' } }],
+    });
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'free web search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    expect(await screen.findByText('Supported by FLUJO')).toBeInTheDocument();
+    expect(screen.getByText('Bring your own key')).toBeInTheDocument();
+    expect(screen.getByText('The service requires your own provider account; usage charges may apply.')).toBeInTheDocument();
+    expect(installMcpRecommendationMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /install and connect/i })).toBeDisabled();
+  });
+
+  it('opens an existing bundled server configuration without install consent or provider effects', async () => {
+    researchMcpConnectionMock.mockResolvedValue({ ...result, candidates: [{ ...result.candidates[0],
+      action: 'configure-existing', existingServerName: 'filesystem', recommendationTier: 'flujo-supported',
+      cost: { kind: 'free', evidence: 'Local filesystem tools; no service account is required.' } }] });
+    const configure = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} onConfigureExisting={configure} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'work with local files' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
+    expect(configure).toHaveBeenCalledWith('filesystem');
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install and connect/i })).not.toBeInTheDocument();
+    expect(installMcpRecommendationMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps unknown service pricing explicit and does not label a keyless connector free', async () => {
+    researchMcpConnectionMock.mockResolvedValue({ ...result, candidates: [{ ...result.candidates[0],
+      cost: { kind: 'unknown', evidence: 'The publisher supplied no service pricing evidence.' } }] });
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    expect(await screen.findByText('Service pricing unconfirmed')).toBeInTheDocument();
+    expect(screen.queryByText('Free for this capability')).not.toBeInTheDocument();
+  });
+
+  it('offers manual setup when only agent, media or fallback models exist', async () => {
+    jest.mocked(modelService.loadModels).mockResolvedValueOnce([
+      { id: 'cli', name: 'CLI agent', adapter: 'codex-cli' },
+      { id: 'media', name: 'Image route', adapter: 'openai', outputModalities: ['text', 'image'] },
+      { id: 'fallback', name: 'Routing policy', adapter: 'openai', fallbackPolicy: { enabled: true } },
+    ] as never);
+    const manual = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={manual} />
+    </ThemeProvider>);
+    expect(await screen.findByText(/choose a saved text model for research/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
+    expect(manual).toHaveBeenCalledTimes(1); expect(researchMcpConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('can find and configure bundled options without a model account', async () => {
+    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    researchMcpConnectionMock.mockResolvedValue({ ...result, candidates: [{ ...result.candidates[0],
+      action: 'configure-existing', existingServerName: 'filesystem', recommendationTier: 'flujo-supported', cost: { kind: 'free' } }] });
+    const configure = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} onConfigureExisting={configure} />
+    </ThemeProvider>);
+    await screen.findByText(/choose a saved text model for research/i);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'work with local files' } });
+    fireEvent.click(screen.getByRole('button', { name: /find bundled options/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
+    expect(researchMcpConnectionMock).toHaveBeenCalledWith({ query: 'work with local files', modelId: '' }, expect.any(Function), expect.any(AbortSignal));
+    expect(configure).toHaveBeenCalledWith('filesystem'); expect(installMcpRecommendationMock).not.toHaveBeenCalled();
+  });
+
+  it('offers configuration when an approved install encounters an existing mismatched server', async () => {
+    researchMcpConnectionMock.mockResolvedValue(result);
+    installMcpRecommendationMock.mockResolvedValue({ installed: false, needsConfiguration: true, existingServerName: 'search', error: 'Configure existing server.' });
+    const configure = jest.fn(), installed = jest.fn(), authenticate = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={installed} onAuthenticate={authenticate} onManual={jest.fn()} onConfigureExisting={configure} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    fireEvent.click(await screen.findByLabelText(/approve saving and connecting/i));
+    fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
+    expect(configure).toHaveBeenCalledWith('search');
+    expect(installed).not.toHaveBeenCalled(); expect(authenticate).not.toHaveBeenCalled();
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.mocked(modelService.loadModels).mockReset().mockResolvedValue([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never);
@@ -71,7 +171,7 @@ describe('McpAiConnectionPanel', () => {
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'free web search' } });
     await screen.findByRole('button', { name: /retry loading models/i });
-    expect(screen.getByRole('button', { name: /research options/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /open manual setup/i })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
