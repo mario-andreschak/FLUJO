@@ -1,4 +1,5 @@
 import { FlowExecutor } from './FlowExecutor';
+import { ConversationLogReadPressureError } from './conversationLogReadAdmission';
 import { loadItem as loadItemBackend, assertSafeCollectionId } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
@@ -158,6 +159,7 @@ async function loadFromDurableStorage(conversationId: string): Promise<SharedSta
       return state;
     }
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.warn('Error loading conversation state from storage', { conversationId, error });
   }
   return undefined;

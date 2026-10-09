@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
@@ -39,6 +40,7 @@ async function GET_handler(
     const resources = await listRunResources(conversationId);
     return NextResponse.json({ resources });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     if (isRunResourceIndexPressureError(error)) {
       return NextResponse.json({ error: error.message, code: error.code, retryable: true },
         { status: 503, headers: { 'Retry-After': '1' } });

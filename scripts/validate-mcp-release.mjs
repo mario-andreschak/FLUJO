@@ -120,6 +120,7 @@ for (const required of [
   'scripts/launch-next.mjs',
   'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',
+  'scripts/subscription-allowance.mjs',
   'mcp-servers/browser/scripts/install-browser.mjs',
   '.next/BUILD_ID',
   '.next/routes-manifest.json',

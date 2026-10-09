@@ -35,6 +35,7 @@ jest.mock('@/utils/logger', () => ({
 import { GET as listResources } from '@/app/v1/chat/conversations/[conversationId]/resources/route';
 import { GET as readResource } from '@/app/v1/chat/conversations/[conversationId]/resources/[resourceId]/content/route';
 import { RunResourceIndexPressureError } from '@/backend/services/runResources/indexCache';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 
 const conversationContext = {
   params: Promise.resolve({ conversationId: 'conversation_persona' }),
@@ -48,6 +49,17 @@ function request(path: string) {
 }
 
 describe('Persona run-resource HTTP boundaries', () => {
+  it.each([
+    ['CONVERSATION_LOG_READ_BUSY', 429],
+    ['CONVERSATION_LOG_READ_MEMORY', 503],
+  ] as const)('preserves %s for the shared HTTP wrapper before reading resources', async (code, status) => {
+    const pressure = new ConversationLogReadPressureError(code, status);
+    loadConversationStateMock.mockRejectedValue(pressure);
+    await expect(listResources(request('/v1/chat/conversations/conversation_persona/resources'), conversationContext)).rejects.toBe(pressure);
+    await expect(readResource(request('/v1/chat/conversations/conversation_persona/resources/resource_1/content'), resourceContext)).rejects.toBe(pressure);
+    expect(listRunResourcesMock).not.toHaveBeenCalled();
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
   let ownershipMarkers: Record<string, unknown>;
 
   beforeEach(() => {

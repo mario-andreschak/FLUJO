@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { COMPACTION_SUMMARY_MARKER } from '@/backend/execution/flow/handlers/summarizingCompaction';
-import { projectMessages, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { projectMessages, withConversationLogEvents } from '@/backend/execution/flow/conversationLog';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 import {
   MEMORY_KINDS,
@@ -145,13 +145,13 @@ export async function buildMemoryMaintenancePlan(input: {
   candidateLimit?: number;
   completedAt?: number;
 }): Promise<MemoryMaintenancePlan> {
-  const messages = input.conversationId
-    ? projectMessages(await readConversationLog(input.conversationId) ?? [])
-    : [];
-  const selected = messages.filter((message) => (
+  const select = (messages: FlujoChatMessage[]) => messages.filter((message) => (
     (message.role === 'user' || message.role === 'assistant')
     && (input.completedAt === undefined || message.timestamp <= input.completedAt)
   )).slice(-MAX_EVIDENCE_ITEMS);
+  const selected = input.conversationId
+    ? await withConversationLogEvents(input.conversationId, async events => select(projectMessages(events ?? [])))
+    : [];
   if (selected.length === 0 && input.fallbackOutput?.trim()) {
     selected.push({
       id: `${input.sourceDispatchId}:outcome`,

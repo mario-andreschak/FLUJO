@@ -46,6 +46,28 @@ actions or an unfolded subflow invocation also remains protected. Byte/count
 pressure never authorizes discarding that ownership. The cache does not truncate
 canonical messages, drop retry markers or clear a live registry to meet a budget.
 
+## Complete conversation-log recovery
+
+Canonical JSONL recovery streams 64 KiB chunks from one opened file instead of
+holding the complete UTF-8 text and an array of split lines alongside parsed
+events. It reads the file size observed on that handle; later appends belong to
+the next read. Existing event order and malformed-tail handling are preserved.
+
+Full-history reads share four admission slots across workspaces. Before reading,
+each reserves a conservative `16 * fileBytes + 128 KiB` estimate against current
+V8 heap headroom, leaving 64 MiB available for other work. Callback-scoped
+consumers hold that reservation through transcript projection. This estimate is
+not a hard memory guarantee and does not cover all snapshot, provider, external
+memory or subsequent retained-context allocations.
+
+Admission refuses overload without truncating history or evicting live state.
+HTTP callers receive `CONVERSATION_LOG_READ_BUSY` (429) or
+`CONVERSATION_LOG_READ_MEMORY` (503), with `Retry-After: 5` and private/no-store
+caching. Loader failures of these types propagate instead of becoming a false
+404. The compatibility `readConversationLog` API releases admission when it
+returns its events; callers retaining or projecting events should use
+`withConversationLogEvents` to keep the temporary allocation covered.
+
 ## Diagnostics
 
 `getConversationCacheDiagnostics()` returns workspace-scoped counters and numeric
