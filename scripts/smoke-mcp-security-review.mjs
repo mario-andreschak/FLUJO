@@ -88,11 +88,60 @@ try {
   assert.equal(review.scanner.dependencyLookup, 'offline');
   assert.ok(review.limitations.some(value => value.includes('Offline')));
   assert.equal('safe_to_install' in review, false);
+  // Qualify browser-style disconnect against the actual built route after its
+  // scanner reaches Running; a staging-only abort is weaker evidence.
+  const controller = new AbortController();
+  const cancellable = fetch(`${base}/api/mcp/security-review`, {
+    method: 'POST', headers: { authorization: `Bearer ${operator.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ repositoryUrl: 'https://github.com/mario-andreschak/mcp-voice' }), signal: controller.signal,
+  }).then(() => ({ aborted: false }), () => ({ aborted: true }));
+  let activeId;
+  try {
+    const deadline = Date.now() + 30_000;
+    while (!activeId && Date.now() < deadline) {
+      await delay(100);
+      const list = spawnSync('docker', ['ps', '--filter', 'name=^/flujo-security-review-', '--format', '{{.ID}}'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+      assert.equal(list.status, 0);
+      for (const id of list.stdout.trim().split('\n').filter(Boolean)) {
+        const inspected = spawnSync('docker', ['inspect', id], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+        assert.equal(inspected.status, 0);
+        const [record] = JSON.parse(inspected.stdout);
+        if (record.Image === image && record.State.Running && record.Config.Cmd[0] === 'scan') activeId = record.Id;
+      }
+    }
+    assert.ok(activeId, 'Observe actual route scanner before disconnect');
+    const concurrent = await post(body);
+    assert.equal(concurrent.status, 200);
+    assert.equal((await concurrent.json()).review.status, 'unavailable');
+  } finally {
+    controller.abort();
+    assert.equal((await cancellable).aborted, true);
+  }
+  const cleanupDeadline = Date.now() + 30_000;
+  while (Date.now() < cleanupDeadline) {
+    const listing = spawnSync('docker', ['ps', '--all', '--no-trunc', '--filter', `id=${activeId}`, '--format', '{{.ID}}'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    assert.equal(listing.status, 0);
+    if (!listing.stdout.trim()) break;
+    await delay(200);
+  }
+  const residual = spawnSync('docker', ['ps', '--all', '--no-trunc', '--filter', `id=${activeId}`, '--format', '{{.ID}}'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  assert.equal(residual.status, 0); assert.equal(residual.stdout.trim(), '');
+  // Capacity remains owned until seed+volume cleanup finishes, then is reusable.
+  let resumed;
+  const resumeDeadline = Date.now() + 30_000;
+  do {
+    await delay(200);
+    const resumedResponse = await post({ repositoryUrl: 'https://github.com/mario-andreschak/mcp-voice' });
+    assert.equal(resumedResponse.status, 200);
+    resumed = (await resumedResponse.json()).review;
+  } while (resumed.status === 'unavailable' && !resumed.source && Date.now() < resumeDeadline);
+  assert.ok(['partial', 'reviewed'].includes(resumed.status), 'Review capacity recovers after disconnected scanner cleanup');
   assert.equal(await fs.readFile(operator.env.FLUJO_OWNER_AUTH_FILE).then(value => value.equals(originalPolicy)), true);
   await assert.rejects(fs.access(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE), { code: 'ENOENT' });
   evidence = { builtHttpAdmission: true, unlockedOwnerOnly: true, invalidBodiesRefused: true, livePublicSource: review.source,
     scanner: review.scanner, status: review.status, risk: review.risk, findings: review.findings.length,
-    reportSha256: createHash('sha256').update(JSON.stringify(review)).digest('hex'), authorityUnchanged: true };
+    reportSha256: createHash('sha256').update(JSON.stringify(review)).digest('hex'), authorityUnchanged: true,
+    actualHttpDisconnectCleanup: true, concurrentReviewRefused: true, capacityRecovered: true };
 } catch (error) {
   await retain(); throw error;
 } finally {
