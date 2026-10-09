@@ -70,12 +70,20 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
     // Focus the popup
     popup.focus();
 
+    let settled = false;
+    const stopMonitoring = () => {
+      settled = true;
+      clearInterval(pollTimer);
+      clearTimeout(deadlineTimer);
+    };
+
     // Poll for popup closure or URL changes
     const pollTimer = setInterval(() => {
+      if (settled) return;
       try {
         // Check if popup is closed
         if (popup.closed) {
-          clearInterval(pollTimer);
+          stopMonitoring();
           log.info('OAuth popup was closed by user');
           onClose?.();
           reject(new Error('OAuth popup was closed by user'));
@@ -93,7 +101,7 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
 
         // Check if we're back on our domain (callback URL)
         if (popupUrl.includes('/mcp')) {
-          clearInterval(pollTimer);
+          stopMonitoring();
           
           // Parse URL parameters
           const url = new URL(popupUrl);
@@ -127,9 +135,10 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
     }, 1000);
 
     // Set timeout to prevent infinite polling
-    setTimeout(() => {
+    const deadlineTimer = setTimeout(() => {
+      if (settled) return;
+      stopMonitoring();
       if (!popup.closed) {
-        clearInterval(pollTimer);
         popup.close();
         const error = 'OAuth authentication timed out';
         log.error(error);
