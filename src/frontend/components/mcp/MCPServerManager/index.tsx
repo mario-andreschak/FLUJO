@@ -657,8 +657,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // The AI installer persists an exact, approved Registry plan on the backend. For
   // OAuth recommendations, finish the same initiate → popup flow without saving a
   // duplicate config from the wizard.
+  const wizardCallbackEpoch = connectionWizardEpoch.current;
   const handleAiAuthenticate = async (serverName: string): Promise<void> => {
-    const epoch = connectionWizardEpoch.current;
+    const epoch = wizardCallbackEpoch;
     const ownsWizard = () => connectionWizardOpen.current && connectionWizardEpoch.current === epoch;
     if (!ownsWizard()) return;
     const windowName = `oauth_${serverName}_wizard_${connectionWizardId}_${epoch}`;
@@ -687,8 +688,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   const handleAiInstalled = async (serverName: string): Promise<void> => {
-    const epoch = connectionWizardEpoch.current;
-    if (!connectionWizardOpen.current) return;
+    const epoch = wizardCallbackEpoch;
+    if (!connectionWizardOpen.current || connectionWizardEpoch.current !== epoch) return;
     await retryServer(serverName);
     if (connectionWizardOpen.current && connectionWizardEpoch.current === epoch) setConnectionWizardOpen(false);
   };
