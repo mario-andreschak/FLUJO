@@ -26,7 +26,7 @@ import {
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
 import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
@@ -124,6 +124,14 @@ export default function PersonaCreationWizard({
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [step, setStep] = useState(0);
+  const dialogId = useId();
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousStepRef = useRef(step);
+  useEffect(() => {
+    const changed = previousStepRef.current !== step;
+    previousStepRef.current = step;
+    if (open && changed) stepHeadingRef.current?.focus();
+  }, [open, step]);
   const [roles, setRoles] = useState<RolesResponse | null>(null);
   const [flows, setFlows] = useState<Flow[]>([]);
   const [name, setName] = useState('');
@@ -591,9 +599,9 @@ export default function PersonaCreationWizard({
         fullScreen={fullScreen}
         fullWidth
         maxWidth="lg"
-        aria-labelledby="persona-create-title"
+        aria-labelledby={`${dialogId}-title`}
       >
-        <DialogTitle id="persona-create-title">{t('personas.create.title')}</DialogTitle>
+        <DialogTitle id={`${dialogId}-title`}>{t('personas.create.title')}</DialogTitle>
         {loading && <LinearProgress />}
         <DialogContent dividers>
           <Stack spacing={3}>
@@ -644,7 +652,7 @@ export default function PersonaCreationWizard({
 
             {step === 0 && (
               <Stack spacing={2}>
-                <Typography variant="h5">{t('personas.create.identity.title')}</Typography>
+                <Typography variant="h5" component="h3" ref={stepHeadingRef} tabIndex={-1}>{t('personas.create.identity.title')}</Typography>
                 <Typography color="text.secondary">{t('personas.create.identity.help')}</Typography>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
                   <Avatar src={avatarUrl || undefined} sx={{ width: 88, height: 88 }}>
@@ -662,12 +670,13 @@ export default function PersonaCreationWizard({
             {step === 1 && (
               <Stack spacing={2}>
                 <Box>
-                  <Typography variant="h5">{t('personas.create.roleTitle')}</Typography>
+                  <Typography variant="h5" component="h3" ref={stepHeadingRef} tabIndex={-1}>{t('personas.create.roleTitle')}</Typography>
                   <Typography color="text.secondary">{t('personas.create.roleHelp')}</Typography>
                 </Box>
                 <CardPickerGrid
                   searchable
                   selectionMode="single"
+                  autoFocusSearch={false}
                   ariaLabel={t('personas.create.roleTitle')}
                   emptyMessage={t('personas.create.noRolesHelp')}
                   isLoading={!roles && loading}
@@ -677,7 +686,7 @@ export default function PersonaCreationWizard({
                     selected: roleVersionId === role.id,
                     searchText: `${role.name} ${role.mission}`,
                     onSelect: () => setRole(role.id),
-                    content: <RoleVersionCard role={role} selected={roleVersionId === role.id} plainLanguage onSelect={() => {}} />,
+                    content: <RoleVersionCard role={role} selected={roleVersionId === role.id} plainLanguage />,
                   }))}
                 />
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
@@ -690,7 +699,7 @@ export default function PersonaCreationWizard({
             {step === 3 && (
               <Stack spacing={2}>
                 <Box>
-                  <Typography variant="h5">{t('personas.create.behaviorsTitle')}</Typography>
+                  <Typography variant="h5" component="h3" ref={stepHeadingRef} tabIndex={-1}>{t('personas.create.behaviorsTitle')}</Typography>
                   <Typography color="text.secondary">{t('personas.create.behaviorsHelp')}</Typography>
                 </Box>
                 {selectedBehaviors.map((flow) => readiness[flow.id]?.state !== 'ready' && (
@@ -699,6 +708,7 @@ export default function PersonaCreationWizard({
                 <CardPickerGrid
                   searchable
                   selectionMode="multiple"
+                  autoFocusSearch={false}
                   ariaLabel={t('personas.create.behaviorsTitle')}
                   items={flows.filter((flow) => flow.id !== coreFlowRef).map((flow) => ({
                     key: flow.id,
@@ -715,7 +725,7 @@ export default function PersonaCreationWizard({
             {step === 2 && (
               <Stack spacing={2}>
                 <Box>
-                  <Typography variant="h5">{t('personas.create.appsTitle')}</Typography>
+                  <Typography variant="h5" component="h3" ref={stepHeadingRef} tabIndex={-1}>{t('personas.create.appsTitle')}</Typography>
                   <Typography color="text.secondary">{t('personas.create.appsHelp')}</Typography>
                 </Box>
                 {appsError && <Alert severity="warning">{appsError}</Alert>}
@@ -759,6 +769,7 @@ export default function PersonaCreationWizard({
                 <CardPickerGrid
                   searchable
                   selectionMode="multiple"
+                  autoFocusSearch={false}
                   ariaLabel={t('personas.create.appsTitle')}
                   isLoading={appsLoading || appsRefreshing}
                   emptyMessage={t('personas.apps.noEligible')}
@@ -777,7 +788,7 @@ export default function PersonaCreationWizard({
             {step === 4 && (
               <Stack spacing={2}>
                 <Box>
-                  <Typography variant="h5">{t('personas.create.reviewTitle')}</Typography>
+                  <Typography variant="h5" component="h3" ref={stepHeadingRef} tabIndex={-1}>{t('personas.create.reviewTitle')}</Typography>
                   <Typography color="text.secondary">{t('personas.create.reviewHelp')}</Typography>
                 </Box>
                 <Typography>{t('personas.create.reviewIdentity', { name: name.trim(), purpose: mission.trim() || t('personas.create.noPurpose') })}</Typography>
@@ -843,9 +854,9 @@ export default function PersonaCreationWizard({
         </DialogActions>
       </Dialog>
 
-      <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} maxWidth="xs" fullWidth>
+      <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} maxWidth="xs" fullWidth aria-describedby={`${dialogId}-discard-help`}>
         <DialogTitle>{t('personas.create.cancelTitle')}</DialogTitle>
-        <DialogContent><Typography>{t('personas.create.cancelHelp')}</Typography></DialogContent>
+        <DialogContent><Typography id={`${dialogId}-discard-help`}>{t('personas.create.cancelHelp')}</Typography></DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmCancel(false)}>{t('personas.create.keepEditing')}</Button>
           <Button color="error" disabled={savingDraft} onClick={() => void discardAndClose()}>{draftRecord ? t('personas.create.discardDraft') : t('personas.create.discard')}</Button>

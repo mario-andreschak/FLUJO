@@ -10,7 +10,7 @@ export function localVerificationCommands({ full = false, install = false, tests
   if (install) npm('ci', '--include=dev');
   node('--test', 'scripts/verification-contract.test.mjs', 'scripts/workflow-contract.test.mjs', 'scripts/required-check-workflow.test.mjs', 'scripts/verify-repository-rules.test.mjs', 'scripts/require-release-verification.test.mjs', 'scripts/release-verification.test.mjs', 'scripts/verify-codex-built-import.test.mjs');
   if (!testsOnly) { npm('run', 'build'); node('scripts/verify-codex-built-import.mjs'); npm('run', 'typecheck:mcp'); npm('run', 'validate:mcp-release'); }
-  node('scripts/run-local-jest.cjs', '--ci', '--selectProjects', 'node', '--runInBand', '--runTestsByPath', ...CRITICAL_TEST_FILES);
+  node('scripts/run-local-jest.cjs', '--ci', '--selectProjects', 'node', 'jsdom', '--runInBand', '--runTestsByPath', ...CRITICAL_TEST_FILES);
   if (full) {
     npm('run', 'typecheck'); npm('run', 'lint:all'); npm('audit', '--include=dev', '--audit-level=high');
     npm('run', 'smoke:mcp-artifacts'); npm('run', 'test:ci');
