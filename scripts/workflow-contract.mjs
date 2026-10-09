@@ -219,7 +219,8 @@ export function assertWorkflowContract(workflows) {
   if (build.some(step => step.if === APPLICATION_CHANGED)) {
     const selection = build.find(step => step.id === 'application-change');
     const syntax = build.find(step => step.name === 'Validate Worker publisher shell syntax');
-    if (!selection || selection.if !== undefined || selection['continue-on-error'] || selection.shell !== 'bash'
+    if (!build.some(step => step.uses?.startsWith('actions/checkout@') && step.with?.['fetch-depth'] === 0)
+        || !selection || selection.if !== undefined || selection['continue-on-error'] || selection.shell !== 'bash'
         || selection.env?.BASE_REVISION !== '${{ github.event.pull_request.base.sha }}'
         || selection.env?.HEAD_REVISION !== '${{ github.event.pull_request.head.sha }}'
         || !selection.run?.includes("['diff', '--name-only', '-z', base, head]")

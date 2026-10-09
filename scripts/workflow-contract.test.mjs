@@ -28,6 +28,7 @@ for (const [label, change] of [
   ['omitted packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 22.17.0')).run = 'npm run build'; }],
   ['skipped packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 22.17.0')).if = 'false'; }],
   ['unpaired production runtime guard', files => { delete files['verify.yml'].jobs['production-build'].steps.find(step => step.run === 'node scripts/verify-ci-node.mjs 22.17.0 --record').if; }],
+  ['shallow production comparison checkout', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.uses?.startsWith('actions/checkout@')).with['fetch-depth'] = 2; }],
   ['untrusted production comparison revision', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.id === 'application-change').env.HEAD_REVISION = '${{ github.event.pull_request.title }}'; }],
   ['omitted publisher syntax validation', files => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter(step => step.name !== 'Validate Worker publisher shell syntax'); }],
   ['disabled real container probes', files => { delete files['verify.yml'].jobs.test.steps.find(step => step.run === 'npm run test:ci').env.FLUJO_RUN_ISOLATION_SOURCE_PROBE; }],
