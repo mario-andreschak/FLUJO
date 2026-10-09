@@ -114,3 +114,54 @@ overrides the image command with a synthetic listener; it qualifies init
 behavior and does not substitute for actual FLUJO startup, worker-launch,
 provider shutdown or snapshot recovery acceptance above. The direct-Node row
 is the expected-zombie negative control. See the [local lifecycle evidence](audits/2026-10-09-container-init-lifecycle.md).
+
+## Default application image acceptance
+
+Freeze a clean source revision, then build the repository's actual Dockerfile
+once with its synchronized package version and full source SHA:
+
+```sh
+docker build --build-arg FLUJO_APPLICATION_VERSION=VERSION --build-arg FLUJO_BUILD_REVISION=FULL_SOURCE_SHA --tag flujo-official-local:FULL_SOURCE_SHA .
+node scripts/smoke-official-container.mjs flujo-official-local:FULL_SOURCE_SHA
+node scripts/smoke-official-container.mjs flujo-official-local:FULL_SOURCE_SHA --outer-init
+```
+
+Both rows resolve the immutable local image config ID and keep the image's
+default Tini entrypoint, launcher command and healthcheck. They run as UID 1000
+without network access, host-data mounts or published ports, with capabilities
+dropped and no new privileges. A fresh private owner policy contains credential
+hashes; the short-lived bearer and USER passphrase stay in memory and enter the
+container through protected environment or stdin. The policy is installed before
+startup with preserved UID/mode, then verified by the image user. The image's
+compiled owner issuer must match the source used by the host operator.
+
+The probe requires locked storage to return HTTP 423 and fail readiness, including
+after USER initialization. Passphrase authentication must make the actual image
+healthcheck command succeed silently, while missing and wrong owner credentials
+fail. Docker's own health status must also become healthy. Readiness remains
+distinct from liveness: a locked profile is not a reason to restart the service.
+
+Linux process receipts bind PID, start identity, UID, PPid, SID and process group.
+They verify the genuine Tini-to-launcher-to-Next chain. An independent process
+started through Docker exec creates a held descendant; its direct parent must
+exit and be reaped, the live descendant must be adopted by the image's Tini, and
+its listener must close before its process entry disappears. The genuine FLUJO
+healthcheck must remain successful throughout. Independent shared-group and
+detached controls must retain their identities and receive no SIGTERM during
+this reaping sequence.
+
+After the fixture finishes, Docker sends SIGTERM to the real application. The
+container must stop within nine seconds, before the launcher's ten-second
+SIGKILL fallback, without OOM or exit 137. Exit 143 is an accepted forwarded
+SIGTERM result. The probe verifies its unique ownership label, image ID and full
+container ID before removal, and reports success only after container and private
+operator cleanup. Commands, requests and polls have deadlines; an uncertain
+failure retains the exact owned handles and bounded, redacted private diagnostics.
+
+This exercises an actual locally built application image. The descendant is an
+exec-origin process fixture, not a provider, authored Flow or managed MCP worker.
+An isolated container namespace stopping does not independently establish host
+port closure; surviving detached processes are not expected after PID 1 exits.
+Registry signatures, publication, deployment, worker recovery and paid provider
+acceptance remain separate work. Preserve both row receipts, the build log,
+source SHA and image ID with the review evidence.
