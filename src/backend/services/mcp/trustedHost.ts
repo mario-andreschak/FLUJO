@@ -5,6 +5,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, trustedHostMcpPolicySchema, sameTrustedHostConsent, verifyTrustedHostMcp } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
+import { assertPackageRunnerResolution, packageRunnerArguments } from '../security/protectedPackageRunner';
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 import { activatePendingWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 
@@ -74,6 +75,16 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
     environment.set(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, fixtureToken);
   }
   for (const [name, value] of Object.entries(workerRuntimeCredentials(config))) environment.set(name, value);
+  if (authority.policy.packageRunner) {
+    const runner = authority.policy.packageRunner;
+    try { assertPackageRunnerResolution(authority.policy.sourceRoot, authority.policy.entryPoint, config.cwd!, runner); }
+    catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
+    const cache = [...environment].find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];
+    if (!cache) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    return { command: config.command,
+      args: packageRunnerArguments(authority.policy.sourceRoot, runner, authority.policy.entryPoint, config.args ?? [], cache),
+      cwd: config.cwd!, env: mcpStringDataRecord(environment) };
+  }
   return { command: config.command, args: [...(config.args ?? [])], cwd: config.cwd!, env: mcpStringDataRecord(environment) };
 }
 
@@ -143,6 +154,10 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
     retire: () => retireWithReason('explicit'),
     assertCurrent: async (current: MCPStdioConfig) => {
       checkLive();
+      if (initial.policy.packageRunner) {
+        const { resolveRuntimeHomeIsolation } = await import('./runtimeHomeIsolation');
+        if (await resolveRuntimeHomeIsolation(current) !== (initial.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+      }
       if (current.name !== captured.name || current.disabled || !sameTrustedHostConsent(current, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       const authority = await verifyTrustedHostMcp(current, cancellation.signal);
       // Fingerprinting yields. A snapshot from before that await cannot admit
@@ -196,6 +211,10 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
         checkLive();
       }
       launchPhase = 'transport-start';
+      if (initial.policy.packageRunner) {
+        try { assertPackageRunnerResolution(initial.policy.sourceRoot, initial.policy.entryPoint, captured.cwd!, initial.policy.packageRunner); }
+        catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
+      }
       await start();
       // A revocation while the SDK awaited process startup closes this generation.
       launchPhase = 'post-start';
