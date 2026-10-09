@@ -28,6 +28,8 @@ export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
   '__tests__/frontend/components/ModelConnectionWizard.test.tsx',
   '__tests__/frontend/components/McpConnectionWizard.test.tsx',
   '__tests__/frontend/components/McpAiConnectionPanel.test.tsx',
+  '__tests__/frontend/components/McpServerManagerWizardOwnership.test.tsx',
+  '__tests__/frontend/components/oauthPopup.test.ts',
   '__tests__/frontend/components/CardPickerGrid.test.tsx',
   '__tests__/frontend/components/PersonaCreationWizard.test.tsx',
   '__tests__/frontend/components/RoleVersionCardLocalization.test.tsx',
