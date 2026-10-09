@@ -8,7 +8,7 @@ import {
   FlowListResponse
 } from '@/shared/types/flow';
 import {
-  loadItem,
+  loadItemForBackup,
   listCollectionItemEntriesStrict,
   saveCollectionItem,
   loadCollectionItem,
@@ -226,7 +226,7 @@ export class FlowService { // Add export keyword here
 
   /** Read authoritative backup data without tolerant listings, migration writes, or UI caches. */
   async loadFlowsForBackup(): Promise<Flow[]> {
-    const legacy = await loadItem<unknown>(StorageKey.FLOWS, null);
+    const legacy = await loadItemForBackup<unknown>(StorageKey.FLOWS, null);
     if (legacy !== null && !Array.isArray(legacy)) throw new Error('Invalid legacy flow collection');
     const entries = await listCollectionItemEntriesStrict<unknown>(FLOWS_COLLECTION);
     const flows = new Map<string, Flow>();

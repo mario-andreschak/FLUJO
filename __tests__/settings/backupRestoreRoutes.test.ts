@@ -47,6 +47,7 @@ const conversationFiles = new Map<string, unknown>();
 
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => loadItemMock(...args),
+  loadItemForBackup: (...args: unknown[]) => loadItemMock(...args),
   saveItem: (...args: unknown[]) => saveItemMock(...args),
   saveCollectionItem: (...args: unknown[]) => saveCollectionItemMock(...args),
   loadCollectionItem: (...args: unknown[]) => loadCollectionItemMock(...args),
@@ -225,6 +226,27 @@ describe('backup route', () => {
     const response = await callBackup(['flows']);
     const zip = await JSZip.loadAsync(await response.arrayBuffer());
     expect(JSON.parse(await zip.file('storage/flows.json')!.async('string')).map((flow: { id: string }) => flow.id)).toEqual(['flow-1', 'alive']);
+  });
+
+  it('fails closed on interrupted legacy history before constructing an archive', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.CHAT_HISTORY) throw new Error('Backup storage item is empty');
+      return modelsData;
+    });
+    const response = await callBackup(['chatHistory', 'models']);
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Content-Type')).not.toBe('application/zip');
+  });
+
+  it('records unreadable legacy flows as failed while exporting healthy selections', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.FLOWS) throw new Error('Backup storage item is empty');
+      return modelsData;
+    });
+    const response = await callBackup(['flows', 'models']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(response.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string')).selectionResults).toEqual({ flows: 'failed', models: 'completed' });
   });
 
   it('never reads or archives the key or raw server files even when explicitly selected', async () => {

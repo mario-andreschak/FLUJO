@@ -2,7 +2,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
-import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadItem } from '@/utils/storage/backend';
+import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadItemForBackup } from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
@@ -62,7 +62,7 @@ async function POST_handler(request: NextRequest) {
     const conversationSnapshots: Record<string, unknown>[] = [];
     if (selections.includes('chatHistory')) {
       const [historySnapshot, loadedConversations] = await Promise.all([
-        loadItem<unknown>(StorageKey.CHAT_HISTORY, null),
+        loadItemForBackup<unknown>(StorageKey.CHAT_HISTORY, null),
         listCollectionItemEntriesStrict<unknown>('conversations'),
       ]);
       chatHistorySnapshot = historySnapshot;
@@ -130,7 +130,7 @@ async function POST_handler(request: NextRequest) {
             ? await flowService.loadFlowsForBackup()
             : storageKey === StorageKey.CHAT_HISTORY
               ? chatHistorySnapshot
-            : await loadItem<unknown>(storageKey, null);
+            : await loadItemForBackup<unknown>(storageKey, null);
           if (data === null || (storageKey === StorageKey.FLOWS && Array.isArray(data) && data.length === 0)) {
             log.warn(`No data stored for key [${requestId}]:`, storageKey);
             continue;
