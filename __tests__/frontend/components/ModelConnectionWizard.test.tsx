@@ -59,7 +59,7 @@ describe('ModelConnectionWizard', () => {
     save();
     expect(onCreateModels).toHaveBeenCalledTimes(2);
     await act(async () => completions[0]({ success: true, created: onCreateModels.mock.calls[0][0], existing: [] }));
-    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
     expect(screen.queryByText(/AI connections saved/i)).not.toBeInTheDocument();
     await act(async () => completions[1]({ success: true, created: onCreateModels.mock.calls[1][0], existing: [] }));
     expect(await screen.findByText(/AI connections saved/i)).toBeInTheDocument();
@@ -77,7 +77,7 @@ describe('ModelConnectionWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
     fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
     fireEvent.click(await screen.findByRole('button', { name: 'Download fixture-model and connect' }));
-    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
     props.setOpen(false);
     props.setOpen(true);
     await act(async () => complete({ ok: false } as Response));
@@ -139,9 +139,9 @@ describe('ModelConnectionWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
     fireEvent.click(screen.getByRole('heading', { name: /ChatGPT/i }).closest('button')!);
     fireEvent.click(await screen.findByRole('button', { name: 'Install with WinGet' }));
-    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
     await act(async () => complete({ ok: false, json: async () => ({ error: 'fixture install unavailable' }) } as Response));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled());
   });
 
   it('keeps the selected setup visible while its model save is pending', async () => {
@@ -155,7 +155,7 @@ describe('ModelConnectionWizard', () => {
     fireEvent.change(screen.getByLabelText('OpenRouter API key', { exact: true }), { target: { value: 'sk-or-test' } });
     fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
     await waitFor(() => expect(onCreateModels).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
     await act(async () => complete({ success: true, created: onCreateModels.mock.calls[0][0], existing: [] }));
     expect(await screen.findByText(/AI connections saved/i)).toBeInTheDocument();
   });
