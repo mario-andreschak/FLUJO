@@ -34,6 +34,7 @@ import { getFlowCardMetrics } from '@/utils/shared/flowCardMetrics';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
@@ -566,6 +567,9 @@ const FlowCard = ({
         </>
       )}
 
+      <Box sx={{ gridColumn: '1 / -1' }}>
+        <AllowanceBar entity={{ kind: 'flows', id: flow.id }} modelIds={flow.nodes.flatMap(node => typeof node.data?.properties?.boundModel === 'string' ? [node.data.properties.boundModel] : [])} />
+      </Box>
       {!pickerMode && onSetFolder && (
         <FolderAssignMenu
           anchorEl={folderAnchorEl}
