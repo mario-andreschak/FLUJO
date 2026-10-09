@@ -16,6 +16,8 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/mcp/flowsTasksRouteClassification.test.ts',
   '__tests__/mcp/protectedPackageRunner.test.ts',
   '__tests__/model/orcarouterProvider.test.ts',
+  '__tests__/ollama/ollamaClient.test.ts',
+  '__tests__/ollama/pullRoute.test.ts',
   '__tests__/packages/workspaceMcpPreparationMarker.test.ts',
   '__tests__/security/ownerAccess.test.ts',
   '__tests__/security/isolatedMcp.test.ts',
