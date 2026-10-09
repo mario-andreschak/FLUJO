@@ -111,7 +111,9 @@
     "@mario.andreschak/mcp-flujo": "3.46.3",
     "@modelcontextprotocol/client": "^2.3.1",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/ext-tasks": "0.2.2",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@mui/icons-material": "^6.5.0",
     "@mui/material": "^6.5.0",
     "@openai/codex-sdk": "0.160.1",
@@ -182,8 +184,8 @@
     "postcss-flexbugs-fixes": "^5.0.2",
     "postcss-preset-env": "^11.3.2",
     "process": "^0.11.10",
-    "typescript": "^6.0.3",
     "tinyglobby": "0.2.17",
+    "typescript": "^6.0.3",
     "wait-on": "^9.1.0",
     "webpack": "^5.109.2"
   }

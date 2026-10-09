@@ -35,6 +35,7 @@ import {
   serverIdentityFingerprint,
 } from './remoteTaskStore';
 import { fetchTaskStatus, mcpTasksClientEnabled } from './tasksProtocol';
+import { getTasksExtensionSession } from './tasksExtensionSession';
 
 const log = createLogger('backend/services/mcp/remoteTaskResume');
 
@@ -98,6 +99,17 @@ export async function resumeRemoteMcpTasks(): Promise<ResumeSummary> {
       // non-terminal with a diagnostic so the next sweep can retry.
       await patchRemoteTaskRecord(record.recordId, { diagnostic: 'server-disconnected' });
       summary.skipped++;
+      continue;
+    }
+
+    const modern = (client as unknown as { getProtocolEra?: () => string }).getProtocolEra?.() === 'modern';
+    if ((record.protocolVersion === '2026-07-28') !== modern ||
+        (modern && !getTasksExtensionSession(client))) {
+      await patchRemoteTaskRecord(record.recordId, {
+        status: 'failed', diagnostic: 'identity-mismatch',
+        errorMessage: 'MCP Tasks protocol generation changed; task was not resumed.',
+      });
+      summary.failedClosed++;
       continue;
     }
 

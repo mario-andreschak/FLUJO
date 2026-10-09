@@ -168,6 +168,7 @@ export interface CreateRemoteTaskInput {
   remoteTaskId: string;
   serverName: string;
   serverIdentity: string;
+  protocolVersion?: '2026-07-28';
   toolName: string;
   /** Accepted for source compatibility only; never read or fingerprinted. */
   args?: Record<string, unknown>;
@@ -192,6 +193,7 @@ export async function createRemoteTaskRecord(
       remoteTaskId: input.remoteTaskId,
       serverName: input.serverName,
       serverIdentity: input.serverIdentity,
+      ...(input.protocolVersion ? { protocolVersion: input.protocolVersion } : {}),
       toolName: input.toolName,
       requestFingerprint: requestFingerprint(),
       ownership: input.ownership,
@@ -288,6 +290,7 @@ export type RemoteTaskPatch = Partial<
     | 'remoteTaskId'
     | 'serverName'
     | 'serverIdentity'
+    | 'protocolVersion'
     | 'toolName'
     | 'requestFingerprint'
     | 'createdAt'
@@ -332,6 +335,7 @@ export async function patchRemoteTaskRecord(
         remoteTaskId: current.remoteTaskId,
         serverName: current.serverName,
         serverIdentity: current.serverIdentity,
+        protocolVersion: current.protocolVersion,
         toolName: current.toolName,
         requestFingerprint: current.requestFingerprint,
         createdAt: current.createdAt,

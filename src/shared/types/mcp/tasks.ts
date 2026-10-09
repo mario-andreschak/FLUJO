@@ -1,29 +1,13 @@
-/**
- * Official MCP Tasks extension — wire contract (issue #404).
- *
- * PROTOCOL FREEZE (plan step 1). The contract below is pinned against the
- * repository's resolved `@modelcontextprotocol/sdk` (1.x,
- * `experimental/tasks`), which is the only Tasks implementation FLUJO can
- * actually interoperate with today. Two deviations from the planning notes are
- * deliberate and load-bearing:
- *
- *  - There is NO `resultType: "task"` discriminator and no `pollIntervalMs`
- *    field in the resolved SDK/spec. A task-augmented request returns
- *    `CreateTaskResult = { task: Task }`, and the poll interval hint is
- *    `Task.pollInterval` (milliseconds).
- *  - There is NO `tasks/update` method and no `inputRequests` array. The
- *    baseline method set is `tasks/get`, `tasks/result`, `tasks/cancel`
- *    (+ optional `tasks/list`). `input_required` is driven by the server
- *    issuing a *related* `elicitation/create` / `sampling/createMessage`
- *    request carrying `_meta["io.modelcontextprotocol/related-task"]`.
- *
- * Task augmentation is requested per request by adding `task: { ttl }` to the
- * request params (`TaskAugmentedRequestParams`), and is only legal when the
- * server advertised `capabilities.tasks.requests.tools.call`.
- *
- * Everything a remote server sends is untrusted: the parsers below validate
- * types and apply protective bounds, but never rewrite protocol meaning.
+/** MCP Tasks wire validation. Modern 2026-07-28 shapes use the pinned official
+ * ext-tasks codecs. The retained 2025 SDK adapter uses nested creation handles,
+ * ttl/pollInterval and related-request input. Normalize names only after validation;
+ * modern input/result/error payloads are ephemeral and never part of task records.
  */
+
+import {
+  CreateTaskResultV2Schema, GetTaskResultV2Schema,
+  type InputRequestsV2, type ErrorV2,
+} from '@modelcontextprotocol/ext-tasks/core/v2';
 
 /** Extension identifier, used for logging/documentation and capability gating. */
 export const MCP_TASKS_EXTENSION_ID = 'io.modelcontextprotocol/tasks';
@@ -37,6 +21,7 @@ export const MCP_TASK_METHODS = {
   result: 'tasks/result',
   cancel: 'tasks/cancel',
   list: 'tasks/list',
+  update: 'tasks/update',
 } as const;
 
 /** Deferred, explicitly out of baseline scope (see issue #404). */
@@ -92,11 +77,39 @@ export interface McpTask {
   pollInterval?: number;
   /** Diagnostic message (failure reason / progress text). */
   statusMessage?: string;
+  /** Absent for the retained 2025-era adapter. Wire fields below remain ephemeral. */
+  protocolVersion?: '2026-07-28';
+  inputRequests?: InputRequestsV2;
+  result?: Record<string, unknown>;
+  error?: ErrorV2;
 }
 
 export type McpTaskParseResult =
   | { ok: true; task: McpTask }
   | { ok: false; reason: string };
+
+/** Validate the pinned modern wire contract before normalizing lifecycle names. */
+export function parseModernTask(value: unknown, creation = false): McpTaskParseResult {
+  const parsed = creation ? CreateTaskResultV2Schema.safeParse(value) : GetTaskResultV2Schema.safeParse(value);
+  if (!parsed.success) return { ok: false, reason: 'invalid modern Tasks result' };
+  const wire = parsed.data;
+  if (!Number.isFinite(Date.parse(wire.createdAt)) || !Number.isFinite(Date.parse(wire.lastUpdatedAt))) {
+    return { ok: false, reason: 'invalid modern Task timestamps' };
+  }
+  const bounded = parseMcpTask({ ...wire, ttl: wire.ttlMs, pollInterval: wire.pollIntervalMs });
+  if (!bounded.ok) return bounded;
+  if ('inputRequests' in wire && (Object.keys(wire.inputRequests).length > 32 ||
+      Object.keys(wire.inputRequests).some(key => key.length > 512))) {
+    return { ok: false, reason: 'task input request limit exceeded' };
+  }
+  return { ok: true, task: {
+    ...bounded.task,
+    protocolVersion: '2026-07-28',
+    ...('inputRequests' in wire ? { inputRequests: wire.inputRequests } : {}),
+    ...('result' in wire ? { result: wire.result } : {}),
+    ...('error' in wire ? { error: wire.error } : {}),
+  } };
+}
 
 /** Hard cap on persisted/forwarded server-supplied status text. */
 export const MCP_TASK_STATUS_MESSAGE_MAX_CHARS = 500;
@@ -222,6 +235,12 @@ export function classifyToolCallResult(
 ): ToolCallResultKind {
   if (!isPlainObject(response)) return { kind: 'classic' };
 
+  if (response.resultType === 'task') {
+    if (!options.taskRequested) return { kind: 'protocol-invalid', reason: 'unnegotiated modern task handle' };
+    const parsed = parseModernTask(response, true);
+    return parsed.ok ? { kind: 'task', task: parsed.task } : { kind: 'protocol-invalid', reason: parsed.reason };
+  }
+
   // A payload with tool-result fields is a classic result even when it also
   // carries a `task` key: the synchronous result is the documented fallback
   // and must never be reinterpreted as a task handle.
@@ -271,7 +290,9 @@ export function computeTaskExpiresAt(
       ? Math.min(task.ttl, MCP_TASK_MAX_TTL_MS)
       : Math.min(Math.max(fallbackTtlMs, 0), MCP_TASK_MAX_TTL_MS);
   if (ttl <= 0) return undefined;
-  return nowMs + ttl;
+  const origin = task.protocolVersion === '2026-07-28' && task.createdAt
+    ? Math.min(nowMs, Date.parse(task.createdAt)) : nowMs;
+  return origin + ttl;
 }
 
 /** Extract the related-task id from an inbound request's `_meta`, if any. */

@@ -83,12 +83,13 @@ it('does not traverse a cyclic or hostile argument object while persisting task 
 it('keeps new tags immutable through polling patches and reloaded records', async () => {
   const created = (await createRemoteTaskRecord(input({ password: 'synthetic-new-secret' })))!;
   const patched = await patchRemoteTaskRecord(created.recordId, {
-    status: 'working', pollCount: 1, requestFingerprint: 'forged-request', serverIdentity: 'forged-server',
+    status: 'working', pollCount: 1, requestFingerprint: 'forged-request', serverIdentity: 'forged-server', protocolVersion: '2026-07-28',
   } as unknown as RemoteTaskPatch);
   const reloaded = await getRemoteTaskRecord(created.recordId);
   expect(patched?.requestFingerprint).toBe(created.requestFingerprint);
   expect(reloaded?.requestFingerprint).toBe(created.requestFingerprint);
   expect(reloaded?.serverIdentity).toBe(created.serverIdentity);
+  expect(reloaded?.protocolVersion).toBe(created.protocolVersion);
   expect(reloaded?.pollCount).toBe(1);
 });
 

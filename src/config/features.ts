@@ -192,27 +192,24 @@ export const FEATURES = {
   /**
    * MCP Tasks extension (issue #404), CLIENT side.
    *
-   * When true, FLUJO may request task-augmented execution (`params.task`) from
-   * servers that advertise `capabilities.tasks.requests.tools.call`, and runs
-   * the durable poll/cancel lifecycle in
-   * backend/services/mcp/clientTasks.ts.
-   *
-   * Default OFF: the Tasks APIs in @modelcontextprotocol/sdk 1.x are still
-   * marked experimental, and this flag governs BOTH negotiation and durable
-   * record creation so FLUJO never advertises or half-implements the extension.
-   * A server that returns a schema-valid task handle anyway is still handled
-   * (never misread as a tool result) — see shared/types/mcp/tasks.ts.
+   * Deployment opt-in enables modern per-request extension negotiation and the
+   * retained 2025 per-tool augmentation. Governs negotiation and durable record
+   * creation together. Input remains attended and server-policy controlled.
+   * Default off; FLUJO_MCP_TASKS_CLIENT=true enables the backend lifecycle.
    */
-  ENABLE_MCP_TASKS_CLIENT: false,
+  get ENABLE_MCP_TASKS_CLIENT(): boolean {
+    return process.env.FLUJO_MCP_TASKS_CLIENT === 'true';
+  },
 
   /**
    * MCP Tasks extension, SERVER side (FLUJO's own /mcp-proxy and /mcp-flows
-   * endpoints). Kept OFF and unimplemented on purpose: neither endpoint can
-   * currently bind a stable caller identity to a task, and task-id-only lookup
-   * across stateless Streamable HTTP requests would be an authorization hole.
-   * See docs/mcp-tasks.md ("Server-side status").
+   * /mcp-flows endpoint). Requires configured owner bearer authorization and
+   * the modern protocol. Legacy/proxy/private worker profiles stay synchronous.
+   * Default off; deployment opt-in does not change the owner access policy.
    */
-  ENABLE_MCP_TASKS_SERVER: false,
+  get ENABLE_MCP_TASKS_SERVER(): boolean {
+    return process.env.FLUJO_MCP_TASKS_SERVER === 'true';
+  },
 
   /** Enable automatic expiry of untouched memory candidates (issue #452). */
   ENABLE_MEMORY_CANDIDATE_EXPIRY: true,

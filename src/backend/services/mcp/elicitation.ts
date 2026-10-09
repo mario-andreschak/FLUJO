@@ -9,7 +9,7 @@ import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPElicitationPolicy } from '@/shared/types/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getElicitationContext } from './elicitationContext';
-import { registerPendingElicitation } from './elicitationRegistry';
+import { registerPendingElicitation, cancelElicitation } from './elicitationRegistry';
 import { captureExternalAuthorizationElicitation } from './externalAuthorization';
 import { relatedTaskIdOf } from '@/shared/types/mcp/tasks';
 import {
@@ -59,8 +59,10 @@ export function registerElicitationHandler(client: Client, config: MCPServerConf
  */
 export function createElicitationHandler(
   config: MCPServerConfig
-): (request: { params?: unknown }) => Promise<ElicitResult> {
-  return bindToCurrentWorkspace(async (request: { params?: unknown }): Promise<ElicitResult> => {
+): (request: { params?: unknown; signal?: AbortSignal; expectedConversationId?: string; assertCurrent?: () => Promise<void> }) => Promise<ElicitResult> {
+  return bindToCurrentWorkspace(async (request): Promise<ElicitResult> => {
+    if (request.signal?.aborted) return { action: 'cancel' };
+    await request.assertCurrent?.();
     const params = request.params as {
       mode?: string;
       message?: string;
@@ -87,6 +89,7 @@ export function createElicitationHandler(
     }
 
     const ctx = getElicitationContext(config.name);
+    if (request.expectedConversationId !== undefined && ctx?.conversationId !== request.expectedConversationId) return { action: 'cancel' };
     if (!ctx && relatedTaskId) {
       log.warn(
         `Task ${relatedTaskId} on ${config.name} requested input outside an attended run; auto-cancelling`
@@ -108,12 +111,19 @@ export function createElicitationHandler(
     const requestedSchema = (params?.requestedSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>;
 
     const elicitationId = crypto.randomUUID();
+    await request.assertCurrent?.();
+    if (request.signal?.aborted || (request.expectedConversationId !== undefined &&
+        getElicitationContext(config.name)?.conversationId !== request.expectedConversationId)) return { action: 'cancel' };
     log.info(`Suspending for elicitation ${elicitationId} from ${config.name} in conv ${ctx.conversationId}`);
     if (relatedTaskId) {
       noteTaskInputRequested(config.name, relatedTaskId, elicitationId);
     }
 
-    // Emit SSE event to the frontend.
+    const pending = registerPendingElicitation(elicitationId);
+    const onAbort = bindToCurrentWorkspace(() => { cancelElicitation(elicitationId); });
+    request.signal?.addEventListener('abort', onAbort, { once: true });
+    if (request.signal?.aborted) onAbort();
+    // Register before emitting so a fast user response cannot miss the mailbox.
     const emit = executionEventBus.emitterFor(ctx.conversationId);
     emit({
       type: 'run:awaiting_elicitation',
@@ -123,7 +133,9 @@ export function createElicitationHandler(
     });
 
     // Await the user's response (or a 5-minute timeout).
-    const result = await registerPendingElicitation(elicitationId);
+    let result: ElicitResult;
+    try { result = await pending; }
+    finally { request.signal?.removeEventListener('abort', onAbort); }
     log.info(`Elicitation ${elicitationId} resolved with action=${result.action}`);
     if (relatedTaskId) {
       // Idempotent: a duplicate submission for the same id is ignored.

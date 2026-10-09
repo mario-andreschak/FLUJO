@@ -88,11 +88,13 @@ export function registerSamplingHandler(client: Client, config: MCPServerConfig)
  */
 export function createSamplingHandler(
   config: MCPServerConfig
-): (request: { params?: unknown }) => Promise<CreateMessageResult> {
+): (request: { params?: unknown; signal?: AbortSignal; assertCurrent?: () => Promise<void> }) => Promise<CreateMessageResult> {
   // Timestamps of recent sampling calls, for the rolling-window rate limit.
   const recentCalls: number[] = [];
 
   return async (request): Promise<CreateMessageResult> => {
+    request.signal?.throwIfAborted();
+    await request.assertCurrent?.();
     const policy = policyOf(config);
     if (!policy?.enabled || !policy.modelId) {
       throw new McpError(ErrorCode.InvalidRequest, 'Sampling is not enabled for this server');
@@ -131,7 +133,11 @@ export function createSamplingHandler(
     const adapter = getCompletionAdapter(model);
     // Prefer the per-policy token cap; fall back to the model's own default.
     const maxTokens = policy.maxTokens ?? normalizeMaxTokens(model.maxTokens);
-    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens });
+    request.signal?.throwIfAborted();
+    await request.assertCurrent?.();
+    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens, ...(request.signal ? { signal: request.signal } : {}) });
+    request.signal?.throwIfAborted();
+    await request.assertCurrent?.();
 
     const raw = completion.choices?.[0]?.message?.content;
     const text = typeof raw === 'string' ? raw : '';

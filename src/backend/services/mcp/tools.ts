@@ -13,7 +13,10 @@ import {
   buildTaskAugmentation,
   decideTaskAugmentation,
   mcpTasksClientEnabled,
+  extensionDispatchOptions,
 } from "./tasksProtocol";
+import { getTasksExtensionSession, TasksExtensionRequestTimeoutError } from './tasksExtensionSession';
+import { getElicitationContext } from './elicitationContext';
 import { runRemoteTaskLifecycle } from "./clientTasks";
 import { resolveServerIdentity } from "./remoteTaskStore";
 import {
@@ -201,7 +204,9 @@ export async function callTool(
   callerNodeId?: string,
   ownerScope?: string,
   executionExtensionContext?: ExecutionExtensionContext,
+  trustedConversationId?: string,
 ): Promise<MCPServiceResponse> {
+  const originatingInputContext = trustedConversationId ? getElicitationContext(serverName) : undefined;
   log.debug("Entering callTool method");
   if (!client) {
     log.warn(`Server ${serverName} not found`);
@@ -218,6 +223,7 @@ export async function callTool(
       : MAX_TIMEOUT_MS;
   const isolated = Boolean(getManagedMcpIsolation(client.transport));
   const trustedHost = Boolean(getManagedTrustedHost(client.transport));
+  let modernTaskCall = false;
 
   try {
     const privateExecution = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
@@ -307,6 +313,7 @@ export async function callTool(
         `Requesting task-augmented execution of ${toolName} on ${serverName} (${taskDecision.reason})`,
       );
     }
+    modernTaskCall = taskDecision.request && taskDecision.negotiation.protocolVersion === '2026-07-28';
 
     // The ONE v1/v2 signature difference FLUJO hits (see betaClient.ts): v1 is
     // callTool(params, resultSchema?, options?), the v2-beta SDK dropped the
@@ -319,7 +326,8 @@ export async function callTool(
     const requestParams = {
       name: toolName,
       arguments: normalizedArgs,
-      ...(taskDecision.request ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
+      ...(taskDecision.request && taskDecision.negotiation.protocolVersion !== '2026-07-28'
+        ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
       ...(privateMeta ? { _meta: privateMeta } : callerNodeId || ownerScope
         ? {
             _meta: {
@@ -333,7 +341,11 @@ export async function callTool(
     };
     await assertMcpIsolationDispatch(client, serverName);
     await assertBundledFlujoWorkloadEffectCurrent();
-    const response = isBetaClient(client)
+    const modernTasks = taskDecision.request && taskDecision.negotiation.protocolVersion === '2026-07-28'
+      ? getTasksExtensionSession(client) : undefined;
+    const response = modernTasks
+      ? await modernTasks.callTool(JSON.parse(JSON.stringify(requestParams)), extensionDispatchOptions(callOptions))
+      : isBetaClient(client)
       ? await (
           client.callTool as unknown as (
             params: typeof requestParams,
@@ -391,10 +403,12 @@ export async function callTool(
         ...(signal ? { signal } : {}),
         ...(onProgress ? { onProgress } : {}),
         ownership: {
+          ...(trustedConversationId ? { conversationId: trustedConversationId } : {}),
           ...(callerNodeId ? { nodeId: callerNodeId } : {}),
           ...(ownerScope ? { ownerScope } : {}),
           source,
         },
+        ...(originatingInputContext ? { originatingInputContext } : {}),
         // Without the flag the lifecycle still runs (a server may answer with
         // a task regardless) — it just does not claim durable compliance.
         persist,
@@ -427,6 +441,10 @@ export async function callTool(
       return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_tool_unavailable',
         statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-call' };
     }
+    if (modernTaskCall && !signal?.aborted && error instanceof Error && error.name === 'ZodError') return {
+      success: false, error: `Server '${serverName}' returned an invalid modern MCP Tasks result.`,
+      errorType: 'task-protocol-invalid', statusCode: 502, toolName,
+    };
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
     let errorMessage = error instanceof Error ? error.message : "Unknown error";
     let statusCode = 500;
@@ -447,7 +465,8 @@ export async function callTool(
     // notifications/cancelled for the in-flight request as part of its timeout
     // handling, so the server has been told to stop; just map it to the
     // standardized timeout response shape.
-    if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+    if (error instanceof TasksExtensionRequestTimeoutError ||
+        (error instanceof McpError && error.code === ErrorCode.RequestTimeout)) {
       const timeoutSeconds = Math.round(timeoutMs / 1000);
       log.warn(
         `Tool ${toolName} execution timed out after ${timeoutSeconds} seconds`,

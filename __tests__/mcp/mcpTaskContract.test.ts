@@ -14,6 +14,7 @@ import {
   parseCreateTaskResult,
   parseMcpTask,
   parseTaskStatusResult,
+  parseModernTask,
   relatedTaskIdOf,
   MCP_RELATED_TASK_META_KEY,
 } from '@/shared/types/mcp/tasks';
@@ -30,6 +31,38 @@ const validTask = {
   lastUpdatedAt: '2026-01-01T00:00:00.000Z',
   pollInterval: 2_000,
 };
+
+describe('pinned modern Tasks wire contract', () => {
+  const modern = { taskId: 'modern-1', status: 'working', ttlMs: 60_000, pollIntervalMs: 2000,
+    createdAt: '2026-10-09T10:00:00.000Z', lastUpdatedAt: '2026-10-09T10:00:00.000Z' };
+  it('accepts flat creation only under explicit negotiation', () => {
+    const wire = { ...modern, resultType: 'task' };
+    expect(classifyToolCallResult(wire, { taskRequested: true })).toMatchObject({
+      kind: 'task', task: { taskId: modern.taskId, protocolVersion: '2026-07-28', ttl: 60000, pollInterval: 2000 },
+    });
+    expect(classifyToolCallResult(wire, { taskRequested: false }).kind).toBe('protocol-invalid');
+    expect(parseModernTask({ resultType: 'task', task: modern }, true).ok).toBe(false);
+  });
+  it('validates terminal results, errors and input before lifecycle dispatch', () => {
+    expect(parseModernTask({ ...modern, resultType: 'complete', status: 'completed' }).ok).toBe(false);
+    expect(parseModernTask({ ...modern, resultType: 'complete', status: 'completed', result: { content: [] } })).toMatchObject({
+      ok: true, task: { result: { content: [] } },
+    });
+    expect(parseModernTask({ ...modern, resultType: 'complete', status: 'failed', error: { code: -32000, message: 'Failure', data: { retryable: true } } })).toMatchObject({
+      ok: true, task: { error: { code: -32000, message: 'Failure', data: { retryable: true } } },
+    });
+    expect(parseModernTask({ ...modern, resultType: 'complete', status: 'input_required', inputRequests: {
+      bad: { method: 'elicitation/create', params: { message: 'Input', requestedSchema: true } },
+    } }).ok).toBe(false);
+  });
+  it('honors creation-based expiry and rejects invalid dates', () => {
+    const parsed = parseModernTask({ ...modern, resultType: 'task' }, true);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(computeTaskExpiresAt(parsed.task, Date.parse(modern.createdAt) + 40000, 3600000))
+      .toBe(Date.parse(modern.createdAt) + 60000);
+    expect(parseModernTask({ ...modern, resultType: 'task', createdAt: 'invalid' }, true).ok).toBe(false);
+  });
+});
 
 describe('parseMcpTask', () => {
   it('accepts a spec-shaped task', () => {

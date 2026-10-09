@@ -27,6 +27,8 @@ import {
   isAuthoringTool,
 } from '@/backend/services/mcp/flowAuthoringTools';
 import { createLogger } from '@/utils/logger';
+import { mcpTasksServerEnabled } from '@/backend/services/mcp/tasksProtocol';
+import { handleModernFlowsMcpRequest, isLegacyFlowsMcpRequest } from '@/backend/services/mcp/flowsTasksServer';
 
 // Flow execution and MCP services use Node APIs — never the edge runtime.
 export const runtime = 'nodejs';
@@ -41,6 +43,31 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
+/** Bound the public SDK's body-primary era probe before it clones/parses JSON. */
+async function classificationBodyFits(request: Request): Promise<boolean> {
+  const limit = 256 * 1024;
+  const length = request.headers.get('content-length');
+  if (length && Number(length) > limit) return false;
+  if (!request.body) return true;
+  const reader = request.clone().body!.getReader();
+  let bytes = 0;
+  try {
+    while (true) {
+      request.signal.throwIfAborted();
+      const chunk = await reader.read();
+      if (chunk.done) return true;
+      bytes += chunk.value.byteLength;
+      if (bytes > limit) {
+        // Cancelling one tee branch alone waits for the other. Retire both,
+        // without delaying the rejection on an uncooperative source stream.
+        void reader.cancel().catch(() => undefined);
+        void request.body.cancel().catch(() => undefined);
+        return false;
+      }
+    }
+  } finally { reader.releaseLock(); }
+}
+
 // MCP 2026-07-28 note: the new spec introduces `Mcp-Method` and `Mcp-Name` HTTP request
 // headers as advisory routing hints for load balancers and intermediate proxies. FLUJO
 // re-terminates every inbound MCP request (a fresh `Server` + Web-standard transport
@@ -50,11 +77,8 @@ function jsonError(status: number, message: string): Response {
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },
-    // MCP Tasks (#404) is deliberately NOT advertised: this endpoint has no
-    // caller identity at all, so a durable task could only be addressed by
-    // task id — an authorization hole across stateless requests. Long-running
-    // flow runs therefore stay synchronous here until a caller-bound ownership
-    // mechanism exists. See docs/features/mcp-tasks.md ("Server-side status").
+    // The retained legacy protocol is synchronous. Only the separate modern,
+    // explicitly enabled owner-authorized handler can advertise durable Tasks.
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -87,6 +111,11 @@ async function handle(request: Request): Promise<Response> {
   if (!isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
     log.warn('Rejected non-local request', { host: request.headers.get('host') });
     return jsonError(403, 'Forbidden: this endpoint only accepts local requests.');
+  }
+
+  if (mcpTasksServerEnabled()) {
+    if (!await classificationBodyFits(request)) return jsonError(413, 'MCP request body exceeds the limit.');
+    if (!await isLegacyFlowsMcpRequest(request)) return handleModernFlowsMcpRequest(request);
   }
 
   const server = buildFlowsServer();

@@ -57,6 +57,8 @@ export interface McpRemoteTaskRecord {
   serverName: string;
   /** Fingerprint of the server config/auth identity (see remoteTaskStore). */
   serverIdentity: string;
+  /** Missing on older records; never resume an id across protocol generations. */
+  protocolVersion?: '2026-07-28';
 
   /** Originating operation. */
   toolName: string;

@@ -1,24 +1,7 @@
-/**
- * MCP Tasks extension — protocol/SDK adapter (issue #404, plan step 1 & 3).
- *
- * This module is the ONLY place in FLUJO that talks to the experimental Tasks
- * APIs of the resolved `@modelcontextprotocol/sdk` 1.x (`experimental/tasks`).
- * Everything else consumes the narrow, validated surface exported here, so an
- * SDK/spec revision only has to be absorbed in this file.
- *
- * Frozen baseline (see shared/types/mcp/tasks.ts for the full contract):
- *  - request task augmentation with `params.task = { ttl }`;
- *  - poll `tasks/get`, fetch the payload with `tasks/result`, cancel with
- *    `tasks/cancel`; `tasks/list` is optional and unused by the lifecycle;
- *  - `notifications/tasks/status` and `subscriptions/listen` are deferred.
- *
- * Deliberate deviation from the planning note: the resolved SDK/spec has no
- * `resultType: "task"` discriminator, no `pollIntervalMs`, and no
- * `tasks/update`. Task support is negotiated through the SERVER capability
- * `capabilities.tasks.requests.tools.call` plus the per-request `task` param —
- * FLUJO therefore declares no `tasks` CLIENT capability, because it hosts no
- * tasks of its own (that capability describes client-side task creation for
- * sampling/elicitation, which remains out of scope).
+/** MCP Tasks protocol adapter. The official modern extension owns per-request
+ * capability framing and tasks/get/update/cancel; the retained SDK1 path uses
+ * per-tool task augmentation and tasks/get/result/cancel. Never send a legacy
+ * task RPC after a modern session has retired. Creation is never retried.
  */
 
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -33,9 +16,12 @@ import {
   MCP_TASK_METHODS,
   MCP_TASKS_EXTENSION_ID,
   parseTaskStatusResult,
+  parseModernTask,
   type McpTask,
 } from '@/shared/types/mcp/tasks';
 import { getMcpRemoteTaskSettings } from './remoteTaskStore';
+import { getTasksExtensionSession, wasModernTasksExtensionClient } from './tasksExtensionSession';
+import type { DispatchOptions } from '@modelcontextprotocol/ext-tasks/client';
 
 const log = createLogger('backend/services/mcp/tasksProtocol');
 
@@ -44,7 +30,7 @@ export function mcpTasksClientEnabled(): boolean {
   return FEATURES.ENABLE_MCP_TASKS_CLIENT === true;
 }
 
-/** Server-side Tasks master switch. Intentionally unimplemented (see docs). */
+/** Server-side switch; the authorized modern /mcp-flows path owns its handlers. */
 export function mcpTasksServerEnabled(): boolean {
   return FEATURES.ENABLE_MCP_TASKS_SERVER === true;
 }
@@ -55,10 +41,17 @@ export interface TaskNegotiation {
   supportsToolsCall: boolean;
   supportsCancel: boolean;
   supportsList: boolean;
+  protocolVersion?: '2026-07-28';
 }
 
 interface ClientWithCapabilities {
   getServerCapabilities?: () => Record<string, unknown> | undefined;
+  getProtocolEra?: () => string | undefined;
+}
+
+function isModernClient(client: Client): boolean {
+  return wasModernTasksExtensionClient(client) ||
+    (client as unknown as ClientWithCapabilities).getProtocolEra?.() === 'modern';
 }
 
 /**
@@ -95,6 +88,14 @@ export function getTaskNegotiation(client: Client | undefined): TaskNegotiation 
     supportsList: false,
   };
   if (!client || !mcpTasksClientEnabled()) return none;
+
+  // Modern Tasks are negotiated per request by the official extension framing.
+  // Do not cache an unavailable session before discovery/connection completes.
+  if (getTasksExtensionSession(client)) return {
+    supported: true, supportsToolsCall: true, supportsCancel: true, supportsList: false,
+    protocolVersion: '2026-07-28',
+  };
+  if (isModernClient(client)) return none;
 
   const cached = negotiationCache.get(client as unknown as object);
   if (cached) return cached;
@@ -197,6 +198,10 @@ export async function decideTaskAugmentation(
     };
   }
 
+  if (negotiation.protocolVersion === '2026-07-28') return {
+    request: true, negotiation, reason: 'modern Tasks extension negotiated',
+  };
+
   const support = await getToolTaskSupport(client, toolName);
   if (support !== 'required' && support !== 'optional') {
     return {
@@ -253,6 +258,9 @@ export async function fetchTaskStatus(
   taskId: string,
   options?: { signal?: AbortSignal; timeout?: number },
 ): Promise<TaskStatusOutcome> {
+  const modern = getTasksExtensionSession(client);
+  if (modern) return parseModernTask(await modern.getTask(taskId, extensionDispatchOptions(options)));
+  if (isModernClient(client)) throw new Error('Modern MCP Tasks session is unavailable');
   const raw = await taskRequest(client, MCP_TASK_METHODS.get, taskId, GetTaskResultSchema, options);
   const parsed = parseTaskStatusResult(raw);
   return parsed.ok ? { ok: true, task: parsed.task } : { ok: false, reason: parsed.reason };
@@ -264,6 +272,13 @@ export async function fetchTaskPayload(
   taskId: string,
   options?: { signal?: AbortSignal; timeout?: number },
 ): Promise<unknown> {
+  const modern = getTasksExtensionSession(client);
+  if (modern) {
+    const task = await modern.getTask(taskId, extensionDispatchOptions(options));
+    if (task.status !== 'completed') throw new Error('Modern task result is not completed');
+    return task.result;
+  }
+  if (isModernClient(client)) throw new Error('Modern MCP Tasks session is unavailable');
   return taskRequest(
     client,
     MCP_TASK_METHODS.result,
@@ -284,6 +299,12 @@ export async function cancelRemoteTask(
   timeoutMs = 10_000,
 ): Promise<TaskStatusOutcome | undefined> {
   try {
+    const modern = getTasksExtensionSession(client);
+    if (modern) {
+      await modern.cancelTask(taskId, extensionDispatchOptions({ timeout: timeoutMs }));
+      return undefined; // Modern cancellation is an acknowledgement, not a state.
+    }
+    if (isModernClient(client)) return undefined;
     const raw = await taskRequest(client, MCP_TASK_METHODS.cancel, taskId, CancelTaskResultSchema, {
       timeout: timeoutMs,
     });
@@ -293,4 +314,17 @@ export async function cancelRemoteTask(
     log.warn(`Best-effort tasks/cancel failed for task ${taskId}:`, error);
     return undefined;
   }
+}
+
+/** Keep host timeouts/signals on the extension's explicit raw dispatch seam. */
+export function extensionDispatchOptions(
+  options?: { signal?: AbortSignal; timeout?: number; resetTimeoutOnProgress?: boolean },
+): DispatchOptions {
+  return {
+    ...(options?.signal ? { signal: options.signal } : {}),
+    context: {
+      ...(options?.timeout ? { requestTimeoutMs: options.timeout } : {}),
+      ...(options?.resetTimeoutOnProgress ? { resetTimeoutOnProgress: true } : {}),
+    },
+  };
 }

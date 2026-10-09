@@ -1,4 +1,9 @@
-# MCP Tasks extension (issue #404)
+# MCP Tasks legacy adapter notes (issue #404)
+
+These notes record the original SDK1 client baseline. For the current modern
+extension, deployment switches, authorized server operation, migration,
+durability and qualification, see [MCP Tasks 2026](mcp-tasks-2026.md).
+The historical server/deferred statements below describe that earlier baseline.
 
 FLUJO can consume the official MCP **Tasks** extension as a *client*: a
 long-running tool call may return a task handle immediately, and FLUJO then
