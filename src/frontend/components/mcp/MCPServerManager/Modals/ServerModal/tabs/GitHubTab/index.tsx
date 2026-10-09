@@ -15,6 +15,7 @@ import path from 'path';
 import { Box, Paper, Stack, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import McpSecurityReviewPanel from '@/frontend/components/mcp/McpSecurityReviewPanel';
+import McpModelRiskAssessmentPanel from '@/frontend/components/mcp/McpModelRiskAssessmentPanel';
 
 const GitHubTab: React.FC<TabProps> = ({
   initialConfig,
@@ -330,6 +331,7 @@ const GitHubTab: React.FC<TabProps> = ({
         />
         
         <McpSecurityReviewPanel repositoryUrl={githubUrl} />
+        <McpModelRiskAssessmentPanel repositoryUrl={githubUrl} />
 
         <GitHubActions
           showCloneButton={showCloneButton}
