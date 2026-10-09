@@ -63,6 +63,8 @@ import {
   buildWaveLookup,
   waveBucket,
   orderWaveGroups,
+  WAVE_ADHOC_KEY,
+  WAVE_ARCHIVED_KEY,
 } from '@/utils/shared/waveGrouping';
 import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
@@ -592,7 +594,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const waveChainByGroup = useMemo(() => {
     const map = new Map<string, ReturnType<typeof buildChainIndex>>();
     if (groupMode !== 'wave') return map;
-    for (const g of groups) map.set(g.key, buildChainIndex(g.items));
+    for (const g of groups) {
+      // Fallback buckets combine unrelated runs and remain flat, even when
+      // those runs retain parent links from earlier execution chains (#220).
+      if (g.key !== WAVE_ADHOC_KEY && g.key !== WAVE_ARCHIVED_KEY) {
+        map.set(g.key, buildChainIndex(g.items));
+      }
+    }
     return map;
   }, [groupMode, groups]);
 
