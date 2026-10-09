@@ -27,7 +27,7 @@ jobs:
         run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: npm ci --include=dev
       - name: Verify workflow and release contracts
-        run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/required-check-workflow.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/selector-parser-security.test.mjs scripts/require-release-verification.test.mjs scripts/release-verification.test.mjs
+        run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/required-check-workflow.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/selector-parser-security.test.mjs scripts/require-release-verification.test.mjs scripts/release-verification.test.mjs scripts/verify-codex-built-import.test.mjs
       - name: Build once with the default heap
         run: npm run build
       - run: npm run typecheck:mcp

@@ -36,6 +36,8 @@ export async function verifyCodexBuiltImport(root) {
     assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     return factories.size;
   } finally {
+    assert.equal(path.dirname(path.resolve(fixture)), path.resolve(os.tmpdir()), 'Unexpected fixture cleanup directory');
+    assert.ok(path.basename(fixture).startsWith('flujo-codex-built-import-'), 'Unexpected fixture cleanup name');
     // Remove the junction first: never recursively traverse installed modules.
     await rm(path.join(fixture, 'node_modules'), { force: true });
     await rm(fixture, { recursive: true, force: true });

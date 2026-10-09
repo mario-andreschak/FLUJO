@@ -6,6 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { SUPPORTED_NODE_RANGE } from '../bin/node-runtime.mjs';
+import { verifyCodexBuiltImport } from './verify-codex-built-import.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -140,4 +141,5 @@ for (const entry of packages) {
   }
 }
 
-console.log(`Validated flujo-ai and four standalone MCP packages at ${rootPackage.version}.`);
+const codexFactories = await verifyCodexBuiltImport(root);
+console.log(`Validated flujo-ai and four standalone MCP packages at ${rootPackage.version}; ${codexFactories} relocated Codex import variants passed.`);
