@@ -56,8 +56,10 @@ the installation's private owner bearer and selected workspace. Inspect the
 returned package revision, source, cwd, capabilities and `revision.launchArgs`.
 `revision.dependencyGraph` lists the local npm/package runtime dependency and
 peer graph, including optional dependencies that are absent. Mandatory missing
-dependencies, mismatched package identities and ambient Node dependency search
-directories refuse inspection even if the remaining bytes were fingerprinted.
+dependencies, mismatched package identities and matching ambient Node dependency
+candidates refuse inspection even if the remaining bytes were fingerprinted.
+An unrelated ancestor `node_modules` directory does not change a dependency
+already resolved inside the reviewed closure and is not refused merely for existing.
 Approve that exact `policyDigest` using POST to the same endpoint with
 `runtimeHome`, `reviewedDigest` and a future `expiresAt` within 30 days. The
 existing owner approval transaction rechecks the proposal, private authority
