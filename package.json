@@ -54,6 +54,7 @@
     "packages/antigravity-cli/*.cjs",
     "packages/antigravity-cli/package.json",
     "packages/antigravity-cli/artifacts.json",
+    "packages/avatar-sdk/*",
     "!packages/antigravity-cli/.cache/**"
   ],
   "scripts": {

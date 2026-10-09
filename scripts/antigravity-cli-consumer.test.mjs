@@ -104,6 +104,7 @@ test('a packed production consumer installs and executes its own verified Antigr
   try {
     const packed = JSON.parse(await runNpm('root pack', ['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs, '.'], root, PACK_TIMEOUT_MS, deadlineAt))[0];
     const files = packed.files.map(entry => entry.path.replaceAll('\\', '/'));
+    assert.ok(files.includes('packages/avatar-sdk/flujo-ai-avatar-sdk-0.1.0.tgz'), 'Root tarball omitted the pinned Avatar SDK');
     for (const required of ['package.json', 'index.cjs', 'install.cjs', 'bin.cjs', 'artifacts.json']) {
       assert.ok(files.includes('packages/antigravity-cli/' + required), 'Root tarball omitted ' + required);
     }
@@ -119,6 +120,9 @@ test('a packed production consumer installs and executes its own verified Antigr
     const installed = JSON.parse(await readFile(manifest, 'utf8'));
     assert.equal(installed.dependencies['@flujo-ai/antigravity-cli'], 'file:packages/antigravity-cli');
     assert.equal(installed.bin['flujo-agy'], 'packages/antigravity-cli/bin.cjs');
+    const sdk = JSON.parse(await readFile(path.join(consumer, 'node_modules', '@flujo-ai', 'avatar-sdk', 'package.json'), 'utf8'));
+    assert.equal(sdk.name, '@flujo-ai/avatar-sdk');
+    assert.equal(sdk.version, '0.1.0');
     const result = assertPackagedBinary(manifest);
     const relative = path.relative(consumer, result.binary);
     assert.ok(relative && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative), 'Consumer resolved the source checkout binary');
