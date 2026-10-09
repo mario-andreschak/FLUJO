@@ -7,6 +7,7 @@ import {
   ANTIGRAVITY_CLI_GUIDED_MODELS,
   getAntigravityCliModelLabel,
   GEMINI_NATIVE_GUIDED_MODELS,
+  getProviderProfileById,
 } from '@/shared/types/model/provider';
 
 export type GuidedConnectionKind =
@@ -14,6 +15,7 @@ export type GuidedConnectionKind =
   | 'requesty-free'
   | 'openrouter-paid'
   | 'requesty-paid'
+  | 'orcarouter-paid'
   | 'azure'
   | 'claude-subscription'
   | 'codex-subscription'
@@ -113,6 +115,15 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
       supportsTools: true,
     },
   ],
+  'orcarouter-paid': [{
+    name: 'anthropic/claude-sonnet-4',
+    displayName: 'Claude Sonnet via OrcaRouter',
+    description: 'A vendor/model connection through your OrcaRouter account.',
+    provider: getProviderProfileById('orcarouter')!.provider,
+    adapter: getProviderProfileById('orcarouter')!.adapter,
+    baseUrl: getProviderProfileById('orcarouter')!.baseUrl,
+    supportsTools: true,
+  }],
   'requesty-paid': [
     {
       name: 'deepseek/deepseek-v3.2',

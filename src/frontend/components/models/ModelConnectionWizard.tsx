@@ -149,6 +149,15 @@ const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
     keyLabel: 'models.wizard.openrouterKey',
     note: 'models.wizard.openrouterPaid.note',
   },
+  'orcarouter-paid': {
+    eyebrow: 'models.wizard.copy.paygOnline',
+    title: 'models.wizard.orcarouter.title',
+    summary: 'models.wizard.orcarouter.summary',
+    accountUrl: 'https://www.orcarouter.ai',
+    accountLabel: 'models.wizard.orcarouter.account',
+    keyLabel: 'models.wizard.orcarouter.key',
+    note: 'models.wizard.orcarouter.note',
+  },
   'requesty-paid': {
     eyebrow: 'models.wizard.copy.paygOnline',
     title: 'models.wizard.requestyPaid.title',
@@ -712,6 +721,7 @@ export default function ModelConnectionWizard({
           <ChoiceGrid>
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterPaidDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyPaidDescription')} onClick={() => selectSetup('requesty-paid')} />
+            <OptionCard icon={CloudQueueRoundedIcon} title="OrcaRouter" description={t('models.wizard.orcarouter.summary')} onClick={() => selectSetup('orcarouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Azure OpenAI" description={t('models.wizard.azureDescription')} onClick={() => selectSetup('azure')} />
             <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
           </ChoiceGrid>

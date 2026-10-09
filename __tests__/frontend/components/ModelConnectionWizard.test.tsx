@@ -228,3 +228,17 @@ describe('ModelConnectionWizard', () => {
     expect(screen.queryByRole('button', { name: 'Install with WinGet' })).not.toBeInTheDocument();
   });
 });
+
+it('saves the OrcaRouter first-use connection with its own credentials and vendor/model ID', async () => {
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ platform: 'win32' }) } as Response));
+  const props = renderWizard();
+  fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+  fireEvent.click(screen.getByRole('button', { name: /i can pay/i }));
+  fireEvent.click(screen.getByRole('heading', { name: 'OrcaRouter' }).closest('button')!);
+  expect(screen.getByText(/an OpenRouter key will not authenticate/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('OrcaRouter API key', { exact: true }), { target: { value: 'orca-fixture-key' } });
+  fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+  await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
+  expect((props.onCreateModels as jest.Mock).mock.calls[0][0]).toEqual([expect.objectContaining({ provider: 'orcarouter', adapter: 'openai', name: 'anthropic/claude-sonnet-4', ApiKey: 'orca-fixture-key', baseUrl: 'https://api.orcarouter.ai/v1' })]);
+  global.fetch = originalFetch;
+});
