@@ -59,6 +59,9 @@ export default function McpAiConnectionPanel({
   const theme = useTheme();
   const { t } = useI18n();
   const [models, setModels] = useState<Model[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsFailed, setModelsFailed] = useState(false);
+  const [modelLoadAttempt, setModelLoadAttempt] = useState(0);
   const [modelId, setModelId] = useState('');
   const [query, setQuery] = useState('');
   const [working, setWorking] = useState(false);
@@ -75,6 +78,8 @@ export default function McpAiConnectionPanel({
 
   useEffect(() => {
     let cancelled = false;
+    setModelsLoading(true);
+    setModelsFailed(false);
     modelService.loadModels()
       .then((loaded) => {
         if (cancelled) return;
@@ -82,13 +87,17 @@ export default function McpAiConnectionPanel({
         setModelId((current) => loaded.some((model) => model.id === current) ? current : loaded[0]?.id ?? '');
       })
       .catch(() => {
-        if (!cancelled) setError(t('mcp.ai.modelsFailed'));
+        if (!cancelled) setModelsFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
       });
     return () => {
       cancelled = true;
-      abortRef.current?.abort();
     };
-  }, [t]);
+  }, [modelLoadAttempt]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const selected = useMemo(
     () => result?.candidates.find((candidate) => candidate.id === selectedId) ?? null,
@@ -214,7 +223,7 @@ export default function McpAiConnectionPanel({
                 label={t('mcp.ai.model')}
                 value={modelId}
                 onChange={(event) => setModelId(event.target.value)}
-                disabled={working || models.length === 0}
+                disabled={working || modelsLoading || models.length === 0}
               >
                 {models.map((model) => (
                   <MenuItem key={model.id} value={model.id}>{model.displayName || model.name}</MenuItem>
@@ -226,13 +235,25 @@ export default function McpAiConnectionPanel({
               size="large"
               startIcon={working ? <CircularProgress size={18} color="inherit" /> : <SearchRoundedIcon />}
               onClick={() => void startResearch()}
-              disabled={working || !query.trim() || !modelId}
+              disabled={working || modelsLoading || !query.trim() || !modelId}
             >
               {working ? t('mcp.ai.researching') : t('mcp.ai.research')}
             </Button>
           </Box>
         </Stack>
       </Paper>
+
+      {!modelsLoading && (modelsFailed || models.length === 0) ? (
+        <Alert severity={modelsFailed ? 'error' : 'info'}>
+          {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noModels')}
+          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <Button onClick={() => setModelLoadAttempt((attempt) => attempt + 1)} disabled={working}>
+              {t('mcp.ai.retryModels')}
+            </Button>
+            <Button onClick={onManual} disabled={working}>{t('mcp.ai.openManual')}</Button>
+          </Stack>
+        </Alert>
+      ) : null}
 
       {working ? (
         <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }} aria-live="polite">

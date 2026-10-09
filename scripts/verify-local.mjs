@@ -8,8 +8,8 @@ export function localVerificationCommands({ full = false, install = false, tests
   const npm = (...args) => commands.push({ tool: 'npm', args });
   const node = (...args) => commands.push({ tool: 'node', args });
   if (install) npm('ci', '--include=dev');
-  node('--test', 'scripts/verification-contract.test.mjs', 'scripts/workflow-contract.test.mjs', 'scripts/required-check-workflow.test.mjs', 'scripts/verify-repository-rules.test.mjs', 'scripts/require-release-verification.test.mjs', 'scripts/release-verification.test.mjs');
-  if (!testsOnly) { npm('run', 'build'); npm('run', 'typecheck:mcp'); npm('run', 'validate:mcp-release'); }
+  node('--test', 'scripts/verification-contract.test.mjs', 'scripts/workflow-contract.test.mjs', 'scripts/required-check-workflow.test.mjs', 'scripts/verify-repository-rules.test.mjs', 'scripts/require-release-verification.test.mjs', 'scripts/release-verification.test.mjs', 'scripts/verify-codex-built-import.test.mjs');
+  if (!testsOnly) { npm('run', 'build'); node('scripts/verify-codex-built-import.mjs'); npm('run', 'typecheck:mcp'); npm('run', 'validate:mcp-release'); }
   node('scripts/run-local-jest.cjs', '--ci', '--selectProjects', 'node', '--runInBand', '--runTestsByPath', ...CRITICAL_TEST_FILES);
   if (full) {
     npm('run', 'typecheck'); npm('run', 'lint:all'); npm('audit', '--include=dev', '--audit-level=high');

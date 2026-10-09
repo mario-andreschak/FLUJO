@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import McpAiConnectionPanel from '@/frontend/components/mcp/MCPServerManager/McpAiConnectionPanel';
 import type { McpAssistantResearchResult } from '@/shared/types/mcp/assistant';
+import { modelService } from '@/frontend/services/model';
 
 const researchMcpConnectionMock = jest.fn();
 const installMcpRecommendationMock = jest.fn();
@@ -58,6 +59,40 @@ const result: McpAssistantResearchResult = {
 describe('McpAiConnectionPanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.mocked(modelService.loadModels).mockReset().mockResolvedValue([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never);
+  });
+
+  it('retries a failed model load without losing the request or remounting', async () => {
+    jest.mocked(modelService.loadModels).mockRejectedValueOnce(new Error('Temporary connection failure'));
+    researchMcpConnectionMock.mockResolvedValue(result);
+    const onManual = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={onManual} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'free web search' } });
+    await screen.findByRole('button', { name: /retry loading models/i });
+    expect(screen.getByRole('button', { name: /research options/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /open manual setup/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    expect(screen.getByLabelText(/one thing to connect/i)).toHaveValue('free web search');
+    expect(modelService.loadModels).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Could not load AI models.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+      { query: 'free web search', modelId: 'model-1' }, expect.any(Function), expect.any(AbortSignal),
+    ));
+  });
+
+  it('offers manual setup when no models are configured', async () => {
+    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    const onManual = jest.fn();
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={onManual} />
+    </ThemeProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /open manual setup/i }));
+    expect(onManual).toHaveBeenCalledTimes(1);
+    expect(researchMcpConnectionMock).not.toHaveBeenCalled();
   });
 
   it('streams research progress, shows the exact plan, and installs only after approval', async () => {

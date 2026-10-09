@@ -70,3 +70,22 @@ SBOM generation, hosted signatures, registry readback, alias digest equality and
 installed operator journeys. Container OS vulnerability scanning and resolution,
 worker-channel provenance, installer provenance and admin enforcement remain
 separate acceptance work. No source test result supplies an external grade.
+
+## Container process lifecycle
+
+The official image runs the existing launcher through Debian's Tini with
+subreaper mode. Compose also enables the runtime's init. This keeps adopted
+tool descendants from remaining zombies after they exit, including when a
+managed runner provides an outer init. Signals still go to the launcher;
+FLUJO's generation-bound process ownership and shutdown behavior remain in
+the application.
+
+Run `node scripts/test-container-init.mjs IMAGE` against a locally built image
+and repeat with `--outer-init`. The probe starts a synthetic HTTP process and
+an independently exiting parent/descendant, verifies the live descendant's
+process identity, requires its `/proc` entry to disappear after termination,
+checks the listener stays alive, and checks graceful SIGTERM forwarding.
+It uses an owned disposable container without network or host data. This
+qualifies init behavior; it does not substitute for the FLUJO startup and
+snapshot recovery smoke above. `--expect-zombie` provides a negative control
+for an image that starts Node directly without an init.
