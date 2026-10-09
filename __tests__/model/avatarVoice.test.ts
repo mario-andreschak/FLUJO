@@ -43,6 +43,17 @@ const waitForCondition = async (condition: () => boolean) => {
   expect(condition()).toBe(true);
 };
 describe('avatar native voice uses canonical Flujo results', () => {
+  it('refuses a long work report instead of reading its first 600 characters', async () => {
+    FlowExecutor.conversationStates.set('conversation', state() as never);
+    jest.mocked(recoverConversationTranscript).mockResolvedValue({ messages: [{ id: 'reply', role: 'assistant', content: 'Long work report. '.repeat(60) }], source: 'snapshot' } as never);
+    const original = global.fetch;
+    global.fetch = jest.fn() as typeof fetch;
+    try {
+      const response = await handleAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', locale: 'en' }), 'local-speech');
+      expect(response.status).toBe(409); expect((await response.json()).code).toBe('conversation_reply_required');
+      expect(global.fetch).not.toHaveBeenCalled();
+    } finally { global.fetch = original; }
+  });
   it('uses Pocket without an online key, reading and rechecking the saved reply', async () => {
     delete process.env.FLUJO_AVATAR_OPENROUTER_KEY;
     process.env.FLUJO_AVATAR_POCKET_ORIGIN = 'http://127.0.0.1:43947';

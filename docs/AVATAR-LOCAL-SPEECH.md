@@ -33,6 +33,16 @@ result narration and recheck ownership before returning audio. UI guidance may u
 short plain text. Browser recognition, where used, can require its browser vendor's
 network service; this option does not claim fully offline conversation.
 
+Pocket is an output renderer. A foreground conversation model must author brief
+spoken replies and delegate substantial work to a separate background flow. The
+local route rejects replies longer than 600 characters instead of clipping work
+reports. The draft `docs/examples/avatar-conversation.flowspec.json` expresses
+that split using stock detached-subflow tools. Its two workspace model IDs must be
+bound to tested Codex subscription configurations: `o-conversation-codex` targets
+`gpt-6-luna` with low reasoning; `o-background-codex` targets `gpt-6.1-sol` with high
+reasoning. Importing a draft does not establish model access, tool availability or
+live utterance delivery while the foreground run remains active.
+
 Desktop auditions observed about 0.95GiB process RSS for Anna and about 1.06GiB for
 Spanish/German. These are desktop observations, not a guarantee that Pocket plus
 FLUJO/Codex fits a shared 2GB Fly machine. Measure combined peak memory and CPU before
