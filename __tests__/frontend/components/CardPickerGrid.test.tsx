@@ -118,6 +118,7 @@ describe('CardPickerGrid', () => {
     editor.focus();
     fireEvent.keyDown(editor, { key: ' ' });
     fireEvent.keyDown(editor, { key: 'ArrowRight' });
+    fireEvent.click(editor);
     expect(editor).toHaveFocus();
     expect(onSelect).not.toHaveBeenCalled();
   });

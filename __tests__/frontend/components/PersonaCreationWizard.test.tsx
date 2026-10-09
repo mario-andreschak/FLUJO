@@ -299,6 +299,23 @@ describe('PersonaCreationWizard', () => {
     expect(deleteDraftMock).not.toHaveBeenCalled();
   });
 
+  it('keeps Behavior keyboard toggling usable after clicking its managed Flow card', async () => {
+    render(wizard({ draft: draftRecord() }));
+    const behavior = await screen.findByRole('checkbox', { name: 'Research' });
+    const visualAction = behavior.querySelector<HTMLElement>('[role="button"][tabindex="-1"]');
+    expect(visualAction).not.toBeNull();
+    act(() => visualAction!.focus());
+    fireEvent.click(visualAction!);
+    expect(behavior).toHaveFocus();
+    expect(behavior).toHaveAttribute('aria-checked', 'false');
+    fireEvent.keyDown(behavior, { key: ' ' });
+    expect(behavior).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+    await waitFor(() => expect(updateDraftMock).toHaveBeenCalledWith('draft_existing', {
+      expectedRevision: 4, payload: fullPayload,
+    }));
+  });
+
   it('fails closed on a preflight network error and preserves a resumable draft', async () => {
     creationReadinessMock.mockRejectedValueOnce(new Error('offline'));
     render(wizard({ draft: draftRecord({ ...fullPayload, step: 4 }) }));

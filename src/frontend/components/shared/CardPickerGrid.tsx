@@ -235,7 +235,16 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
               aria-disabled={item.disabled || undefined}
               aria-label={item.label}
               tabIndex={item.onSelect ? (item.disabled || (selectionMode === 'single' && item.key !== tabStopKey) ? -1 : 0) : undefined}
-              onClick={item.onSelect && !item.disabled ? () => item.onSelect?.(item.key) : undefined}
+              onClick={item.onSelect && !item.disabled ? (event) => {
+                const control = (event.target as Element).closest(
+                  'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="button"]:not([tabindex="-1"])',
+                );
+                if (control && control !== event.currentTarget) return;
+                // Managed domain cards may contain passive action regions.
+                // Keep subsequent Space/arrows on the selection owner.
+                event.currentTarget.focus();
+                item.onSelect?.(item.key);
+              } : undefined}
               onKeyDown={item.onSelect && !item.disabled ? (event) => {
                 // Card content may include its own controls. Their editing and
                 // activation keys must not select the surrounding card.
