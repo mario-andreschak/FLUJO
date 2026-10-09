@@ -241,12 +241,21 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
     }
     const resources = await flujo.listResources(undefined, { timeout: 240_000 });
     if (!Array.isArray(resources.resources)) throw new Error('Flujo proxy did not return an MCP resource list.');
-    const templates = await flujo.listResourceTemplates(undefined, { timeout: 240_000 });
+  } finally {
+    await flujo.close();
+  }
+  // The bundled control token is deliberately short lived. On slower Windows
+  // runners, exercise a fresh server generation before the final protocol read.
+  await updateBuiltIn(baseUrl, 'flujo', { disabled: true }, ownerToken);
+  await updateBuiltIn(baseUrl, 'flujo', { disabled: false }, ownerToken);
+  const renewedFlujo = await connectProxy(baseUrl, 'flujo', ownerToken);
+  try {
+    const templates = await renewedFlujo.listResourceTemplates(undefined, { timeout: 240_000 });
     if (!templates.resourceTemplates.some((entry) => entry.uriTemplate === 'flujo://run/{conversationId}/{resourceId}')) {
       throw new Error('Flujo proxy omitted the run-resource template.');
     }
   } finally {
-    await flujo.close();
+    await renewedFlujo.close();
   }
 
   await updateBuiltIn(baseUrl, 'bash', { disabled: true }, ownerToken);

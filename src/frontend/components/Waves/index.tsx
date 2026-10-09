@@ -31,6 +31,7 @@ import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import PlaygroundCanvas from './PlaygroundCanvas';
 import DayView from './DayView';
+import FactoryObservatoryPanel from './FactoryObservatoryPanel';
 import type { PlaygroundMode } from './playgroundGraph';
 
 const log = createLogger('frontend/components/Waves');
@@ -39,7 +40,7 @@ const VIEW_PREF_KEY = 'flujo-ui:waves:view';
 const MODE_PREF_KEY = 'flujo-ui:waves:playground-mode';
 const ACTIVE_WAVE_PREF_KEY = 'flujo-ui:waves:active-wave';
 
-type WavesView = 'playground' | 'day';
+type WavesView = 'playground' | 'day' | 'factory';
 
 export type WavesManagerHeight = number | string | {
   xs: number | string;
@@ -90,6 +91,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   }, [refresh]);
 
   useEffect(() => {
+    if (view === 'factory') return;
     refresh().catch((error) => {
       log.warn('Initial automation map load failed', error);
       setLoadError(true);
@@ -102,7 +104,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
       });
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, view]);
 
   useEffect(() => {
     if (!data || !activeWaveId) return;
@@ -157,6 +159,10 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
         <CalendarViewDayRoundedIcon sx={{ fontSize: 18 }} />
         {t('waves.day')}
       </ToggleButton>
+      <ToggleButton value="factory" aria-label="FACTORY swarm">
+        <HubRoundedIcon sx={{ fontSize: 18 }} />
+        FACTORY
+      </ToggleButton>
     </ToggleButtonGroup>
   );
 
@@ -184,7 +190,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
           pb: { xs: 1, sm: 1.5 },
         }}
       >
-        {loading && (
+        {view !== 'factory' && loading && (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
             <Stack spacing={1.25} alignItems="center">
               <CircularProgress size={34} />
@@ -193,7 +199,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
           </Box>
         )}
 
-        {!loading && !data && loadError && (
+        {view !== 'factory' && !loading && !data && loadError && (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 2 }}>
             <Alert
               severity="error"
@@ -320,6 +326,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
             />
           </Box>
         )}
+        {view === 'factory' && <FactoryObservatoryPanel />}
       </Box>
     </Box>
   );
