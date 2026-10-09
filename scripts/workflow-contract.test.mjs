@@ -5,14 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { assertWorkflowContract } from './workflow-contract.mjs';
+import { assertFullWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
-const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file))
-  .map((file) => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
+const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
+  .map((file) => [file === 'verify-full.yml' ? 'verify.yml' : file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
 
 test('repository workflows retain mandatory verification and immutable direct action dependencies', () => {
-  assertWorkflowContract(readWorkflows());
+  assertFullWorkflowContract(readWorkflows());
 });
 
 for (const [label, change] of [
@@ -20,12 +20,14 @@ for (const [label, change] of [
   ['persisted checkout credentials', (files) => { files['verify.yml'].jobs.typecheck.steps[0].with['persist-credentials'] = true; }],
   ['broad default token', (files) => { files['verify.yml'].permissions.contents = 'write'; }],
   ['missing permission default', (files) => { delete files['verify.yml'].permissions; }],
-  ['path-filtered PR', (files) => { files['verify.yml'].on.pull_request = { paths: ['src/**'] }; }],
+  ['path-filtered PR', (files) => { files['verify.yml'].on.pull_request = {}; }],
   ['missing Windows', (files) => { files['verify.yml'].jobs['production-build'].strategy.matrix.os.pop(); }],
   ['optional matrix', (files) => { files['verify.yml'].jobs['production-build']['continue-on-error'] = true; }],
   ['conditional tests', (files) => { files['verify.yml'].jobs.test.if = 'false'; }],
   ['YAML boolean-false required job', (files) => { files['verify.yml'].jobs.test.if = YAML.parse('if: false').if; }],
   ['omitted packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 22.17.0')).run = 'npm run build'; }],
+  ['repeated production build', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.name?.endsWith('on Node 22.17.0')).run += 'npm run build\n'; }],
+  ['repeated production install', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.name?.endsWith('on Node 22.17.0')).run += 'npm ci --include=dev\n'; }],
   ['skipped packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 22.17.0')).if = 'false'; }],
   ['unpaired production runtime guard', files => { delete files['verify.yml'].jobs['production-build'].steps.find(step => step.run === 'node scripts/verify-ci-node.mjs 22.17.0 --record').if; }],
   ['untrusted production comparison revision', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.id === 'application-change').env.HEAD_REVISION = '${{ github.event.pull_request.title }}'; }],
@@ -86,7 +88,7 @@ for (const [label, change] of [
   test(`workflow validation refuses ${label}`, () => {
     const files = readWorkflows();
     change(files);
-    assert.throws(() => assertWorkflowContract(files));
+    assert.throws(() => assertFullWorkflowContract(files));
   });
 }
 

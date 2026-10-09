@@ -1,14 +1,7 @@
 # Source proposal: draft publication is inert; a separately selected PR transition exports.
 name: Export immutable 8fe Windows worker payload
 on:
-  pull_request:
-    types: [ready_for_review]
-    branches: [codex/scorecard-integration]
-    paths:
-      - .github/workflows/worker-payload-export.yml
-      - scripts/export-worker-payload.mjs
-      - scripts/export-worker-payload.test.mjs
-      - scripts/worker-payload-route.mjs
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

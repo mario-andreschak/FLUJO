@@ -696,7 +696,7 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   }
   const upload = prepare.steps.find(({ uses }) => uses?.startsWith('actions/upload-artifact@'));
   assert.equal(prepare.outputs.artifact_id, `\${{ steps.${upload.id}.outputs.artifact-id }}`);
-  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify.yml', import.meta.url), 'utf8'));
+  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify-full.yml', import.meta.url), 'utf8'));
   const isolationSetup = verification.jobs.test.steps.find(({ name }) => name === 'Prepare real Linux MCP isolation image');
   const releaseIsolationSetup = prepare.steps.find(({ name }) => name === 'Prepare real Linux MCP isolation image for release verification');
   const releasePrepare = prepare.steps.find(({ run }) => run === 'node scripts/npm-release.mjs prepare');
@@ -714,7 +714,7 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
 });
 
 test('both release-safety runners install pinned dependencies before the workflow structure checks', () => {
-  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify.yml', import.meta.url), 'utf8'));
+  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify-full.yml', import.meta.url), 'utf8'));
   const job = verification.jobs['release-safety'];
   assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
   const install = job.steps.findIndex(({ run }) => run === 'npm ci --include=dev');

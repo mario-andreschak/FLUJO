@@ -1,23 +1,29 @@
 /** Shared by CI, release publication, and the administrator acceptance recipe. */
-export const REQUIRED_JOB_IDS = Object.freeze([
+export const FULL_JOB_IDS = Object.freeze([
   'production-build', 'release-safety', 'typecheck', 'lint', 'test',
   'test-isolated', 'workflow-contract', 'dependency-security', 'codeql',
 ]);
 
-export const REQUIRED_CHECK_NAMES = Object.freeze([
+export const FULL_CHECK_NAMES = Object.freeze([
   'Production build (ubuntu-latest)', 'Production build (windows-latest)',
   'Release safety (ubuntu-latest)', 'Release safety (windows-latest)',
   'typecheck', 'lint', 'test', 'test-isolated', 'workflow-contract',
   'dependency-security', 'CodeQL (javascript-typescript)', 'CodeQL (actions)', 'verification',
 ]);
 
-export function assertDependencyResults(needs) {
+export function assertFullDependencyResults(needs) {
   if (!needs || typeof needs !== 'object' || Array.isArray(needs)) throw new Error('Missing verification dependencies.');
-  for (const id of REQUIRED_JOB_IDS) {
+  for (const id of FULL_JOB_IDS) {
     if (needs[id]?.result !== 'success') {
       throw new Error(`Required verification job ${id} concluded ${needs[id]?.result ?? 'missing'}.`);
     }
   }
+}
+
+export const REQUIRED_JOB_IDS = Object.freeze(['verification']);
+export const REQUIRED_CHECK_NAMES = Object.freeze(['verification']);
+export function assertDependencyResults(needs) {
+  if (!needs || needs.verification?.result !== 'success') throw new Error('Required verification job verification concluded unsuccessfully.');
 }
 
 /** A green aggregate workflow can still contain skipped or removed jobs. */

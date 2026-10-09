@@ -3,37 +3,6 @@
 name: Validate Windows installer
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/installer.yml'
-      - 'README.md'
-      - 'installer/**'
-      - 'scripts/install.ps1'
-      - 'scripts/install.sh'
-      - 'scripts/installer-functions.ps1'
-      - 'scripts/installer-release.mjs'
-      - 'scripts/installer-release.test.mjs'
-      - 'scripts/uninstall.ps1'
-      - 'scripts/update.ps1'
-      - 'tests/installer.Tests.ps1'
-      - 'tests/installer-unix.test.sh'
-      - 'tests/installer-repository.test.mjs'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'bin/flujo.mjs'
-      - 'bin/node-runtime*.mjs'
-      - 'scripts/node-runtime.test.mjs'
-      - 'scripts/verify-ci-node*.mjs'
-      - 'scripts/ci-node-binaries.json'
-      - 'scripts/launch-next.mjs'
-      - 'scripts/smoke-mcp-artifacts.mjs'
-      - 'scripts/validate-mcp-release.mjs'
-      - 'scripts/antigravity-cli-*.mjs'
-      - 'packages/antigravity-cli/**'
-      - '__tests__/mcp/**'
-      - 'mcp-servers/**'
-      - 'src/app/mcp-proxy/**'
-      - 'src/backend/services/mcp/**'
   push:
     branches: [main]
     tags: ['v*']

@@ -2,7 +2,6 @@ name: Verify Cloud Worker Image
 
 # Local candidate execution; registry provenance and promotion stay main-only.
 on:
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read

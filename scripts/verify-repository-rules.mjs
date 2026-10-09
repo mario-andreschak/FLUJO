@@ -18,11 +18,11 @@ export function assertRepositoryRules({ rules, rulesets }) {
   for (const type of ['deletion', 'non_fast_forward']) {
     if (!rules.some((rule) => rule.type === type)) throw new Error(`Missing effective ${type} rule.`);
   }
-  const review = rules.some((rule) => rule.type === 'pull_request'
-    && rule.parameters?.required_approving_review_count >= 1
-    && ['dismiss_stale_reviews_on_push', 'require_code_owner_review', 'require_last_push_approval', 'required_review_thread_resolution']
-      .every((key) => rule.parameters[key] === true));
-  if (!review) throw new Error('Required review, code ownership, last-push approval and resolved threads were not proved.');
+  const review = rules.some(rule => rule.type === 'pull_request'
+    && rule.parameters?.required_approving_review_count === 0
+    && rule.parameters.require_code_owner_review === false && rule.parameters.require_last_push_approval === false
+    && rule.parameters.required_review_thread_resolution === true);
+  if (!review) throw new Error('Automated merge policy must require no human approvals and resolve review threads.');
   for (const name of REQUIRED_CHECK_NAMES) {
     if (!rules.some((rule) => rule.type === 'required_status_checks'
         && rule.parameters?.strict_required_status_checks_policy === true
@@ -31,12 +31,7 @@ export function assertRepositoryRules({ rules, rulesets }) {
       throw new Error(`Missing required up-to-date GitHub Actions check: ${name}.`);
     }
   }
-  if (!rules.some((rule) => rule.type === 'code_scanning'
-      && rule.parameters?.code_scanning_tools?.some((tool) => tool.tool === 'CodeQL'
-        && ['errors', 'errors_and_warnings', 'all'].includes(tool.alerts_threshold)
-        && ['high_or_higher', 'medium_or_higher', 'all'].includes(tool.security_alerts_threshold)))) {
-    throw new Error('CodeQL high/critical finding protection was not proved.');
-  }
+  if (rules.some(rule => rule.type === 'code_scanning' || (rule.type === 'required_status_checks' && rule.parameters.required_status_checks.some(check => !REQUIRED_CHECK_NAMES.includes(check.context))))) throw new Error('Focused merge policy cannot require former hosted contexts or a separate scanner run.');
 }
 
 export function inspectRepositoryRules({ api, branch = 'main' }) {

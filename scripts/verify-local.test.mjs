@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { localVerificationCommands } from './verify-local.mjs';
+test('local qualification installs and builds once, then tests real files', () => {
+ const commands = localVerificationCommands({ install: true });
+ assert.equal(commands.filter(command => command.args.join(' ') === 'ci --include=dev').length, 1);
+ assert.equal(commands.filter(command => command.args.join(' ') === 'run build').length, 1);
+ assert.ok(commands.find(command => command.args.includes('--runTestsByPath')));
+});
+test('full local work remains explicit and isolation requires prepared full qualification', () => {
+ const commands = localVerificationCommands({ full: true, isolated: true });
+ for (const script of ['typecheck', 'lint:all', 'test:ci', 'test:isolated', 'smoke:mcp-artifacts']) assert.ok(commands.some(command => command.args.includes(script)));
+ assert.throws(() => localVerificationCommands({ isolated: true }));
+ assert.equal(localVerificationCommands({ testsOnly: true }).some(command => command.args.includes('build')), false);
+});

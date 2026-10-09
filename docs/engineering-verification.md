@@ -1,3 +1,19 @@
+# Local-first verification and repository enforcement
+
+Bundle implementation changes and qualify them locally before pushing. Run `node scripts/verify-local.mjs --install --full` with a supported Node runtime. This installs once, builds once, validates release inventory, runs critical regressions, typechecks, lints, audits dependencies, exercises packed artifacts and runs the ordinary full suite with its assertion baseline. Add `--isolated` only after preparing the existing Docker/process/browser dependencies. Use `--tests-only` to reuse already built local artifacts; it does not claim a fresh build.
+
+GitHub `verify.yml` runs exactly one job named `verification` on PRs and main pushes. It selects official Node 24.21.0, installs once, builds once with the default heap, validates MCP types/release inventory, runs workflow/release contracts and explicit critical API/MCP/workspace-transfer regressions. This is focused hosted coverage, not the full platform, runtime or soak matrix.
+
+The broad Windows/Linux, four-runtime, full-suite, isolated and CodeQL qualification remains available through explicit `verify-full.yml` manual dispatch and existing local commands. Installer, Worker candidate image, Persona acceptance and scorecard workflows no longer run on every PR. Post-merge publication and selected release workflows retain their source/artifact validation.
+
+The ruleset template requires only GitHub Actions `verification`, with no human approvals, Code Owner approval or last-pusher approval. Resolved review threads, branch deletion/force-push protection and strict check freshness remain. Actual repository settings must be transitioned separately; source YAML cannot change them. CodeQL remains a manual broad qualification tool rather than a separate hosted merge prerequisite.
+
+Release publication checks the exact main-push SHA, latest successful authoritative workflow attempt, and successful `verification` job. It does not manufacture the former matrix contexts or claim they ran. Original candidate bytes, version, provenance and signature checks remain enforced.
+
+## Historical broad qualification recipe
+
+The following records the former automatic matrix and its rationale. Where it describes mandatory hosted jobs or human-review settings, the current local-first policy above supersedes it.
+
 # Verification and repository enforcement (#565)
 
 Source checks, repository settings, distribution acceptance and human review are

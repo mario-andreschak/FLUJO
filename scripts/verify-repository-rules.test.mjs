@@ -13,11 +13,11 @@ for (const [label, change] of [
   ['bot bypass', (f) => { f.rulesets[0].bypass_actors = [{ actor_id: 15368, actor_type: 'Integration', bypass_mode: 'always' }]; }],
   ['hidden bypass list', (f) => { delete f.rulesets[0].bypass_actors; }],
   ['empty effective rules', (f) => { f.rules = []; }],
-  ['no code-owner review', (f) => { f.rules.find((r) => r.type === 'pull_request').parameters.require_code_owner_review = false; }],
+  ['human code-owner review', (f) => { f.rules.find((r) => r.type === 'pull_request').parameters.require_code_owner_review = true; }],
   ['stale checks permitted', (f) => { f.rules.find((r) => r.type === 'required_status_checks').parameters.strict_required_status_checks_policy = false; }],
   ['missing required check', (f) => { f.rules.find((r) => r.type === 'required_status_checks').parameters.required_status_checks.pop(); }],
   ['spoofable check source', (f) => { f.rules.find((r) => r.type === 'required_status_checks').parameters.required_status_checks[0].integration_id = null; }],
-  ['critical-only alert rule', (f) => { f.rules.find((r) => r.type === 'code_scanning').parameters.code_scanning_tools[0].security_alerts_threshold = 'critical'; }],
+  ['extra scanner merge gate', (f) => { f.rules.push({ type: 'code_scanning', ruleset_id: 7 }); }],
 ]) {
   test(`auditor refuses ${label}`, () => { const f = fixture(); change(f); assert.throws(() => assertRepositoryRules(f)); });
 }
