@@ -6,6 +6,7 @@ import ServerManager from '@/frontend/components/mcp/MCPServerManager';
 const retryMock = jest.fn();
 const reserveMock = jest.fn();
 const openMock = jest.fn();
+let latestWizardProps: { onInstalled: (name: string) => Promise<void>; onAuthenticate: (name: string) => Promise<void> };
 jest.mock('next/navigation', () => ({ useRouter: () => ({ push: jest.fn(), replace: jest.fn() }) }));
 jest.mock('@/frontend/contexts/ThemeContext', () => ({ useTheme: () => ({ visualStyle: 'modern' }) }));
 jest.mock('@/frontend/hooks/useServerStatus', () => ({ useServerStatus: () => ({
@@ -23,11 +24,14 @@ jest.mock('@/frontend/components/mcp/MCPServerManager/McpAgentJourney', () => ()
 jest.mock('@/frontend/components/mcp/McpAppsDashboard', () => () => null);
 jest.mock('@/frontend/components/mcp/MCPServerManager/McpConnectionWizard', () => ({
   __esModule: true,
-  default: (props: { open: boolean; onClose: () => void; onInstalled: (name: string) => Promise<void>; onAuthenticate: (name: string) => Promise<void> }) => props.open ? <div data-testid="wizard">
+  default: (props: { open: boolean; onClose: () => void; onInstalled: (name: string) => Promise<void>; onAuthenticate: (name: string) => Promise<void> }) => {
+    latestWizardProps = props;
+    return props.open ? <div data-testid="wizard">
     <button onClick={props.onClose}>External close</button>
     <button onClick={() => void props.onInstalled('search')}>Installed callback</button>
     <button onClick={() => void props.onAuthenticate('search')}>Authenticate callback</button>
-  </div> : null,
+  </div> : null;
+  },
 }));
 
 function connect() {
@@ -36,6 +40,28 @@ function connect() {
 
 describe('MCP manager wizard callback ownership', () => {
   beforeEach(() => { jest.clearAllMocks(); });
+
+  it.each(['installation', 'authentication'])('rejects the retained %s callback before it starts refresh or OAuth', async (operation) => {
+    const previousFetch = global.fetch;
+    global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ alreadyAuthorized: true }) })) as unknown as typeof fetch;
+    retryMock.mockResolvedValue(undefined);
+    reserveMock.mockReturnValue({ close: jest.fn() });
+    try {
+      render(<ThemeProvider theme={createTheme()}><ServerManager /></ThemeProvider>);
+      connect();
+      const oldCallbacks = latestWizardProps;
+      fireEvent.click(screen.getByText('External close'));
+      connect();
+      await act(async () => {
+        if (operation === 'installation') await oldCallbacks.onInstalled('old');
+        else await oldCallbacks.onAuthenticate('old');
+      });
+      expect(retryMock).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(reserveMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId('wizard')).toBeInTheDocument();
+    } finally { global.fetch = previousFetch; }
+  });
 
   it('does not close the reopened authentication window when the old request finishes', async () => {
     const finishes: Array<(value: Response) => void> = [];
