@@ -6,7 +6,9 @@ import { synthesizePocket, validatePocketSpeech, POCKET_MAX_TEXT } from '@/vendo
 import { createHash } from 'node:crypto';
 import { assertExecutionConversationAccess, assertExecutionStateAccess } from '@/backend/execution/extensions';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { recoverConversationTranscript } from '@/backend/execution/flow/conversationLog';
+import { recoverConversationTranscript, flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { completedForegroundDispatch } from './foreground-reply.mjs';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { loadItem } from '@/utils/storage/backend';
 import type { StorageKey } from '@/shared/types/storage';
@@ -101,7 +103,7 @@ async function boundedBody(request: Request, signal: AbortSignal, maximum = 12 *
   } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
-/** Narration receives only a terminal, root-level public Chat reply. It cannot
+/** Narration receives only a finished, root-level public Chat reply. It cannot
  * accept browser-supplied results, tool arguments or claims of success. */
 export async function canonicalVoiceResult(conversationId: string, messageId: string) {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(conversationId) || !/^[A-Za-z0-9_-]{1,128}$/.test(messageId)) throw new PublicError(400, 'invalid_voice_request', 'Choose a recorded result.');
@@ -110,16 +112,25 @@ export async function canonicalVoiceResult(conversationId: string, messageId: st
     ?? await loadItem<SharedState | undefined>(`conversations/${conversationId}` as StorageKey, undefined);
   if (!state || state.conversationId !== conversationId) throw new PublicError(404, 'result_unavailable', 'The result is unavailable.');
   await assertExecutionStateAccess(state, conversationId);
-  if (!['completed', 'awaiting_tool_approval', 'paused_debug', 'capped', 'error'].includes(state.status ?? '')) throw new PublicError(409, 'result_not_ready', 'Work is still in progress.');
+  const open = state.status === 'running';
+  if (!open && !['completed', 'awaiting_tool_approval', 'paused_debug', 'capped', 'error'].includes(state.status ?? '')) throw new PublicError(409, 'result_not_ready', 'Work is still in progress.');
+  if (state.isCancelled || state.recovery?.cancellationRequestedAt || state.recovery?.manualActionRequired) throw new PublicError(409, 'result_not_ready', 'This reply is held.');
   const { messages } = await recoverConversationTranscript(state);
   await assertExecutionConversationAccess(conversationId);
   await assertExecutionStateAccess(state, conversationId);
   const visible = messages.filter(message => !message.disabled && !message.depth && ['user', 'assistant'].includes(message.role));
   const latest = visible.at(-1);
   if (latest?.id !== messageId || latest.role !== 'assistant') throw new PublicError(409, 'result_not_current', 'That reply is no longer current.');
+  if (latest.tool_calls?.length) throw new PublicError(409, 'result_not_ready', 'A tool call is not a spoken reply.');
+  if (open) {
+    await flushConversationLog(conversationId);
+    const events = await readConversationLog(conversationId) ?? [];
+    if (listPendingToolCalls(conversationId).length || !completedForegroundDispatch(conversationId, latest, events)) throw new PublicError(409, 'result_not_ready', 'The foreground reply is not finished.');
+  }
   const content = typeof latest.content === 'string' ? latest.content : Array.isArray(latest.content) ? latest.content.flatMap(part => 'text' in part ? [part.text] : []).join('\n') : '';
   const reply = content.replace(/<flujo-ui-actions>[\s\S]*?<\/flujo-ui-actions>/g, '').trim().slice(0, 8000);
   if (!reply) throw new PublicError(409, 'result_unavailable', 'There is no public reply to speak.');
+  if (open && reply.length > 600) throw new PublicError(409, 'result_not_ready', 'Keep the full report in Chat.');
   return { reply, mode: 'flujo', status: state.status === 'awaiting_tool_approval' || state.status === 'paused_debug' ? 'waiting_for_input' : 'completed' };
 }
 
