@@ -237,9 +237,10 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
           throw new PublicError(400, 'invalid_voice_request', 'Choose a recorded reply.');
         const result = await abortable(canonicalVoiceResult(body.conversationId, body.messageId), owned.signal); await check();
         provenance = { conversationId: body.conversationId, messageId: body.messageId, digest: resultDigest(result), expires: Date.now() + 60_000 };
-        // Speak an exact bounded excerpt; no extra summarizer or online provider.
-        const excerpt = result.reply.slice(0, POCKET_MAX_TEXT);
-        speech = validatePocketSpeech({ text: excerpt.length === result.reply.length ? excerpt : excerpt.slice(0, Math.max(excerpt.lastIndexOf(' '), 1)), locale: body.locale });
+        // The conversation flow must author a short utterance. Never turn a
+        // background report into speech by clipping its first paragraph.
+        if (result.reply.length > POCKET_MAX_TEXT) throw new PublicError(409, 'conversation_reply_required', 'A short conversation reply is needed before speaking. The full work result stays in Chat.');
+        speech = validatePocketSpeech({ text: result.reply, locale: body.locale });
       } else speech = validatePocketSpeech(body);
       const audio = await abortable(synthesizePocket(speech, process.env.FLUJO_AVATAR_POCKET_ORIGIN, scopedFetch, owned.signal), owned.signal);
       await checkResult();
