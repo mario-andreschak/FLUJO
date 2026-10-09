@@ -30,6 +30,7 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     } } : undefined;
     return json({ serverName: name, policyDigest: preview.policyDigest, privileges: 'owner-account',
       command: preview.config.command, args: preview.config.args, roots: preview.config.roots,
+      cwd: preview.config.cwd, sourceRoot: policy.sourceRoot, packageRunner: policy.packageRunner,
       runtimeHome, environmentNames: policy.environmentNames, workload, revision: preview.revision });
   } catch (error) {
     if (!owner.authorization.recheck()) console.warn(`[bundled-consent-preview] ${consentDiagnosticCode(error)}`);
