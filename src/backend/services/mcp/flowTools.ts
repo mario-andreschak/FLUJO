@@ -23,6 +23,7 @@ import { flowService } from '@/backend/services/flow/index';
 import { buildFlowToolNameMap } from '@/shared/utils/flowToolNaming';
 import { buildFlowToolDescription } from '@/backend/execution/flow/buildHandoffDescription';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { ElicitResultV2Schema, type InputRequestsV2, type InputResponsesV2 } from '@modelcontextprotocol/ext-tasks/core/v2';
 
 const log = createLogger('backend/services/mcp/flowTools');
 
@@ -34,6 +35,11 @@ function flowInputSchema(): Tool['inputSchema'] {
       input: {
         type: 'string',
         description: 'The message / prompt to send to the flow as the user turn.',
+      },
+      confirm: {
+        type: 'boolean',
+        description: 'Request confirmation before running. Requires negotiated MCP Tasks with form elicitation support.',
+        default: false,
       },
     },
     required: ['input'],
@@ -80,11 +86,24 @@ function extractInput(args: Record<string, unknown>): string {
  * The flow is resolved by rebuilding the same deterministic name map used by
  * `flowToolsListTools`, so list and call always agree. Runs are ephemeral.
  */
+export interface FlowToolExecutionOptions {
+  abortSignal?: AbortSignal;
+  assertAuthorized?: () => void;
+  requestInput?: (requests: InputRequestsV2) => Promise<InputResponsesV2>;
+}
+
 export async function flowToolsCallTool(
   toolName: string,
   args: Record<string, unknown>,
+  options: FlowToolExecutionOptions = {},
 ): Promise<CallToolResult> {
+  const assertCurrent = () => {
+    options.abortSignal?.throwIfAborted();
+    options.assertAuthorized?.();
+  };
+  assertCurrent();
   const flows = await flowService.loadFlows();
+  assertCurrent();
   const nameMap = buildFlowToolNameMap(flows.map((f) => ({ id: f.id, name: f.name })));
 
   let flowId: string | undefined;
@@ -106,6 +125,26 @@ export async function flowToolsCallTool(
   const input = extractInput(args);
 
   try {
+    if (args.confirm === true) {
+      if (!options.requestInput) return {
+        content: [{ type: 'text', text: 'Confirmation requires negotiated MCP Tasks and form elicitation.' }], isError: true,
+      };
+      const responses = await options.requestInput({ confirmation: {
+        method: 'elicitation/create',
+        params: {
+          mode: 'form', message: `Run the FLUJO flow '${toolName}'?`,
+          requestedSchema: { type: 'object', properties: {
+            confirmed: { type: 'boolean', title: 'Run this flow' },
+          }, required: ['confirmed'] },
+        },
+      } });
+      assertCurrent();
+      const response = ElicitResultV2Schema.parse(responses.confirmation);
+      if (response.action !== 'accept' || response.content?.confirmed !== true) return {
+        content: [{ type: 'text', text: 'Flow execution declined.' }],
+      };
+    }
+    assertCurrent();
     const result = await runFlow({
       flowId,
       prompt: input,
@@ -113,7 +152,13 @@ export async function flowToolsCallTool(
       mode: 'ephemeral',
       flujo: true,
       requireApproval: false,
+      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+      ...(options.assertAuthorized ? { executionAuthority: {
+        signal: options.abortSignal ?? new AbortController().signal,
+        assertCurrent: async () => { assertCurrent(); },
+      } } : {}),
     });
+    assertCurrent();
 
     if (result.flowNotFound) {
       return {
@@ -134,6 +179,8 @@ export async function flowToolsCallTool(
       content: [{ type: 'text', text: result.outputText ?? '' }],
     };
   } catch (err) {
+    // Authority loss/cancellation must retire the job, never look like success.
+    assertCurrent();
     log.error('flowToolsCallTool failed', { toolName, flowId, err });
     return {
       content: [{ type: 'text', text: `Error running flow: ${err instanceof Error ? err.message : String(err)}` }],

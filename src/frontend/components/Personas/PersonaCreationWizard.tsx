@@ -143,7 +143,9 @@ export default function PersonaCreationWizard({
   const [loading, setLoading] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<
+    'personas.create.draftResumed' | 'personas.create.savingDraft' | 'personas.create.draftSaved' | null
+  >(null);
   const [draftRecord, setDraftRecord] = useState<PersonaCreationDraft | null>(null);
   const [roleRefreshError, setRoleRefreshError] = useState<string | null>(null);
   const [setupCheck, setSetupCheck] = useState<{ key: string; result: PersonaCreationReadiness } | null>(null);
@@ -154,6 +156,7 @@ export default function PersonaCreationWizard({
   });
   const lastRoleRefreshAtRef = useRef(0);
   const hydratingDraftIdRef = useRef<string | null>(null);
+  const resumedDraftRef = useRef<{ id: string; workspaceId: string } | null>(null);
 
   useEffect(() => {
     tRef.current = t;
@@ -219,11 +222,22 @@ export default function PersonaCreationWizard({
     setSetupCheck(null);
     setDraftRecord(null);
     hydratingDraftIdRef.current = null;
+    resumedDraftRef.current = null;
     setIdempotencyKey(uuidv4());
   };
 
   useEffect(() => {
-    if (!open || !draft) return;
+    if (!open || !draft) {
+      resumedDraftRef.current = null;
+      return;
+    }
+    if (
+      resumedDraftRef.current?.id === draft.id
+      && resumedDraftRef.current.workspaceId === draft.workspaceId
+    ) return;
+    // Restore once per editing session. Locale changes and background draft
+    // refreshes must preserve local edits and the revision used for conflicts.
+    resumedDraftRef.current = { id: draft.id, workspaceId: draft.workspaceId };
     // Effects below still see the pre-hydration render. Mark this draft before
     // restoring state so default App synchronization skips that stale pass.
     hydratingDraftIdRef.current = draft.id;
@@ -240,8 +254,8 @@ export default function PersonaCreationWizard({
     setAppsEdited(draft.payload.appsEdited);
     setMemories(draft.payload.memories.length ? draft.payload.memories : ['']);
     setIdempotencyKey(draft.payload.idempotencyKey);
-    setStatus(t('personas.create.draftResumed'));
-  }, [draft, open, t]);
+    setStatus('personas.create.draftResumed');
+  }, [draft, open]);
 
   const refreshRoles = useCallback(async (
     initialize = false,
@@ -330,7 +344,11 @@ export default function PersonaCreationWizard({
   useEffect(() => {
     if (!open) return;
     if (draft && hydratingDraftIdRef.current === draft.id) {
-      hydratingDraftIdRef.current = null;
+      // Strict Mode can replay the stale opening effects before restored state
+      // is rendered. Keep the guard until that state is actually visible here.
+      if (draftRecord?.id === draft.id && draftRecord.workspaceId === draft.workspaceId) {
+        hydratingDraftIdRef.current = null;
+      }
       return;
     }
     if (appsEdited) return;
@@ -343,7 +361,7 @@ export default function PersonaCreationWizard({
         ? current
         : next
     ));
-  }, [appServers, appsEdited, draft, open, selectedRole]);
+  }, [appServers, appsEdited, draft, draftRecord, open, selectedRole]);
 
   const wasOnAppsStepRef = useRef(false);
   useEffect(() => {
@@ -458,7 +476,7 @@ export default function PersonaCreationWizard({
   const saveDraft = async () => {
     setSavingDraft(true);
     setError(null);
-    setStatus(t('personas.create.savingDraft'));
+    setStatus('personas.create.savingDraft');
     try {
       const payload = draftPayload();
       const saved = draftRecord
@@ -473,7 +491,7 @@ export default function PersonaCreationWizard({
             payload,
           });
       setDraftRecord(saved);
-      setStatus(t('personas.create.draftSaved'));
+      setStatus('personas.create.draftSaved');
       reset();
       onDraftSaved(saved);
     } catch (cause) {
@@ -583,7 +601,7 @@ export default function PersonaCreationWizard({
               {steps.map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
             </Stepper>
             {error && <Alert severity="error" role="alert">{error}</Alert>}
-            {status && <Alert severity="info" role="status" aria-live="polite">{status}</Alert>}
+            {status && <Alert severity="info" role="status" aria-live="polite">{t(status)}</Alert>}
             {roleRefreshError && (
               <Alert
                 severity="warning"
