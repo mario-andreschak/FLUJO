@@ -1,0 +1,11 @@
+export { default as Eyes } from './client/Eyes.js';
+export type { EyesProps, AvatarStyle, EyePhase } from './client/Eyes.js';
+export { FactoryAvatar } from './factory/FactoryAvatar.js';
+export type { FactoryAvatarProps, FactoryAvatarObservation, AvatarLocale } from './factory/FactoryAvatar.js';
+export { WorldSky } from './world/WorldSky.js';
+export type { WorldSkyProps } from './world/WorldSky.js';
+export { currentWorldSkySelection } from './world/selection.js';
+export type { WorldSkyModel, WorldSkySelection, WorldSkyIntent, WorldSkyLayer } from './world/selection.js';
+export { createAcceptedTaskNarrationTransport } from './client/acceptedTaskNarrationTransport.js';
+export type { AcceptedTaskNarrationBinding, AcceptedTaskNarrationSelection } from './client/acceptedTaskNarrationTransport.js';
+export type { NativeVoiceTransport, AvatarVoiceEndpoint } from './client/nativeVoiceTransport.js';

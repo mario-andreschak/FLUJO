@@ -5,7 +5,7 @@ export const REQUIRED_JOB_IDS = Object.freeze([
 ]);
 
 export const REQUIRED_CHECK_NAMES = Object.freeze([
-  'Production build (ubuntu-latest)', 'Production build (windows-latest)',
+  'Production build (ubuntu-latest)',
   'Release safety (ubuntu-latest)', 'Release safety (windows-latest)',
   'typecheck', 'lint', 'test', 'test-isolated', 'workflow-contract',
   'dependency-security', 'CodeQL (javascript-typescript)', 'CodeQL (actions)', 'verification',

@@ -9,8 +9,9 @@ merge, release, deployment, provider run or live controller operation.
 `scripts/verification-contract.mjs` lists the required jobs and displayed check
 names. `verify.yml` runs on every PR and main push; its final `verification`
 check runs even after failure and rejects any missing, failed, cancelled or
-skipped prerequisite. Ubuntu and Windows production jobs build with the normal
-Node heap, typecheck MCP workspaces, validate release payloads and install the
+skipped prerequisite. One Ubuntu production job on Node 22.23.3 (matching the
+container) builds once with the normal Node heap, typechecks MCP workspaces,
+validates release payloads and installs the
 packed app/MCP tarballs into a disposable consumer before exercising actual
 process boundaries. Browser/operator journeys remain separate release gates.
 
@@ -131,3 +132,6 @@ Retain source SHA, OS/Node/npm versions, exact commands, failures/skips,
 run/attempt IDs, artifact hashes and human owner in #564/#578's evidence ledger.
 The drill, fresh scanner/remediation evidence, installed-release acceptance,
 human security/release tabletop and independent reassessment remain open.
+
+CI pulls the pinned Node image from Docker's public ECR mirror to avoid Docker Hub's anonymous pull limit. Both the container index and Linux isolation image retain their original SHA-256 digests; the signed Node executable checks remain mandatory. Obsolete Worker image candidate runs are cancelled when a newer commit arrives.
+

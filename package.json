@@ -54,6 +54,7 @@
     "packages/antigravity-cli/*.cjs",
     "packages/antigravity-cli/package.json",
     "packages/antigravity-cli/artifacts.json",
+    "packages/avatar-sdk/**",
     "!packages/antigravity-cli/.cache/**"
   ],
   "scripts": {
@@ -63,6 +64,7 @@
     "dockerbuild": "gh workflow run publish-image.yml -R mario-andreschak/FLUJO --ref main",
     "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
     "typecheck": "next typegen && tsc --noEmit -p tsconfig.json",
+    "verify:avatar-sdk": "node scripts/verify-avatar-sdk.mjs",
     "typecheck:mcp": "npm run typecheck --workspaces --if-present",
     "test:mcp": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/mcp",
     "test:mcp-process-boundary": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts",
@@ -98,6 +100,7 @@
     "postinstall": "node packages/antigravity-cli/install.cjs"
   },
   "dependencies": {
+    "@flujo-ai/avatar-sdk": "file:packages/avatar-sdk",
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
     "@anthropic-ai/sdk": "^0.115.0",
     "@emotion/react": "^11.14.0",
@@ -128,7 +131,7 @@
     "mcp-stdio-oauth": "^0.1.0",
     "next": "16.3.8",
     "node-fetch": "^3.3.2",
-    "openai": "^7.3.0",
+    "openai": "7.3.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",

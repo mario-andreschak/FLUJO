@@ -43,6 +43,52 @@ const waitForCondition = async (condition: () => boolean) => {
   expect(condition()).toBe(true);
 };
 describe('avatar native voice uses canonical Flujo results', () => {
+  it('refuses a long work report instead of reading its first 600 characters', async () => {
+    FlowExecutor.conversationStates.set('conversation', state() as never);
+    jest.mocked(recoverConversationTranscript).mockResolvedValue({ messages: [{ id: 'reply', role: 'assistant', content: 'Long work report. '.repeat(60) }], source: 'snapshot' } as never);
+    const original = global.fetch;
+    global.fetch = jest.fn() as typeof fetch;
+    try {
+      const response = await handleAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', locale: 'en' }), 'local-speech');
+      expect(response.status).toBe(409); expect((await response.json()).code).toBe('conversation_reply_required');
+      expect(global.fetch).not.toHaveBeenCalled();
+    } finally { global.fetch = original; }
+  });
+  it('uses Pocket without an online key, reading and rechecking the saved reply', async () => {
+    delete process.env.FLUJO_AVATAR_OPENROUTER_KEY;
+    process.env.FLUJO_AVATAR_POCKET_ORIGIN = 'http://127.0.0.1:43947';
+    const bytes = Buffer.alloc(48); bytes.write('RIFF'); bytes.writeUInt32LE(40,4); bytes.write('WAVEfmt ',8);
+    bytes.writeUInt32LE(16,16); bytes.writeUInt16LE(1,20); bytes.writeUInt16LE(1,22); bytes.writeUInt32LE(24000,24);
+    bytes.writeUInt32LE(48000,28); bytes.writeUInt16LE(2,32); bytes.writeUInt16LE(16,34); bytes.write('data',36); bytes.writeUInt32LE(4,40);
+    const original = global.fetch;
+    global.fetch = jest.fn(async (_url, options) => {
+      expect(_url).toBe('http://127.0.0.1:43947/speech');
+      expect(JSON.parse(String(options?.body))).toEqual({ text: 'A recorded result.', locale: 'en' });
+      expect(options?.headers).toEqual({ 'content-type': 'application/json' });
+      return new Response(bytes);
+    }) as typeof fetch;
+    try {
+      FlowExecutor.conversationStates.set('conversation', state() as never);
+      const response = await handleAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', locale: 'en' }), 'local-speech');
+      expect(response.status).toBe(200); expect(response.headers.get('content-type')).toBe('audio/wav');
+      expect((await response.arrayBuffer()).byteLength).toBe(48);
+      expect(recoverConversationTranscript).toHaveBeenCalledTimes(4);
+      expect((await handleAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', text: 'Invented success', locale: 'en' }), 'local-speech')).status).toBe(400);
+    } finally { global.fetch = original; delete process.env.FLUJO_AVATAR_POCKET_ORIGIN; }
+  });
+  it('does not return local audio when the canonical reply changes during synthesis', async () => {
+    process.env.FLUJO_AVATAR_POCKET_ORIGIN = 'http://127.0.0.1:43947';
+    FlowExecutor.conversationStates.set('conversation', state() as never);
+    const original = global.fetch;
+    global.fetch = jest.fn(async () => {
+      jest.mocked(recoverConversationTranscript).mockResolvedValue({ messages: [{ id: 'reply', role: 'assistant', content: 'Changed' }], source: 'snapshot' } as never);
+      return new Response('ignored');
+    }) as typeof fetch;
+    try {
+      const response = await handleAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', locale: 'de' }), 'local-speech');
+      expect(response.status).toBe(409); expect((await response.json()).code).toBe('result_not_current');
+    } finally { global.fetch = original; delete process.env.FLUJO_AVATAR_POCKET_ORIGIN; }
+  });
   beforeEach(() => {
     jest.clearAllMocks(); FlowExecutor.conversationStates.clear();
     process.env.FLUJO_AVATAR_OPENROUTER_KEY = 'TEST_ONLY';
