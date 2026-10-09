@@ -429,6 +429,23 @@ export const API_GROUPS: ApiGroup[] = [
       },
       {
         method: 'POST',
+        path: '/api/mcp/security-review',
+        summary: 'Optional on-demand SkillSpector static review of an immutable public GitHub source snapshot. Never installs or launches the candidate, calls a model, or grants consent.',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'repositoryUrl', type: 'string', required: true, description: 'Public https://github.com/owner/repository URL.' },
+          { name: 'revision', type: 'string', description: 'Optional complete 40-character commit SHA; otherwise resolves HEAD once.' },
+        ],
+        response: '{ success: true, review: { status, source?, scanner?, risk?, findings?, limitations } }. Unsupported, unavailable, cancelled and partial reviews are explicit evidence states.',
+        notes: [
+          'Use Review source in Marketplace server details or the GitHub tab. Review is optional; existing trust and runtime consent remain separate.',
+          'Operator setup: build docker/skillspector.Dockerfile with Docker, then set FLUJO_SKILLSPECTOR_IMAGE to the full local sha256 image ID and restart FLUJO. Review never pulls an image or installs its engine. See docs/guides/mcp-security-review.md for exact commands and container deployment limits.',
+          'At most 256 files, 1 MiB per file and 8 MiB total; unsupported links, submodules, LFS pointers and truncated trees are refused. Private repositories and non-GitHub sources are unsupported. Public GitHub API rate limits apply.',
+          'Static analysis has no network or model credentials. Offline dependency lookup and absent skill manifests limit coverage. A repository report does not certify Registry package bytes, downloaded dependencies, runtime tools or future revisions.',
+        ],
+      },
+      {
+        method: 'POST',
         path: '/api/mcp/test-connection',
         summary: 'Run a real MCP handshake against an unsaved config (tests custom CAs and headers) without registering it.',
         paramsLabel: 'Body',

@@ -18,6 +18,7 @@ import {
 } from '@/utils/mcp/registry';
 import { InstallOptionList } from '../../components/InstallOptionPicker';
 import useRegistryInstall from '../../hooks/useRegistryInstall';
+import McpSecurityReviewPanel from '@/frontend/components/mcp/McpSecurityReviewPanel';
 import {
   DEFAULT_MARKETPLACE_FILTERS,
   filterMarketplaceResults,
@@ -614,6 +615,8 @@ const MarketplaceTab: React.FC<TabProps> = ({
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {selectedServer.description || t('mcp.spotlight.noDescription')}
               </Typography>
+
+              <McpSecurityReviewPanel key={selectedServer.name} repositoryUrl={selectedServer.repository?.url ?? ''} />
 
               {/* Persistent security warning + explicit trust confirmation */}
               <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1 }}>
