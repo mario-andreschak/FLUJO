@@ -119,11 +119,15 @@ try {
     oneRequestPerAssessment: true, actualProviderDisconnect: true, concurrentRefusal: true, capacityRecovered: true, consentAuthorityUnchanged: true };
 } catch (error) { await retain(); throw error; }
 finally {
+  let cleanupError;
   try {
     if (child?.connected && child.exitCode === null && child.signalCode === null) await new Promise((resolve, reject) => child.send('stop', error => error ? reject(error) : resolve()));
     if (closed) { const exit = await Promise.race([closed, delay(15_000, undefined, { ref: false }).then(() => { throw new Error('Server cleanup timeout'); })]); assert.ok(exit.code === 0 || exit.code === 143 || exit.signal === 'SIGTERM'); }
+  } catch (error) { cleanupError = error; await retain(); }
+  try {
     provider.closeAllConnections(); if (provider.listening) await new Promise((resolve, reject) => provider.close(error => error ? reject(error) : resolve()));
-    if (!failed) await operator.restore();
-  } catch (error) { await retain(); throw error; }
+    if (!failed && !cleanupError) await operator.restore();
+  } catch (error) { cleanupError ??= error; await retain(); }
+  if (cleanupError) throw cleanupError;
 }
 console.log(JSON.stringify({ ...receipt, gracefulCleanup: true }, null, 2));
