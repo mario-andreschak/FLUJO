@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { createStdioTransport, resolveStdioLaunch } from '@/backend/services/mcp/connection';
@@ -13,14 +14,16 @@ import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
 
 import { materializeProtectedPackageRunner } from './fixtures/protectedPackageRunner';
 
 // This server uses genuine npm exec resolution and real SDK stdio transport.
-// It deliberately has no dependencies, registry access, lifecycle hooks or credentials.
+// Its one materialized synthetic dependency exercises actual Node resolution.
+// There is no registry access, lifecycle hook or real credential.
 const serverSource = `#!/usr/bin/env node
 const readline = require('node:readline');
+const dependency = require('owned-probe-dependency');
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   if (request.id === undefined) return;
@@ -32,7 +35,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   else if (request.method === 'tools/list') result = { tools: [{ name: 'probe',
     description: 'Read synthetic fixture runtime', inputSchema: { type: 'object' } }] };
   else if (request.method === 'tools/call') result = { content: [{ type: 'text', text: JSON.stringify({
-    cwd: process.cwd(), home: process.env.HOME, args: process.argv.slice(2), marker: 'reviewed-package'
+    cwd: process.cwd(), home: process.env.HOME, args: process.argv.slice(2), marker: 'reviewed-package', dependency
   }) }] };
   else if (request.method === 'ping') result = {};
   else { process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,error:{code:-32601,message:'Unknown method'}})+'\\n'); return; }
@@ -98,7 +101,7 @@ test.each(['v1', 'beta'])('%s starts the reviewed package via genuine offline np
         { name: 'probe', arguments: {} }, { timeout: 10_000 });
     const text = (result as { content: Array<{ text: string }> }).content[0].text;
     expect(JSON.parse(text)).toMatchObject({ marker: 'reviewed-package', cwd: config.cwd,
-      args: ['--synthetic-argument'] });
+      args: ['--synthetic-argument'], dependency: 'reviewed-dependency' });
     expect(JSON.parse(text).home).not.toBe(process.env.HOME);
     expect(getManagedTrustedHost(transport)).toBeDefined();
     ledger.approvals = []; persist();
@@ -193,6 +196,44 @@ test('package manifest drift cannot be covered by reusing the source digest', as
     fs.writeFileSync(manifest, JSON.stringify({ ...value, version: '9.9.9' }));
     await expect(verifyTrustedHostMcp(config)).rejects.toThrow();
   } finally { fs.writeFileSync(manifest, original); }
+});
+
+test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mandatory dependency closure', async state => {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  const packageDirectory = policy.packageRunner!.packageDirectory;
+  const dependency = path.join(packageDirectory, 'node_modules', 'owned-probe-dependency');
+  const backup = path.join(directory, 'dependency-backup');
+  const ambient = path.join(path.dirname(policy.sourceRoot), 'node_modules', 'owned-probe-dependency');
+  const entryPoint = path.join(packageDirectory, 'node_modules', 'owned-probe', 'server.cjs');
+  const resolveInActualNode = () => execFileSync(process.execPath, ['-e',
+    "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('owned-probe-dependency'))", entryPoint], {
+    encoding: 'utf8', timeout: 5_000, env: {
+      HOME: path.join(directory, 'resolution-home'), USERPROFILE: path.join(directory, 'resolution-home'),
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot! } : {}),
+    },
+  });
+  fs.renameSync(dependency, backup);
+  try {
+    if (state === 'ambient') {
+      fs.mkdirSync(ambient, { recursive: true });
+      fs.writeFileSync(path.join(ambient, 'package.json'), JSON.stringify({
+        name: 'owned-probe-dependency', version: '1.0.0', main: 'index.cjs' }));
+      fs.writeFileSync(path.join(ambient, 'index.cjs'), "module.exports = 'unreviewed-ambient-dependency';\n");
+      // Demonstrate the actual resolution candidate, not a modeled resolver.
+      expect(resolveInActualNode()).toBe(path.join(ambient, 'index.cjs'));
+    } else {
+      expect(() => resolveInActualNode()).toThrow();
+    }
+    const reapproved = { ...config, trustedHost: { ...policy,
+      sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot) } };
+    approve(reapproved);
+    await expect(verifyTrustedHostMcp(reapproved)).rejects.toThrow();
+  } finally {
+    const resolved = path.resolve(ambient);
+    if (!resolved.startsWith(path.resolve(directory) + path.sep)) throw new Error('Unsafe ambient dependency cleanup');
+    fs.rmSync(resolved, { recursive: true, force: true });
+    fs.renameSync(backup, dependency);
+  }
 });
 
 test.each(['expired', 'wrong-owner', 'imported'])('real authority refuses %s approvals', async state => {

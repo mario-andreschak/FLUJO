@@ -2,7 +2,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { resolveRuntimeHomeIsolation } from '../mcp/runtimeHomeIsolation';
 import { assertPackageRunnerResolution, packageRunnerArguments } from './protectedPackageRunner';
 import { fingerprintTrustedHostExecutableAsync, fingerprintTrustedHostSourceAsync, trustedHostEnvironment,
-  trustedHostMcpPolicySchema, trustedHostMcpPreviewDigestAsync, TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from './trustedHostMcp';
+  trustedHostMcpPolicySchema, trustedHostMcpPreviewDigestAsync, TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES, trustedHostPackageRunnerContext } from './trustedHostMcp';
 
 /** Preview performs inspection only. The existing protected owner approval
  * transaction recomputes this proposal and publishes its private ledger grant. */
@@ -22,7 +22,7 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
     }
     cwd = runtime.cwd;
   }
-  assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner);
+  assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(stored, runtimeHome));
   const checks = await Promise.allSettled([fingerprintTrustedHostSourceAsync(policy.sourceRoot),
     fingerprintTrustedHostExecutableAsync(stored.command), fingerprintTrustedHostExecutableAsync(policy.packageRunner.shell)]);
   if (checks.some(result => result.status !== 'fulfilled')) throw new Error('Package runner source inspection failed');
@@ -36,7 +36,7 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
       environmentNames: [...new Set([...policy.environmentNames, ...Object.keys(environment),
         ...(runtimeHome === 'isolated' ? TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES : [])])] } };
   const policyDigest = await trustedHostMcpPreviewDigestAsync(config);
-  assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner);
+  assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config, runtimeHome));
   const cache = Object.entries(environment).find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];
   if (!cache) throw new Error('Package runner cache unavailable');
   return { config, policyDigest, storedConfig: structuredClone(stored), revision: {
