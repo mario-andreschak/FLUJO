@@ -57,6 +57,42 @@ const result: McpAssistantResearchResult = {
 };
 
 describe('McpAiConnectionPanel', () => {
+  it('claims research synchronously when click and Enter arrive in the same update', async () => {
+    let finish!: (value: McpAssistantResearchResult) => void;
+    researchMcpConnectionMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+    </ThemeProvider>);
+    const request = screen.getByLabelText(/one thing to connect/i);
+    fireEvent.change(request, { target: { value: 'search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+      fireEvent.keyDown(request, { key: 'Enter' });
+    });
+    expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(result); });
+    expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled();
+  });
+  it('does not authenticate or refresh after an installing panel unmounts', async () => {
+    let finish!: (value: unknown) => void;
+    researchMcpConnectionMock.mockResolvedValue(result);
+    installMcpRecommendationMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const onInstalled = jest.fn();
+    const onAuthenticate = jest.fn(async () => undefined);
+    const view = render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={onInstalled} onAuthenticate={onAuthenticate} onManual={jest.fn()} />
+    </ThemeProvider>);
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
+    fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
+    view.unmount();
+    await act(async () => { finish({ installed: true, serverName: 'search', needsAuthentication: true }); });
+    expect(onAuthenticate).not.toHaveBeenCalled();
+    expect(onInstalled).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     jest.mocked(modelService.loadModels).mockReset().mockResolvedValue([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never);
