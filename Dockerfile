@@ -23,6 +23,7 @@ COPY mcp-servers ./mcp-servers
 # package metadata before the later full source copy.
 COPY tooling/next-lint-glob ./tooling/next-lint-glob
 COPY packages/antigravity-cli ./packages/antigravity-cli
+COPY packages/avatar-sdk ./packages/avatar-sdk
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
