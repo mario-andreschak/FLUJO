@@ -297,6 +297,10 @@ jobs:
       - run: npm run typecheck
       - run: npm run typecheck:mcp
       - run: node scripts/generate-api-inventory.mjs --check
+      - name: Verify packed Avatar SDK installation
+        run: |
+          npm run verify:avatar-sdk
+          node --test scripts/avatar-sdk-packed-dependency.test.mjs
 
   workflow-contract:
     name: workflow-contract
