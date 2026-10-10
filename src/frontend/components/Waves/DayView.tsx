@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   alpha,
   Box,
@@ -442,7 +442,7 @@ function DesktopTimeline({ date, now, items, packageColor, onActivate, formatDat
               >
                 <ButtonBase
                   onClick={() => onActivate(item)}
-                  aria-label={`${formatDate(item.at, { hour: 'numeric', minute: '2-digit' })}, ${item.name}, ${item.activity}`}
+                  aria-label={`${formatDate(item.at, { hour: 'numeric', minute: '2-digit' })}, ${item.name}, ${activityLabel(item, t)}`}
                   sx={{
                     position: 'absolute',
                     zIndex: 2,
@@ -586,6 +586,7 @@ export default function DayView({
   ));
   const [hiddenPackages, setHiddenPackages] = useState<Set<string>>(() => new Set());
   const [mobileMonthOpen, setMobileMonthOpen] = useState(false);
+  const mobileMonthId = useId();
   const mobileMonthButtonRef = useRef<HTMLButtonElement>(null);
   const selectedDateMs = selectedDate?.getTime();
   const currentDate = useMemo(
@@ -717,6 +718,8 @@ export default function DayView({
               ref={mobileMonthButtonRef}
               size="small"
               startIcon={<CalendarMonthRoundedIcon />}
+              aria-expanded={mobileMonthOpen}
+              aria-controls={mobileMonthOpen ? mobileMonthId : undefined}
               onClick={() => setMobileMonthOpen((open) => !open)}
             >
               {mobileMonthOpen ? t('waves.day.hideMonth') : t('waves.day.chooseDate')}
@@ -732,6 +735,7 @@ export default function DayView({
                     clickable
                     variant={visible ? 'filled' : 'outlined'}
                     label={packageName}
+                    aria-pressed={visible}
                     onClick={() => togglePackage(packageName)}
                     sx={{
                       flexShrink: 0,
@@ -744,7 +748,7 @@ export default function DayView({
               })}
             </Box>
           </Box>
-          <Collapse in={mobileMonthOpen} unmountOnExit>
+          <Collapse id={mobileMonthId} in={mobileMonthOpen} unmountOnExit>
             <Box sx={{ maxWidth: 320, mx: 'auto', pt: 1.25 }}>
               <DayViewMiniMonth
                 selectedDate={currentDate}
