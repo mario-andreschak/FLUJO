@@ -135,7 +135,7 @@
     "node-fetch": "^3.3.2",
     "openai": "7.32.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
     "react-window": "^1.8.11",
     "remark-gfm": "^4.0.1",
