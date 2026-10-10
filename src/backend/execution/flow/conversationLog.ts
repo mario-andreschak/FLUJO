@@ -1,7 +1,7 @@
 import { constants, promises as fs, readFileSync } from 'fs';
 import path from 'path';
 import { StringDecoder } from 'node:string_decoder';
-import { withConversationLogReadAdmission, ConversationLogReadPressureError } from './conversationLogReadAdmission';
+import { withConversationLogReadAdmission, ConversationLogReadPressureError, type ConversationReadReservation } from './conversationLogReadAdmission';
 import {
   ExecutionEvent,
   ExecutionEventType,
@@ -439,7 +439,7 @@ export async function readConversationLog(conversationId: string): Promise<Execu
 
 /** Keeps read/projection admission until the consumer has adopted or discarded the complete history. */
 export async function withConversationLogEvents<T>(conversationId: string,
-  consume: (events: ExecutionEvent[] | undefined) => Promise<T>): Promise<T> {
+  consume: (events: ExecutionEvent[] | undefined) => Promise<T>, reservation?: ConversationReadReservation): Promise<T> {
   if (!SAFE_ID.test(conversationId)) return consume(undefined);
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
@@ -483,7 +483,7 @@ export async function withConversationLogEvents<T>(conversationId: string,
       if (skipped) log.warn(`Skipped ${skipped} unparseable line(s) in conversation log ${conversationId} (truncated append?)`);
       consuming = true;
       return consume(events);
-    });
+    }, reservation);
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;
     // Retain legacy storage-I/O fallback, but never swallow consumer or changed-history errors.
@@ -823,7 +823,7 @@ export function repairDanglingToolCalls(
  * present, plus at least one more. Anything else (no log, log incomplete or
  * diverged) keeps the snapshot untouched. Returns true when recovery applied.
  */
-export async function recoverMessagesFromLog(state: SharedState): Promise<boolean> {
+export async function recoverMessagesFromLog(state: SharedState, reservation?: ConversationReadReservation): Promise<boolean> {
   if (state.ephemeral) return false;
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return false;
@@ -844,7 +844,7 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
   );
   state.messages = projectedParent;
   return true;
-  });
+  }, reservation);
 }
 
 /**

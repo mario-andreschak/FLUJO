@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
 import { readModelTurnMedia, readModelTurnSnapshotResponse } from '@/backend/execution/flow/modelTurnArchive';
@@ -107,7 +107,7 @@ describe('canonical model-turn timeline admission', () => {
     await expect(invoke()).rejects.toBe(pressure);
   });
   it('keeps security and missing-state checks ahead of canonical read admission', async () => {
-    jest.mocked(assertLocalRequest).mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+    jest.mocked(assertLocalRequest).mockReturnValueOnce(new NextResponse('forbidden', { status: 403 }));
     expect((await invoke()).status).toBe(403);
     expect(withConversationLogEvents).not.toHaveBeenCalled();
     jest.mocked(loadConversationStateReadOnly).mockResolvedValueOnce(undefined);

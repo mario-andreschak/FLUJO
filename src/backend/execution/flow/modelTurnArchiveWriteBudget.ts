@@ -46,6 +46,8 @@ export const MODEL_TURN_ARCHIVE_WRITE_LIMITS = Object.freeze({
   localMediaBytes: 32 * 1024 * 1024,
   inspectedValues: 100_000,
   depth: 64,
+  queuedWrites: 512,
+  queueTimeoutMs: 30_000,
 });
 
 export class ModelTurnArchiveMemoryError extends Error {
@@ -165,21 +167,76 @@ function reserve(bytes: number, limit: number, writer: boolean): ArchiveMemoryRe
     if (released) return;
     released = true;
     ledger.bytes -= held;
-    if (writer) ledger.writers--;
+    if (writer) { ledger.writers--; drainArchiveWriteQueue(); }
   } };
+}
+
+export interface ArchiveWriteAdmissionOptions {
+  /** Explicit ordinary-dispatch opt-in. Protected/native callers retain fail-fast defaults. */
+  wait?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+interface ArchiveWriteWaiter { grant: () => void }
+const queueRuntime = globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: ArchiveWriteWaiter[] };
+const writeQueue = queueRuntime.__flujoArchiveWriteQueue ??= [];
+function drainArchiveWriteQueue(): void {
+  while (ledger.writers < MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites && writeQueue.length) {
+    writeQueue[0].grant();
+  }
+}
+
+function admitArchiveWriter(bytes: number, options?: ArchiveWriteAdmissionOptions): Promise<ArchiveMemoryReservation> {
+  options?.signal?.throwIfAborted();
+  if (!options?.wait || (!writeQueue.length && ledger.writers < MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites)) {
+    return Promise.resolve(reserve(bytes, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true));
+  }
+  if (writeQueue.length >= MODEL_TURN_ARCHIVE_WRITE_LIMITS.queuedWrites) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
+  // Retained queued references count against the same byte ceiling before any archive clone.
+  const held = reserve(bytes, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, false);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      const index = writeQueue.indexOf(waiter);
+      if (index >= 0) writeQueue.splice(index, 1);
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abort);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true; cleanup(); held.release(); reject(error);
+    };
+    const abort = () => fail(options.signal?.reason ?? new DOMException('Archive admission cancelled.', 'AbortError'));
+    const waiter: ArchiveWriteWaiter = { grant: () => {
+      if (settled) return;
+      settled = true; cleanup();
+      // Transfer queued bytes to a writer atomically, without yielding or relaxing either bound.
+      held.release();
+      try { options.signal?.throwIfAborted(); resolve(reserve(bytes, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true)); }
+      catch (error) { reject(error); }
+    } };
+    const requested = options.timeoutMs ?? MODEL_TURN_ARCHIVE_WRITE_LIMITS.queueTimeoutMs;
+    const timeout = Number.isFinite(requested) ? Math.max(0, Math.min(requested, MODEL_TURN_ARCHIVE_WRITE_LIMITS.queueTimeoutMs)) : MODEL_TURN_ARCHIVE_WRITE_LIMITS.queueTimeoutMs;
+    const timer = setTimeout(() => fail(new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_BUSY')), timeout);
+    writeQueue.push(waiter);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) abort();
+    drainArchiveWriteQueue();
+  });
 }
 
 interface WriteScope {
   reservation: ArchiveMemoryReservation;
   reservedEstimate: number;
   pendingCloses: number;
+  mediaOps: number;
   settled: boolean;
   schemaProjectionPolicy: ArchiveSchemaProjectionPolicy;
 }
 
 /** Callback evaluation/cloning must occur inside this admitted boundary. */
 export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Promise<T>,
-  schemaProjectionPolicy: ArchiveSchemaProjectionPolicy = 'legacy-unbounded'): Promise<T> {
+  schemaProjectionPolicy: ArchiveSchemaProjectionPolicy = 'legacy-unbounded', admissionOptions?: ArchiveWriteAdmissionOptions): Promise<T> {
   // Re-entrant or escaped AsyncLocalStorage work cannot borrow a spent permit.
   if (scopes.getStore()) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
   // Covers copied object/string views, serialization, UTF8 and compression work.
@@ -189,12 +246,19 @@ export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Pr
     legacy = true;
   }) * 4;
   const reservedEstimate = legacy ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
-  const reservation = reserve(reservedEstimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true);
-  const scope: WriteScope = { reservation, reservedEstimate, pendingCloses: 0, settled: false, schemaProjectionPolicy };
-  try { return await scopes.run(scope, task); }
+  const reservation = await admitArchiveWriter(reservedEstimate, admissionOptions);
+  const scope: WriteScope = { reservation, reservedEstimate, pendingCloses: 0, mediaOps: 0, settled: false, schemaProjectionPolicy };
+  try {
+    admissionOptions?.signal?.throwIfAborted();
+    return await scopes.run(scope, async () => {
+      // Queued payload references may change while waiting. Check before any clone/factory.
+      recheckArchiveWriteMemory(payload);
+      return task();
+    });
+  }
   finally {
     scope.settled = true;
-    if (!scope.pendingCloses) reservation.release();
+    if (!scope.pendingCloses && !scope.mediaOps) reservation.release();
   }
 }
 
@@ -234,10 +298,18 @@ export async function closeArchiveWriteHandle(handle: FileHandle, primary?: unkn
 export async function readArchiveLocalMedia(file: string): Promise<Buffer> {
   const scope = scopes.getStore();
   if (!scope) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+  const assertActive = () => {
+    if (scope.settled) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
+  };
+  assertActive();
+  scope.mediaOps++;
+  let handle: FileHandle | undefined;
   let primary: unknown;
   try {
+    handle = await fs.open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+    assertActive();
     const stat = await handle.stat();
+    assertActive();
     if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size > MODEL_TURN_ARCHIVE_WRITE_LIMITS.localMediaBytes) {
       refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     }
@@ -245,14 +317,22 @@ export async function readArchiveLocalMedia(file: string): Promise<Buffer> {
     const bytes = Buffer.alloc(stat.size + 1);
     let offset = 0;
     while (offset < bytes.length) {
+      assertActive();
       const read = await handle.read(bytes, offset, Math.min(64 * 1024, bytes.length - offset), offset);
+      assertActive();
       if (!read.bytesRead) break;
       offset += read.bytesRead;
     }
     if (offset !== stat.size) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     return bytes.subarray(0, offset);
   } catch (error) { primary = error; throw error; }
-  finally { await closeArchiveWriteHandle(handle, primary); }
+  finally {
+    try { if (handle) await closeArchiveWriteHandle(handle, primary); }
+    finally {
+      scope.mediaOps--;
+      if (scope.settled && !scope.pendingCloses && !scope.mediaOps) scope.reservation.release();
+    }
+  }
 }
 
 /** Await every sibling before surfacing failure and releasing shared memory. */

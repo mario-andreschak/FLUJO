@@ -13,7 +13,41 @@ Missing, malformed, expired, revoked, foreign-owner or stale approvals refuse la
 
 Trusted host configuration describes the requested profile; effective authority resides in `FLUJO_MCP_TRUSTED_HOST_FILE`, independently protected outside workspace data and matched to `FLUJO_OWNER_AUTH_FILE`. Approval binds the workspace/server, exact absolute executable and arguments, working directory, source-tree and executable digests, named environment injection, and requested host broker capabilities. Changing package bytes, command, arguments or capabilities requires renewed consent. An imported profile never imports approval.
 
-Package fingerprinting reads a bounded regular-file tree without executing inspected code. Symlinks, hard links, reparse paths, unstable file identities and over-limit trees refuse admission. Executable identity is checked separately. Dynamic package runners and unresolved relative executables cannot establish a pinned package/executable identity: install and inspect a fixed package first, or use an approved immutable container image.
+Package fingerprinting reads a bounded regular-file tree without executing inspected code. Symlinks, hard links, reparse paths, unstable file identities and over-limit trees refuse admission. Executable identity is checked separately. Unresolved relative executables and unmaterialized or floating package-runner code refuse admission. A protected `npx` profile can authorize an exact, already materialized local package closure as described below; an immutable approved container remains a separate execution profile.
+
+## Protected package runners
+
+The `npx` trusted-host profile binds the exact Node executable, copied npm CLI
+and dependencies, selected package and dependency tree, regular binary shims,
+shell executable, npm configuration files, arguments, environment, capabilities
+and working directory to the protected owner grant. It invokes the genuine
+`npx-cli.js` with `-y package@exact-version`; it does not replace package-runner
+execution with a direct package entrypoint. Installation and materialization
+happen before review. Launch uses offline resolution and ignored install
+scripts, without an installation fallback or permission to download code.
+
+Use the existing owner host-consent preview and approval transaction to inspect
+and authorize the stored proposal. Importing that proposal transfers no grant.
+Changed source, npm or package revision, shell, arguments, environment, cwd or
+capabilities require a fresh proposal and approval; expiry and durable revocation
+continue to deny the captured transport. The source digest includes the npm
+closure, package dependencies and shims. Npm's actual default binary selection
+must match the declared binary. Because npm prepends cwd and ancestor
+`node_modules/.bin` directories ahead of PATH even with an explicit prefix,
+unreviewed binary-resolution directories there refuse admission.
+
+Runtime-home selection follows global override, then server setting, then
+workspace default, then host mode. The effective mode must match the grant.
+Isolated mode uses the deterministic private per-server cwd outside the managed
+source root and separate workspace/server HOME, configuration, cache and temp
+paths. These paths redirect application state; the approved process still runs
+with the owner's account privileges and can access the host filesystem, network
+and child processes. Runtime-home isolation provides no OS containment.
+
+The [package-runner operator guide](protected-package-runner.md) describes the
+materialized layout and review steps. Both SDK transport factories use the same
+launch and fresh-authority checks. Fixed-source profiles retain their source cwd
+and existing bundled provenance requirements.
 
 Approval is checked before launch, immediately before transport start, after awaited SDK startup, before tool discovery/argument preparation, and again before tool dispatch. Trusted-host launch performs no shipped-package readiness, installation or build execution. Both SDK generations suppress unapproved inherited environment defaults; a trusted-host profile does not implicitly receive every host environment value. Scope-specific runtime credentials remain separate from persisted configuration and cannot become a blanket host grant.
 
