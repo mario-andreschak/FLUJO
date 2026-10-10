@@ -5,6 +5,7 @@ export type ModelProvider =
   | 'openai'
   | 'azure'
   | 'openrouter'
+  | 'orcarouter'
   | 'requesty'
   | 'anthropic'
   | 'gemini'
@@ -317,6 +318,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1'
   },
+  orcarouter: {
+    label: 'OrcaRouter',
+    baseUrl: 'https://api.orcarouter.ai/v1'
+  },
   requesty: {
     label: 'Requesty',
     baseUrl: 'https://router.requesty.ai/v1'
@@ -541,6 +546,16 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'OpenAI SDK (Responses)',
     baseUrl: 'https://openrouter.ai/api/v1',
     showBaseUrl: true,
+  },
+  {
+    id: 'orcarouter',
+    label: 'OrcaRouter',
+    provider: 'orcarouter',
+    adapter: 'openai',
+    sdkLabel: 'OpenAI SDK',
+    baseUrl: 'https://api.orcarouter.ai/v1',
+    showBaseUrl: true,
+    defaultModels: ['anthropic/claude-sonnet-4'],
   },
   {
     id: 'requesty',
