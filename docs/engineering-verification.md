@@ -152,4 +152,3 @@ The drill, fresh scanner/remediation evidence, installed-release acceptance,
 human security/release tabletop and independent reassessment remain open.
 
 CI pulls the pinned Node image from Docker's public ECR mirror to avoid Docker Hub's anonymous pull limit. Both the container index and Linux isolation image retain their original SHA-256 digests; the signed Node executable checks remain mandatory. Obsolete Worker image candidate runs are cancelled when a newer commit arrives.
-
