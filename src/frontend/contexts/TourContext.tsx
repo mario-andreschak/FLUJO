@@ -22,6 +22,7 @@ import { mcpService } from '@/frontend/services/mcp';
 import type { Flow } from '@/shared/types/flow';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { TutorialProgress } from '@/shared/types/storage/storage';
+import { LEGACY_HIDDEN_DASHBOARD_CARD_IDS, type DashboardCardId, type Settings } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/contexts/TourContext');
@@ -38,6 +39,11 @@ interface TourContextType {
   isActive: boolean;
   /** Index of the current step within TOUR_STEPS. */
   stepIndex: number;
+  /** Changes on replay so mounted Home cards can discard older setup dismissals. */
+  dashboardRestoreId: number;
+  saveDashboardDismissals: (cards: DashboardCardId[]) => void;
+  /** Replay requires the real workspace settings, including saved dismissals. */
+  canStartTour: boolean;
   startTour: () => void;
   next: () => void;
   back: () => void;
@@ -61,6 +67,9 @@ interface TourContextType {
 const TourContext = createContext<TourContextType>({
   isActive: false,
   stepIndex: 0,
+  dashboardRestoreId: 0,
+  saveDashboardDismissals: () => {},
+  canStartTour: false,
   startTour: () => {},
   next: () => {},
   back: () => {},
@@ -94,11 +103,13 @@ function webCapabilityScore(value: string): number {
 
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { settings, updateSettings, isLoading, settingsHydrated } = useStorage();
+  const canStartTour = settingsHydrated && !isLoading;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
   const [isActive, setIsActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
+  const [dashboardRestoreId, setDashboardRestoreId] = useState(0);
   const [isBigTutorialActive, setIsBigTutorialActive] = useState(false);
   const [bigTutorialProgress, setBigTutorialProgress] = useState<TutorialProgress>(
     settings.onboarding?.tutorials?.bigTutorialStage1 ?? DEFAULT_BIG_PROGRESS,
@@ -111,14 +122,39 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const autoStartChecked = useRef(false);
   const bigAutoStartChecked = useRef(false);
   const bigPersistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const tourPersistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Dismissal, replay and completion writes share their order, including when
+  // a Home dismissal is still saving as the user replays from another entry.
+  const persistTourSettings = useCallback((update: (current: Settings) => Settings) => {
+    tourPersistenceQueueRef.current = tourPersistenceQueueRef.current.then(async () => {
+      const current = settingsRef.current;
+      const nextSettings = update(current);
+      if (nextSettings === current) return;
+      await updateSettings(nextSettings);
+      // The next queued write may run before React commits the storage update.
+      if (settingsRef.current === current) settingsRef.current = nextSettings;
+    }).catch((error) => log.warn('Failed to persist guided tour settings', error));
+  }, [updateSettings]);
 
   const persistCompleted = useCallback(() => {
-    const current = settingsRef.current;
-    updateSettings({
+    persistTourSettings((current) => ({
       ...current,
       onboarding: { ...(current.onboarding ?? {}), completed: true },
-    }).catch((error) => log.warn('Failed to persist onboarding completion', error));
-  }, [updateSettings]);
+    }));
+  }, [persistTourSettings]);
+
+  const saveDashboardDismissals = useCallback((cards: DashboardCardId[]) => {
+    persistTourSettings((current) => ({
+      ...current,
+      onboarding: {
+        ...(current.onboarding ?? {}),
+        completed: current.onboarding?.completed ?? false,
+        dashboardCardsHidden: false,
+        dashboardDismissedCards: cards,
+      },
+    }));
+  }, [persistTourSettings]);
 
   const persistBigProgress = useCallback((progress: TutorialProgress) => {
     const pending = bigPersistenceQueueRef.current.then(async () => {
@@ -151,11 +187,28 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [persistBigProgress]);
 
   const startTour = useCallback(() => {
+    if (!canStartTour) return;
     log.info('Starting guided tour');
+    setDashboardRestoreId((id) => id + 1);
+    persistTourSettings((current) => {
+      const onboarding = current.onboarding;
+      const dismissed = Array.isArray(onboarding?.dashboardDismissedCards) ? onboarding.dashboardDismissedCards : [];
+      if (onboarding?.dashboardCardsHidden !== true
+        && !dismissed.some((id) => LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id))) return current;
+      return {
+        ...current,
+        onboarding: {
+          ...(onboarding ?? {}),
+          completed: onboarding?.completed ?? false,
+          dashboardCardsHidden: false,
+          dashboardDismissedCards: dismissed.filter((id) => !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+        },
+      };
+    });
     setIsBigTutorialActive(false);
     setStepIndex(0);
     setIsActive(true);
-  }, []);
+  }, [canStartTour, persistTourSettings]);
 
   const endTour = useCallback(() => {
     log.info('Ending guided tour');
@@ -490,6 +543,9 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <TourContext.Provider value={{
       isActive,
       stepIndex,
+      dashboardRestoreId,
+      saveDashboardDismissals,
+      canStartTour,
       startTour,
       next,
       back,

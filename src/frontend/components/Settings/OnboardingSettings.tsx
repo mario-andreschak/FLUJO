@@ -10,6 +10,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 export default function OnboardingSettings() {
   const {
     startTour,
+    canStartTour,
     startBigTutorial,
     resumeBigTutorial,
     restartBigTutorial,
@@ -24,7 +25,7 @@ export default function OnboardingSettings() {
         {t('settings.onboarding.description')}
       </Typography>
       <Stack spacing={2} alignItems="flex-start">
-        <Button variant="outlined" startIcon={<SchoolIcon />} onClick={startTour}>
+        <Button variant="outlined" startIcon={<SchoolIcon />} onClick={startTour} disabled={!canStartTour}>
           {t('settings.onboarding.replay')}
         </Button>
 

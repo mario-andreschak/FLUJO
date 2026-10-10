@@ -72,8 +72,8 @@ interface WorkspaceStatus {
 export default function HomePage() {
   const theme = useTheme();
   const { t, tp } = useI18n();
-  const { settings, updateSettings } = useStorage();
-  const { startTour } = useTour();
+  const { settings } = useStorage();
+  const { startTour, canStartTour, saveDashboardDismissals, isActive: tourActive = false, dashboardRestoreId = 0 } = useTour();
   const [encryptionKeySet, setEncryptionKeySet] = useState(true);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ behindBy: number; branch: string } | null>(null);
@@ -282,46 +282,39 @@ export default function HomePage() {
   // Dismissals applied in this session are merged with the persisted list so a
   // quick sequence of clicks cannot overwrite an earlier dismissal while the
   // asynchronous settings write is still in flight.
-  const [sessionDismissedCards, setSessionDismissedCards] = useState<DashboardCardId[]>([]);
+  const [sessionDismissals, setSessionDismissals] = useState<{ restoreId: number; cards: DashboardCardId[] }>({
+    restoreId: dashboardRestoreId,
+    cards: [],
+  });
   const dismissedCards = useMemo(
-    () => new Set<DashboardCardId>([...persistedDismissedCards, ...sessionDismissedCards]),
-    [persistedDismissedCards, sessionDismissedCards],
+    () => new Set<DashboardCardId>([
+      // Replay can navigate here before the settings write finishes.
+      ...persistedDismissedCards.filter((id) => !tourActive || !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+      ...sessionDismissals.cards.filter((id) => sessionDismissals.restoreId === dashboardRestoreId
+        || !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+    ]),
+    [persistedDismissedCards, sessionDismissals, tourActive, dashboardRestoreId],
   );
 
   const persistDismissedCards = (nextDismissed: Set<DashboardCardId>) => {
-    void updateSettings({
-      ...settings,
-      onboarding: {
-        ...(settings.onboarding ?? {}),
-        completed: settings.onboarding?.completed ?? false,
-        // Neutralize the legacy collective flag once explicit state exists.
-        dashboardCardsHidden: false,
-        dashboardDismissedCards: DASHBOARD_CARD_IDS.filter((id) => nextDismissed.has(id)),
-      },
-    });
+    saveDashboardDismissals(DASHBOARD_CARD_IDS.filter((id) => nextDismissed.has(id)));
   };
 
   const dismissDashboardCard = (cardId: DashboardCardId) => {
     if (dismissedCards.has(cardId)) return;
-    setSessionDismissedCards((current) => (current.includes(cardId) ? current : [...current, cardId]));
+    setSessionDismissals((current) => ({
+      restoreId: dashboardRestoreId,
+      cards: [...new Set([
+        ...current.cards.filter((id) => current.restoreId === dashboardRestoreId
+          || !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+        cardId,
+      ])],
+    }));
     persistDismissedCards(new Set<DashboardCardId>([...dismissedCards, cardId]));
   };
 
   const visibleSetupSteps = setupSteps.filter((step) => !dismissedCards.has(step.id));
   const showConnectedAppsCard = !dismissedCards.has('connectedApps');
-
-  const handleStartTour = () => {
-    // The guided tour points at the setup cards, so restore them before it runs.
-    const restored = new Set<DashboardCardId>(dismissedCards);
-    const restoredAny = LEGACY_HIDDEN_DASHBOARD_CARD_IDS.filter((id) => restored.delete(id)).length > 0;
-    if (restoredAny) {
-      setSessionDismissedCards((current) =>
-        current.filter((id) => !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
-      );
-      persistDismissedCards(restored);
-    }
-    startTour();
-  };
 
   return (
     <Container maxWidth={false} disableGutters>
@@ -385,7 +378,7 @@ export default function HomePage() {
               </Typography>
             </Box>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-              <Button variant="outlined" onClick={handleStartTour} startIcon={<AutoAwesomeRounded />}>
+              <Button variant="outlined" onClick={startTour} disabled={!canStartTour} startIcon={<AutoAwesomeRounded />}>
                 {t('home.openGuide')}
               </Button>
             </Stack>
