@@ -120,7 +120,20 @@ it('rejects incompatible native Gemini endpoints before sending credentials', as
 
 it.each(['claude-cli', 'codex-cli', 'antigravity-cli'] as const)('factory denies %s assessment without running an agent', async adapter => {
   const request = input('openai', adapter, '/v1');
-  await expect(Promise.resolve().then(() => getCompletionAdapter(request.model).createCompletion(request))).rejects.toThrow(/does not support/);
+  const selected = getCompletionAdapter(request.model);
+  await expect(Promise.resolve().then(() => selected.createCompletion(request))).rejects.toThrow(/does not support/);
+  expect(selected.createStreamCompletion).toBeUndefined();
+  expect(receipts).toHaveLength(0);
+});
+
+it.each(['media', 'fallback'] as const)('factory denies %s assessment before sending a request', async kind => {
+  const request = input('openai', 'openai', '/v1');
+  request.model = kind === 'media'
+    ? { ...request.model, provider: 'openrouter', outputModalities: ['image'] }
+    : { ...request.model, fallbackPolicy: { modelIds: ['first', 'second'] } };
+  const selected = getCompletionAdapter(request.model);
+  await expect(Promise.resolve().then(() => selected.createCompletion(request))).rejects.toThrow(/does not support/);
+  await expect(Promise.resolve().then(() => selected.createStreamCompletion!(request))).rejects.toThrow(/does not support/);
   expect(receipts).toHaveLength(0);
 });
 

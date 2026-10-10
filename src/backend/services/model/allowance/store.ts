@@ -11,7 +11,9 @@ const state = shared[stateSymbol] ??= { identitySecret: randomBytes(32), observa
 const { identitySecret, observations } = state;
 const MAX_OBSERVATIONS = 512;
 
-/** Neither credential hashes nor account identifiers leave this process. */
+/** Process-keyed grouping pseudonym, projected as accountGroup in local allowance
+ * responses. The random HMAC secret stays in memory; this is not a persisted
+ * password hash or an authentication verifier. No credential is projected. */
 export function allowanceAccountKey(provider: AllowanceProvider, identity: string): string {
   return createHmac('sha256', identitySecret)
     .update(JSON.stringify([getWorkspaceDataDir(), provider, identity])).digest('hex');

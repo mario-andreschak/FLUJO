@@ -21,5 +21,8 @@ async function response(request: NextRequest, refresh: boolean) {
   }
 }
 
-export const GET = withWorkspaceRoute((request: NextRequest) => response(request, false));
-export const POST = withWorkspaceRoute((request: NextRequest) => response(request, true));
+function GET_handler(request: NextRequest) { return response(request, false); }
+function POST_handler(request: NextRequest) { return response(request, true); }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);

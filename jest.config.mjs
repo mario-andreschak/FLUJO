@@ -132,6 +132,9 @@ async function buildConfig() {
     }
   }
   return {
+    // Recycle accumulated test heaps between completed files. The serial
+    // process stage and each test's workload and deadlines remain unchanged.
+    workerIdleMemoryLimit: "1GB",
     projects: [node, jsdom],
   };
 }

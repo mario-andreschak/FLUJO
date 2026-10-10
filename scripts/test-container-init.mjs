@@ -15,9 +15,11 @@ let activeDeadline;
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: activeDeadline ? Math.max(1, Math.min(30_000, activeDeadline - Date.now())) : 30_000, maxBuffer: 1024 * 1024 }).trim();
 const imageId = JSON.parse(docker('image', 'inspect', image))[0].Id;
 const child = `const fs=require('fs');const server=require('http').createServer((q,s)=>s.end('descendant alive')).listen(4202,'127.0.0.1');server.on('listening',()=>{fs.writeFileSync('/tmp/orphan.pid',String(process.pid));const timer=setInterval(()=>{if(fs.existsSync('/tmp/orphan.release')){clearInterval(timer);server.close(()=>{fs.writeFileSync('/tmp/orphan.exit','listener closed');process.exit(0)})}},25)});`;
-const parent = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/parent.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'}).unref();setInterval(()=>{if(fs.existsSync('/tmp/parent.release'))process.exit(0)},25);`;
-const control = label => `const fs=require('fs');fs.writeFileSync('/tmp/${label}.pid',String(process.pid));process.on('SIGTERM',()=>fs.writeFileSync('/tmp/${label}.term','received'));setInterval(()=>{},1000);`;
-const main = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/main.pid',String(process.pid));spawn(process.execPath,['-e',${JSON.stringify(control('control'))}],{detached:true,stdio:'ignore'}).unref();spawn(process.execPath,['-e',${JSON.stringify(control('sibling'))}],{stdio:'ignore'}).unref();const server=require('http').createServer((q,s)=>s.end('alive')).listen(4200,'127.0.0.1');server.on('listening',()=>spawn(process.execPath,['-e',${JSON.stringify(parent)}],{stdio:'ignore'}).once('exit',(code,signal)=>fs.writeFileSync('/tmp/parent.exit',JSON.stringify({code,signal}))));process.on('SIGTERM',()=>{fs.writeFileSync('/tmp/main.term','received');server.close(()=>{console.log('LISTENER_CLOSED');setInterval(()=>{if(fs.existsSync('/tmp/main.release')){console.log('GRACEFUL_SHUTDOWN');process.exit(0)}},25)})});`;
+// Executable sources are fixed; nested programs and values travel as argv data,
+// never as escaped fragments interpolated into another JavaScript program.
+const parent = `const fs=require('fs');const {spawn}=require('child_process');fs.writeFileSync('/tmp/parent.pid',String(process.pid));spawn(process.execPath,['-e',process.argv[1]],{detached:true,stdio:'ignore'}).unref();setInterval(()=>{if(fs.existsSync('/tmp/parent.release'))process.exit(0)},25);`;
+const control = `const fs=require('fs');const label=process.argv[1];if(!['control','sibling'].includes(label))throw new Error('Invalid control');fs.writeFileSync('/tmp/'+label+'.pid',String(process.pid));process.on('SIGTERM',()=>fs.writeFileSync('/tmp/'+label+'.term','received'));setInterval(()=>{},1000);`;
+const main = `const fs=require('fs');const {spawn}=require('child_process');const programs=JSON.parse(process.argv[1]);fs.writeFileSync('/tmp/main.pid',String(process.pid));spawn(process.execPath,['-e',programs.control,'control'],{detached:true,stdio:'ignore'}).unref();spawn(process.execPath,['-e',programs.control,'sibling'],{stdio:'ignore'}).unref();const server=require('http').createServer((q,s)=>s.end('alive')).listen(4200,'127.0.0.1');server.on('listening',()=>spawn(process.execPath,['-e',programs.parent,programs.child],{stdio:'ignore'}).once('exit',(code,signal)=>fs.writeFileSync('/tmp/parent.exit',JSON.stringify({code,signal}))));process.on('SIGTERM',()=>{fs.writeFileSync('/tmp/main.term','received');server.close(()=>{console.log('LISTENER_CLOSED');setInterval(()=>{if(fs.existsSync('/tmp/main.release')){console.log('GRACEFUL_SHUTDOWN');process.exit(0)}},25)})});`;
 const pause = () => new Promise(resolve => setTimeout(resolve, 100));
 async function until(read, accepts, description) {
   const deadline = Date.now() + 15_000;
@@ -31,22 +33,25 @@ async function until(read, accepts, description) {
 }
 let containerId;
 const inspect = () => JSON.parse(docker('inspect', containerId))[0];
-const execute = code => docker('exec', containerId, 'node', '-e', code);
-const readFile = file => execute(`const fs=require('fs');try{process.stdout.write(fs.readFileSync(${JSON.stringify(file)},'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}`);
+const execute = (code, ...args) => docker('exec', containerId, 'node', '-e', code, ...args);
+const readFile = file => execute(`const fs=require('fs');try{process.stdout.write(fs.readFileSync(process.argv[1],'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}`, file);
 const snapshot = pid => {
   assert.ok(Number.isSafeInteger(pid) && pid > 0, 'Invalid process ID');
-  return JSON.parse(execute(`const fs=require('fs');try{const raw=fs.readFileSync('/proc/${pid}/stat','utf8');const f=raw.slice(raw.lastIndexOf(')')+2).trim().split(/\\s+/);const status=fs.readFileSync('/proc/${pid}/status','utf8');process.stdout.write(JSON.stringify({pid:${pid},state:f[0],ppid:Number(f[1]),pgid:Number(f[2]),sid:Number(f[3]),birth:f[19],uid:Number(status.match(/^Uid:\\s+(\\d+)/m)[1]),command:fs.readFileSync('/proc/${pid}/cmdline','utf8').split('\\0').filter(Boolean)}))}catch(e){if(e.code!=='ENOENT')throw e;process.stdout.write('null')}`));
+  return JSON.parse(execute(`const fs=require('fs');const pid=Number(process.argv[1]);if(!Number.isSafeInteger(pid)||pid<=0)throw new Error('Invalid process ID');try{const raw=fs.readFileSync('/proc/'+pid+'/stat','utf8');const f=raw.slice(raw.lastIndexOf(')')+2).trim().split(/\\s+/);const status=fs.readFileSync('/proc/'+pid+'/status','utf8');process.stdout.write(JSON.stringify({pid,state:f[0],ppid:Number(f[1]),pgid:Number(f[2]),sid:Number(f[3]),birth:f[19],uid:Number(status.match(/^Uid:\\s+(\\d+)/m)[1]),command:fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\\0').filter(Boolean)}))}catch(e){if(e.code!=='ENOENT')throw e;process.stdout.write('null')}`, String(pid)));
 };
 const sameLive = (current, original, label) => {
   assert.ok(current && current.birth === original.birth && !['Z', 'X', 'x'].includes(current.state), `${label} is absent, replaced or terminated`);
   assert.ok(current.uid > 0, `${label} is running as root`);
 };
-const release = label => execute(`require('fs').writeFileSync('/tmp/${label}.release','release')`);
+const release = label => {
+  assert.ok(['parent', 'orphan', 'main'].includes(label), 'Invalid release target');
+  return execute(`require('fs').writeFileSync('/tmp/'+process.argv[1]+'.release','release')`, label);
+};
 try {
   containerId = docker('run', '-d', '--pull=never', '--name', name, '--label', `io.flujo.init-test-owner=${owner}`, '--network', 'none', '--read-only', '--no-healthcheck',
     '--tmpfs', '/tmp:rw,nosuid,nodev,size=16777216', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     ...(flags.includes('--outer-init') ? ['--init'] : []), ...(directNode ? ['--entrypoint', 'node'] : []), imageId,
-    ...(directNode ? ['-e', main] : ['node', '-e', main]));
+    ...(directNode ? ['-e', main] : ['node', '-e', main]), JSON.stringify({ child, parent, control }));
   const pids = {};
   for (const label of ['main', 'parent', 'orphan', 'control', 'sibling']) {
     pids[label] = Number(await until(() => readFile(`/tmp/${label}.pid`), value => /^\d+$/.test(value), `${label} readiness`));

@@ -48,6 +48,8 @@ export function trustedHostPackageRunnerContext(config: MCPStdioConfig, runtimeH
   const environment = trustedHostEnvironment(config);
   const homeName = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
   const configured = [...environment].find(([name]) => process.platform === 'win32' ? name.toUpperCase() === homeName : name === homeName)?.[1];
+  // A stable directory component for the public configured server name, not a
+  // credential hash or password verifier; runtime isolation uses this same map.
   const home = mode === 'isolated' ? path.join(getWorkspaceDataDir(), 'userdata', 'mcp-runtime',
     createHash('sha256').update(config.name).digest('hex').slice(0, 24), 'home') : configured ?? '';
   return { command: config.command, home };

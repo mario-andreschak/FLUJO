@@ -44,9 +44,9 @@ describe('isolated test stage', () => {
     const isolatedScript = packageJson.scripts['test:isolated'];
     expect(isolatedScript).toBeDefined();
     expect(isolatedScript).toContain('--runInBand');
-    for (const file of ISOLATED_TEST_FILES) {
-      expect(isolatedScript).toContain(file);
-    }
+    const selectedFiles = isolatedScript.match(/__tests__\/[^\s]+\.test\.tsx?/g) ?? [];
+    expect([...selectedFiles].sort()).toEqual([...ISOLATED_TEST_FILES].sort());
+    expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
   });
 
   it('builds standalone MCP artifacts before running the isolated suites', () => {

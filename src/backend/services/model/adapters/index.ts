@@ -14,16 +14,20 @@ import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 import { FallbackAdapter } from './fallbackAdapter';
 
 function denyAssessment(adapter: CompletionAdapter): CompletionAdapter {
-  return {
-    createCompletion(input) {
-      if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
-      return adapter.createCompletion(input);
-    },
-    ...(adapter.createStreamCompletion ? { createStreamCompletion(input: Parameters<CompletionAdapter['createCompletion']>[0]) {
-      if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
-      return adapter.createStreamCompletion!(input);
-    } } : {}),
+  // Preserve the adapter instance and its method receiver for ordinary calls.
+  const createCompletion = adapter.createCompletion.bind(adapter);
+  adapter.createCompletion = input => {
+    if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
+    return createCompletion(input);
   };
+  if (adapter.createStreamCompletion) {
+    const createStreamCompletion = adapter.createStreamCompletion.bind(adapter);
+    adapter.createStreamCompletion = input => {
+      if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
+      return createStreamCompletion(input);
+    };
+  }
+  return adapter;
 }
 
 export * from './types';
