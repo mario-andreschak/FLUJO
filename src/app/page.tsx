@@ -20,7 +20,6 @@ import {
   ArrowForwardRounded,
   AutoAwesomeRounded,
   ChatBubbleRounded,
-  CheckCircleRounded,
   CloseRounded,
   HubRounded,
   LockRounded,
@@ -421,11 +420,7 @@ export default function HomePage() {
                   overflow: 'hidden',
                   flexDirection: 'column',
                   border: 1,
-                  borderColor: step.complete
-                    ? alpha(theme.palette.success.main, 0.45)
-                    : highlighted
-                      ? alpha(theme.palette.primary.main, 0.48)
-                      : 'divider',
+                  borderColor: highlighted ? alpha(theme.palette.primary.main, 0.48) : 'divider',
                   borderRadius: 4,
                   bgcolor: alpha(theme.palette.background.paper, step.available ? 0.78 : 0.5),
                   opacity: step.available ? 1 : 0.7,
@@ -444,8 +439,8 @@ export default function HomePage() {
                     borderRadius: '50%',
                     content: '""',
                     background: `radial-gradient(circle, ${alpha(
-                      step.complete ? theme.palette.success.main : theme.palette.primary.main,
-                      step.available ? 0.18 : 0.07,
+                      theme.palette.primary.main,
+                      highlighted ? 0.18 : 0.07,
                     )}, transparent 68%)`,
                   },
                 }}
@@ -458,16 +453,16 @@ export default function HomePage() {
                       height: 46,
                       placeItems: 'center',
                       borderRadius: 3,
-                      color: step.complete ? 'success.main' : step.available ? 'primary.main' : 'text.disabled',
-                      bgcolor: alpha(step.complete ? theme.palette.success.main : theme.palette.primary.main, 0.1),
+                      color: step.available ? 'primary.main' : 'text.disabled',
+                      bgcolor: alpha(theme.palette.primary.main, step.available ? 0.1 : 0.05),
                     }}
                   >
-                    {step.complete ? <CheckCircleRounded /> : <Icon />}
+                    <Icon />
                   </Box>
                   <Stack direction="row" alignItems="center" spacing={0.5}>
                     <Chip
                       size="small"
-                      color={step.complete ? 'success' : highlighted ? 'primary' : 'default'}
+                      color={highlighted ? 'primary' : 'default'}
                       variant="outlined"
                       label={step.status}
                     />
