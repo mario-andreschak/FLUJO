@@ -130,6 +130,23 @@ describe('setup-first home journey', () => {
     expect(screen.getByRole('button', { name: 'Create an agent first' })).toBeDisabled();
   });
 
+  it.each([
+    { state: 'missing', models: [], aiAction: 'Connect AI', aiHref: '/models?add=1' },
+    { state: 'unavailable', models: null, aiAction: 'Open AI setup', aiHref: '/models' },
+  ])('explains $state AI settings before agent creation when the bundled agent already exists', async ({ models, aiAction, aiHref }) => {
+    mockTryLoadModels.mockResolvedValue(models);
+    mockLoadFlows.mockResolvedValue([{ id: 'default-agent-flujo', name: 'FLUJO' }]);
+
+    render(<HomePage />);
+
+    await waitFor(() => expect(screen.getByText('1 created')).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: aiAction })).toHaveAttribute('href', aiHref);
+    expect(screen.getByRole('button', { name: 'Connect AI first' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Finish AI setup first' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Create another' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Create another' })).not.toBeInTheDocument();
+  });
+
   it('unlocks Talk after both a model and an agent exist', async () => {
     mockTryLoadModels.mockResolvedValue([{ id: 'model-1' }]);
     mockLoadFlows.mockResolvedValue([{ id: 'assistant-1' }]);

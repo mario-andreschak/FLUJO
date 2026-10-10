@@ -245,7 +245,7 @@ export default function HomePage() {
       available: aiReady,
       status: assistantReady ? tp('home.createdCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
       href: aiReady ? '/flows?create=assistant' : undefined,
-      action: assistantReady ? t('home.agent.another') : aiReady ? t('home.agent.openBuilder') : t('home.agent.connectFirst'),
+      action: !aiReady ? t('home.agent.connectFirst') : assistantReady ? t('home.agent.another') : t('home.agent.openBuilder'),
     },
     {
       id: 'talk',
