@@ -245,7 +245,3 @@ try {
   await fs.writeFile(path.join(evidence, 'receipt.json'), JSON.stringify(receipt, null, 2));
   console.log(JSON.stringify({ stopped: child.exitCode !== null || child.signalCode !== null, cleanupErrors: receipt.cleanupErrors }));
 }
-
-
-
-
