@@ -71,3 +71,20 @@ it('retains the bundled binary without install or replay on registry failure and
   expect(mockRun).not.toHaveBeenCalled();
   expect(startOwnedCodexAppServer).not.toHaveBeenCalled();
 });
+
+it('refuses to activate a candidate binary linked to another file', async () => {
+  const outside = path.join(mockWorkspace, 'outside-binary');
+  await fs.writeFile(outside, 'linked-cli');
+  const ordinaryRun = mockRun.getMockImplementation()!;
+  mockRun.mockImplementation(async (file, args, options) => {
+    if (args.includes('install')) {
+      await fs.link(outside, path.join(options.cwd, 'codex'));
+      return { stdout: '', stderr: '' };
+    }
+    return ordinaryRun(file, args, options);
+  });
+  expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(mockBundled);
+  await expect(fs.stat(path.join(mockWorkspace, 'db/codex-cli/current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await fs.readFile(outside, 'utf8')).toBe('linked-cli');
+  expect(stop).toHaveBeenCalledTimes(1);
+});

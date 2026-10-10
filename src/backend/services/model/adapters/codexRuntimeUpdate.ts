@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
+import { readPlainFile } from '@/utils/readPlainFile';
 import { bundledCodexExecutable } from './codexRestrictedProfile';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration } from './codexAppServerProcess';
 import { admitCodexDirectory, readCodexRuntimeFile, writeCodexRuntimeFile } from './codexRuntimeFiles';
@@ -48,9 +49,10 @@ export async function readOrdinaryCodexVersion(executable = bundledCodexExecutab
 }
 
 async function digest(executable: string): Promise<string> {
-  const stat = await fs.lstat(executable);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024 * 1024) throw new Error('Invalid Codex executable');
-  return createHash('sha256').update(await fs.readFile(executable)).digest('hex');
+  const hash = createHash('sha256');
+  await readPlainFile(executable, { maxBytes: 512 * 1024 * 1024,
+    consume: async chunk => { hash.update(chunk); } });
+  return hash.digest('hex');
 }
 
 /** No threads or inference: qualify stdio framing, initialization and paged model listing. */
