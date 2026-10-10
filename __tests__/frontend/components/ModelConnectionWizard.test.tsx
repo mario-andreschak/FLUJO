@@ -41,6 +41,45 @@ function renderWizard(overrides?: Partial<React.ComponentProps<typeof ModelConne
 }
 
 describe('ModelConnectionWizard', () => {
+  it('focuses and names each new question immediately, including Back and reopening', () => {
+    const props = renderWizard();
+    const expectQuestion = () => {
+      const heading = screen.getAllByRole('heading')[0];
+      expect(heading).toHaveFocus();
+      expect(screen.getByRole('dialog')).toHaveAccessibleName(heading.textContent!);
+    };
+    expectQuestion();
+    const choice = screen.getByRole('button', { name: /no idea/i });
+    choice.focus();
+    fireEvent.click(choice);
+    expectQuestion();
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    expectQuestion();
+    const back = screen.getByRole('button', { name: 'Back' });
+    back.focus();
+    fireEvent.click(back);
+    expectQuestion();
+    props.setOpen(false);
+    props.setOpen(true);
+    expectQuestion();
+  });
+
+  it('keeps typing focus on rerenders and announces the saved result', async () => {
+    renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+    fireEvent.click(screen.getByRole('heading', { name: 'OpenRouter' }).closest('button')!);
+    const key = screen.getByLabelText('OpenRouter API key', { exact: true });
+    key.focus();
+    fireEvent.change(key, { target: { value: 'sk-or-test' } });
+    expect(key).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    const heading = await screen.findByRole('heading', { name: /AI connections saved/i });
+    expect(heading).toHaveFocus();
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(heading.textContent!);
+  });
+
   it('does not let an old save completion unlock a new pending save', async () => {
     const completions: Array<(value: { success: boolean; created: Model[]; existing: Model[] }) => void> = [];
     const onCreateModels = jest.fn((_models: Model[]) => new Promise<{ success: boolean; created: Model[]; existing: Model[] }>(resolve => completions.push(resolve)));

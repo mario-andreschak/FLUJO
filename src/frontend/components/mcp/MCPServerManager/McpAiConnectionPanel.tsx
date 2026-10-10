@@ -36,6 +36,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { supportsMcpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 
 interface McpAiConnectionPanelProps {
+  titleId?: string;
   onInstalled: (serverName: string) => void | Promise<void>;
   onAuthenticate: (serverName: string) => Promise<void>;
   onManual: () => void;
@@ -55,6 +56,7 @@ function planText(candidate: McpAssistantCandidate): string {
 }
 
 export default function McpAiConnectionPanel({
+  titleId,
   onInstalled,
   onAuthenticate,
   onManual,
@@ -236,7 +238,7 @@ export default function McpAiConnectionPanel({
     <Stack spacing={2.2}>
       <Box>
         <Typography variant="overline" color="primary.main">{t('mcp.ai.eyebrow')}</Typography>
-        <Typography variant="h4">{t('mcp.ai.title')}</Typography>
+        <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('mcp.ai.title')}</Typography>
         <Typography color="text.secondary" sx={{ mt: 0.7, maxWidth: 760 }}>
           {t('mcp.ai.description')}
         </Typography>

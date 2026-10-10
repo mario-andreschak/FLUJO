@@ -29,6 +29,7 @@ import type { ServerSetupTab } from './Modals/ServerModal/types';
 import McpAiConnectionPanel from './McpAiConnectionPanel';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
+import { useSetupStepFocus } from '@/frontend/hooks/useSetupStepFocus';
 
 type WizardStep = 'welcome' | 'ai' | 'discovery' | 'source';
 
@@ -90,6 +91,7 @@ function OptionCard({
           borderColor: alpha(theme.palette.primary.main, 0.7),
           boxShadow: `0 16px 38px ${alpha(theme.palette.primary.main, 0.16)}`,
         },
+        '@media (prefers-reduced-motion: reduce)': { transition: 'none', '&:hover': { transform: 'none' } },
         '&:focus-visible': {
           outline: `3px solid ${alpha(theme.palette.primary.main, 0.3)}`,
           outlineOffset: 3,
@@ -142,6 +144,7 @@ export default function McpConnectionWizard({
 }: McpConnectionWizardProps) {
   const theme = useTheme();
   const { t } = useI18n();
+  const { titleId, stepContentRef } = useSetupStepFocus(open);
   const [step, setStep] = useState<WizardStep>('welcome');
   const [history, setHistory] = useState<WizardStep[]>([]);
   const [installing, setInstalling] = useState(false);
@@ -186,7 +189,7 @@ export default function McpConnectionWizard({
             variant="outlined"
             sx={{ mb: 2 }}
           />
-          <Typography variant="h4">{t('mcp.wizard.welcomeTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('mcp.wizard.welcomeTitle')}</Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 680 }}>
             {t('mcp.wizard.welcomeDescription')}
           </Typography>
@@ -224,6 +227,7 @@ export default function McpConnectionWizard({
     if (step === 'ai') {
       return (
         <McpAiConnectionPanel
+          titleId={titleId}
           onInstalled={onInstalled}
           onConfigureExisting={onConfigureExisting}
           onAuthenticate={onAuthenticate}
@@ -240,7 +244,7 @@ export default function McpConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('mcp.wizard.readyMadeEyebrow')}</Typography>
-          <Typography variant="h4">{t('mcp.wizard.discoveryTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('mcp.wizard.discoveryTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 700 }}>
             {t('mcp.wizard.discoveryDescription')}
           </Typography>
@@ -272,7 +276,7 @@ export default function McpConnectionWizard({
     return (
       <>
         <Typography variant="overline" color="primary.main">{t('mcp.wizard.yourAppEyebrow')}</Typography>
-        <Typography variant="h4">{t('mcp.wizard.sourceTitle')}</Typography>
+        <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('mcp.wizard.sourceTitle')}</Typography>
         <Typography color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 700 }}>
           {t('mcp.wizard.sourceDescription')}
         </Typography>
@@ -301,7 +305,7 @@ export default function McpConnectionWizard({
   };
 
   return (
-    <Dialog open={open} onClose={close} fullWidth maxWidth={step === 'ai' ? 'lg' : 'md'} aria-label={t('mcp.wizard.welcomeTitle')}>
+    <Dialog open={open} onClose={close} fullWidth maxWidth={step === 'ai' ? 'lg' : 'md'} aria-labelledby={titleId}>
       <DialogContent
         data-tour="mcp-setup-wizard"
         sx={{
@@ -310,10 +314,12 @@ export default function McpConnectionWizard({
           p: { xs: 2.2, sm: 4 },
           overflowX: 'hidden',
           overflowY: 'auto',
+          '@media (prefers-reduced-motion: reduce)': { '& [data-setup-decoration]': { animation: 'none' } },
         }}
       >
         <Box
           aria-hidden
+          data-setup-decoration
           sx={{
             position: 'absolute',
             width: 220,
@@ -328,6 +334,7 @@ export default function McpConnectionWizard({
         />
         <Box
           aria-hidden
+          data-setup-decoration
           sx={{
             position: 'absolute',
             width: 150,
@@ -364,6 +371,7 @@ export default function McpConnectionWizard({
 
           <Box
             key={step}
+            ref={stepContentRef}
             sx={{
               animation: `${arrive} 260ms ease-out both`,
               '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
