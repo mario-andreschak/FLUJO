@@ -190,6 +190,11 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
           pb: { xs: 1, sm: 1.5 },
         }}
       >
+        {view !== 'factory' && !loading && data && loadError && (
+          <Alert severity="warning" sx={{ flexShrink: 0 }}>
+            {t('waves.staleMap')}
+          </Alert>
+        )}
         {view !== 'factory' && loading && (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
             <Stack spacing={1.25} alignItems="center">
@@ -279,7 +284,6 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
               </Menu>
 
               <Box sx={{ flex: 1 }} />
-              {loadError && <Chip size="small" color="warning" variant="outlined" label={t('waves.staleMap')} />}
               <Chip size="small" variant="outlined" label={tp('waves.flowCount', data.flows.length)} />
               <Chip size="small" variant="outlined" label={tp('waves.connectionCount', data.relations.length)} />
               {data.orphanExecutionIds.length > 0 && (
