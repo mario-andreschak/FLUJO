@@ -73,7 +73,7 @@ export default function HomePage() {
   const theme = useTheme();
   const { t, tp } = useI18n();
   const { settings } = useStorage();
-  const { startTour, saveDashboardDismissals, isActive: tourActive = false, dashboardRestoreId = 0 } = useTour();
+  const { startTour, canStartTour, saveDashboardDismissals, isActive: tourActive = false, dashboardRestoreId = 0 } = useTour();
   const [encryptionKeySet, setEncryptionKeySet] = useState(true);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ behindBy: number; branch: string } | null>(null);
@@ -378,7 +378,7 @@ export default function HomePage() {
               </Typography>
             </Box>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-              <Button variant="outlined" onClick={startTour} startIcon={<AutoAwesomeRounded />}>
+              <Button variant="outlined" onClick={startTour} disabled={!canStartTour} startIcon={<AutoAwesomeRounded />}>
                 {t('home.openGuide')}
               </Button>
             </Stack>

@@ -29,6 +29,7 @@ jest.mock('@/frontend/contexts/StorageContext', () => ({
 jest.mock('@/frontend/contexts/TourContext', () => ({
   useTour: () => ({
     startTour: mockStartTour,
+    canStartTour: true,
     saveDashboardDismissals: (cards: string[]) => mockUpdateSettings({
       ...mockSettings,
       onboarding: { ...mockSettings.onboarding, completed: mockSettings.onboarding?.completed ?? false,

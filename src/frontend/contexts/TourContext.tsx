@@ -42,6 +42,8 @@ interface TourContextType {
   /** Changes on replay so mounted Home cards can discard older setup dismissals. */
   dashboardRestoreId: number;
   saveDashboardDismissals: (cards: DashboardCardId[]) => void;
+  /** Replay requires the real workspace settings, including saved dismissals. */
+  canStartTour: boolean;
   startTour: () => void;
   next: () => void;
   back: () => void;
@@ -67,6 +69,7 @@ const TourContext = createContext<TourContextType>({
   stepIndex: 0,
   dashboardRestoreId: 0,
   saveDashboardDismissals: () => {},
+  canStartTour: false,
   startTour: () => {},
   next: () => {},
   back: () => {},
@@ -100,6 +103,7 @@ function webCapabilityScore(value: string): number {
 
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { settings, updateSettings, isLoading, settingsHydrated } = useStorage();
+  const canStartTour = settingsHydrated && !isLoading;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
@@ -183,6 +187,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [persistBigProgress]);
 
   const startTour = useCallback(() => {
+    if (!canStartTour) return;
     log.info('Starting guided tour');
     setDashboardRestoreId((id) => id + 1);
     persistTourSettings((current) => {
@@ -203,7 +208,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsBigTutorialActive(false);
     setStepIndex(0);
     setIsActive(true);
-  }, [persistTourSettings]);
+  }, [canStartTour, persistTourSettings]);
 
   const endTour = useCallback(() => {
     log.info('Ending guided tour');
@@ -540,6 +545,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       stepIndex,
       dashboardRestoreId,
       saveDashboardDismissals,
+      canStartTour,
       startTour,
       next,
       back,

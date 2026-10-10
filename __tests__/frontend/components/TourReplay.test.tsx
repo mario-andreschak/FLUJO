@@ -40,17 +40,22 @@ const labels = {
 };
 
 function TourStatus() {
-  const { isActive, endTour } = useTour();
+  const { isActive, endTour, startTour } = useTour();
   return <>
     <output aria-label="guide active">{String(isActive)}</output>
     <button onClick={endTour}>End guide</button>
+    <button onClick={startTour}>Force guide start</button>
   </>;
 }
 
 /** Models StorageContext's real contract: publish settings only after the save. */
-function Workspace({ initialSettings, initialPath = '/settings' }: { initialSettings: Settings; initialPath?: string }) {
+function Workspace({ initialSettings, initialPath = '/settings', hydrationSettings }: {
+  initialSettings: Settings; initialPath?: string; hydrationSettings?: Settings;
+}) {
   const [settings, setSettings] = useState(initialSettings);
   const [path, setPath] = useState(initialPath);
+  const [settingsHydrated, setSettingsHydrated] = useState(!hydrationSettings);
+  const [isLoading, setIsLoading] = useState(!!hydrationSettings);
   const updateSettings = useCallback(async (nextSettings: Settings) => {
     await mockPersist(nextSettings);
     setSettings(nextSettings);
@@ -61,8 +66,16 @@ function Workspace({ initialSettings, initialPath = '/settings' }: { initialSett
     window.history.replaceState({}, '', nextPath);
     setPath(nextPath);
   };
-  mockUseStorage.mockReturnValue({ settings, updateSettings, isLoading: false, settingsHydrated: true });
+  mockUseStorage.mockReturnValue({ settings, updateSettings, isLoading, settingsHydrated });
   return <TourProvider>
+    {hydrationSettings && <>
+      <button onClick={() => setIsLoading(false)}>Finish loading without settings</button>
+      <button onClick={() => {
+        setSettings(hydrationSettings);
+        setSettingsHydrated(true);
+        setIsLoading(false);
+      }}>Load saved settings</button>
+    </>}
     {path === '/settings' ? <OnboardingSettings /> : <HomePage />}
     <TourStatus />
     <TourOverlay />
@@ -105,6 +118,42 @@ describe('guided tour replay from Settings and Home', () => {
 
   afterEach(() => {
     Reflect.deleteProperty(globalThis, 'fetch');
+  });
+
+  it.each([
+    { path: '/settings', replayButton: 'Replay guided tour' },
+    { path: '/', replayButton: 'Open setup guide' },
+  ])('waits for real settings before replay from $path, including after an unsuccessful load', async ({ path, replayButton }) => {
+    const saved = initialSettings();
+    render(<Workspace initialSettings={createDefaultSettings()} initialPath={path} hydrationSettings={saved} />);
+    const replay = screen.getByRole('button', { name: replayButton });
+    expect(replay).toBeDisabled();
+    fireEvent.click(replay);
+    fireEvent.click(screen.getByRole('button', { name: 'Force guide start' }));
+    await act(async () => {});
+    expect(screen.getByLabelText('guide active')).toHaveTextContent('false');
+    expect(mockPersist).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Finish loading without settings' }));
+    expect(replay).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Force guide start' }));
+    await act(async () => {});
+    expect(screen.getByLabelText('guide active')).toHaveTextContent('false');
+    expect(mockPersist).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load saved settings' }));
+    await waitFor(() => expect(replay).toBeEnabled());
+    expect(mockLatestSettings).toEqual(saved);
+    fireEvent.click(replay);
+    await waitFor(expectSetupTargets);
+    await waitFor(() => expect(mockLatestSettings).toEqual({
+      ...saved,
+      onboarding: { ...saved.onboarding, dashboardCardsHidden: false, dashboardDismissedCards: ['connectedApps'] },
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'End guide' }));
+    await waitFor(() => expect(screen.getByLabelText('guide active')).toHaveTextContent('false'));
+    expectSetupTargets();
+    expect(screen.queryByRole('button', { name: labels.connectedApps })).not.toBeInTheDocument();
   });
 
   it('restores Settings replay targets before its slow save finishes and preserves other settings', async () => {
