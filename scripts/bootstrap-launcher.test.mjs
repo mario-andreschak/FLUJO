@@ -55,8 +55,8 @@ function fixture(t) {
   Object.assign(env, { HOME: home, USERPROFILE: home, TEMP: root, TMP: root, NODE_ENV: 'production',
     FLUJO_BOOTSTRAP_DIR: selected, FLUJO_DATA_DIR: path.join(root, 'data'),
     FLUJO_LOCAL_INSTANCE_DIR: path.join(root, 'instances'), FLUJO_EXPOSURE_MODE: 'localhost' });
-  function run(entry) {
-    const args = entry === 'npm' ? ['bin/flujo.mjs', '--no-open', '--port', '43550']
+  function run(entry, cliArgs = ['--no-open', '--port', '43550']) {
+    const args = entry === 'npm' ? ['bin/flujo.mjs', ...cliArgs]
       : ['scripts/launch-next.mjs', 'start', '-p', '43550'];
     return spawnSync(process.execPath, args, { cwd: app, env, encoding: 'utf8', windowsHide: true,
       timeout: 30_000, maxBuffer: 1024 * 1024 });
@@ -79,6 +79,42 @@ function assertNativeDataRoot(actual, requested) {
   assert.equal(actualDirectory.dev, requestedDirectory.dev);
   assert.equal(actualDirectory.ino, requestedDirectory.ino);
 }
+for (const option of ['--version', '--help', '--porrt=4200', 'start']) {
+  test(`npm rejects unknown option ${option} before creating folders or launching`, t => {
+    const f = fixture(t);
+    f.env.FLUJO_BOOTSTRAP_DIR = path.join(f.root, 'uncreated-bootstrap');
+    const result = f.run('npm', [option, '--no-open']);
+    assert.ifError(result.error);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown option/);
+    assert.ok(!result.stdout.includes('BOOTSTRAP_CHILD'));
+    for (const key of ['FLUJO_BOOTSTRAP_DIR', 'FLUJO_DATA_DIR', 'FLUJO_LOCAL_INSTANCE_DIR']) {
+      assert.equal(existsSync(f.env[key]), false, key);
+    }
+  });
+}
+
+for (const cliArgs of [['--port'], ['--port=bad']]) {
+  test(`npm rejects invalid explicit port ${cliArgs.join(' ')} before creating folders`, t => {
+    const f = fixture(t);
+    f.env.FLUJO_BOOTSTRAP_DIR = path.join(f.root, 'uncreated-bootstrap');
+    const result = f.run('npm', cliArgs);
+    assert.ifError(result.error);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Invalid port/);
+    assert.equal(existsSync(f.env.FLUJO_BOOTSTRAP_DIR), false);
+    assert.equal(existsSync(f.env.FLUJO_DATA_DIR), false);
+  });
+}
+
+for (const cliArgs of [['-p', '43550'], ['--port=43550']]) {
+  test(`npm retains documented port syntax ${cliArgs.join(' ')}`, t => {
+    const f = fixture(t);
+    const child = witness(f.run('npm', [...cliArgs, '--no-open']));
+    assert.ok(child.args.includes('43550'));
+  });
+}
+
 for (const entry of ['npm', 'next']) {
   test(`${entry} entry launches with isolated settings, data and discovery`, t => {
     const f = fixture(t); const child = witness(f.run(entry));
