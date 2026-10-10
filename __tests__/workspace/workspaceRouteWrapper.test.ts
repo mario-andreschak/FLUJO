@@ -26,11 +26,32 @@ jest.mock('@/utils/workspace', () => {
 });
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { POST as openSnapshotFolder } from '@/app/api/snapshots/open-folder/route';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { makeLocalRequest } from '../utils/localRequest';
 
 describe('withWorkspaceRoute compatibility', () => {
+  it.each([
+    ['CONVERSATION_LOG_READ_BUSY', 429],
+    ['CONVERSATION_LOG_READ_MEMORY', 503],
+  ] as const)('returns retryable %s without reporting a missing conversation', async (code, status) => {
+    const pressure = new ConversationLogReadPressureError(code, status);
+    const wrapped = withWorkspaceRoute((async () => { throw pressure; }) as never) as unknown as
+      (request: Request) => Promise<Response>;
+    const response = await wrapped(new Request('http://localhost/v1/chat/conversations/example'));
+    expect(response.status).toBe(status);
+    expect(response.headers.get('Retry-After')).toBe('5');
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(await response.json()).toEqual({ error: pressure.message, code });
+  });
+
+  it('preserves unrelated handler errors', async () => {
+    const failure = new Error('unrelated handler failure');
+    const wrapped = withWorkspaceRoute((async () => { throw failure; }) as never) as unknown as
+      (request: Request) => Promise<Response>;
+    await expect(wrapped(new Request('http://localhost/v1/chat/conversations/example'))).rejects.toBe(failure);
+  });
   beforeEach(() => {
     mockEnsureWorkspaceLayoutReady.mockReset().mockResolvedValue(undefined);
     mockEnsureWorkspaceDirs.mockReset().mockResolvedValue(undefined);

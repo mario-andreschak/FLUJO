@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
@@ -25,7 +26,8 @@ async function loadPersistedState(conversationId: string): Promise<SharedState |
       `conversations/${conversationId}` as StorageKey,
       undefined as never,
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     // Keep the route's existing not-running boundary for unsafe ids and storage
     // failures. In particular, do not adopt a persisted legacy state into the
     // live map: only an executing local loop may drain the legacy inbox.

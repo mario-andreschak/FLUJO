@@ -14,6 +14,7 @@ import {
 } from '@/shared/types/model/fallbackPolicy';
 import type { ModelResult } from '@/frontend/services/model';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 
 export default function FallbackPolicyDialog({ model, models, onSave, onClose }: {
   model: Model;
@@ -59,6 +60,7 @@ export default function FallbackPolicyDialog({ model, models, onSave, onClose }:
       <DialogContent>
         <Stack spacing={2.5} sx={{ pt: 1 }}>
           <Typography color="text.secondary">{t('models.policy.description')}</Typography>
+          <AllowanceBar modelIds={ids} />
           {error && <Alert severity="error">{error}</Alert>}
           <TextField label={t('models.policy.name')} value={name} onChange={event => setName(event.target.value)} fullWidth disabled={saving} />
           <TextField label={t('models.policy.alias')} value={alias} onChange={event => setAlias(event.target.value)}

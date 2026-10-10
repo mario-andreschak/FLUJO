@@ -85,6 +85,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         ripgrep \
+        tini \
     && rm -rf /var/lib/apt/lists/*
 # Debian refuses bare `pip install` into system site-packages (PEP 668). MCP
 # server configs run exactly that, and inside a disposable container the
@@ -150,6 +151,10 @@ RUN mkdir -p \
     && chown -R node:node /app/data /home/node
 
 USER node
+
+# Reap adopted tool descendants and forward signals to the existing launcher.
+# Subreaper mode also works when a managed runner supplies an outer init.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 
 # Port 4200: main HTTPS proxy
 # Port 4201: shared MCP Apps transport listener (`*.localhost` browser origins)

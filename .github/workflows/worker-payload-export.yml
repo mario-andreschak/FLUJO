@@ -1,14 +1,7 @@
 # Source proposal: draft publication is inert; a separately selected PR transition exports.
 name: Export immutable 8fe Windows worker payload
 on:
-  pull_request:
-    types: [ready_for_review]
-    branches: [codex/scorecard-integration]
-    paths:
-      - .github/workflows/worker-payload-export.yml
-      - scripts/export-worker-payload.mjs
-      - scripts/export-worker-payload.test.mjs
-      - scripts/worker-payload-route.mjs
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -39,24 +32,24 @@ jobs:
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       ACTUAL_EVENT_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: proposal-tools
           fetch-depth: 2
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.workflow_sha }}
           path: workflow-source
           fetch-depth: 2
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: 8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5
           path: compiled-source
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '22.23.3'
           architecture: x64
@@ -143,7 +136,7 @@ jobs:
           $taskInputs = Get-Content -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Raw | ConvertFrom-Json
           if ((Get-FileHash package-lock.json -Algorithm SHA256).Hash.ToLowerInvariant() -cne $taskInputs.lockSha256) { throw 'Source lock changed.' }
           [ordered]@{applicationSource='8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5';applicationTree='4f318966afccb7fc7b44f04b51b6fbaeb7ee94ae';proposalSource=$env:PROPOSAL_SHA;workflowSource=$env:WORKFLOW_SHA;actualEventSource=$env:ACTUAL_EVENT_SHA;buildInputsSha256=(Get-FileHash -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Algorithm SHA256).Hash.ToLowerInvariant();archiveSha256=(Get-FileHash -LiteralPath $taskArchive -Algorithm SHA256).Hash.ToLowerInvariant();archiveBytes=(Get-Item -LiteralPath $taskArchive).Length;contentManifestSha256=(Get-FileHash -LiteralPath (Join-Path $taskExport 'payload-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant();runId=$env:GITHUB_RUN_ID;runAttempt=$env:GITHUB_RUN_ATTEMPT;appOrProviderEntry=$false;actualWorkerAcceptance='UNRUN'} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskExport 'archive-provenance.json') -Encoding utf8
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: worker-payload-win32-x64-8fe-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -155,7 +148,7 @@ jobs:
           retention-days: 14
       - name: Retain source/runtime/export diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: worker-payload-diagnostics-8fe-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

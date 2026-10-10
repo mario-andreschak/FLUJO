@@ -155,18 +155,15 @@ test('installer workflow reuses immutable build bytes with tag-only signing/publ
   assertWorkflowContract(workflows());
 });
 
-for (const file of ['scripts/installer-release.mjs', 'scripts/installer-release.test.mjs']) {
-  test(`installer workflow refuses omitting the ${file} validation trigger`, () => {
-    const files = workflows();
-    files['installer.yml'].on.pull_request.paths = files['installer.yml'].on.pull_request.paths.filter((name) => name !== file);
-    assert.throws(() => assertWorkflowContract(files), /trigger hosted installer validation/);
-  });
-}
-
-test('installer workflow refuses excluding its helper files from validation', () => {
+test('installer validation retains explicit manual availability', () => {
   const files = workflows();
-  files['installer.yml'].on.pull_request.paths.push('!scripts/**');
-  assert.throws(() => assertWorkflowContract(files), /trigger hosted installer validation/);
+  delete files['installer.yml'].on.workflow_dispatch;
+  assert.throws(() => assertWorkflowContract(files), /manual\/release-only/);
+});
+test('installer helper changes cannot introduce another automatic PR workflow', () => {
+  const files = workflows();
+  files['installer.yml'].on.pull_request = { paths: ['scripts/installer-release.mjs'] };
+  assert.throws(() => assertWorkflowContract(files), /Only main integration verification/);
 });
 
 for (const job of ['installer-attest', 'installer-publish']) {

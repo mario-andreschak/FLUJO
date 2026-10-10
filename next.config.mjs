@@ -40,7 +40,9 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
-  serverExternalPackages: ['@openai/codex-sdk'],
+  // Both SDKs locate their native executables relative to import.meta.url.
+  // Keep Node's installed-package lookup when the built app moves machines.
+  serverExternalPackages: ['@openai/codex-sdk', '@anthropic-ai/claude-agent-sdk'],
   // Runtime workspace data can contain Windows junctions such as the legacy
   // Content.IE5 cache link. It is never a deployable application dependency,
   // so keep it out of Next's output traces.
@@ -90,6 +92,7 @@ const nextConfig = {
     '@emotion/react',
     '@emotion/styled',
     'mcp-stdio-oauth',
+    '@modelcontextprotocol/ext-tasks',
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {

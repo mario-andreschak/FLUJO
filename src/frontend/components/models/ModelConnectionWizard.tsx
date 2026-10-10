@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -148,6 +148,15 @@ const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
     accountLabel: 'models.wizard.openrouterPaid.account',
     keyLabel: 'models.wizard.openrouterKey',
     note: 'models.wizard.openrouterPaid.note',
+  },
+  'orcarouter-paid': {
+    eyebrow: 'models.wizard.copy.paygOnline',
+    title: 'models.wizard.orcarouter.title',
+    summary: 'models.wizard.orcarouter.summary',
+    accountUrl: 'https://www.orcarouter.ai',
+    accountLabel: 'models.wizard.orcarouter.account',
+    keyLabel: 'models.wizard.orcarouter.key',
+    note: 'models.wizard.orcarouter.note',
   },
   'requesty-paid': {
     eyebrow: 'models.wizard.copy.paygOnline',
@@ -319,6 +328,17 @@ export default function ModelConnectionWizard({
   const [ollamaChecked, setOllamaChecked] = useState(false);
   const [ollamaPulling, setOllamaPulling] = useState(false);
   const [ollamaProgress, setOllamaProgress] = useState<string[]>([]);
+  const sessionRef = useRef(0);
+  const capabilityRequestRef = useRef(0);
+  const operationRef = useRef(false);
+
+  // A parent may close/reopen the dialog while a request is pending. The
+  // external operation may finish, but its UI result belongs to that session.
+  useEffect(() => {
+    sessionRef.current += 1;
+    operationRef.current = false;
+    return () => { sessionRef.current += 1; };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -340,6 +360,8 @@ export default function ModelConnectionWizard({
     setInstallOutput([]);
     setInstallResult('idle');
     setOllama(null);
+    setOllamaLoading(false);
+    setOllamaPulling(false);
     setOllamaChecked(false);
     setOllamaProgress([]);
   }, [open]);
@@ -362,6 +384,7 @@ export default function ModelConnectionWizard({
   };
 
   const back = () => {
+    if (operationRef.current) return;
     const previous = history[history.length - 1];
     if (!previous) return;
     setHistory((value) => value.slice(0, -1));
@@ -387,17 +410,24 @@ export default function ModelConnectionWizard({
   };
 
   const loadOllama = useCallback(async () => {
+    const session = sessionRef.current;
+    const request = ++capabilityRequestRef.current;
+    const current = () => session === sessionRef.current && request === capabilityRequestRef.current;
     setOllamaLoading(true);
     setError(null);
     try {
       const response = await fetch('/api/local-models/capability', { cache: 'no-store' });
       if (!response.ok) throw new Error(t('models.wizard.inspectFailed'));
-      setOllama(await response.json() as OllamaCapability);
+      const capability = await response.json() as OllamaCapability;
+      if (current()) setOllama(capability);
     } catch (loadError) {
+      if (!current()) return;
       setError(loadError instanceof Error ? loadError.message : t('models.wizard.inspectFailed'));
     } finally {
-      setOllamaChecked(true);
-      setOllamaLoading(false);
+      if (current()) {
+        setOllamaChecked(true);
+        setOllamaLoading(false);
+      }
     }
   }, [t]);
 
@@ -408,7 +438,10 @@ export default function ModelConnectionWizard({
   }, [kind, loadOllama, ollamaChecked, ollamaLoading, open, step]);
 
   const runInstaller = async (tool: InstallTool) => {
-    if (!setupHost?.oneClickInstall) return;
+    if (!setupHost?.oneClickInstall || operationRef.current) return;
+    operationRef.current = true;
+    const session = sessionRef.current;
+    const current = () => session === sessionRef.current;
     setInstallTool(tool);
     setInstallResult('idle');
     setInstallOutput([]);
@@ -426,6 +459,7 @@ export default function ModelConnectionWizard({
       let terminalSuccess = false;
       let terminalError = '';
       await readNdjsonStream(response, (event) => {
+        if (!current()) return;
         if (event.type === 'stdout' || event.type === 'stderr') {
           setInstallOutput((lines) => [...lines, event.data].slice(-8));
         }
@@ -437,35 +471,48 @@ export default function ModelConnectionWizard({
           terminalError = event.error || '';
         }
       });
+      if (!current()) return;
       if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.wingetFailed'));
       setInstallResult('success');
-      if (tool === 'ollama') window.setTimeout(() => void loadOllama(), 1200);
+      if (tool === 'ollama') window.setTimeout(() => { if (current()) void loadOllama(); }, 1200);
     } catch (installError) {
+      if (!current()) return;
       setInstallResult('error');
       setError(installError instanceof Error ? installError.message : t('models.wizard.installFailed'));
     } finally {
-      setInstallTool(null);
+      if (current()) {
+        operationRef.current = false;
+        setInstallTool(null);
+      }
     }
   };
 
-  const finish = async (models: Model[]) => {
+  const finish = async (models: Model[], session = sessionRef.current) => {
+    const current = () => session === sessionRef.current;
+    if (!current()) return;
+    operationRef.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await onCreateModels(models);
+      if (!current()) return;
       if (!result.success) throw new Error(result.error || t('models.wizard.createFailed'));
       setCreated(result.created);
       setExisting(result.existing);
       go('success');
     } catch (saveError) {
+      if (!current()) return;
       setError(saveError instanceof Error ? saveError.message : t('models.wizard.createFailed'));
     } finally {
-      setBusy(false);
+      if (current()) {
+        operationRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   const finishStandardSetup = async () => {
-    if (!kind || kind === 'ollama') return;
+    if (!kind || kind === 'ollama' || operationRef.current) return;
     const supportsLocalLogin = kind === 'codex-subscription' || kind === 'antigravity-cli';
     const requiresKey = !supportsLocalLogin;
     if (requiresKey && !apiKey.trim()) {
@@ -501,6 +548,9 @@ export default function ModelConnectionWizard({
   };
 
   const connectOllama = async () => {
+    if (operationRef.current) return;
+    const session = sessionRef.current;
+    const current = () => session === sessionRef.current;
     const modelName = ollama?.suggestedModel || 'llama3.2:3b';
     const alreadyInstalled = ollama?.installedModels?.some((name) => name === modelName);
     if (!ollama?.ollamaReachable) {
@@ -509,6 +559,7 @@ export default function ModelConnectionWizard({
     }
 
     if (!alreadyInstalled) {
+      operationRef.current = true;
       setOllamaPulling(true);
       setOllamaProgress([]);
       setError(null);
@@ -522,6 +573,7 @@ export default function ModelConnectionWizard({
         let terminalSuccess = false;
         let terminalError = '';
         await readNdjsonStream(response, (event) => {
+          if (!current()) return;
           if (event.type === 'stdout' || event.type === 'stderr') {
             setOllamaProgress((lines) => [...lines, event.data].slice(-6));
           }
@@ -530,8 +582,11 @@ export default function ModelConnectionWizard({
             terminalError = event.error || '';
           }
         });
+        if (!current()) return;
         if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.modelDownloadFailed', { model: modelName }));
       } catch (pullError) {
+        if (!current()) return;
+        operationRef.current = false;
         setError(pullError instanceof Error ? pullError.message : t('models.wizard.downloadFailed'));
         setOllamaPulling(false);
         return;
@@ -539,11 +594,12 @@ export default function ModelConnectionWizard({
       setOllamaPulling(false);
     }
 
+    if (!current()) return;
     await finish(buildGuidedModels({
       kind: 'ollama',
       ollamaModel: modelName,
       ollamaUrl: ollama?.ollamaUrl,
-    }));
+    }), session);
   };
 
   const verbose = experience === 'beginner';
@@ -712,6 +768,7 @@ export default function ModelConnectionWizard({
           <ChoiceGrid>
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterPaidDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyPaidDescription')} onClick={() => selectSetup('requesty-paid')} />
+            <OptionCard icon={CloudQueueRoundedIcon} title="OrcaRouter" description={t('models.wizard.orcarouter.summary')} onClick={() => selectSetup('orcarouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Azure OpenAI" description={t('models.wizard.azureDescription')} onClick={() => selectSetup('azure')} />
             <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
           </ChoiceGrid>
@@ -935,7 +992,7 @@ export default function ModelConnectionWizard({
         <Box sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             {history.length && step !== 'success' ? (
-              <IconButton onClick={back} aria-label={t('models.wizard.backAria')}><ArrowBackRoundedIcon /></IconButton>
+              <IconButton onClick={back} disabled={busy || ollamaPulling || Boolean(installTool)} aria-label={t('models.wizard.backAria')}><ArrowBackRoundedIcon /></IconButton>
             ) : <Box sx={{ width: 40 }} />}
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('models.wizard.progressAria')} />

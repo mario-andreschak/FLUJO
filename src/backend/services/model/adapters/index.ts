@@ -13,6 +13,23 @@ import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 import { FallbackAdapter } from './fallbackAdapter';
 
+function denyAssessment(adapter: CompletionAdapter): CompletionAdapter {
+  // Preserve the adapter instance and its method receiver for ordinary calls.
+  const createCompletion = adapter.createCompletion.bind(adapter);
+  adapter.createCompletion = input => {
+    if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
+    return createCompletion(input);
+  };
+  if (adapter.createStreamCompletion) {
+    const createStreamCompletion = adapter.createStreamCompletion.bind(adapter);
+    adapter.createStreamCompletion = input => {
+      if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
+      return createStreamCompletion(input);
+    };
+  }
+  return adapter;
+}
+
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
 export { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
@@ -37,9 +54,9 @@ export type {
  * Gateway profiles also resolve older Chat Completions records to Responses.
  */
 export function getCompletionAdapter(model: Model): CompletionAdapter {
-  if (model.fallbackPolicy) return new FallbackAdapter(getCompletionAdapter);
+  if (model.fallbackPolicy) return denyAssessment(new FallbackAdapter(getCompletionAdapter));
   if (resolveOpenRouterMediaRoute(model).useMediaRoute) {
-    return new OpenRouterMediaAdapter();
+    return denyAssessment(new OpenRouterMediaAdapter());
   }
   switch (resolveModelAdapter(model.provider, model.adapter)) {
     case 'azure':
@@ -51,11 +68,11 @@ export function getCompletionAdapter(model: Model): CompletionAdapter {
     case 'gemini':
       return new GeminiAdapter();
     case 'claude-cli':
-      return new ClaudeSubscriptionAdapter();
+      return denyAssessment(new ClaudeSubscriptionAdapter());
     case 'codex-cli':
-      return new CodexAdapter();
+      return denyAssessment(new CodexAdapter());
     case 'antigravity-cli':
-      return new AntigravityCliAdapter();
+      return denyAssessment(new AntigravityCliAdapter());
     case 'openai':
     default:
       return new OpenAiAdapter();

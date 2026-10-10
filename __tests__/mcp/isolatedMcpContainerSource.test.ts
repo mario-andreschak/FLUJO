@@ -16,7 +16,9 @@ jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn(async (_key: unk
 const probe = process.env.FLUJO_RUN_ISOLATION_SOURCE_PROBE === '1' ? test : test.skip;
 
 probe.each(['v1', 'beta'])('real %s SDK uses an approved Linux container for discovery, tool dispatch and cleanup', async era => {
-  const tempRoot = path.resolve(os.tmpdir());
+  // Windows Temp grants inherited access beyond the owner; use the same private
+  // owner profile anchor as the real protected package-runner source fixtures.
+  const tempRoot = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA! : os.tmpdir());
   const directory = fs.mkdtempSync(path.join(tempRoot, 'flujo-mcp-source-test-'));
   const saved = { FLUJO_OWNER_AUTH_FILE: process.env.FLUJO_OWNER_AUTH_FILE, FLUJO_MCP_ISOLATION_FILE: process.env.FLUJO_MCP_ISOLATION_FILE };
   // Fits the policy's bounded command argument. Read/write checks use only

@@ -37,11 +37,15 @@ import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWr
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
 let archiveMetadata: Record<string, unknown> | undefined;
+let sdkRequestObserved: (() => void) | undefined;
 class LocalAdapter extends OpenAiAdapter {
   async createCompletion(input: CompletionInput) {
-    return super.createCompletion({ ...input, onSdkRequest: snapshot => input.onSdkRequest?.({
-      ...snapshot, request: archiveMetadata ? { ...(snapshot.request as Record<string, unknown>), ...archiveMetadata } : snapshot.request,
-    }) ?? Promise.resolve(undefined) });
+    return super.createCompletion({ ...input, onSdkRequest: snapshot => {
+      sdkRequestObserved?.();
+      return input.onSdkRequest?.({
+        ...snapshot, request: archiveMetadata ? { ...(snapshot.request as Record<string, unknown>), ...archiveMetadata } : snapshot.request,
+      }) ?? Promise.resolve(undefined);
+    } });
   }
   protected createClient(model: Model, apiKey: string): OpenAI {
     return createOpenAIClient({ baseURL: model.baseUrl, apiKey, maxRetries: 0, timeout: 5000 });
@@ -54,13 +58,14 @@ function deferred() {
   return { promise, resolve };
 }
 
-const invoke = (messages: FlujoChatMessage[], canonical = messages) => (
+const invoke = (messages: FlujoChatMessage[], canonical = messages, options: Record<string, unknown> = {}) => (
   ModelHandler as unknown as { generateCompletion: (
     model: string, prompt: string, messages: FlujoChatMessage[], tools: undefined, options: Record<string, unknown>,
   ) => Promise<{ success: boolean; error?: { code: string; message: string } }> }
 ).generateCompletion('memory-model', '', messages, undefined, {
   archiveModelTurns: true, canonicalMessages: canonical,
   conversationId: 'memory-conversation', nodeId: 'memory-node', runId: 'memory-run',
+  ...options,
 });
 
 describe('actual ModelHandler / SDK / archive memory boundary', () => {
@@ -92,6 +97,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     fixtureUncertain = false;
     writeOpenControl = undefined;
     archiveMetadata = undefined;
+    sdkRequestObserved = undefined;
     server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -129,6 +135,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
       () => { _setModelTurnArchiveDirForTests(priorArchive); },
       () => { writeOpenControl = undefined; },
       () => { archiveMetadata = undefined; },
+      () => { sdkRequestObserved = undefined; },
       () => { if (priorData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = priorData; },
       () => { if (priorParentData === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = priorParentData; },
       async () => {
@@ -159,12 +166,12 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(canonical).toHaveLength(MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues + 1);
   });
 
-  it('refuses a per-dispatch write before cloning or starting HTTP, then admits a successor after drainage', async () => {
+  it('refuses a protected per-dispatch write before cloning or starting HTTP, then admits a successor after drainage', async () => {
     const gate = deferred();
     const entered = deferred();
     let count = 0;
-    const writes = Array.from({ length: 4 }, () => withArchiveWriteMemory('held', async () => {
-      if (++count === 4) entered.resolve();
+    const writes = Array.from({ length: MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites }, () => withArchiveWriteMemory('held', async () => {
+      if (++count === MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites) entered.resolve();
       await gate.promise;
     }));
     const prepare = jest.fn(() => ({ conversationId: 'no-write', nodeId: 'node', modelId: 'model', modelName: 'model',
@@ -174,12 +181,52 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
       await expect(archiveModelDispatch(prepare(), prepare)).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' });
       // One call only builds the input references; deferred clone factory did not run.
       expect(prepare).toHaveBeenCalledTimes(1);
-      const result = await invoke([message]);
+      const result = await invoke([message], [message], {
+        durableContext: { executionAuthority: { assertCurrent: async () => {} } },
+      });
       expect(result).toMatchObject({ success: false, error: { code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' } });
       expect(requests).toHaveLength(0);
     } finally { gate.resolve(); await Promise.allSettled(writes); }
     expect((await invoke([message])).success).toBe(true);
     expect(requests).toHaveLength(1);
+  });
+
+  it('queues an ordinary dispatch before HTTP and archives it after the held writers drain', async () => {
+    const gate = deferred();
+    const entered = deferred();
+    const sdkEntered = deferred();
+    let count = 0;
+    const writes = Array.from({ length: MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites }, () => withArchiveWriteMemory('held', async () => {
+      if (++count === MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites) entered.resolve();
+      await gate.promise;
+    }));
+    let running: ReturnType<typeof invoke> | undefined;
+    let settled = false;
+    try {
+      await entered.promise;
+      sdkRequestObserved = sdkEntered.resolve;
+      running = invoke([message]).then(result => { settled = true; return result; });
+      await sdkEntered.promise;
+      expect(getArchiveWritePressure().writers).toBe(MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites);
+      expect((globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: unknown[] }).__flujoArchiveWriteQueue).toHaveLength(1);
+      expect(settled).toBe(false);
+      expect(requests).toHaveLength(0);
+      gate.resolve();
+      await Promise.all(writes);
+      expect((await running).success).toBe(true);
+      expect(requests).toHaveLength(1);
+      expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
+      const files = (await fs.readdir(path.join(root, 'archives', 'memory-conversation'))).filter(file => file.endsWith('.v2.json.gz'));
+      expect(files).toHaveLength(1);
+      const snapshot = await readModelTurnSnapshot('memory-conversation', files[0].slice(0, -'.v2.json.gz'.length));
+      expect(snapshot!.canonicalMessages).toEqual([message]);
+      expect(snapshot!.entry.outcome).toBe('completed');
+    } finally {
+      gate.resolve();
+      await Promise.allSettled(writes);
+      await running;
+      sdkRequestObserved = undefined;
+    }
   });
 
   it('archives actual 400 and continuation attempts with original canonical history and zero leaked reservations', async () => {

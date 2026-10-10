@@ -64,6 +64,21 @@ require.extensions['.ts'] = function transpileTypeScript(module, filename) {
 const workspaceId = process.argv[2];
 if (!workspaceId) throw new Error('A workspace id is required.');
 
+async function startPersonaFixture() {
+// Source transpilation emits require, but the Tasks extension exposes only
+// native import conditions. Load the actual public namespaces before importing
+// the source graph, as the worker-transfer child does for stdio OAuth. Do not
+// bypass export maps or replace protocol/schema behavior with fixture stubs.
+const nativeTasks = new Map(await Promise.all([
+  '@modelcontextprotocol/ext-tasks/core',
+  '@modelcontextprotocol/ext-tasks/core/v2',
+  '@modelcontextprotocol/ext-tasks/client',
+].map(async name => [name, await import(name)])));
+const originalLoad = Module._load;
+Module._load = function loadNativeTasks(request, parent, isMain) {
+  return nativeTasks.has(request) ? nativeTasks.get(request) : originalLoad.call(this, request, parent, isMain);
+};
+
 const enduringAgents = require(path.join(
   repositoryRoot,
   'src/backend/services/enduringAgents/index.ts',
@@ -345,5 +360,11 @@ void announceReady().catch((error) => {
     error instanceof Error ? error.stack ?? error.message : String(error)
   }\n`);
   input.close();
+  process.exitCode = 1;
+});
+}
+
+void startPersonaFixture().catch(error => {
+  process.stderr.write(`Persona child module loading failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

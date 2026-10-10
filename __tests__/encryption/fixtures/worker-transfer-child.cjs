@@ -43,8 +43,12 @@ let stage = 'restore';
     process.env.FLUJO_WORKER_SNAPSHOT_KEY = require('node:crypto').randomBytes(32).toString('base64');
     // Source transpilation emits require; load genuine import-only namespaces
     // through Node's native ESM loader, without substituting their behavior.
+    stage = 'load-snapshot-source';
     const native = new Map();
-    for (const name of ['mcp-stdio-oauth/protocol', 'mcp-stdio-oauth/client', 'mcp-stdio-oauth/client/transport']) {
+    for (const name of [
+      'mcp-stdio-oauth/protocol', 'mcp-stdio-oauth/client', 'mcp-stdio-oauth/client/transport',
+      '@modelcontextprotocol/ext-tasks/core', '@modelcontextprotocol/ext-tasks/core/v2', '@modelcontextprotocol/ext-tasks/client',
+    ]) {
       native.set(name, await import(name));
     }
     const load = Module._load;

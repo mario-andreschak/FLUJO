@@ -1,4 +1,5 @@
-# Pull-request verification (issue #457).
+# Main integration verification: genuine checks required by active ruleset 24434701.
+# Intermediate feature branches remain locally qualified; only main-target PRs run this gate.
 #
 # Before this workflow existed no CI job ran `npm test`, `tsc --noEmit` or
 # `eslint` on a pull request: two test files that could not even be parsed were
@@ -11,6 +12,7 @@ name: verify
 
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -31,23 +33,23 @@ jobs:
   production-build:
     name: Production build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          # One current runtime matches the shipped Linux container.
-          node-version: '22.23.3'
+          # Build once on a supported runtime, then qualify the same artifacts below.
+          node-version: '24.21.0'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - name: Determine whether application qualification inputs changed
         id: application-change
         shell: bash
@@ -97,17 +99,72 @@ jobs:
       - name: Build with the ordinary command and default Node heap
         if: steps.application-change.outputs.changed == 'true'
         run: npm run build
-      - name: Qualify installed app and packed MCP packages on Node 22.23.3
+      - name: Validate built MCP package types and release inventory
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
           npm run typecheck:mcp
           npm run validate:mcp-release
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        if: steps.application-change.outputs.changed == 'true'
+        with:
+          node-version: '22.17.0'
+          cache: npm
+      - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
+        run: node scripts/verify-ci-node.mjs 22.17.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 22.17.0
+        if: steps.application-change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run smoke:mcp-artifacts
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        if: steps.application-change.outputs.changed == 'true'
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Qualify installed app and packed MCP packages on Node 22.23.3
+        if: steps.application-change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run smoke:mcp-artifacts
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        if: steps.application-change.outputs.changed == 'true'
+        with:
+          node-version: '24.2.0'
+          cache: npm
+      - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
+        run: node scripts/verify-ci-node.mjs 24.2.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 24.2.0
+        if: steps.application-change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run smoke:mcp-artifacts
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        if: steps.application-change.outputs.changed == 'true'
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - name: Verify exact official Node runtime
+        if: steps.application-change.outputs.changed == 'true'
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 24.21.0
+        if: steps.application-change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
           npm run smoke:mcp-artifacts
       - name: Retain exact runtime measurements
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ci-node-runtime-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-node-runtime/
@@ -123,10 +180,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
@@ -153,7 +210,7 @@ jobs:
             __tests__/enduringAgents/runtimeClock.test.ts \
             __tests__/enduringAgents/soak/evidence.test.ts \
             __tests__/enduringAgents/soak/personaSoak.test.ts
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: persona-memory-profile-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -168,10 +225,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
       # Workflow structure checks use the lockfile-pinned YAML dependency.
@@ -200,7 +257,7 @@ jobs:
         timeout-minutes: 3
         run: node scripts/ownership-prototype/run.cjs "${{ runner.temp }}/ownership-prototype.json"
       - name: Retain ownership prototype fixture report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ownership-prototype-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ownership-prototype.json
@@ -216,10 +273,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
@@ -243,27 +300,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
-      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs scripts/selector-parser-security.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/required-check-workflow.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs scripts/selector-parser-security.test.mjs
 
   dependency-security:
     name: dependency-security
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
@@ -272,7 +329,7 @@ jobs:
       - run: npm ci --include=dev
       - name: Audit the installed lockfile dependencies, including build tools
         run: npm audit --include=dev --audit-level=high --json > dependency-audit.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: dependency-audit-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -280,8 +337,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # Administrator prerequisite: disable CodeQL default setup before this
-  # advanced setup can upload results. See docs/engineering-verification.md.
+  # Genuine two-language extended scans and processed result uploads.
+  # If default setup is enabled, an administrator must switch it to advanced.
   codeql:
     name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-latest
@@ -295,7 +352,7 @@ jobs:
       matrix:
         language: [javascript-typescript, actions]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
@@ -315,10 +372,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
@@ -335,10 +392,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
@@ -357,14 +414,30 @@ jobs:
           docker_path="$(command -v docker)"
           daemon='unix:///var/run/docker.sock'
           test "$("$docker_path" --host "$daemon" info --format '{{.OSType}}/{{.CgroupVersion}}')" = 'linux/2'
-          "$docker_path" --host "$daemon" pull public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
-          image="$("$docker_path" --host "$daemon" image inspect public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 --format '{{.Id}}')"
+          # Both registries must provide the same pinned upstream manifest.
+          digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
+          image_ref=''
+          for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do
+            for attempt in 1 2; do
+              if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
+                image_ref="$registry@$digest"
+                break 2
+              fi
+              sleep "$attempt"
+            done
+          done
+          test -n "$image_ref"
+          image="$("$docker_path" --host "$daemon" image inspect "$image_ref" --format '{{.Id}}')"
           [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]
           printf '%s\n' "FLUJO_TEST_ISOLATION_DOCKER=$docker_path" "FLUJO_TEST_ISOLATION_DAEMON=$daemon" "FLUJO_TEST_ISOLATION_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Exercise real Linux MCP discovery and cleanup before the full suite
         env:
           FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1'
         run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand __tests__/mcp/isolatedMcpContainerSource.test.ts
+      - name: Critical backend regressions
+        run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/settings/backupRestoreRoutes.test.ts __tests__/settings/backupStrictStorage.test.ts __tests__/workspace/workspaceListRoute.test.ts __tests__/workspace/workspaceCreateMcpRecords.test.ts __tests__/workspace/workspaceRouteWrapper.test.ts __tests__/flow/conversationLogReadAdmission.test.ts __tests__/flow/conversationSnapshotAdmission.test.ts __tests__/flow/modelTurnArchiveWriteBudget.test.ts __tests__/mcp/toolDiscoveryPagination.test.ts __tests__/mcp/storedTransportAdmission.test.ts __tests__/mcp/tasksGenerationsProtocol.test.ts __tests__/mcp/clientTasksLifecycle.test.ts __tests__/mcp/tasksExtensionSession.test.ts __tests__/mcp/serverTasks.test.ts __tests__/mcp/flowsTasksServer.test.ts __tests__/mcp/flowsTasksRouteClassification.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/model/orcarouterProvider.test.ts __tests__/ollama/ollamaClient.test.ts __tests__/ollama/pullRoute.test.ts __tests__/packages/workspaceMcpPreparationMarker.test.ts __tests__/security/ownerAccess.test.ts __tests__/security/isolatedMcp.test.ts __tests__/mcp/isolatedMcpTransport.test.ts __tests__/mcp/securityReviewSource.test.ts __tests__/mcp/securityReviewReport.test.ts __tests__/mcp/securityReviewRoute.test.ts __tests__/mcp/securityReviewLifecycle.test.ts __tests__/mcp/securityReviewRunner.test.ts __tests__/mcp/modelRiskEvidence.test.ts __tests__/mcp/modelRiskAssessment.test.ts __tests__/mcp/modelRiskAssessmentRoute.test.ts __tests__/model/readOnlyAssessmentAdapter.test.ts __tests__/mcp/discoverySearch.test.ts __tests__/mcp/registryDiscovery.test.ts __tests__/mcp/assistedPreferences.test.ts __tests__/mcp/assistedRanking.test.ts __tests__/mcp/assistedInstall.test.ts __tests__/mcp/assistantRoute.test.ts __tests__/mcp/registryInstall.test.ts __tests__/mcp/registryIconsRoute.test.ts __tests__/mcp/registryDiscoveryClient.test.ts __tests__/mcp/registryDiscoveryRoute.test.ts __tests__/mcp/registryWorkspaceIsolation.test.ts __tests__/mcp/quality/orchestrator.test.ts __tests__/mcp/installBestAssistedTool.test.ts __tests__/mcp/assistedDiscoveryBody.test.ts
+      - name: Critical frontend regressions
+        run: node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath __tests__/frontend/components/DayViewMiniMonth.test.tsx __tests__/frontend/components/ChatHistory.test.tsx __tests__/frontend/components/PersonaGoalCard.test.tsx __tests__/frontend/components/PersonaGoalValidation.test.tsx __tests__/frontend/components/BackupSettings.test.tsx __tests__/frontend/components/ModelConnectionWizard.test.tsx __tests__/frontend/components/McpConnectionWizard.test.tsx __tests__/frontend/components/McpAiConnectionPanel.test.tsx __tests__/frontend/components/McpServerManagerWizardOwnership.test.tsx __tests__/frontend/components/oauthPopup.test.ts __tests__/frontend/components/CardPickerGrid.test.tsx __tests__/frontend/components/PersonaCreationWizard.test.tsx __tests__/frontend/components/RoleVersionCardLocalization.test.tsx __tests__/frontend/components/McpSecurityReviewPanel.test.tsx __tests__/frontend/components/McpModelRiskAssessmentPanel.test.tsx __tests__/frontend/components/ServerModalDiscoverySession.test.tsx __tests__/frontend/components/MarketplaceTab.test.tsx
       # Jest's own exit code is deliberately not the gate: the baseline script
       # below is, because it distinguishes "a quarantined flake failed" from
       # "a suite stopped executing". It still records the raw results.
@@ -380,14 +453,14 @@ jobs:
         run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
       - name: Upload memory experiment results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: memory-experiment-results
           path: memory-experiment-results.json
           if-no-files-found: warn
       - name: Upload Jest results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: jest-results-ci
           path: jest-results.json
@@ -398,10 +471,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
           cache: npm
@@ -427,14 +500,14 @@ jobs:
         run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
       - name: Upload Jest results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: jest-results-isolated
           path: jest-results-isolated.json
           if-no-files-found: warn
       - name: Upload Persona smoke evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: persona-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: soak-smoke-artifacts/
@@ -447,10 +520,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
       - name: Verify exact official Node runtime
@@ -460,5 +533,5 @@ jobs:
           VERIFICATION_NEEDS: ${{ toJSON(needs) }}
         run: >-
           node --input-type=module -e
-          "import { assertDependencyResults } from './scripts/verification-contract.mjs';
-          assertDependencyResults(JSON.parse(process.env.VERIFICATION_NEEDS));"
+          "import { assertFullDependencyResults } from './scripts/verification-contract.mjs';
+          assertFullDependencyResults(JSON.parse(process.env.VERIFICATION_NEEDS));"

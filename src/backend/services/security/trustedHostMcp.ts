@@ -8,6 +8,7 @@ import { getDataDir } from '@/utils/paths';
 import { ownerPolicySchema } from './ownerCredentials';
 import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
 import { BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
+import { protectedPackageRunnerSchema, assertPackageRunnerDeclaration, assertPackageRunnerResolution } from './protectedPackageRunner';
 
 /** Admit only own data properties; configuration accessors never run during consent. */
 export function trustedHostEnvironment(config: MCPStdioConfig): Map<string, string> {
@@ -39,17 +40,33 @@ export const TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES = [
   ...(process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH'] : []),
 ] as const;
 
+/** The child module search roots follow the reviewed effective home, never the
+ * inspecting FLUJO process's unrelated HOME. No ambient NODE_PATH is inherited. */
+export function trustedHostPackageRunnerContext(config: MCPStdioConfig, runtimeHome?: 'host' | 'isolated') {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  const mode = runtimeHome ?? policy.runtimeHome;
+  const environment = trustedHostEnvironment(config);
+  const homeName = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+  const configured = [...environment].find(([name]) => process.platform === 'win32' ? name.toUpperCase() === homeName : name === homeName)?.[1];
+  // A stable directory component for the public configured server name, not a
+  // credential hash or password verifier; runtime isolation uses this same map.
+  const home = mode === 'isolated' ? path.join(getWorkspaceDataDir(), 'userdata', 'mcp-runtime',
+    createHash('sha256').update(config.name).digest('hex').slice(0, 24), 'home') : configured ?? '';
+  return { command: config.command, home };
+}
+
 /** A request for explicit host trust, never effective approval or an OS sandbox. */
 export const trustedHostMcpPolicySchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal('trusted-host'),
   privileges: z.literal('owner-account'),
-  runtime: z.enum(['node', 'native']),
+  runtime: z.enum(['node', 'native', 'npx']),
   runtimeHome: z.enum(['host', 'isolated']).optional(),
   entryPoint: absolutePath,
   sourceRoot: absolutePath,
   sourceDigest: digestSchema,
   executableDigest: digestSchema,
+  packageRunner: protectedPackageRunnerSchema.optional(),
   bundledInstallation: z.object({
     packageDirectory: z.enum(['flujo', 'filesystem', 'bash', 'browser']),
     installationRoot: absolutePath,
@@ -68,7 +85,8 @@ export const trustedHostMcpPolicySchema = z.object({
   environmentNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)
     .refine(name => !['NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'].includes(name.toUpperCase()))).max(64),
 }).strict().refine(value => new Set(value.environmentNames.map(name => process.platform === 'win32' ? name.toUpperCase() : name)).size === value.environmentNames.length)
-  .refine(value => !value.bundledInstallation?.workload || value.bundledInstallation.packageDirectory === 'flujo');
+  .refine(value => !value.bundledInstallation?.workload || value.bundledInstallation.packageDirectory === 'flujo')
+  .refine(value => (value.runtime === 'npx') === Boolean(value.packageRunner) && !(value.packageRunner && value.bundledInstallation));
 
 export const trustedHostApprovalsSchema = z.object({
   schemaVersion: z.literal(1),
@@ -312,11 +330,14 @@ function consentInput(config: MCPStdioConfig, diagnostic = false): { consent: st
     const cwd = absolutePath.parse(config.cwd);
     const args = z.array(z.string().max(2048).refine(value => !value.includes('\0'))).max(64).parse(config.args ?? []);
     if (config.isolation !== undefined || /\.(?:cmd|bat|ps1)$/i.test(command)) throw new Error();
-    if (canonical(cwd) !== canonical(policy.sourceRoot)) throw new Error();
+    if (policy.runtime !== 'npx' && canonical(cwd) !== canonical(policy.sourceRoot)) throw new Error();
     const entry = path.relative(policy.sourceRoot, policy.entryPoint);
     if (!entry || entry === '..' || entry.startsWith(`..${path.sep}`) || path.isAbsolute(entry)) throw new Error();
     const executableName = path.basename(command).toLowerCase().replace(/\.exe$/, '');
-    if (policy.runtime === 'node') {
+    if (policy.runtime === 'npx') {
+      assertPackageRunnerDeclaration({ sourceRoot: policy.sourceRoot, entryPoint: policy.entryPoint, command, cwd, args,
+        runner: policy.packageRunner!, environment: trustedHostEnvironment(config) });
+    } else if (policy.runtime === 'node') {
       if (executableName !== 'node' || args[0] !== policy.entryPoint || !/\.(?:mjs|cjs|js)$/.test(policy.entryPoint)) throw new Error();
     } else if (canonical(command) !== canonical(policy.entryPoint)
         || ['node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack', 'uv', 'uvx', 'pip', 'pip3', 'python', 'python3', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'ruby', 'perl', 'deno', 'bun', 'go', 'cargo'].includes(executableName)) throw new Error();
@@ -407,6 +428,10 @@ export function assertTrustedHostMcpAllowed(config: MCPStdioConfig): z.infer<typ
     if (approvals.ownerId !== owner.ownerId || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (fingerprintTrustedHostExecutable(config.command) !== policy.executableDigest
         || fingerprintTrustedHostSource(policy.sourceRoot) !== policy.sourceDigest) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    if (policy.packageRunner) {
+      assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, config.cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config));
+      if (fingerprintTrustedHostExecutable(policy.packageRunner.shell) !== policy.packageRunner.shellDigest) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    }
     // Fingerprinting can take time. An approval that expired meanwhile cannot
     // authorize a later effect, and changed owner/grant files must be reread.
     const currentApprovals = approvalsSchema.parse(readPrivateApproval(process.env.FLUJO_MCP_TRUSTED_HOST_FILE));
@@ -580,6 +605,17 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
   return tree.digest('hex');
 }
 
+/** Fresh, bounded inspection for owner previews as well as launch guards. */
+export async function fingerprintTrustedHostSourceAsync(sourceRoot: string, signal?: AbortSignal): Promise<string> {
+  try { return await fingerprintSourceAsync(sourceRoot, signal); }
+  catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
+}
+
+export async function fingerprintTrustedHostExecutableAsync(filename: string, signal?: AbortSignal): Promise<string> {
+  try { return (await hashStableFileAsync(filename, MAX_EXECUTABLE_BYTES, signal)).digest; }
+  catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
+}
+
 /** Production checks yield during source verification and reread authority afterward. */
 export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: AbortSignal) {
   const captured = structuredClone(config);
@@ -620,6 +656,14 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
     }
     check(executable.digest === before.policy.executableDigest, 'executable-digest');
     check(source === before.policy.sourceDigest, 'source-digest');
+    if (before.policy.packageRunner) {
+      const runner = before.policy.packageRunner;
+      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner,
+        { ...trustedHostPackageRunnerContext(captured), inspectClosure: false });
+      const shell = await hashStableFileAsync(runner.shell, MAX_EXECUTABLE_BYTES, signal);
+      check(shell.digest === runner.shellDigest, 'executable-digest');
+      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));
+    }
   } catch {
     try {
       if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read', phase);

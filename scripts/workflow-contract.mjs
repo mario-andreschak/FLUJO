@@ -1,4 +1,5 @@
-import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
+import { assertRequiredCheckWorkflow } from './required-check-workflow.mjs';
+import { FULL_JOB_IDS as REQUIRED_JOB_IDS, FULL_CHECK_NAMES as REQUIRED_CHECK_NAMES, REQUIRED_CHECK_NAMES as MAIN_CHECK_NAMES } from './verification-contract.mjs';
 import { CI_NODE_PROFILES } from './verify-ci-node.mjs';
 import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
 
@@ -6,7 +7,7 @@ const APPLICATION_CHANGED = "steps.application-change.outputs.changed == 'true'"
 const isApplicationSelection = (file, id, condition) => file === 'verify.yml' && id === 'production-build' && condition === APPLICATION_CHANGED;
 
 export function assertNodeRuntimeWorkflowContract(workflows) {
-  const profiles = [CI_NODE_PROFILES.current22];
+  const profiles = Object.values(CI_NODE_PROFILES);
   for (const [file, workflow] of Object.entries(workflows)) {
     for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
       const steps = job.steps ?? [];
@@ -15,7 +16,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
         throw new Error(`${file}/${id} executes Node commands without an exact verified runtime.`);
       }
       const versions = setups.map((index) => steps[index].with?.['node-version']);
-      const expected = file === 'verify.yml' && id === 'production-build' ? profiles
+      const expected = file === 'verify.yml' && id === 'production-build' ? [CI_NODE_PROFILES.current24, ...profiles.slice(1)]
         : setups.map(() => file === 'publish-npm.yml' ? CI_NODE_PROFILES.current24 : CI_NODE_PROFILES.current22);
       if (JSON.stringify(versions) !== JSON.stringify(expected)) throw new Error(`${file}/${id} has a missing or unpinned CI runtime profile.`);
       for (const [position, index] of setups.entries()) {
@@ -49,23 +50,23 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
     throw new Error('Production qualification must use the ordinary default Node heap.');
   }
   const steps = build?.steps ?? [];
-  if (steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm run build').length !== 1
-      || steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm ci --include=dev').length !== 1) {
-    throw new Error('Production CI must install and build once per change.');
-  }
   if (steps.some((step) => step.env?.NODE_OPTIONS || step.env?.NODE_V8_OPTIONS || /--max-old-space-size|NODE_OPTIONS=/i.test(step.run ?? ''))) {
     throw new Error('Production qualification commands must preserve ordinary Node options and default heap.');
   }
   if (!steps.some((step) => step.name === 'Build with the ordinary command and default Node heap' && step.run === 'npm run build')) {
-    throw new Error('The ordinary default-heap production build must remain mandatory.');
+    throw new Error('The ordinary default-heap build must remain mandatory.');
   }
-  const command = 'set -euo pipefail\nnpm run typecheck:mcp\nnpm run validate:mcp-release\nnpm run smoke:mcp-artifacts\n';
-  for (const version of profiles) {
-    const index = steps.findIndex((step) => step.name === `Qualify installed app and packed MCP packages on Node ${version}`);
-    const qualification = steps[index];
+  if (steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm run build').length !== 1
+      || steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm ci --include=dev').length !== 1) {
+    throw new Error('Production qualification must install and build once per operating system.');
+  }
+  const command = 'set -euo pipefail\nnpm run smoke:mcp-artifacts\n';
+  for (const version of profiles.slice(1)) {
+    const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record` && step.if === APPLICATION_CHANGED);
+    const qualification = steps[index + 1];
     if (index < 0 || qualification?.shell !== 'bash' || qualification.run !== command
         || (qualification.if !== undefined && qualification.if !== APPLICATION_CHANGED) || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
-      throw new Error(`Node ${version} must enforce build, types and actual packed-process acceptance with shell failure propagation.`);
+      throw new Error(`Node ${version} must enforce actual packed-process acceptance of the built artifacts with shell failure propagation.`);
     }
   }
   if (!steps.some((step) => step.uses?.startsWith('actions/upload-artifact@') && step.if === 'always()'
@@ -75,11 +76,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
 }
 
 function assertInstallerProvenance(workflow) {
-  const paths = workflow?.on?.pull_request?.paths;
-  if (!Array.isArray(paths) || paths.some((file) => file.startsWith('!'))
-      || !['scripts/installer-release.mjs', 'scripts/installer-release.test.mjs'].every((file) => paths.includes(file))) {
-    throw new Error('Installer helper changes must trigger hosted installer validation.');
-  }
+  if (!Object.hasOwn(workflow?.on ?? {}, 'workflow_dispatch') || Object.hasOwn(workflow.on, 'pull_request')) throw new Error('Installer validation must remain manual/release-only.');
   const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
   const build = workflow?.jobs?.['installer-build'];
   const attest = workflow?.jobs?.['installer-attest'];
@@ -131,7 +128,7 @@ function assertInstallerProvenance(workflow) {
   }
 }
 
-export function assertWorkflowContract(workflows) {
+export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
@@ -139,7 +136,7 @@ export function assertWorkflowContract(workflows) {
   const docs = docsWorkflow?.jobs?.['scorecard-source'];
   const docsSteps = docs?.steps ?? [];
   const capture = docsSteps.findIndex(step => step.run === 'node scripts/check-scorecard-ci.mjs "${{ runner.temp }}/scorecard-source-checks"');
-  if (!docsWorkflow?.on || !Object.hasOwn(docsWorkflow.on, 'pull_request') || docsWorkflow.on.pull_request?.paths || docsWorkflow.on.pull_request?.['paths-ignore']
+  if (!docsWorkflow?.on || !Object.hasOwn(docsWorkflow.on, 'workflow_dispatch') || Object.hasOwn(docsWorkflow.on, 'pull_request') || Object.hasOwn(docsWorkflow.on, 'push')
       || docs?.if !== undefined || docs?.['continue-on-error'] || docs?.strategy?.['fail-fast'] !== false
       || JSON.stringify(docs?.strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])
       || docsWorkflow.env?.NODE_OPTIONS || docs.env?.NODE_OPTIONS
@@ -188,10 +185,8 @@ export function assertWorkflowContract(workflows) {
     throw new Error('Selected-release journeys must verify ancestry from the workflow checkout before detaching or installing, without shared caches.');
   }
   const workflow = workflows['verify.yml'];
-  if (!workflow || !Object.hasOwn(workflow.on, 'pull_request')
-      || workflow.on.pull_request != null
-      || !workflow.on.push?.branches?.includes('main') || workflow.on.push.paths || workflow.on.push['paths-ignore']) {
-    throw new Error('Verification must run for every pull request and main push without path filters.');
+  if (!workflow || !Object.hasOwn(workflow.on, 'workflow_dispatch') || (!mainIntegration && (Object.hasOwn(workflow.on, 'pull_request') || Object.hasOwn(workflow.on, 'push')))) {
+    throw new Error('Broad qualification must be explicitly dispatched; it cannot run on every PR or push.');
   }
   for (const id of REQUIRED_JOB_IDS) {
     const job = workflow.jobs[id];
@@ -205,7 +200,7 @@ export function assertWorkflowContract(workflows) {
     }
   }
   for (const id of ['production-build', 'release-safety']) {
-    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(id === 'production-build' ? ['ubuntu-latest'] : ['ubuntu-latest', 'windows-latest'])) {
+    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(mainIntegration && id === 'production-build' ? ['ubuntu-latest'] : ['ubuntu-latest', 'windows-latest'])) {
       throw new Error(`${id} has an unexpected platform matrix.`);
     }
   }
@@ -217,7 +212,7 @@ export function assertWorkflowContract(workflows) {
         ? job.strategy.matrix.language.map((language) => job.name.replace('${{ matrix.language }}', language))
         : [job.name];
   });
-  if (JSON.stringify(names) !== JSON.stringify(REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
+  if (JSON.stringify(names) !== JSON.stringify(mainIntegration ? MAIN_CHECK_NAMES : REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
   const build = workflow.jobs['production-build'].steps;
   if (build.some(step => step.if === APPLICATION_CHANGED)) {
     const selection = build.find(step => step.id === 'application-change');
@@ -253,10 +248,31 @@ export function assertWorkflowContract(workflows) {
       || mainTests[suite].env?.FLUJO_RUN_ISOLATION_SOURCE_PROBE !== '1') {
     throw new Error('Main CI must prepare a real Linux Docker image and execute both MCP isolation probes.');
   }
+  const preparation = mainTests[isolation].run;
+  if (!preparation.includes("digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'")
+      || !preparation.includes('for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do')
+      || !preparation.includes('for attempt in 1 2; do')
+      || !preparation.includes('pull "$registry@$digest"')
+      || !preparation.includes('test -n "$image_ref"')
+      || !preparation.includes('image inspect "$image_ref"')
+      || !preparation.includes('[[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]')) {
+    throw new Error('Isolation pulls must retry bounded identical-digest mirrors and fail closed before publishing the inspected image identity.');
+  }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
-      || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
+      || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertFullDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
     throw new Error('The required verification check must evaluate every prerequisite even after failures.');
   }
+}
+
+export function assertWorkflowContract(workflows) {
+  assertRequiredCheckWorkflow(workflows['verify.yml']);
+  for (const [name, workflow] of Object.entries(workflows)) {
+    if (name !== 'verify.yml' && (Object.hasOwn(workflow.on ?? {}, 'pull_request') || Object.hasOwn(workflow.on ?? {}, 'pull_request_target'))) throw new Error('Only main integration verification may run on pull requests: ' + name);
+  }
+  const { 'verify-full.yml': full, ...other } = workflows;
+  if (!full) throw new Error('Manual broad qualification is missing.');
+  assertFullWorkflowContract(other, { mainIntegration: true });
+  assertFullWorkflowContract({ ...other, 'verify.yml': full });
 }

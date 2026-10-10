@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 219.
+Route files: 222.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -65,7 +65,9 @@ Route files: 219.
 | `/api/mcp/flujo/skills` | GET, POST | [source](../../src/app/api/mcp/flujo/skills/route.ts) |
 | `/api/mcp/flujo/state` | POST | [source](../../src/app/api/mcp/flujo/state/route.ts) |
 | `/api/mcp/flujo/tools` | GET | [source](../../src/app/api/mcp/flujo/tools/route.ts) |
+| `/api/mcp/model-risk-assessment` | POST | [source](../../src/app/api/mcp/model-risk-assessment/route.ts) |
 | `/api/mcp/oauth-capability` | POST | [source](../../src/app/api/mcp/oauth-capability/route.ts) |
+| `/api/mcp/security-review` | POST | [source](../../src/app/api/mcp/security-review/route.ts) |
 | `/api/mcp/servers` | GET, POST | [source](../../src/app/api/mcp/servers/route.ts) |
 | `/api/mcp/servers/{name}` | DELETE, GET, PUT | [source](../../src/app/api/mcp/servers/[name]/route.ts) |
 | `/api/mcp/servers/{name}/host-consent` | DELETE, GET, POST | [source](../../src/app/api/mcp/servers/[name]/host-consent/route.ts) |
@@ -86,6 +88,7 @@ Route files: 219.
 | `/api/mcp/test-connection` | POST | [source](../../src/app/api/mcp/test-connection/route.ts) |
 | `/api/mcp/test-connection/stream` | POST | [source](../../src/app/api/mcp/test-connection/stream/route.ts) |
 | `/api/model` | GET, POST | [source](../../src/app/api/model/route.ts) |
+| `/api/model/allowance` | GET, POST | [source](../../src/app/api/model/allowance/route.ts) |
 | `/api/model/provider` | POST | [source](../../src/app/api/model/provider/route.ts) |
 | `/api/model/test` | POST | [source](../../src/app/api/model/test/route.ts) |
 | `/api/model/{id}` | DELETE, GET, PUT | [source](../../src/app/api/model/[id]/route.ts) |

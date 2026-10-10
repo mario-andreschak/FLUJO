@@ -1,4 +1,9 @@
-import { getCurrentWorkspace } from '@/utils/workspace';
+import { registerTaskInputHandler, dispatchTaskInputRequest } from './taskInputHandlers';
+import { getCurrentWorkspace, bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { registerTasksExtensionClient } from './tasksExtensionSession';
+import { FEATURES } from '@/config/features';
+import { InputResponseV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
+import { getElicitationContext } from './elicitationContext';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
@@ -53,11 +58,10 @@ import {
 } from '@/backend/mcpApps/runtimeBroker';
 
 // ---------------------------------------------------------------------------
-// Experimental v2-beta MCP protocol support (spec revision 2026-07-28).
+// Split SDK MCP protocol support (spec revision 2026-07-28).
 //
 // When the `mcpBetaProtocol` experimental setting is on, connections are built
-// on `@modelcontextprotocol/client` (the v2 SDK, pinned to an exact beta
-// version in package.json — its public API may still change before stable)
+// on `@modelcontextprotocol/client` (the stable v2 SDK, pinned in package.json)
 // instead of `@modelcontextprotocol/sdk` v1. The v2 client is created with
 // `versionNegotiation: { mode: 'auto' }`: it probes each server with
 // `server/discover` and speaks the new stateless 2026-07-28 protocol when the
@@ -121,13 +125,11 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
   const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
-  const client = new BetaClient(
-    {
+  const clientInfo = {
       name: `flujo-${config.name}-client`,
       version: "3.46.3",
-    },
-    {
-      capabilities: {
+  };
+  const clientCapabilities = {
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
         ...(serverHasStdioOAuth || serverHasElicitation
@@ -150,7 +152,9 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
               }
             : {}),
         },
-      },
+  };
+  const client = new BetaClient(clientInfo, {
+      capabilities: clientCapabilities,
       // 'auto': probe for a 2026-07-28 server, fall back to the classic
       // initialize handshake on anything else. Never 'pin' — FLUJO must keep
       // working against every existing server.
@@ -162,18 +166,52 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
     },
   );
 
-  client.setRequestHandler("roots/list", createRootsListHandler(config, client));
+  const rootsHandler = createRootsListHandler(config, client);
+  const samplingHandler = serverHasSampling ? createSamplingHandler(config) : undefined;
+  const elicitationHandler = serverHasStdioOAuth || serverHasElicitation ? createElicitationHandler(config) : undefined;
+  registerTaskInputHandler(client, 'roots/list', rootsHandler);
+  if (samplingHandler) registerTaskInputHandler(client, 'sampling/createMessage', samplingHandler);
+  if (elicitationHandler) registerTaskInputHandler(client, 'elicitation/create', elicitationHandler);
+  client.setRequestHandler("roots/list", rootsHandler);
   if (serverHasSampling) {
-    const handler = createSamplingHandler(config);
     client.setRequestHandler("sampling/createMessage", async (request) =>
-      handler(request),
+      samplingHandler!(request),
     );
   }
   if (serverHasStdioOAuth || serverHasElicitation) {
-    const handler = createElicitationHandler(config);
     client.setRequestHandler("elicitation/create", async (request) =>
-      handler(request),
+      elicitationHandler!(request),
     );
+  }
+
+  // Register the declared host identity before discovery. Only negotiated
+  // modern remote connections can later create the raw extension channel.
+  if (config.transport !== 'stdio' && config.isolation === undefined && config.trustedHost === undefined) {
+    const isAuthorityCurrent = bindToCurrentWorkspace(async () => {
+      if (!FEATURES.ENABLE_MCP_TASKS_CLIENT) return false;
+      const { mcpService } = await import('@/backend/services/mcp');
+      return mcpService.getClient(config.name) === (client as unknown as Client);
+    });
+    registerTasksExtensionClient(client, {
+      endpointId: workspaceCacheKey(config.name), clientInfo, clientCapabilities,
+      authorizeLateTaskCancellation: isAuthorityCurrent,
+      isAuthorityCurrent,
+      handleInputRequest: bindToCurrentWorkspace(async (request, signal, expectedConversationId) => {
+        const assertCurrent = async () => {
+          signal?.throwIfAborted();
+          if (!await isAuthorityCurrent()) throw new Error('MCP Tasks input connection is no longer current');
+          const context = getElicitationContext(config.name);
+          if (expectedConversationId !== undefined && (!context || context.conversationId !== expectedConversationId || context.getUnattended())) {
+            throw new Error('MCP Tasks input owner is no longer attended');
+          }
+        };
+        await assertCurrent();
+        if (request.method === 'elicitation/create' && !serverHasElicitation) throw new Error('The requested MCP Tasks input capability is disabled');
+        const response = await dispatchTaskInputRequest(client, request, { signal, assertCurrent, expectedConversationId });
+        await assertCurrent();
+        return InputResponseV2Schema.parse(response);
+      }),
+    });
   }
 
   (client as unknown as ClientWithBetaMarker).__flujoBeta = true;
@@ -183,7 +221,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   (client as unknown as { __flujoCapKey?: string }).__flujoCapKey =
     capabilityKey(config);
   log.info(
-    `Created v2-beta MCP client for ${config.name} (version negotiation: auto)`,
+    `Created split-SDK MCP client for ${config.name} (version negotiation: ${config.transport === 'stdio' ? 'legacy' : 'auto'})`,
   );
   return client as unknown as Client;
 }

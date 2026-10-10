@@ -146,6 +146,9 @@ export interface TodoItem {
 }
 
 export interface ProcessNodeProperties {
+    /** Explicit engine-owned routing to a sole, unconditioned Finish successor.
+     * No model tools are advertised or dispatched. Absent keeps model handoffs. */
+    terminalRouting?: 'tool-free';
     name?: string;
     /** True once the user edits the node's label by hand; suppresses auto-naming
      *  the node after its bound model on (re)binding (issue #38, Item C). */

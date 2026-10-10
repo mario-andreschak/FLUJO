@@ -1,3 +1,21 @@
+# Local-first qualification and main integration checks
+
+Bundle implementation changes and qualify them locally before pushing. Run `node scripts/verify-local.mjs --install --full` with a supported Node runtime. This installs once, builds once, validates release inventory, runs critical regressions, typechecks, lints, audits dependencies, exercises packed artifacts and runs the ordinary full suite with its assertion baseline. Add `--isolated` only after preparing the existing Docker/process/browser dependencies. Use `--tests-only` to reuse already built local artifacts; it does not claim a fresh build.
+
+Active main ruleset `24434701` still requires twelve genuine GitHub Actions checks and CodeQL high/critical findings protection. The current account has no administrator permission. The compatibility bridge in `verify.yml` therefore runs real production/release checks, source and MCP types, lint, ordinary and isolated suites, workflow contracts, dependency audit, and two extended CodeQL scans before the fail-closed `verification` aggregate. Publication verifies every required job from the latest successful exact-main-SHA attempt. No status-only substitutes or repository-policy bypasses are used.
+
+Automatic verification runs only for PRs targeting `main` and pushes to `main`; intermediate feature branches remain locally qualified. The Ubuntu production job builds once on verified official Node 24.21.0 with the default heap, then exercises the same packed artifacts on the four declared runtime profiles. Release safety still covers Ubuntu and Windows. Explicit `verify-full.yml` dispatch retains the additional Windows production qualification; it is not automatically triggered alongside integration checks. Installer, Worker candidate image, Persona acceptance and scorecard workflows remain manual/release-only.
+
+Critical backend and rendered interface suites remain explicit fail-on-error steps and shared local-runner constants. The ordinary/isolated full suites retain their existing completed-assertion and quarantine baseline gates. Docker isolation setup retries bounded pulls from Docker Hub and public ECR using the identical pinned Node manifest digest; it fails if neither registry supplies it and publishes only the inspected immutable image identity to the probes. It does not skip isolation when the registry fails.
+
+Read-only reconciliation on October 9, 2026 found advanced CodeQL result uploads and processing succeeded for exact main `8a39263282dd7c4d765a7371f09bd79129851425` in run `37997014991`; both language analyses were fresh. The default-setup settings API remained unauthorized, so its setting was not directly verified. That run failed on an ECR `toomanyrequests` image pull, followed by the aggregate refusing its failed prerequisite. Candidate scans and all genuine required checks must still pass on the reconciled integration source before merging.
+
+The ruleset template now matches the existing twelve required contexts, scanner protection, zero human approvals, resolved review threads and strict freshness. Source files do not change active settings. A future switch to one focused hosted check still requires an authorized administrator to reconcile policy and source together; this bridge does not claim that transition has occurred.
+
+## Historical broad qualification recipe
+
+The following records earlier qualification and administrator recipes. Historical permissions, approval settings, observations and runtime pins below are not fresh state; use the current compatibility bridge and observations above.
+
 # Verification and repository enforcement (#565)
 
 Source checks, repository settings, distribution acceptance and human review are
@@ -134,4 +152,3 @@ The drill, fresh scanner/remediation evidence, installed-release acceptance,
 human security/release tabletop and independent reassessment remain open.
 
 CI pulls the pinned Node image from Docker's public ECR mirror to avoid Docker Hub's anonymous pull limit. Both the container index and Linux isolation image retain their original SHA-256 digests; the signed Node executable checks remain mandatory. Obsolete Worker image candidate runs are cancelled when a newer commit arrives.
-

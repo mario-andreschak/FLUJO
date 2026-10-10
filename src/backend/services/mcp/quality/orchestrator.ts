@@ -42,14 +42,17 @@ export interface EnrichOptions {
   now?: number;
   /** Pre-loaded settings (tests / callers that already have them). */
   settings?: McpQualitySettings;
+  /** Read-only research cancellation; ordinary enrichment remains unchanged. */
+  signal?: AbortSignal;
 }
 
 /** Run `fn` with an abort signal that fires after `ms`. Rejections propagate. */
-async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number, callerSignal?: AbortSignal): Promise<T> {
+  callerSignal?.throwIfAborted();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
-    return await fn(controller.signal);
+    return await fn(callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal);
   } finally {
     clearTimeout(timer);
   }
@@ -66,7 +69,9 @@ export async function enrichAndRank(
 ): Promise<ScoredCandidate[]> {
   const topN = options.topN ?? DEFAULT_TOP_N;
   try {
+    options.signal?.throwIfAborted();
     const settings = options.settings ?? (await loadQualitySettings());
+    options.signal?.throwIfAborted();
     const enabled = PROVIDERS.filter((p) => isProviderEnabled(settings, p.id));
     if (enabled.length === 0) {
       return candidates.map((c) => ({ candidate: c, score: 0, signals: [] }));
@@ -79,11 +84,13 @@ export async function enrichAndRank(
     const tail = candidates.slice(topN);
     const cache = new QualityCache(options.now ?? Date.now());
     await cache.load();
+    options.signal?.throwIfAborted();
 
     // Per-candidate signal accumulator (index-aligned with `head`).
     const signalsByCandidate: QualitySignal[][] = head.map(() => []);
 
     for (const provider of enabled) {
+      options.signal?.throwIfAborted();
       const applicable = head
         .map((c, i) => ({ c, i }))
         .filter(({ c }) => provider.isApplicable(c));
@@ -108,23 +115,28 @@ export async function enrichAndRank(
         try {
           await withTimeout(
             (signal) => provider.prefetch!(query, stale.map((s) => s.c), signal),
-            PREFETCH_TIMEOUT_MS
+            PREFETCH_TIMEOUT_MS,
+            options.signal,
           );
         } catch (error) {
+          options.signal?.throwIfAborted();
           log.warn(`Provider "${provider.id}" prefetch failed; degrading`, error);
         }
       }
 
       // Fetch each stale candidate (mostly a warmed-map lookup) and cache it.
       for (const { c, i } of stale) {
+        options.signal?.throwIfAborted();
         try {
-          const signal = await withTimeout((s) => provider.fetch(c, s), FETCH_TIMEOUT_MS);
+          const signal = await withTimeout((s) => provider.fetch(c, s), FETCH_TIMEOUT_MS, options.signal);
+          options.signal?.throwIfAborted();
           if (signal) {
             signalsByCandidate[i].push(signal);
             const key = provider.cacheKey(c);
             if (key) cache.set(provider.id, key, signal);
           }
         } catch (error) {
+          options.signal?.throwIfAborted();
           log.warn(`Provider "${provider.id}" fetch failed for "${c.registryName}"`, error);
         }
       }
@@ -134,6 +146,7 @@ export async function enrichAndRank(
     }
 
     await cache.flush();
+    options.signal?.throwIfAborted();
 
     // Score each head candidate over its APPLICABLE providers.
     const scoredHead: ScoredCandidate[] = head.map((c, i) => {
@@ -159,6 +172,7 @@ export async function enrichAndRank(
     const scoredTail: ScoredCandidate[] = tail.map((c) => ({ candidate: c, score: 0, signals: [] }));
     return [...rankedHead, ...scoredTail];
   } catch (error) {
+    options.signal?.throwIfAborted();
     // Never let ranking break the caller — fall back to registry order.
     log.warn('enrichAndRank failed; returning unranked candidates', error);
     return candidates.map((c) => ({ candidate: c, score: 0, signals: [] }));

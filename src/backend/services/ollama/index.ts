@@ -58,7 +58,8 @@ export async function listTags(signal?: AbortSignal): Promise<OllamaTag[]> {
  * Pull a model, invoking `onProgress` for every progress line Ollama streams.
  *
  * Ollama's /api/pull returns NDJSON, so we reuse the same line parser as FLUJO's
- * own command streams. Resolves when the stream ends. Rejects on a transport /
+ * own command streams. Resolves after a terminal success status. Rejects when
+ * the stream ends without success or on a transport /
  * non-2xx error; an error reported *inside* the stream is surfaced via a progress
  * line with an `error` field (the caller decides how to treat it) and the stream
  * simply ends.
@@ -86,20 +87,30 @@ export async function pull(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const parser = createNdjsonParser<OllamaPullProgress>();
+  let succeeded = false;
+  let streamErrored = false;
+  const report = (progress: OllamaPullProgress) => {
+    if (progress.error) streamErrored = true;
+    if (progress.status === 'success') succeeded = true;
+    onProgress(progress);
+  };
 
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       for (const line of parser.push(decoder.decode(value, { stream: true }))) {
-        onProgress(line);
+        report(line);
       }
     }
     const tail = decoder.decode();
     if (tail) {
-      for (const line of parser.push(tail)) onProgress(line);
+      for (const line of parser.push(tail)) report(line);
     }
-    for (const line of parser.flush()) onProgress(line);
+    for (const line of parser.flush()) report(line);
+    if (!succeeded && !streamErrored) {
+      throw new Error('Ollama pull ended without a success status');
+    }
   } finally {
     try {
       reader.releaseLock();

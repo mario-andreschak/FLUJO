@@ -20,6 +20,17 @@ const { promises: fsp, createReadStream } = require('node:fs');
 const { createHash, randomBytes } = require('node:crypto');
 const { tmpdir } = require('node:os');
 (async () => {
+  // Source transpilation emits require; retain genuine import-only Tasks
+  // namespaces through Node's native loader before loading the source graph.
+  const nativeTasks = new Map(await Promise.all([
+    '@modelcontextprotocol/ext-tasks/core',
+    '@modelcontextprotocol/ext-tasks/core/v2',
+    '@modelcontextprotocol/ext-tasks/client',
+  ].map(async name => [name, await import(name)])));
+  const load = Module._load;
+  Module._load = function loadNativeTasks(request, parent, isMain) {
+    return nativeTasks.has(request) ? nativeTasks.get(request) : load.call(this, request, parent, isMain);
+  };
   const root = await fsp.mkdtemp(path.join(tmpdir(), 'flujo-large-snapshot-'));
   let captured, archive;
   let peakRss = 0;

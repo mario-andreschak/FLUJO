@@ -66,8 +66,11 @@ export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
 // ---------------------------------------------------------------------------
 export const ISOLATED_TEST_FILES = [
   '__tests__/mcp/internalServer.test.ts',
+  '__tests__/mcp/protectedPackageRunner.test.ts',
+  '__tests__/mcp/serverTasks.test.ts',
   '__tests__/scheduler/staticRealBashFlow.test.ts',
   '__tests__/flow/original520OfflineWorkload.test.ts',
+  '__tests__/flow/nativeOriginalHost.test.ts',
   '__tests__/flow/archiveWriteQuarantineProcess.test.ts',
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/enduringAgents/personaProcessBoundary.test.ts',

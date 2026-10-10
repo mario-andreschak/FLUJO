@@ -84,7 +84,7 @@ describe('OpenRouter dedicated media adapter', () => {
       data: [{ b64_json: 'PNGDATA', media_type: 'image/png' }],
       usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
     }));
-    const adapter = new OpenRouterMediaAdapter();
+    const adapter = getCompletionAdapter(model('image'));
 
     const result = await adapter.createCompletion({
       model: model('image'),
@@ -156,7 +156,7 @@ describe('OpenRouter dedicated media adapter', () => {
       }))
       .mockResolvedValueOnce(binaryResponse('VIDEO_BYTES'));
     const attempts = jest.fn();
-    const adapter = new OpenRouterMediaAdapter();
+    const adapter = getCompletionAdapter(model('video'));
 
     const result = await adapter.createCompletion({
       model: model('video'),

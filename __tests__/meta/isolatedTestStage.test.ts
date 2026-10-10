@@ -30,7 +30,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;
 };
-const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify.yml'), 'utf8');
+const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify-full.yml'), 'utf8');
 
 describe('isolated test stage', () => {
   it('lists only files that exist', () => {
@@ -44,9 +44,9 @@ describe('isolated test stage', () => {
     const isolatedScript = packageJson.scripts['test:isolated'];
     expect(isolatedScript).toBeDefined();
     expect(isolatedScript).toContain('--runInBand');
-    for (const file of ISOLATED_TEST_FILES) {
-      expect(isolatedScript).toContain(file);
-    }
+    const selectedFiles = isolatedScript.match(/__tests__\/[^\s]+\.test\.tsx?/g) ?? [];
+    expect([...selectedFiles].sort()).toEqual([...ISOLATED_TEST_FILES].sort());
+    expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
   });
 
   it('builds standalone MCP artifacts before running the isolated suites', () => {
