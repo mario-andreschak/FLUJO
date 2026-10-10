@@ -128,7 +128,7 @@
     "croner": "^10.0.1",
     "crypto-js": "^4.2.0",
     "isomorphic-git": "^1.40.0",
-    "jszip": "^3.10.1",
+    "jszip": "3.10.2",
     "lodash": "^4.18.1",
     "mcp-remote": "^0.1.38",
     "mcp-stdio-oauth": "^0.1.0",
