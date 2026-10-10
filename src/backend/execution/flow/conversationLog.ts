@@ -624,6 +624,12 @@ function projectMessageEvents(
         projectedId === incoming.id ? incoming : { ...incoming, id: projectedId };
       const projected: FlujoChatMessage =
         depth > 0 ? { ...withRecoveredId, depth } : { ...withRecoveredId };
+      // Provenance belongs to the log event, not its caller-controlled message.
+      // Legacy events remain unknown rather than inferring origin from content.
+      delete projected.executionOrigin;
+      if (!applyContextRemovals && (event.messageOrigin === 'input' || event.messageOrigin === 'internal')) {
+        projected.executionOrigin = event.messageOrigin;
+      }
       if (existingIndex !== undefined) {
         messages[existingIndex] = projected;
       } else {
@@ -685,6 +691,7 @@ function messageSignature(m: FlujoChatMessage): string {
 export async function reconcileConversationLog(
   state: SharedState,
   previousMessages: FlujoChatMessage[],
+  inputMessageIds: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (state.ephemeral) return;
   const conversationId = state.conversationId;
@@ -702,8 +709,10 @@ export async function reconcileConversationLog(
   const raws: RawExecutionEvent[] = [];
   for (const m of current) {
     const previous = baselineById.get(m.id);
-    if (!previous || messageSignature(previous) !== messageSignature(m)) {
-      raws.push({ type: 'message', message: m });
+    if (!previous || messageSignature(previous) !== messageSignature(m)
+      || (m.role === 'user' && inputMessageIds.has(m.id))) {
+      raws.push({ type: 'message', message: m,
+        ...(inputMessageIds.has(m.id) ? { messageOrigin: 'input' as const } : {}) });
     }
   }
   for (const m of baseline) {
@@ -928,10 +937,13 @@ export async function recoverConversationTranscript(
 ): Promise<RecoveredConversationTranscript> {
   const snapshot = (state.messages ?? [])
     .filter((message) => message.role !== 'system')
-    .map((message) => ({
-      ...message,
-      id: message.id || crypto.randomUUID(),
-    }));
+    .map((message) => {
+      const projected = { ...message, id: message.id || crypto.randomUUID() };
+      // Snapshots may contain round-tripped input. Only log events can attest
+      // origin, including when snapshot-only messages fill a damaged log gap.
+      delete projected.executionOrigin;
+      return projected;
+    });
   if (state.ephemeral) return { messages: snapshot, source: 'snapshot' };
 
   const conversationId = state.conversationId;

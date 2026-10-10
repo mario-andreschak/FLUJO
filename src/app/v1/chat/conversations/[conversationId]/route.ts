@@ -184,6 +184,8 @@ async function GET_handler(
         title: sharedState.title || 'Untitled Conversation',
         messages: messagesWithIds, // Use messages with guaranteed IDs
         transcriptWindow,
+        // Only the durable event projection supplies authoritative origins.
+        ...(recoveredTranscript.source === 'durable-log' ? { messageProvenanceVersion: 1 } : {}),
         flowId: sharedState.flowId || null, // Ensure flowId is included
         ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId)
           ? { personaId: sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId }
@@ -205,6 +207,12 @@ async function GET_handler(
         // Additive recovery metadata: precise cancellation/interruption/failure
         // classification, latest safe checkpoint, lane identity, and warnings.
         recovery: sharedState.recovery,
+        ...(['completed', 'capped'].includes(sharedState.status ?? '')
+          && typeof sharedState.lastResponse === 'string' && sharedState.recovery?.runId
+          && sharedState.recovery.classification === sharedState.status
+          && (!sharedState.logicalRunId || sharedState.logicalRunId === sharedState.recovery.runId)
+          ? { terminalResponse: { version: 1, runId: sharedState.recovery.runId, content: sharedState.lastResponse } }
+          : {}),
         parentConversationId: sharedState.parentConversationId ?? null,
         rootConversationId: sharedState.rootConversationId ?? null,
         // Where execution currently sits — powers the chat input's node pill
