@@ -694,6 +694,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     if (connectionWizardOpen.current && connectionWizardEpoch.current === epoch) setConnectionWizardOpen(false);
   };
 
+  const handleAiConfigureExisting = (serverName: string): void => {
+    if (!connectionWizardOpen.current || connectionWizardEpoch.current !== wizardCallbackEpoch) return;
+    const current = servers.find(server => server.name === serverName);
+    if (!current) throw new Error('The server is no longer available in this workspace.');
+    setConnectionWizardOpen(false);
+    handleEditServer(current);
+  };
+
   const serverGroups = useMemo<CardGroup<ServerState>[]>(() => {
     if (groupMode === 'folder') return groupByFolder(
       filteredAndSortedServers,
@@ -1242,6 +1250,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           onChooseSetup={openServerSetup}
           onManualCreation={() => openServerSetup('spotlight')}
           onInstalled={handleAiInstalled}
+          onConfigureExisting={handleAiConfigureExisting}
           onAuthenticate={handleAiAuthenticate}
         />
       ) : null}

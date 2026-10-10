@@ -17,6 +17,8 @@ const PROBE_TIMEOUT_MS = 5000;
 export interface OAuthProbeOptions {
   /** Compatibility input. Every probe now enforces public-only egress. */
   publicOnly?: boolean;
+  /** Cancels the optional research probe without changing its public egress policy. */
+  signal?: AbortSignal;
 }
 
 async function readAuthChallenge(serverUrl: string, signal: AbortSignal): Promise<{
@@ -89,9 +91,10 @@ async function findRegistrationEndpoint(issuers: string[], signal: AbortSignal):
  * preview does not request them. Failures return a fixed not-capable result.
  */
 export async function probeOAuthSupport(serverUrl: string, _options: OAuthProbeOptions = {}): Promise<OAuthCapabilityProbeResult> {
+  _options.signal?.throwIfAborted();
   try {
     const server = publicOAuthUrl(serverUrl);
-    const signal = AbortSignal.timeout(PROBE_TIMEOUT_MS);
+    const signal = _options.signal ? AbortSignal.any([_options.signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS);
     const challenge = await readAuthChallenge(server.href, signal).catch(() => {
       log.debug('OAuth challenge probe unavailable');
       return { bearer: false, reachable: undefined as true | undefined, unauthenticated: false,
@@ -104,11 +107,13 @@ export async function probeOAuthSupport(serverUrl: string, _options: OAuthProbeO
       const meta = await fetchResourceMetadata(metadataUrl, signal).catch(() => undefined);
       if (!meta) continue;
       const registrationEndpoint = await findRegistrationEndpoint(meta.authorizationServers ?? [server.origin], signal);
+      _options.signal?.throwIfAborted();
       log.info('OAuth capability confirmed from public metadata');
       return { oauthCapable: true, resourceMetadataUrl: metadataUrl,
         authorizationServers: meta.authorizationServers, reachable: challenge.reachable,
         dynamicClientRegistration: !!registrationEndpoint, ...(registrationEndpoint ? { registrationEndpoint } : {}) };
     }
+    _options.signal?.throwIfAborted();
     if (challenge.bearer) {
       // Do not return an unverified/unfetchable metadata pointer to another caller.
       log.info('OAuth capability inferred from a Bearer challenge');
@@ -117,6 +122,7 @@ export async function probeOAuthSupport(serverUrl: string, _options: OAuthProbeO
     return { oauthCapable: false, ...(challenge.reachable ? { reachable: true } : {}),
       ...(challenge.unauthenticated ? { unauthenticated: true } : {}) };
   } catch {
+    _options.signal?.throwIfAborted();
     log.debug('OAuth capability probe unavailable');
     return { oauthCapable: false };
   }
