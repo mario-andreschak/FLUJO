@@ -1,14 +1,74 @@
 /** The hosted contract is deliberately focused; broad coverage remains local/manual. */
 export const CRITICAL_TEST_FILES = Object.freeze([
+  '__tests__/settings/backupRestoreRoutes.test.ts',
+  '__tests__/settings/backupStrictStorage.test.ts',
   '__tests__/workspace/workspaceListRoute.test.ts',
   '__tests__/workspace/workspaceCreateMcpRecords.test.ts',
   '__tests__/workspace/workspaceRouteWrapper.test.ts',
+  '__tests__/flow/conversationLogReadAdmission.test.ts',
+  '__tests__/flow/conversationSnapshotAdmission.test.ts',
+  '__tests__/flow/modelTurnArchiveWriteBudget.test.ts',
   '__tests__/mcp/toolDiscoveryPagination.test.ts',
   '__tests__/mcp/storedTransportAdmission.test.ts',
+  '__tests__/mcp/tasksGenerationsProtocol.test.ts',
+  '__tests__/mcp/clientTasksLifecycle.test.ts',
+  '__tests__/mcp/tasksExtensionSession.test.ts',
+  '__tests__/mcp/serverTasks.test.ts',
+  '__tests__/mcp/flowsTasksServer.test.ts',
+  '__tests__/mcp/flowsTasksRouteClassification.test.ts',
+  '__tests__/mcp/protectedPackageRunner.test.ts',
+  '__tests__/model/orcarouterProvider.test.ts',
+  '__tests__/ollama/ollamaClient.test.ts',
+  '__tests__/ollama/pullRoute.test.ts',
   '__tests__/packages/workspaceMcpPreparationMarker.test.ts',
   '__tests__/security/ownerAccess.test.ts',
+  '__tests__/security/isolatedMcp.test.ts',
+  '__tests__/mcp/isolatedMcpTransport.test.ts',
+  '__tests__/mcp/securityReviewSource.test.ts',
+  '__tests__/mcp/securityReviewReport.test.ts',
+  '__tests__/mcp/securityReviewRoute.test.ts',
+  '__tests__/mcp/securityReviewLifecycle.test.ts',
+  '__tests__/mcp/securityReviewRunner.test.ts',
+  '__tests__/mcp/modelRiskEvidence.test.ts',
+  '__tests__/mcp/modelRiskAssessment.test.ts',
+  '__tests__/mcp/modelRiskAssessmentRoute.test.ts',
+  '__tests__/model/readOnlyAssessmentAdapter.test.ts',
+  '__tests__/mcp/discoverySearch.test.ts',
+  '__tests__/mcp/registryDiscovery.test.ts',
+  '__tests__/mcp/assistedPreferences.test.ts',
+  '__tests__/mcp/assistedRanking.test.ts',
+  '__tests__/mcp/assistedInstall.test.ts',
+  '__tests__/mcp/assistantRoute.test.ts',
+  '__tests__/mcp/registryInstall.test.ts',
+  '__tests__/mcp/registryIconsRoute.test.ts',
+  '__tests__/mcp/registryDiscoveryClient.test.ts',
+  '__tests__/mcp/registryDiscoveryRoute.test.ts',
+  '__tests__/mcp/registryWorkspaceIsolation.test.ts',
+  '__tests__/mcp/quality/orchestrator.test.ts',
+  '__tests__/mcp/installBestAssistedTool.test.ts',
+  '__tests__/mcp/assistedDiscoveryBody.test.ts',
 ]);
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
+export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
+  '__tests__/frontend/components/DayViewMiniMonth.test.tsx',
+  '__tests__/frontend/components/ChatHistory.test.tsx',
+  '__tests__/frontend/components/PersonaGoalCard.test.tsx',
+  '__tests__/frontend/components/PersonaGoalValidation.test.tsx',
+  '__tests__/frontend/components/BackupSettings.test.tsx',
+  '__tests__/frontend/components/ModelConnectionWizard.test.tsx',
+  '__tests__/frontend/components/McpConnectionWizard.test.tsx',
+  '__tests__/frontend/components/McpAiConnectionPanel.test.tsx',
+  '__tests__/frontend/components/McpServerManagerWizardOwnership.test.tsx',
+  '__tests__/frontend/components/oauthPopup.test.ts',
+  '__tests__/frontend/components/CardPickerGrid.test.tsx',
+  '__tests__/frontend/components/PersonaCreationWizard.test.tsx',
+  '__tests__/frontend/components/RoleVersionCardLocalization.test.tsx',
+  '__tests__/frontend/components/McpSecurityReviewPanel.test.tsx',
+  '__tests__/frontend/components/McpModelRiskAssessmentPanel.test.tsx',
+  '__tests__/frontend/components/ServerModalDiscoverySession.test.tsx',
+  '__tests__/frontend/components/MarketplaceTab.test.tsx',
+]);
+export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {
   if (!Object.hasOwn(workflow?.on ?? {}, 'pull_request') || workflow.on.pull_request != null
       || !workflow.on.push?.branches?.includes('main') || workflow.on.push.paths || workflow.on.push['paths-ignore']) {
@@ -34,12 +94,12 @@ export function assertRequiredCheckWorkflow(workflow) {
   if (steps[setupIndex + 1]?.run !== 'node scripts/verify-ci-node.mjs 24.21.0 --record'
       || steps.slice(0, setupIndex).some(step => step.run)) throw new Error('Verify official Node before commands.');
   const commands = steps.flatMap(step => (step.run ?? '').split('\n')).filter(Boolean);
-  for (const command of ['npm ci --include=dev', 'npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', CRITICAL_TEST_COMMAND]) {
+  for (const command of ['npm ci --include=dev', 'npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', CRITICAL_TEST_COMMAND, CRITICAL_FRONTEND_TEST_COMMAND]) {
     if (commands.filter(value => value === command).length !== 1) throw new Error('Missing or duplicated critical command: ' + command);
   }
   const install = commands.indexOf('npm ci --include=dev');
   const build = commands.indexOf('npm run build');
-  if (install >= build || build >= commands.indexOf('npm run validate:mcp-release') || build >= commands.indexOf(CRITICAL_TEST_COMMAND)) throw new Error('Install, build and test the same artifacts in order.');
+  if (install >= build || build >= commands.indexOf('npm run validate:mcp-release') || build >= commands.indexOf(CRITICAL_TEST_COMMAND) || build >= commands.indexOf(CRITICAL_FRONTEND_TEST_COMMAND)) throw new Error('Install, build and test the same artifacts in order.');
   const contracts = steps.find(step => step.name === 'Verify workflow and release contracts')?.run?.split(/\s+/) ?? [];
   for (const file of ['verification-contract', 'workflow-contract', 'required-check-workflow', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security', 'require-release-verification', 'release-verification']) {
     if (!contracts.includes('scripts/' + file + '.test.mjs')) throw new Error('Missing contract regression: ' + file);

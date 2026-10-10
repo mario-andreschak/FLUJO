@@ -1,3 +1,4 @@
+import { registerTaskInputHandler, assertTaskInputCurrent, type TaskInputOptions } from './taskInputHandlers';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   ElicitRequestSchema,
@@ -9,7 +10,7 @@ import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPElicitationPolicy } from '@/shared/types/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getElicitationContext } from './elicitationContext';
-import { registerPendingElicitation } from './elicitationRegistry';
+import { registerPendingElicitation, cancelElicitation } from './elicitationRegistry';
 import { captureExternalAuthorizationElicitation } from './externalAuthorization';
 import { relatedTaskIdOf } from '@/shared/types/mcp/tasks';
 import {
@@ -45,7 +46,9 @@ export function elicitationConfigKey(config: MCPServerConfig): string {
  * extension. Form requests remain guarded by the server's explicit policy.
  */
 export function registerElicitationHandler(client: Client, config: MCPServerConfig): void {
-  client.setRequestHandler(ElicitRequestSchema, createElicitationHandler(config));
+  const handler = createElicitationHandler(config);
+  registerTaskInputHandler(client, 'elicitation/create', handler);
+  client.setRequestHandler(ElicitRequestSchema, handler);
 }
 
 /**
@@ -59,8 +62,9 @@ export function registerElicitationHandler(client: Client, config: MCPServerConf
  */
 export function createElicitationHandler(
   config: MCPServerConfig
-): (request: { params?: unknown }) => Promise<ElicitResult> {
-  return bindToCurrentWorkspace(async (request: { params?: unknown }): Promise<ElicitResult> => {
+): (request: { params?: unknown }, options?: TaskInputOptions) => Promise<ElicitResult> {
+  return bindToCurrentWorkspace(async (request: { params?: unknown }, options: TaskInputOptions = {}): Promise<ElicitResult> => {
+    await assertTaskInputCurrent(options);
     const params = request.params as {
       mode?: string;
       message?: string;
@@ -80,6 +84,7 @@ export function createElicitationHandler(
 
     const externalAuthorizationResult =
       await captureExternalAuthorizationElicitation(config.name, params ?? {});
+    await assertTaskInputCurrent(options);
     if (externalAuthorizationResult) return externalAuthorizationResult;
 
     if (!elicitationEnabled(config)) {
@@ -87,6 +92,7 @@ export function createElicitationHandler(
     }
 
     const ctx = getElicitationContext(config.name);
+    if (options.expectedConversationId !== undefined && ctx?.conversationId !== options.expectedConversationId) return { action: 'cancel' };
     if (!ctx && relatedTaskId) {
       log.warn(
         `Task ${relatedTaskId} on ${config.name} requested input outside an attended run; auto-cancelling`
@@ -113,22 +119,31 @@ export function createElicitationHandler(
       noteTaskInputRequested(config.name, relatedTaskId, elicitationId);
     }
 
-    // Emit SSE event to the frontend.
+    await assertTaskInputCurrent(options);
+    if (getElicitationContext(config.name) !== ctx || ctx.getUnattended()) return { action: 'cancel' };
+    // Install the mailbox before publishing the request, including fast answers.
+    const pending = registerPendingElicitation(elicitationId);
     const emit = executionEventBus.emitterFor(ctx.conversationId);
-    emit({
-      type: 'run:awaiting_elicitation',
-      elicitationId,
-      message,
-      requestedSchema,
+    const cancel = bindToCurrentWorkspace(() => {
+      if (cancelElicitation(elicitationId)) emit({ type: 'run:elicitation_cancelled', elicitationId });
     });
+    options.signal?.addEventListener('abort', cancel, { once: true });
+    if (options.signal?.aborted) cancel();
+    else emit({ type: 'run:awaiting_elicitation', elicitationId, message, requestedSchema });
 
-    // Await the user's response (or a 5-minute timeout).
-    const result = await registerPendingElicitation(elicitationId);
+    let result: ElicitResult;
+    try {
+      if (options.signal?.aborted) cancel();
+      result = await pending;
+    } finally {
+      options.signal?.removeEventListener('abort', cancel);
+    }
     log.info(`Elicitation ${elicitationId} resolved with action=${result.action}`);
     if (relatedTaskId) {
       // Idempotent: a duplicate submission for the same id is ignored.
       noteTaskInputResolved(config.name, relatedTaskId, elicitationId, result.action);
     }
+    await assertTaskInputCurrent(options);
     return result;
   });
 }

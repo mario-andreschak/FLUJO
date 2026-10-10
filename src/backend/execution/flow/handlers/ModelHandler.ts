@@ -2813,6 +2813,9 @@ export class ModelHandler {
                       const archiveInput = {
                         ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
                         durableContext: opts?.durableContext,
+                        ...(!nativeReceipt && !opts?.durableContext?.executionAuthority
+                          && !opts?.durableContext?.executionExtensionContext && !opts?.durableContext?.personaAttribution
+                          ? { writeAdmission: { wait: true, signal: abortController.signal } } : {}),
                         conversationId: opts!.conversationId!, runId: opts?.runId,
                         nodeId: opts!.nodeId!, nodeName: opts?.nodeName,
                         modelId: routingModel.id, modelName: routingModel.displayName || routingModel.name,

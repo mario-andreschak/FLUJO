@@ -8,7 +8,7 @@ import {
   appendRawForState,
   projectModelContextMessages,
   projectMessages,
-  readConversationLog,
+  withConversationLogEvents,
 } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
@@ -74,49 +74,50 @@ function isRestoreMode(value: unknown): value is RestoreMode {
 }
 
 /** Resolve the selected chat suffix and, when unambiguous, its file snapshot. */
-async function resolveContext(conversationId: string, messageId: string): Promise<RestoreContext | null> {
-  const events = await readConversationLog(conversationId);
-  if (!events) return null;
-  const messages = projectMessages(events);
-  const selectedIndex = messages.findIndex(message => message.id === messageId);
-  if (selectedIndex < 0) return null;
+async function withRestoreContext<T>(conversationId: string, messageId: string, consume: (context: RestoreContext | null) => Promise<T>): Promise<T> {
+  return withConversationLogEvents(conversationId, async events => {
+    if (!events) return consume(null);
+    const messages = projectMessages(events);
+    const selectedIndex = messages.findIndex(message => message.id === messageId);
+    if (selectedIndex < 0) return consume(null);
 
-  let boundaryReached = false;
-  let target: FileRestoreTarget | null = null;
-  let fileUnavailableReason: FileRestoreUnavailableReason | undefined = 'no-snapshotted-file-changes';
-  const changedFiles = new Map<string, NodeChangedFilesEvent['changedFiles'][number]>();
+    let boundaryReached = false;
+    let target: FileRestoreTarget | null = null;
+    let fileUnavailableReason: FileRestoreUnavailableReason | undefined = 'no-snapshotted-file-changes';
+    const changedFiles = new Map<string, NodeChangedFilesEvent['changedFiles'][number]>();
 
-  for (const event of events) {
-    if (event.type === 'message' && event.message.id === messageId) {
-      boundaryReached = true;
-      continue;
+    for (const event of events) {
+      if (event.type === 'message' && event.message.id === messageId) {
+        boundaryReached = true;
+        continue;
+      }
+      if (!boundaryReached || event.type !== 'node:changed-files') continue;
+      if (!path.isAbsolute(event.root) || event.changedFiles.some(file => !SAFE_PATH.test(file.path))) {
+        target = null;
+        fileUnavailableReason = 'unsafe-path';
+        break;
+      }
+      if (target && target.root !== event.root) {
+        target = null;
+        fileUnavailableReason = 'multiple-roots';
+        break;
+      }
+
+      target ??= { ...event, messageId, changedFiles: [] };
+      target.endSnapshot = event.endSnapshot;
+      for (const file of event.changedFiles) changedFiles.set(file.path, file);
+      fileUnavailableReason = undefined;
     }
-    if (!boundaryReached || event.type !== 'node:changed-files') continue;
-    if (!path.isAbsolute(event.root) || event.changedFiles.some(file => !SAFE_PATH.test(file.path))) {
+
+    if (target && changedFiles.size > 0) {
+      target.changedFiles = [...changedFiles.values()];
+    } else {
       target = null;
-      fileUnavailableReason = 'unsafe-path';
-      break;
-    }
-    if (target && target.root !== event.root) {
-      target = null;
-      fileUnavailableReason = 'multiple-roots';
-      break;
+      fileUnavailableReason ??= 'no-snapshotted-file-changes';
     }
 
-    target ??= { ...event, messageId, changedFiles: [] };
-    target.endSnapshot = event.endSnapshot;
-    for (const file of event.changedFiles) changedFiles.set(file.path, file);
-    fileUnavailableReason = undefined;
-  }
-
-  if (target && changedFiles.size > 0) {
-    target.changedFiles = [...changedFiles.values()];
-  } else {
-    target = null;
-    fileUnavailableReason ??= 'no-snapshotted-file-changes';
-  }
-
-  return { events, messages, selectedIndex, fileTarget: target, fileUnavailableReason };
+    return consume({ events, messages, selectedIndex, fileTarget: target, fileUnavailableReason });
+  });
 }
 
 async function buildPlan(conversationId: string, context: RestoreContext): Promise<RestorePlan> {
@@ -234,19 +235,20 @@ async function GET_handler(
   const messageId = request.nextUrl.searchParams.get('messageId');
   if (!messageId) return NextResponse.json({ error: 'messageId is required' }, { status: 400 });
   const state = await loadConversationState(conversationId);
-if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-if (isPersonaOwnedConversationState(state)) {
-  const notLocal = assertLocalRequest(request);
-  if (notLocal) return notLocal;
-  return NextResponse.json(
-    { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
-    { status: 409 },
-  );
-}
-if (state.status && ACTIVE_STATUSES.has(state.status)) return runningConflict();
-const context = await resolveContext(conversationId, messageId);
-if (!context) return NextResponse.json({ error: 'Message not found in conversation' }, { status: 404 });
-return NextResponse.json((await buildPlan(conversationId, context)).preview);
+  if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+  if (isPersonaOwnedConversationState(state)) {
+    const notLocal = assertLocalRequest(request);
+    if (notLocal) return notLocal;
+    return NextResponse.json(
+      { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+      { status: 409 },
+    );
+  }
+  if (state.status && ACTIVE_STATUSES.has(state.status)) return runningConflict();
+  return withRestoreContext(conversationId, messageId, async context => {
+    if (!context) return NextResponse.json({ error: 'Message not found in conversation' }, { status: 404 });
+    return NextResponse.json((await buildPlan(conversationId, context)).preview);
+  });
 }
 
 async function POST_handler(
@@ -262,7 +264,7 @@ async function POST_handler(
   const { conversationId } = await params;
   const state = await loadConversationState(conversationId);
   if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-if (isPersonaOwnedConversationState(state)) {
+  if (isPersonaOwnedConversationState(state)) {
     const personaNotLocal = assertLocalRequest(request);
     if (personaNotLocal) return personaNotLocal;
     return NextResponse.json(
@@ -285,61 +287,65 @@ if (isPersonaOwnedConversationState(state)) {
       return NextResponse.json({ error: 'Undo operation not found or already used' }, { status: 404 });
     }
     const mode = operation.mode ?? 'files-only';
-    let restoredMessages: Array<{ message: FlujoChatMessage; depth?: number }> | null = null;
-    if (restoresChat(mode)) {
-      const events = await readConversationLog(conversationId);
-      if (!events || !operation.chatHeadMessageIds || !operation.chatTailMessageIds) {
-        return NextResponse.json({ error: 'Chat undo data is unavailable' }, { status: 409 });
+    const executeUndo = async (events: ExecutionEvent[] | undefined) => {
+      let restoredMessages: Array<{ message: FlujoChatMessage; depth?: number }> | null = null;
+      if (restoresChat(mode)) {
+        if (!events || !operation.chatHeadMessageIds || !operation.chatTailMessageIds) {
+          return NextResponse.json({ error: 'Chat undo data is unavailable' }, { status: 409 });
+        }
+        const currentIds = projectModelContextMessages(events).map(message => message.id);
+        if (JSON.stringify(currentIds) !== JSON.stringify(operation.chatHeadMessageIds)) {
+          return NextResponse.json(
+            { error: 'The chat changed after the restore and can no longer be undone safely' },
+            { status: 409 },
+          );
+        }
+        restoredMessages = latestMessageEvents(events, operation.chatTailMessageIds);
+        if (!restoredMessages) {
+          return NextResponse.json({ error: 'Original chat messages are unavailable' }, { status: 409 });
+        }
       }
-      const currentIds = projectModelContextMessages(events).map(message => message.id);
-      if (JSON.stringify(currentIds) !== JSON.stringify(operation.chatHeadMessageIds)) {
-        return NextResponse.json(
-          { error: 'The chat changed after the restore and can no longer be undone safely' },
-          { status: 409 },
+
+      if (restoresFiles(mode)) {
+        if (!operation.root || !operation.snapshotId || !operation.paths) {
+          return NextResponse.json({ error: 'File undo data is unavailable' }, { status: 409 });
+        }
+        const undoAnchor = await shadowRepoService.revert(
+          operation.root,
+          operation.snapshotId,
+          operation.paths,
         );
+        if (!undoAnchor) return NextResponse.json({ error: 'Unable to undo file restore' }, { status: 409 });
       }
-      restoredMessages = latestMessageEvents(events, operation.chatTailMessageIds);
-      if (!restoredMessages) {
-        return NextResponse.json({ error: 'Original chat messages are unavailable' }, { status: 409 });
+
+      if (restoredMessages) {
+        const rawMessages: RawExecutionEvent[] = restoredMessages.map(({ message, depth }) => ({
+          type: 'message',
+          message,
+          ...(depth ? { depth } : {}),
+        }));
+        await appendRawForState(state, rawMessages);
+        const existingIds = new Set(state.messages.map(message => message.id));
+        state.messages.push(...restoredMessages
+          .filter(({ message, depth }) => !depth && !existingIds.has(message.id))
+          .map(({ message }) => message));
+        state.currentNodeId = [...restoredMessages]
+          .reverse()
+          .find(({ message, depth }) => !depth && message.processNodeId)
+          ?.message.processNodeId ?? state.currentNodeId;
+        const lastUser = [...state.messages].reverse().find(message => message.role === 'user');
+        state.lastUserMessageAt = lastUser?.timestamp;
       }
-    }
 
-    if (restoresFiles(mode)) {
-      if (!operation.root || !operation.snapshotId || !operation.paths) {
-        return NextResponse.json({ error: 'File undo data is unavailable' }, { status: 409 });
-      }
-      const undoAnchor = await shadowRepoService.revert(
-        operation.root,
-        operation.snapshotId,
-        operation.paths,
-      );
-      if (!undoAnchor) return NextResponse.json({ error: 'Unable to undo file restore' }, { status: 409 });
-    }
-
-    if (restoredMessages) {
-      const rawMessages: RawExecutionEvent[] = restoredMessages.map(({ message, depth }) => ({
-        type: 'message',
-        message,
-        ...(depth ? { depth } : {}),
-      }));
-      await appendRawForState(state, rawMessages);
-      const existingIds = new Set(state.messages.map(message => message.id));
-      state.messages.push(...restoredMessages
-        .filter(({ message, depth }) => !depth && !existingIds.has(message.id))
-        .map(({ message }) => message));
-      state.currentNodeId = [...restoredMessages]
-        .reverse()
-        .find(({ message, depth }) => !depth && message.processNodeId)
-        ?.message.processNodeId ?? state.currentNodeId;
-      const lastUser = [...state.messages].reverse().find(message => message.role === 'user');
-      state.lastUserMessageAt = lastUser?.timestamp;
-    }
-
-    operation.undoneAt = Date.now();
-    state.updatedAt = Date.now();
-    FlowExecutor.conversationStates.set(conversationId, state);
-    await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
-    return new NextResponse(null, { status: 204 });
+      operation.undoneAt = Date.now();
+      state.updatedAt = Date.now();
+      FlowExecutor.conversationStates.set(conversationId, state);
+      await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
+      return new NextResponse(null, { status: 204 });
+    };
+    return restoresChat(mode)
+      ? withConversationLogEvents(conversationId, executeUndo)
+      : executeUndo(undefined);
   }
 
   if (!body.messageId || !body.previewId || !isRestoreMode(body.mode)) {
@@ -348,69 +354,72 @@ if (isPersonaOwnedConversationState(state)) {
       { status: 400 },
     );
   }
-const context = await resolveContext(conversationId, body.messageId);
-  if (!context) return NextResponse.json({ error: 'Message not found in conversation' }, { status: 404 });
-  const plan = await buildPlan(conversationId, context);
-  if (plan.preview.previewId !== body.previewId) {
-    return NextResponse.json(
-      { error: 'The chat or worktree changed after preview; refresh and review again' },
-      { status: 409 },
-    );
-  }
-  if (restoresFiles(body.mode) && !context.fileTarget) {
-    return NextResponse.json(
-      { error: 'No unambiguous snapshotted file changes are available for this restore point' },
-      { status: 409 },
-    );
-  }
-
-  let preRestoreSnapshot: string | undefined;
-  if (restoresFiles(body.mode) && context.fileTarget) {
-    const paths = context.fileTarget.changedFiles.map(file => file.path);
-    preRestoreSnapshot = await shadowRepoService.revert(
-      context.fileTarget.root,
-      context.fileTarget.startSnapshot,
-      paths,
-    ) ?? undefined;
-    if (!preRestoreSnapshot) {
-      return NextResponse.json({ error: 'Unable to restore worktree files' }, { status: 409 });
+  const mode = body.mode;
+  const messageId = body.messageId;
+  return withRestoreContext(conversationId, messageId, async context => {
+    if (!context) return NextResponse.json({ error: 'Message not found in conversation' }, { status: 404 });
+    const plan = await buildPlan(conversationId, context);
+    if (plan.preview.previewId !== body.previewId) {
+      return NextResponse.json(
+        { error: 'The chat or worktree changed after preview; refresh and review again' },
+        { status: 409 },
+      );
     }
-  }
+    if (restoresFiles(mode) && !context.fileTarget) {
+      return NextResponse.json(
+        { error: 'No unambiguous snapshotted file changes are available for this restore point' },
+        { status: 409 },
+      );
+    }
 
-  if (restoresChat(body.mode)) {
-    const removals = restoreChatSuffix(state, context, plan);
-    await appendRawForState(state, removals);
-  }
+    let preRestoreSnapshot: string | undefined;
+    if (restoresFiles(mode) && context.fileTarget) {
+      const paths = context.fileTarget.changedFiles.map(file => file.path);
+      preRestoreSnapshot = await shadowRepoService.revert(
+        context.fileTarget.root,
+        context.fileTarget.startSnapshot,
+        paths,
+      ) ?? undefined;
+      if (!preRestoreSnapshot) {
+        return NextResponse.json({ error: 'Unable to restore worktree files' }, { status: 409 });
+      }
+    }
 
-  const operationId = crypto.randomUUID();
-  state.revertOperations = {
-    ...(state.revertOperations ?? {}),
-    [operationId]: {
-      messageId: body.messageId,
-      mode: body.mode,
-      ...(context.fileTarget && preRestoreSnapshot
-        ? {
-            root: context.fileTarget.root,
-            snapshotId: preRestoreSnapshot,
-            paths: context.fileTarget.changedFiles.map(file => file.path),
-          }
-        : {}),
-      ...(restoresChat(body.mode)
-        ? {
-            chatHeadMessageIds: plan.chatHeadMessageIds,
-            chatTailMessageIds: plan.chatTailMessageIds,
-          }
-        : {}),
-      createdAt: Date.now(),
-    },
-  };
-  state.updatedAt = Date.now();
-  FlowExecutor.conversationStates.set(conversationId, state);
-  await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
-  return NextResponse.json({
-    operationId,
-    restoredChat: restoresChat(body.mode),
-    restoredFiles: restoresFiles(body.mode),
+    if (restoresChat(mode)) {
+      const removals = restoreChatSuffix(state, context, plan);
+      await appendRawForState(state, removals);
+    }
+
+    const operationId = crypto.randomUUID();
+    state.revertOperations = {
+      ...(state.revertOperations ?? {}),
+      [operationId]: {
+        messageId,
+        mode: mode,
+        ...(context.fileTarget && preRestoreSnapshot
+          ? {
+              root: context.fileTarget.root,
+              snapshotId: preRestoreSnapshot,
+              paths: context.fileTarget.changedFiles.map(file => file.path),
+            }
+          : {}),
+        ...(restoresChat(mode)
+          ? {
+              chatHeadMessageIds: plan.chatHeadMessageIds,
+              chatTailMessageIds: plan.chatTailMessageIds,
+            }
+          : {}),
+        createdAt: Date.now(),
+      },
+    };
+    state.updatedAt = Date.now();
+    FlowExecutor.conversationStates.set(conversationId, state);
+    await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
+    return NextResponse.json({
+      operationId,
+      restoredChat: restoresChat(mode),
+      restoredFiles: restoresFiles(mode),
+    });
   });
 }
 

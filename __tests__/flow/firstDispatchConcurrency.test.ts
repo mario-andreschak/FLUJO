@@ -9,6 +9,8 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import type { StorageKey } from '@/shared/types/storage';
 
 let mockBaseUrl = '';
+let mockArchivePeakBytes = 0;
+let mockArchivePeakWaiters = 0;
 const mockAdmissions: Array<{ start: number; admitted: number; end: number }> = [];
 jest.mock('@/backend/services/enduringAgents/runtimeLock', () => {
   const actual = jest.requireActual('@/backend/services/enduringAgents/runtimeLock');
@@ -19,7 +21,6 @@ jest.mock('@/backend/services/enduringAgents/runtimeLock', () => {
     finally { timing.end = performance.now(); }
   } };
 });
-jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: async () => null, loadFlows: async () => [] } }));
 jest.mock('@/backend/services/model', () => ({ modelService: {
   getModel: async (id: string) => ({ id, name: 'dispatch-fixture', provider: 'openai', adapter: 'openai', ApiKey: '', baseUrl: mockBaseUrl }),
   loadModels: async () => [{ id: 'dispatch-model', name: 'dispatch-fixture' }], resolveAndDecryptApiKey: async () => 'loopback-fixture-key',
@@ -30,7 +31,7 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, ver
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
-import { loadItem } from '@/utils/storage/backend';
+import { loadItem, saveCollectionItem } from '@/utils/storage/backend';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
@@ -50,7 +51,7 @@ beforeAll(async () => {
     request.on('data', chunk => chunks.push(Buffer.from(chunk)));
     request.on('end', () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const id = JSON.stringify(body.messages).match(/dispatch-\d+-\d+/)?.[0];
+      const id = JSON.stringify(body.messages).match(/dispatch-[op]-\d+-\d+/)?.[0];
       if (!id) { response.writeHead(400); response.end('Missing fixture identity'); return; }
       requests.set(id, [...(requests.get(id) ?? []), performance.now()]);
       const base = { id: 'fixture', created: 1, model: 'dispatch-fixture' };
@@ -79,32 +80,40 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-it.each([1, 16, 64])('preserves admitted/refused runs at concurrency %i and measures first physical dispatch', async count => {
-  await runWithWorkspace(`dispatch-${count}`, async () => {
+it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPATCH_300 === '1' ? [[false, 300]] as const : []), [true, 1], [true, 16], [true, 64]] as const)('measures saved-flow first dispatch (protected=%s, concurrency=%i)', async (protectedRun, count) => {
+  await runWithWorkspace(`dispatch-${protectedRun ? 'protected' : 'ordinary'}-${count}`, async () => {
+    requests.clear();
     await ensureWorkspaceDirs();
+    const flow: Flow = { id: 'dispatch-saved-flow', name: 'dispatch-fixture',
+      nodes: [
+        { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { label: 'start', type: 'start', properties: {} } },
+        { id: 'process', type: 'process', position: { x: 1, y: 0 }, data: { label: 'process', type: 'process', properties: { boundModel: 'dispatch-model' } } },
+      ], edges: [{ id: 'edge', source: 'start', target: 'process', data: { edgeType: 'standard' } }],
+    };
+    await saveCollectionItem('flows', flow.id, flow);
     mockAdmissions.length = 0;
+    mockArchivePeakBytes = 0; mockArchivePeakWaiters = 0;
     const started = performance.now();
-    const ids = Array.from({ length: count }, (_, index) => `dispatch-${count}-${index}`);
+    const ids = Array.from({ length: count }, (_, index) => `dispatch-${protectedRun ? 'p' : 'o'}-${count}-${index}`);
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(new Error('Local batch deadline exceeded')), 120_000);
+    const sampleMemory = setInterval(() => {
+      mockArchivePeakBytes = Math.max(mockArchivePeakBytes, getArchiveWritePressure().bytes);
+      mockArchivePeakWaiters = Math.max(mockArchivePeakWaiters, (globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: unknown[] }).__flujoArchiveWriteQueue?.length ?? 0);
+    }, 5);
     const results = await Promise.all(ids.map(conversationId => {
-      const flowDefinition: Flow = { id: conversationId, name: conversationId,
-        nodes: [
-          { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { label: 'start', type: 'start', properties: {} } },
-          { id: 'process', type: 'process', position: { x: 1, y: 0 }, data: { label: 'process', type: 'process', properties: { boundModel: 'dispatch-model' } } },
-        ], edges: [{ id: 'edge', source: 'start', target: 'process', data: { edgeType: 'standard' } }],
-      };
-      return runFlow({ conversationId, flowDefinition, prompt: conversationId, source: 'api', mode: 'conversation',
+      return runFlow({ conversationId, flowId: flow.id, prompt: conversationId, source: 'api', mode: 'conversation',
         abortSignal: controller.signal,
-        executionAuthority: { signal: controller.signal, assertCurrent: async () => {} } });
-    })).finally(() => clearTimeout(deadline));
+        ...(protectedRun ? { executionAuthority: { signal: controller.signal, assertCurrent: async () => {} } } : {}) });
+    })).finally(() => { clearTimeout(deadline); clearInterval(sampleMemory); });
     const latencies = ids.flatMap(id => (requests.get(id) ?? []).slice(0, 1).map(time => time - started)).sort((a, b) => a - b);
-    console.info('FIRST_DISPATCH_BASELINE', JSON.stringify({ count, dispatched: latencies.length,
+    console.info('FIRST_DISPATCH_BASELINE', JSON.stringify({ protectedRun, count, dispatched: latencies.length,
       completed: results.filter(result => result.status === 'completed').length,
       firstMs: Math.round(latencies[0] ?? 0), medianMs: Math.round(latencies[Math.floor(latencies.length / 2)] ?? 0),
       lastMs: Math.round(latencies.at(-1) ?? 0), completedMs: Math.round(performance.now() - started),
       errors: [...new Set(results.filter(result => result.status !== 'completed').map(result => result.error?.details?.code ?? result.error?.message))],
       archivePressure: getArchiveWritePressure(),
+      archivePeak: { bytes: mockArchivePeakBytes, waiters: mockArchivePeakWaiters },
       admission: { count: mockAdmissions.length,
         beforeFirstDispatch: mockAdmissions.filter(timing => timing.start < started + (latencies[0] ?? 0)).length,
         waitMs: Math.round(mockAdmissions.filter(timing => timing.admitted > 0).reduce((total, timing) => total + timing.admitted - timing.start, 0)),
@@ -113,6 +122,7 @@ it.each([1, 16, 64])('preserves admitted/refused runs at concurrency %i and meas
     }));
     for (const [index, id] of ids.entries()) {
       const result = results[index];
+      if (!protectedRun) expect(result.status).toBe('completed');
       if (result.status === 'completed') {
         expect(result.outputText).toBe(`answer ${id}`);
         expect(requests.get(id)).toHaveLength(1);

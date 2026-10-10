@@ -59,7 +59,7 @@ import { loadConversationState } from '@/backend/execution/flow/loadConversation
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import {
   flushConversationLog,
-  readConversationLog,
+  withConversationLogEvents,
   projectMessages,
 } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -1689,7 +1689,7 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
   await assertBundledFlujoWorkloadEffectCurrent();
   await flushConversationLog(id);
 
-  const events = await readConversationLog(id);
+  return withConversationLogEvents(id, async events => {
   const projected = events ? projectMessages(events) : [];
   const all =
     projected.length > 0
@@ -1724,6 +1724,7 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
       ? { note: `Returning the ${selected.length} most recent of ${all.length} messages — raise "limit" to get more.` }
       : {}),
     messages: selected,
+  });
   });
 }
 

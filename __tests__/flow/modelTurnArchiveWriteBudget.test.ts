@@ -148,3 +148,52 @@ describe('archive write allocation ownership', () => {
     expect(provider).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe('ordinary archive writer waiting', () => {
+  async function occupy() {
+    const held = deferred(); const entered = deferred(); let count = 0;
+    const writers = Array.from({ length: 4 }, () => withArchiveWriteMemory('small', async () => {
+      if (++count === 4) entered.resolve(); await held.promise;
+    }));
+    await entered.promise;
+    return { release: async () => { held.resolve(); await Promise.all(writers); } };
+  }
+  it('keeps a 600-request burst bounded to 512 queued references and aborts without any factory', async () => {
+    const active = await occupy(); const abort = new AbortController(); const factory = jest.fn(async () => {});
+    const requests = Array.from({ length: 600 }, () => withArchiveWriteMemory('small', factory, 'owned-only', { wait: true, signal: abort.signal }));
+    const settled = Promise.allSettled(requests);
+    try {
+      expect(getArchiveWritePressure().writers).toBe(4);
+      const queue = (globalThis as typeof globalThis & { __flujoArchiveWriteQueue: unknown[] }).__flujoArchiveWriteQueue;
+      expect(queue).toHaveLength(512);
+      abort.abort(new Error('cancelled batch'));
+      const results = await settled;
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(600);
+      expect(factory).not.toHaveBeenCalled(); expect(queue).toHaveLength(0);
+    } finally { await active.release(); }
+    expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
+  });
+  it('grants queued tasks FIFO in their own async context and releases their bytes', async () => {
+    const active = await occupy(); const order: number[] = [];
+    const writes = Array.from({ length: 12 }, (_, i) => withArchiveWriteMemory('small', async () => { order.push(i); }, 'owned-only', { wait: true }));
+    await active.release(); await Promise.all(writes);
+    expect(order).toEqual(Array.from({ length: 12 }, (_, i) => i));
+    expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
+  });
+  it('expires a waiter without allowing a later factory after slots become free', async () => {
+    const active = await occupy(); const factory = jest.fn(async () => {});
+    try {
+      await expect(withArchiveWriteMemory('small', factory, 'owned-only', { wait: true, timeoutMs: 1 })).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' });
+    } finally { await active.release(); }
+    expect(factory).not.toHaveBeenCalled(); expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
+  });
+  it('rechecks payload expansion after waiting before invoking its clone factory', async () => {
+    const active = await occupy(); const payload: unknown[] = []; const factory = jest.fn(async () => {});
+    const queued = withArchiveWriteMemory(payload, factory, 'owned-only', { wait: true });
+    const result = expect(queued).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_LIMIT' });
+    payload.push(new Array(MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues + 1));
+    await active.release(); await result;
+    expect(factory).not.toHaveBeenCalled(); expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
+  });
+});

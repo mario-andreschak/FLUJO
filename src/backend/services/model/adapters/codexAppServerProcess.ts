@@ -20,7 +20,7 @@ type Message = {id?: number | string; method?: string; params?: unknown; result?
 type Pending = {resolve(value: unknown): void; reject(error: unknown): void; timer: NodeJS.Timeout};
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 32;
-const METHODS = new Set(['initialize', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt']);
+const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt']);
 
 /** Own the public app-server child at birth. Registration precedes all wire input.
  * This transport does not by itself qualify a model, tool inventory, or Original.

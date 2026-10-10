@@ -16,6 +16,7 @@ import {
 } from '@/utils/storage/backend';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { ConversationLogReadPressureError, CONVERSATION_LOG_READ_CONCURRENCY } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
@@ -358,6 +359,7 @@ async function GET_handler(request: NextRequest) {
           ...(pinned ? { pinnedItems: visible.filter((item) => pinned.has(item.id)) } : {}),
         });
       } catch (error) {
+        if (error instanceof ConversationLogReadPressureError) throw error;
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });
         }
@@ -585,6 +587,7 @@ async function GET_handler(request: NextRequest) {
           ...(pinned ? { pinnedItems: visibleConversations.filter((item) => pinned.has(item.id)) } : {}),
         });
       } catch (error) {
+        if (error instanceof ConversationLogReadPressureError) throw error;
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });
         }
@@ -594,6 +597,7 @@ async function GET_handler(request: NextRequest) {
     return NextResponse.json(validConversations);
 
   } catch (error: unknown) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     const duration = Date.now() - startTime;
     log.error('Error listing conversations', {
       requestId,
@@ -855,6 +859,7 @@ async function POST_handler(req: NextRequest) {
     return NextResponse.json(responseItem, { status: 201 }); // 201 Created
 
     } catch (error: unknown) {
+      if (error instanceof ConversationLogReadPressureError) throw error;
       const duration = Date.now() - startTime;
       log.error('Error creating conversation', {
         requestId,
@@ -874,7 +879,8 @@ async function POST_handler(req: NextRequest) {
 // tombstone first, cancel/evict in-memory state, then remove the state file,
 // conversation log, run-resources, and quick-chat compiled-flow cache. Bad
 // ids are counted as errors (not fatal) so one malformed id can't abort the
-// whole batch. Returns { deleted, errors }.
+// whole batch. Read pressure adds retryableIds and a Retry-After header to
+// the partial { deleted, errors } result; it never deletes the refused item.
 async function DELETE_handler(req: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
@@ -894,7 +900,8 @@ async function DELETE_handler(req: NextRequest) {
 
   const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
   let deleted = 0, errors = 0;
-  await Promise.all((body.ids as unknown[]).map(async (rawId) => {
+  const retryableIds: string[] = [];
+  const removeOne = async (rawId: unknown) => {
     if (typeof rawId !== 'string' || !SAFE_ID.test(rawId)) { errors++; return; }
     const id = rawId;
     // Preserve tombstone-first cancellation for an already-running legacy
@@ -940,13 +947,22 @@ async function DELETE_handler(req: NextRequest) {
       // Delete failed — clear the tombstone so the surviving conversation is
       // still persistable/loggable.
       unmarkConversationDeleted(id);
+      if (err instanceof ConversationLogReadPressureError) retryableIds.push(id);
       log.error('Failed to delete conversation in bulk', { requestId, id, err });
       errors++;
     }
+  };
+  const ids = body.ids as unknown[];
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(ids.length, CONVERSATION_LOG_READ_CONCURRENCY) }, async () => {
+    while (nextIndex < ids.length) await removeOne(ids[nextIndex++]);
   }));
 
   log.info('Bulk DELETE complete', { requestId, deleted, errors });
-  return NextResponse.json({ deleted, errors }, { status: 200 });
+  return NextResponse.json({ deleted, errors, ...(retryableIds.length ? { retryableIds, retryAfterSeconds: 5 } : {}) }, {
+    status: 200,
+    ...(retryableIds.length ? { headers: { 'Retry-After': '5', 'Cache-Control': 'private, no-store' } } : {}),
+  });
 }
 
 

@@ -28,6 +28,8 @@ const moduleNameMapper = {
     "<rootDir>/node_modules/mcp-stdio-oauth/dist/$1/index.js",
   "^mcp-stdio-oauth/client/transport$":
     "<rootDir>/node_modules/mcp-stdio-oauth/dist/client/transport.js",
+  "^@modelcontextprotocol/ext-tasks/(client|core|core/v1|core/v2|receiver)$":
+    "<rootDir>/node_modules/@modelcontextprotocol/ext-tasks/dist/$1/index.js",
   // NodeNext source imports retain their runtime .js suffix. During tests the
   // colocated source is still TypeScript, so let Jest resolve the same relative
   // path with its transformed extension.
@@ -47,6 +49,7 @@ const esmOnlyTestPackages = [
   "chokidar",
   "readdirp",
   "@modelcontextprotocol/ext-apps",
+  "@modelcontextprotocol/ext-tasks",
 ];
 
 function allowEsmOnlyPackages(patterns = []) {

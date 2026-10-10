@@ -7,7 +7,7 @@ import { projectArchiveSchema, isOwnedArchiveDescriptor, type ArchiveSchemaProje
 import { types as utilTypes } from 'node:util';
 import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
   settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema, isArchivePlainObject,
-  getArchiveSchemaProjectionPolicy } from './modelTurnArchiveWriteBudget';
+  getArchiveSchemaProjectionPolicy, type ArchiveWriteAdmissionOptions } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -356,6 +356,7 @@ async function writeAtomic(file: string, data: Buffer, durable = false): Promise
 }
 
 export interface ArchiveModelDispatchInput {
+  writeAdmission?: ArchiveWriteAdmissionOptions;
   /** Explicit strict opt-in; default preserves existing arbitrary-Zod compatibility. */
   schemaProjectionPolicy?: ArchiveSchemaProjectionPolicy;
   /** Mandatory preallocated origin ID for a journalled native dispatch. */
@@ -380,14 +381,18 @@ export interface ArchiveModelDispatchInput {
 export function archiveModelDispatch(
   input: ArchiveModelDispatchInput, prepare?: () => ArchiveModelDispatchInput,
 ): Promise<ModelTurnIndexEntry> {
+  const protectedDispatch = Boolean(input.id || input.durableContext?.executionAuthority
+    || input.durableContext?.executionExtensionContext || input.durableContext?.personaAttribution);
+  const writeAdmission = protectedDispatch ? undefined : input.writeAdmission;
   const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
     sdkRequest: input.sdkRequest, modelInput: input.modelInput, visualCompaction: input.visualCompaction };
   return withArchiveWriteMemory(payload, () => withWorkspaceMutation(() => commitFlowDurableMutation(
     input.durableContext ?? {}, () => {
+      writeAdmission?.signal?.throwIfAborted();
       recheckArchiveWriteMemory(payload);
       return archiveModelDispatchWithinMutation(prepare ? prepare() : input);
     },
-  )), input.schemaProjectionPolicy ?? 'legacy-unbounded');
+  )), input.schemaProjectionPolicy ?? 'legacy-unbounded', writeAdmission);
 }
 
 async function archiveModelDispatchWithinMutation(

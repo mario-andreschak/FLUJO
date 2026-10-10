@@ -69,6 +69,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 jest.mock('@/utils/storage/backend', () => ({
   assertSafeCollectionId: jest.fn(),
   loadItem: jest.fn(async (key: string) => storedStates.get(key)),
+  withConversationSnapshot: async (id: string, consume: (state: unknown, token: unknown) => Promise<unknown>) => jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission').withConversationLogReadAdmission(100, (token: unknown) => consume(storedStates.get(`conversations/${id}`), token)),
   saveItem: jest.fn(async (key: string, value: any) => {
     storedStates.set(key, JSON.parse(JSON.stringify(value)));
   }),
