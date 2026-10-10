@@ -47,6 +47,13 @@ const cases: Array<{ name: string; schema: unknown; values: unknown[] }> = [
   { name: 'intersection nested objects', schema: { allOf: [{ type: 'object', properties: { a: { type: 'object', properties: { x: { type: 'string' } } } } }, { type: 'object', properties: { a: { type: 'object', properties: { y: { type: 'number' } } } } }] }, values: [{ a: { x: 'x', y: 1 } }, { a: { y: 'x' } }] },
   { name: 'annotated intersection member', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } }, description: 'retained' }, { type: 'object', properties: { b: { type: 'number' } } }] }, values: [{ a: 'x', b: 1 }, { b: 'x' }] },
   { name: 'intersection distributes over union', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }, { anyOf: [{ type: 'object', properties: { b: { type: 'number' } }, required: ['b'] }, { type: 'object', properties: { c: { type: 'boolean' } }, required: ['c'] }] }] }, values: [{ a: 'x', b: 1 }, { a: 'x', c: true }, { b: 1 }] },
+  { name: 'three overlapping intersection members', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'number' } } }, { type: 'object', properties: { a: { type: 'boolean' } } }] }, values: [{}, { a: 'x' }, { a: 1 }] },
+  { name: 'nested intersection duplicates', schema: { allOf: [{ allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'number' } } }] }, { type: 'object', properties: { a: { type: 'number' } } }] }, values: [{}, { a: 'x' }, { a: 1 }] },
+  { name: 'three members with distributed required fields', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }, { anyOf: [{ type: 'object', properties: { b: { type: 'number' } }, required: ['b'] }, { type: 'object', properties: { c: { type: 'boolean' } }, required: ['c'] }] }, { type: 'object', properties: { d: { type: 'string' } }, required: ['d'] }] }, values: [{ a: 'x', b: 1, d: 'x' }, { a: 'x', c: true, d: 'x' }, { b: 1 }] },
+  { name: 'intersection preserves referenced raw members', schema: { allOf: [{ $ref: '#/$defs/A' }, { type: 'object', properties: { a: { type: 'boolean' } } }], $defs: { A: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'number' } } }] } } }, values: [{}, { a: false }] },
+  { name: 'intersection preserves single union branch raw members', schema: { allOf: [{ oneOf: [{ allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'number' } } }] }] }, { type: 'object', properties: { a: { type: 'boolean' } } }] }, values: [{}, { a: false }] },
+  { name: 'annotated nested intersection stays unflattened', schema: { allOf: [{ allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'number' } } }], description: 'retained annotation' }, { type: 'object', properties: { a: { type: 'boolean' } } }] }, values: [{}, { a: false }] },
+  { name: 'annotated duplicate field declaration order', schema: { allOf: [{ type: 'object', properties: { a: { type: 'object', properties: { x: { type: 'string' }, y: { type: 'number' } }, description: 'retained' } } }, { type: 'object', properties: { a: { type: 'object', properties: { y: { type: 'number' }, x: { type: 'string' } }, description: 'retained' } } }] }, values: [{}, { a: { x: 'x', y: 1 } }, { a: { y: 'x' } }] },
 ];
 
 it.each(cases)('retains actual provider parsing and exact represented metadata: $name', ({ schema, values }) => {
@@ -95,6 +102,16 @@ it('charges distributed intersection expansion before exceeding owned constructi
   const schema = { allOf: [{ type: 'object', properties }, { anyOf: Array.from({ length: 30 }, (_, index) => ({
     type: 'object', properties: { [`b${index}`]: { type: 'number' } },
   })) }] };
+  projectionProbe.mockClear();
+  expect(() => buildOwnedArchiveSchema(schema)).toThrow(ModelTurnArchiveMemoryError);
+  expect(projectionProbe).not.toHaveBeenCalled();
+});
+
+it('charges retained and repeatedly flattened nested members against the same construction capacity', () => {
+  let schema: unknown = { type: 'object', properties: { a0: { type: 'string' } } };
+  for (let index = 1; index < 30; index++) schema = { allOf: [schema, {
+    type: 'object', properties: { [`a${index}`]: { type: 'string' } },
+  }] };
   projectionProbe.mockClear();
   expect(() => buildOwnedArchiveSchema(schema)).toThrow(ModelTurnArchiveMemoryError);
   expect(projectionProbe).not.toHaveBeenCalled();
