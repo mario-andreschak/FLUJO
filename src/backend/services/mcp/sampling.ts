@@ -138,6 +138,7 @@ export function createSamplingHandler(
     const adapter = getCompletionAdapter(model);
     // Prefer the per-policy token cap; fall back to the model's own default.
     const maxTokens = policy.maxTokens ?? normalizeMaxTokens(model.maxTokens);
+    await assertTaskInputCurrent(options);
     const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens, signal: options.signal });
     await assertTaskInputCurrent(options);
 

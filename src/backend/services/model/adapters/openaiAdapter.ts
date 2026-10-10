@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
-import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
 import { extractAssistantMedia } from './messageUtils';
@@ -144,7 +144,9 @@ export class OpenAiAdapter implements CompletionAdapter {
     });
   }
 
-  async createCompletion({
+  async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    assertReadOnlyAssessmentInput(input);
+    const {
     model,
     apiKey,
     messages,
@@ -159,8 +161,10 @@ export class OpenAiAdapter implements CompletionAdapter {
     promptCacheMode,
     toolNameMap,
     executionExtensionContext,
-  }: CompletionInput): Promise<CompletionResult> {
-    const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
+    readOnlyAssessment,
+    } = input;
+    const brandedSinglePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
+    const singlePhysicalAttempt = Boolean(readOnlyAssessment || brandedSinglePhysicalAttempt);
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     const openai = this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
@@ -242,7 +246,7 @@ export class OpenAiAdapter implements CompletionAdapter {
             request: body,
           },
           async () => {
-            await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
+            await assertModelRequestPolicy(executionExtensionContext, model, brandedSinglePhysicalAttempt);
             return openai.chat.completions.create(
               body as OpenAI.Chat.ChatCompletionCreateParams,
               singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
@@ -309,7 +313,9 @@ export class OpenAiAdapter implements CompletionAdapter {
     onSdkRequestResult,
     toolNameMap,
     executionExtensionContext,
+    readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
+    if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     const openai = this.createClient(model, apiKey);

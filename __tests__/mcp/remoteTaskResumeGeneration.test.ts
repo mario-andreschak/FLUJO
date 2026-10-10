@@ -50,3 +50,12 @@ it('polls original generation and cancels ownerless input once without fetching 
   expect(patchRemoteTaskRecord).toHaveBeenLastCalledWith('local', expect.objectContaining({ diagnostic: 'input-required-unattended', status: 'failed' }));
   expect(release).toHaveBeenCalledTimes(1);
 });
+
+it('keeps a retired modern connection nonterminal and skips wire dispatch until reconnect', async () => {
+  const unavailable = { supported: false, supportsToolsCall: false, supportsCancel: false, supportsList: false };
+  jest.mocked(discoverTaskNegotiation).mockResolvedValue(unavailable);
+  expect(await resumeRemoteMcpTasks()).toMatchObject({ skipped: 1, resumed: 0, failedClosed: 0 });
+  expect(patchRemoteTaskRecord).toHaveBeenCalledWith('local', { diagnostic: 'server-disconnected' });
+  expect(fetchTaskStatus).not.toHaveBeenCalled();
+  expect(cancelRemoteTask).not.toHaveBeenCalled();
+});

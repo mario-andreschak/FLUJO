@@ -100,7 +100,13 @@ export async function resumeRemoteMcpTasks(): Promise<ResumeSummary> {
       summary.skipped++;
       continue;
     }
-    if ((await discoverTaskNegotiation(client)).generation !== (record.generation ?? '2025-11-25')) {
+    const negotiation = await discoverTaskNegotiation(client);
+    if (negotiation.generation === undefined) {
+      await patchRemoteTaskRecord(record.recordId, { diagnostic: 'server-disconnected' });
+      summary.skipped++;
+      continue;
+    }
+    if (negotiation.generation !== (record.generation ?? '2025-11-25')) {
       await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'generation-mismatch', errorMessage: 'Remote task protocol generation changed; resume refused.' });
       summary.failedClosed++;
       continue;
@@ -149,7 +155,12 @@ async function pollResumedRecord(
       await patchRemoteTaskRecord(record.recordId, { diagnostic: 'server-disconnected' });
       return false;
     }
-    if (getTaskNegotiation(client).generation !== generation) {
+    const currentGeneration = getTaskNegotiation(client).generation;
+    if (currentGeneration === undefined) {
+      await patchRemoteTaskRecord(record.recordId, { diagnostic: 'server-disconnected' });
+      return false;
+    }
+    if (currentGeneration !== generation) {
       await patchRemoteTaskRecord(record.recordId, { status: 'failed', diagnostic: 'generation-mismatch' });
       return false;
     }
@@ -183,6 +194,7 @@ async function pollResumedRecord(
         status = await fetchTaskStatus(client, record.remoteTaskId, { timeout: 30_000, generation });
         transientFailures = 0;
       } catch (error) {
+        if (!await stillCurrent()) return;
         transientFailures++;
         if (transientFailures >= settings.maxTransientPollFailures) {
           await patchRemoteTaskRecord(record.recordId, {
@@ -212,7 +224,7 @@ async function pollResumedRecord(
 
       const updated = await patchRemoteTaskRecord(record.recordId, {
         status: status.task.status,
-        statusMessage: status.task.statusMessage,
+        statusMessage: generation === '2026-07-28' ? undefined : status.task.statusMessage,
         lastPolledAt: Date.now(),
         nextPollAt: Date.now() + pollMs,
         // The originating run is gone: the terminal payload is intentionally
