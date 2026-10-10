@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
@@ -103,6 +104,7 @@ async function GET_handler(
       },
     });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     if (error instanceof Error && error.message.startsWith('Unsafe run-resource')) {
       return NextResponse.json({ error: 'Invalid resource identifier' }, { status: 400 });
     }

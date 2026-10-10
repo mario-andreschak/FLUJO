@@ -43,6 +43,9 @@ import { NPM_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/npmDow
 import { REGISTRY_STATUS_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/registryStatus';
 import { loadQualitySettings } from '@/backend/services/mcp/quality/settings';
 import type { EnvVarValue, MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
+import { discoverRegistryServers } from './registryDiscovery';
+import { discoverySearchTerms } from '@/shared/mcpDiscoverySearch';
+import { bestMcpRecommendationPreference, compareMcpRecommendationPreferences } from '@/shared/mcpRecommendationPreferences';
 
 const log = createLogger('backend/services/mcp/registryInstall');
 
@@ -65,6 +68,10 @@ export interface RegistrySearchHit {
   requiredEnv: string[];
   /** Quality ranking signals; absent only if enrichment was fully skipped. */
   quality?: QualitySummary;
+  /** Actual public metadata, for exact curated/package identity comparisons. */
+  server?: RegistryServer;
+  /** Registry lifecycle evidence only; never execution consent or human trust. */
+  verificationStatus?: string;
 }
 
 /** Build a ServerCandidate (what the quality layer scores) from a registry result. */
@@ -95,37 +102,40 @@ function qualityFromScored(scored: ScoredCandidate): QualitySummary {
  * recency, npm downloads, registry status) so the best/most-working servers come
  * first — headless callers pick from the top, humans see the good ones up front.
  *
- * NOTE: the registry matches the SEARCH TERM against server NAMES only
- * (substring), not descriptions — callers should try several short terms
- * ("voice", "tts", "speech") rather than sentences.
+ * Acquisition expands capability vocabulary into bounded Registry name queries,
+ * then verifies relevance against actual name/title/description metadata.
  */
 export async function searchRegistry(
   query: string,
-  limit = DEFAULT_SEARCH_LIMIT
+  limit = DEFAULT_SEARCH_LIMIT,
+  signal?: AbortSignal,
+  extraTerms: readonly string[] = [],
 ): Promise<RegistrySearchHit[]> {
-  const results = await fetchRegistryResults(query, limit);
-  const ranked = await enrichAndRank(query, results.map(toCandidate));
-  return ranked.map((sc) => toSearchHit(sc.candidate.server, sc));
+  const results = (await discoverRegistryServers(query, signal, extraTerms)).servers;
+  signal?.throwIfAborted();
+  const ranked = await enrichAndRank(query, results.map(toCandidate), signal ? { signal } : {});
+  signal?.throwIfAborted();
+  const byName = new Map(results.map(result => [result.server.name, result]));
+  return ranked.sort((left, right) => Number(getInstallOptions(right.candidate.server).some(isAutoInstallable))
+    - Number(getInstallOptions(left.candidate.server).some(isAutoInstallable)) || compareMcpRecommendationPreferences(
+    bestMcpRecommendationPreference(left.candidate.server, left.score),
+    bestMcpRecommendationPreference(right.candidate.server, right.score),
+  )).slice(0, Math.min(Math.max(Number.isFinite(limit) ? limit : DEFAULT_SEARCH_LIMIT, 1), 30))
+    .map((sc) => ({ ...toSearchHit(sc.candidate.server, sc), verificationStatus: verificationStatusOf(byName.get(sc.candidate.server.name)) }));
 }
 
 /**
  * Read-only capability discovery for callers that want ranked recommendations
- * without coupling research to installation. Unlike searchRegistry, this fans a
- * natural-language request into Registry-friendly name terms before ranking.
+ * without coupling research to installation. Uses the same bounded acquisition
+ * as the Marketplace and searchRegistry, including natural-language aliases.
  */
 export async function findBestRegistryServers(
   query: string,
   limit = DEFAULT_SEARCH_LIMIT,
+  signal?: AbortSignal,
 ): Promise<RegistrySearchHit[]> {
   if (!query || typeof query !== 'string') return [];
-  const pages = await Promise.all(capabilitySearchTerms(query).map((term) => fetchRegistryResults(term, 10)));
-  const byName = new Map<string, RegistryServerResult>();
-  for (const result of pages.flat()) {
-    if (!byName.has(result.server.name)) byName.set(result.server.name, result);
-  }
-  const ranked = await enrichAndRank(query, [...byName.values()].map(toCandidate));
-  return ranked.slice(0, Math.min(Math.max(limit, 1), 30))
-    .map((candidate) => toSearchHit(candidate.candidate.server, candidate));
+  return searchRegistry(query, limit, signal);
 }
 
 /** Raw registry list fetch (no ranking), shared by search + resolve paths. */
@@ -150,6 +160,7 @@ function toSearchHit(server: RegistryServer, scored?: ScoredCandidate): Registry
     ...(server.description ? { description: server.description } : {}),
     installable: options.length > 0,
     requiredEnv: best ? missingRequiredInputs(best) : [],
+    server,
     ...(scored ? { quality: qualityFromScored(scored) } : {}),
   };
 }
@@ -178,7 +189,12 @@ export async function rankRegistryResults(
           : original // not enriched → don't fabricate a quality summary
       );
     }
-    return ranked.length === results.length ? ranked : results;
+    return ranked.length === results.length ? ranked.sort((left, right) =>
+      Number(getInstallOptions(right.server).some(isAutoInstallable)) - Number(getInstallOptions(left.server).some(isAutoInstallable))
+      || compareMcpRecommendationPreferences(
+        bestMcpRecommendationPreference(left.server, left.quality?.score ?? 0),
+        bestMcpRecommendationPreference(right.server, right.quality?.score ?? 0),
+      )) : results;
   } catch {
     return results;
   }
@@ -196,6 +212,9 @@ export interface InstallResult {
   tools?: Array<{ name: string; description?: string }>;
   /** True when a server of this name already existed (nothing was changed). */
   alreadyExisted?: boolean;
+  /** A matching disabled record needs explicit configuration, not connection. */
+  needsConfiguration?: boolean;
+  existingServerName?: string;
   /** Required env vars/headers the caller must provide; set when NOT installed. */
   needsEnv?: string[];
   /**
@@ -335,12 +354,12 @@ function applyArgTemplates(
  * Returns the full result (not just `.server`) so the caller can read the
  * `_meta … status` verification field.
  */
-export async function resolveRegistryEntry(registryName: string): Promise<RegistryServerResult | null> {
+export async function resolveRegistryEntry(registryName: string, signal?: AbortSignal): Promise<RegistryServerResult | null> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
   url.searchParams.set('version', 'latest');
   url.searchParams.set('limit', '10');
   url.searchParams.set('search', registryName);
-  const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS)) as RegistryListResponse;
+  const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS, signal ? { signal, maxBytes: 256 * 1024 } : {})) as RegistryListResponse;
   const results: RegistryServerResult[] = Array.isArray(data?.servers) ? data.servers : [];
   return results.find((r) => r.server?.name === registryName) ?? null;
 }
@@ -497,6 +516,26 @@ export async function prepareRegistryServerRuntime(
   return { installed: false, serverName, plan, config };
 }
 
+/** A reviewed Registry plan cannot authorize reuse by display name alone. */
+function matchesReviewedRuntime(current: MCPServerConfig, expected: Partial<MCPServerConfig>): boolean {
+  if (!expected.transport || current.transport !== expected.transport) return false;
+  if (current.source) {
+    if (current.source.type !== 'registry' || expected.source?.type !== 'registry'
+      || current.source.registryName !== expected.source.registryName) return false;
+    if (current.source.version !== undefined && current.source.version !== expected.source.version) return false;
+  }
+  if (current.transport === 'stdio' && expected.transport === 'stdio') {
+    return typeof current.command === 'string' && typeof expected.command === 'string'
+      && current.command === expected.command
+      && Array.isArray(current.args) && current.args.every(arg => typeof arg === 'string')
+      && Array.isArray(expected.args) && expected.args.every(arg => typeof arg === 'string')
+      && JSON.stringify(current.args) === JSON.stringify(expected.args);
+  }
+  return 'serverUrl' in current && 'serverUrl' in expected
+    && typeof current.serverUrl === 'string' && typeof expected.serverUrl === 'string'
+    && current.serverUrl === expected.serverUrl;
+}
+
 /** Prepare once, then apply normal adopt-existing and installation semantics. */
 export async function installRegistryServer(
   registryName: string,
@@ -511,7 +550,30 @@ export async function installRegistryServer(
 
   // Never clobber an existing server: report it as available instead.
   const existing = await mcpService.loadServerConfigs();
-  if (Array.isArray(existing) && existing.some((c) => c.name === serverName)) {
+  const matching = Array.isArray(existing) ? existing.find(c => c.name === serverName) : undefined;
+  if (matching?.disabled) {
+    return {
+      installed: false,
+      alreadyExisted: true,
+      needsConfiguration: true,
+      existingServerName: serverName,
+      serverName,
+      plan,
+      error: `The existing server "${serverName}" is disabled. Configure and enable it explicitly before using its tools.`,
+    };
+  }
+  if (matching && options?.expectedPlan && !matchesReviewedRuntime(matching, config)) {
+    return {
+      installed: false,
+      alreadyExisted: true,
+      needsConfiguration: true,
+      existingServerName: serverName,
+      serverName,
+      plan,
+      error: `The existing server "${serverName}" does not match the reviewed Registry plan. Configure it explicitly before using its tools.`,
+    };
+  }
+  if (matching) {
     log.info(`installRegistryServer: "${serverName}" already configured; reusing`);
     const { tools, error } = await mcpService.listServerTools(serverName);
     return {
@@ -608,16 +670,7 @@ export interface BestInstallOptions {
  * lexical fallback also fixes the internal install_best_mcp_server tool.
  */
 export function capabilitySearchTerms(query: string): string[] {
-  const ignored = new Set(['connect', 'with', 'from', 'into', 'using', 'want', 'need', 'server', 'mcp', 'that', 'this', 'the', 'and', 'for']);
-  const words = query.toLocaleLowerCase()
-    .replace(/[^a-z0-9@._/-]+/g, ' ')
-    .split(/\s+/)
-    .map((word) => word.replace(/^[-/@.]+|[-/@.]+$/g, ''))
-    .filter((word) => word.length >= 2 && !ignored.has(word));
-  const terms = [words.slice(0, 3).join(' '), ...words]
-    .map((term) => term.trim().slice(0, 80))
-    .filter(Boolean);
-  return Array.from(new Set(terms)).slice(0, 6);
+  return discoverySearchTerms(query);
 }
 
 /**

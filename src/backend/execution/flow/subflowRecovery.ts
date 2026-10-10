@@ -1,5 +1,5 @@
 import { createLogger } from '@/utils/logger';
-import { loadCollectionItem, listCollectionItems } from '@/utils/storage/backend';
+import { withConversationSnapshot, listCollectionItems } from '@/utils/storage/backend';
 import type { StorageKey } from '@/shared/types/storage';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { FlowExecutor } from './FlowExecutor';
@@ -66,9 +66,10 @@ function storageKey(conversationId: string): StorageKey {
 export async function loadConversationState(conversationId: string): Promise<SharedState | undefined> {
   const live = FlowExecutor.conversationStates.get(conversationId);
   if (live) return live;
-  const stored = await loadCollectionItem<SharedState | undefined>('conversations', conversationId, undefined);
-  if (stored) FlowExecutor.conversationStates.set(conversationId, stored);
-  return stored;
+  return withConversationSnapshot<SharedState, SharedState | undefined>(conversationId, async stored => {
+    if (stored) FlowExecutor.conversationStates.set(conversationId, stored);
+    return stored;
+  });
 }
 
 export async function persistSubflowParent(state: SharedState): Promise<void> {

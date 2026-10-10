@@ -23,6 +23,7 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { v4 as uuidv4 } from 'uuid';
 
 import ModelList from '@/frontend/components/models/list/ModelList';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import ModelModal from '@/frontend/components/models/modal';
 import ModelConnectionWizard, {
   GuidedCreationResult,
@@ -549,6 +550,7 @@ export default function ModelClient() {
         </Box>
       </Paper>
       </StickySearchBar>
+      <AllowanceBar overview />
 
       {error && (
         <Box sx={{ mb: 2 }}>

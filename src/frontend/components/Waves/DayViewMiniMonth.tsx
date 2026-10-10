@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   ButtonBase,
@@ -15,11 +15,17 @@ import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import {
-  addCalendarMonths,
+  addCalendarDays,
   buildMonthGrid,
+  calendarDayKey,
   isSameCalendarDay,
   normalizeCalendarDay,
 } from './dayViewCalendar';
+
+function shiftMonth(date: Date, amount: number): Date {
+  const lastDay = new Date(date.getFullYear(), date.getMonth() + amount + 1, 0, 12).getDate();
+  return new Date(date.getFullYear(), date.getMonth() + amount, Math.min(date.getDate(), lastDay), 12);
+}
 
 export interface DayViewMiniMonthProps {
   selectedDate: Date;
@@ -45,17 +51,59 @@ export default function DayViewMiniMonth({
   const theme = useTheme();
   const { formatDate, t } = useI18n();
   const [shownMonth, setShownMonth] = useState(() => normalizeCalendarDay(selectedDate));
+  const [focusedDate, setFocusedDate] = useState(() => normalizeCalendarDay(selectedDate));
+  const gridRef = useRef<HTMLDivElement>(null);
+  const dayRefs = useRef(new Map<string, HTMLButtonElement>());
+  const restoreFocus = useRef(false);
+  // A parent can recreate Date objects on refresh without changing the selected day.
+  const selectedDay = normalizeCalendarDay(selectedDate).getTime();
 
-  useEffect(() => {
-    setShownMonth(normalizeCalendarDay(selectedDate));
-  }, [selectedDate]);
+  // Commit selection/focus together before a following native Tab can leave.
+  // A deferred effect could otherwise pull focus back after the user moved on.
+  useLayoutEffect(() => {
+    restoreFocus.current = Boolean(gridRef.current?.contains(document.activeElement));
+    setShownMonth(new Date(selectedDay));
+    setFocusedDate(new Date(selectedDay));
+  }, [selectedDay]);
+
+  useLayoutEffect(() => {
+    if (!restoreFocus.current) return;
+    restoreFocus.current = false;
+    dayRefs.current.get(calendarDayKey(focusedDate))?.focus();
+  }, [focusedDate, shownMonth]);
+
+  function browseMonth(amount: number) {
+    const next = shiftMonth(focusedDate, amount);
+    setShownMonth(next);
+    setFocusedDate(next);
+  }
+
+  function navigateDate(event: React.KeyboardEvent<HTMLButtonElement>, date: Date) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    let next: Date;
+    switch (event.key) {
+      case 'ArrowLeft': next = addCalendarDays(date, theme.direction === 'rtl' ? 1 : -1); break;
+      case 'ArrowRight': next = addCalendarDays(date, theme.direction === 'rtl' ? -1 : 1); break;
+      case 'ArrowUp': next = addCalendarDays(date, -7); break;
+      case 'ArrowDown': next = addCalendarDays(date, 7); break;
+      case 'Home': next = addCalendarDays(date, -date.getDay()); break;
+      case 'End': next = addCalendarDays(date, 6 - date.getDay()); break;
+      case 'PageUp': next = shiftMonth(date, event.shiftKey ? -12 : -1); break;
+      case 'PageDown': next = shiftMonth(date, event.shiftKey ? 12 : 1); break;
+      default: return;
+    }
+    event.preventDefault();
+    restoreFocus.current = true;
+    setShownMonth(next);
+    setFocusedDate(next);
+  }
 
   const grid = useMemo(() => buildMonthGrid(shownMonth), [shownMonth]);
   const weekdayLabels = useMemo(() => (
     Array.from({ length: 7 }, (_, index) => {
       // 2 August 2026 is a Sunday, giving us a stable Sunday-first label row.
       const day = new Date(2026, 7, 2 + index, 12);
-      return formatDate(day, { weekday: 'narrow' });
+      return { short: formatDate(day, { weekday: 'narrow' }), full: formatDate(day, { weekday: 'long' }) };
     })
   ), [formatDate]);
 
@@ -63,21 +111,21 @@ export default function DayViewMiniMonth({
     <Stack spacing={2} sx={{ minWidth: 0 }}>
       <Box>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.75 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 760 }}>
+          <Typography variant="subtitle2" aria-live="polite" aria-atomic="true" sx={{ fontWeight: 760 }}>
             {formatDate(shownMonth, { month: 'long', year: 'numeric' })}
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <IconButton
               size="small"
               aria-label={t('waves.day.previousMonth')}
-              onClick={() => setShownMonth((current) => addCalendarMonths(current, -1))}
+              onClick={() => browseMonth(-1)}
             >
               <ChevronLeftRoundedIcon fontSize="small" />
             </IconButton>
             <IconButton
               size="small"
               aria-label={t('waves.day.nextMonth')}
-              onClick={() => setShownMonth((current) => addCalendarMonths(current, 1))}
+              onClick={() => browseMonth(1)}
             >
               <ChevronRightRoundedIcon fontSize="small" />
             </IconButton>
@@ -85,61 +133,74 @@ export default function DayViewMiniMonth({
         </Box>
 
         <Box
+          ref={gridRef}
           role="grid"
           aria-label={formatDate(shownMonth, { month: 'long', year: 'numeric' })}
-          sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 0.25 }}
+          sx={{ display: 'grid', gap: 0.25 }}
         >
-          {weekdayLabels.map((label, index) => (
-            <Typography
-              key={`${label}-${index}`}
-              role="columnheader"
-              variant="caption"
-              color="text.secondary"
-              sx={{ textAlign: 'center', fontSize: 10, fontWeight: 720, py: 0.35 }}
-            >
-              {label}
-            </Typography>
-          ))}
-          {grid.map((cell) => {
-            const selected = isSameCalendarDay(cell.date, selectedDate);
-            const isToday = isSameCalendarDay(cell.date, today);
-            return (
-              <ButtonBase
-                key={cell.key}
-                role="gridcell"
-                aria-selected={selected}
-                aria-current={isToday ? 'date' : undefined}
-                aria-label={formatDate(cell.date, { dateStyle: 'full' })}
-                onClick={() => onSelectDate(cell.date)}
-                sx={{
-                  width: 30,
-                  height: 30,
-                  justifySelf: 'center',
-                  borderRadius: '50%',
-                  fontSize: 12,
-                  fontWeight: selected ? 780 : isToday ? 720 : 540,
-                  color: selected
-                    ? 'primary.contrastText'
-                    : cell.inMonth
-                      ? 'text.primary'
-                      : 'text.disabled',
-                  bgcolor: selected ? 'primary.main' : 'transparent',
-                  border: isToday && !selected
-                    ? `1px solid ${theme.palette.primary.main}`
-                    : '1px solid transparent',
-                  '&:hover': {
-                    bgcolor: selected ? 'primary.dark' : alpha(theme.palette.primary.main, 0.1),
-                  },
-                  '&:focus-visible': {
-                    outline: `3px solid ${alpha(theme.palette.primary.main, 0.26)}`,
-                    outlineOffset: 1,
-                  },
-                }}
+          <Box role="row" sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 0.25 }}>
+            {weekdayLabels.map((label, index) => (
+              <Typography
+                key={index}
+                role="columnheader"
+                aria-label={label.full}
+                variant="caption"
+                color="text.secondary"
+                sx={{ textAlign: 'center', fontSize: 10, fontWeight: 720, py: 0.35 }}
               >
-                {cell.date.getDate()}
-              </ButtonBase>
-            );
-          })}
+                {label.short}
+              </Typography>
+            ))}
+          </Box>
+          {Array.from({ length: 6 }, (_, week) => (
+            <Box key={week} role="row" sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 0.25 }}>
+              {grid.slice(week * 7, week * 7 + 7).map((cell) => {
+                const selected = isSameCalendarDay(cell.date, selectedDate);
+                const isToday = isSameCalendarDay(cell.date, today);
+                return (
+                  <Box key={cell.key} role="gridcell" aria-selected={selected} sx={{ display: 'flex', justifyContent: 'center' }}>
+                    <ButtonBase
+                      ref={(node: HTMLButtonElement | null) => {
+                        if (node) dayRefs.current.set(cell.key, node);
+                        else dayRefs.current.delete(cell.key);
+                      }}
+                      tabIndex={isSameCalendarDay(cell.date, focusedDate) ? 0 : -1}
+                      aria-current={isToday ? 'date' : undefined}
+                      aria-label={formatDate(cell.date, { dateStyle: 'full' })}
+                      onFocus={() => setFocusedDate(cell.date)}
+                      onKeyDown={(event) => navigateDate(event, cell.date)}
+                      onClick={() => onSelectDate(cell.date)}
+                      sx={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: '50%',
+                        fontSize: 12,
+                        fontWeight: selected ? 780 : isToday ? 720 : 540,
+                        color: selected
+                          ? 'primary.contrastText'
+                          : cell.inMonth
+                            ? 'text.primary'
+                            : 'text.disabled',
+                        bgcolor: selected ? 'primary.main' : 'transparent',
+                        border: isToday && !selected
+                          ? `1px solid ${theme.palette.primary.main}`
+                          : '1px solid transparent',
+                        '&:hover': {
+                          bgcolor: selected ? 'primary.dark' : alpha(theme.palette.primary.main, 0.1),
+                        },
+                        '&:focus-visible': {
+                          outline: `3px solid ${alpha(theme.palette.primary.main, 0.26)}`,
+                          outlineOffset: 1,
+                        },
+                      }}
+                    >
+                      {cell.date.getDate()}
+                    </ButtonBase>
+                  </Box>
+                );
+              })}
+            </Box>
+          ))}
         </Box>
       </Box>
 

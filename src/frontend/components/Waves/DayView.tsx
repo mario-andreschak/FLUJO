@@ -586,6 +586,7 @@ export default function DayView({
   ));
   const [hiddenPackages, setHiddenPackages] = useState<Set<string>>(() => new Set());
   const [mobileMonthOpen, setMobileMonthOpen] = useState(false);
+  const mobileMonthButtonRef = useRef<HTMLButtonElement>(null);
   const selectedDateMs = selectedDate?.getTime();
   const currentDate = useMemo(
     () => normalizeCalendarDay(selectedDateMs ?? internalDate),
@@ -713,6 +714,7 @@ export default function DayView({
         <Paper variant="outlined" sx={{ p: 1, borderRadius: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
             <Button
+              ref={mobileMonthButtonRef}
               size="small"
               startIcon={<CalendarMonthRoundedIcon />}
               onClick={() => setMobileMonthOpen((open) => !open)}
@@ -753,6 +755,7 @@ export default function DayView({
                 onSelectDate={(date) => {
                   setDate(date);
                   setMobileMonthOpen(false);
+                  mobileMonthButtonRef.current?.focus();
                 }}
                 onTogglePackage={togglePackage}
                 showPackageFilters={false}

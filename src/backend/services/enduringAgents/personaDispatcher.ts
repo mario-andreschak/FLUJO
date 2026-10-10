@@ -43,7 +43,7 @@ import {
   type FlowRunInput,
   type FlowRunResult,
 } from '@/backend/execution/flow/runFlow';
-import { readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { readConversationLog, withConversationLogEvents } from '@/backend/execution/flow/conversationLog';
 import { buildBehaviorToolRegistry } from '@/backend/execution/flow/handlers/behaviorToolInvocation';
 import {
   enqueueSteeringMessage,
@@ -3371,12 +3371,16 @@ export class PersonaFlowDispatcher {
   ): Promise<boolean> {
     const conversationId = target?.conversationId ?? record.flowInput?.conversationId;
     if (!conversationId) return false;
-    const events = await this.inWorkspace(() => (
-      this.dependencies.readConversationLog(conversationId)
-    ));
-    return Boolean(events?.some((event) => (
+    const matches = (events: Awaited<ReturnType<typeof readConversationLog>>) => Boolean(events?.some((event) => (
       event.type === 'message' && event.message.id === record.id
     )));
+    return this.inWorkspace(async () => {
+      // Preserve injected readers; the production reader retains admission through inspection.
+      if (this.dependencies.readConversationLog === readConversationLog) {
+        return withConversationLogEvents(conversationId, async events => matches(events));
+      }
+      return matches(await this.dependencies.readConversationLog(conversationId));
+    });
   }
 
   /**

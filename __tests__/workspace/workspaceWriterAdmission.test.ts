@@ -1,3 +1,5 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
 import { runWithWorkspace } from '@/utils/workspace';
 
@@ -47,5 +49,36 @@ it('does not poison subsequent admission when an admitted mutation fails', async
       .rejects.toThrow('expected writer failure');
     await expect(withWorkspaceMutation(async () => 'written')).resolves.toBe('written');
     await expect(withWorkspaceRecoveryCapture(async () => 'captured')).resolves.toBe('captured');
+  });
+});
+
+
+it('groups at most eight registrations per lease and releases each lease before its callers start', async () => {
+  await runWithWorkspace(`writer-batching-${process.pid}`, async () => {
+    const originalLink = fs.link.bind(fs); const originalUnlink = fs.unlink.bind(fs);
+    let lease = 0; const installed: number[] = []; const released = new Set<number>();
+    const link = jest.spyOn(fs, 'link').mockImplementation(async (source, target) => {
+      await originalLink(source, target);
+      const name = path.basename(String(target));
+      if (name === '.workspace-capture-admission.lock') lease++;
+      else if (/^\.workspace-capture-writer-[0-9a-f-]{36}\.lock$/.test(name)) installed.push(lease);
+    });
+    const unlink = jest.spyOn(fs, 'unlink').mockImplementation(async target => {
+      await originalUnlink(target);
+      if (path.basename(String(target)) === '.workspace-capture-admission.lock') released.add(lease);
+    });
+    let release!: () => void; const held = new Promise<void>(r => { release = r; });
+    let entered = 0; let ready!: () => void; const all = new Promise<void>(r => { ready = r; });
+    const writes = Array.from({ length: 17 }, (_, i) => withWorkspaceMutation(async () => {
+      expect(released.has(installed[i])).toBe(true);
+      if (++entered === 17) ready(); await held;
+    }));
+    try {
+      await Promise.race([all, Promise.all(writes)]);
+      expect(installed).toHaveLength(17);
+      expect([...new Set(installed)]).toHaveLength(3);
+      for (const group of new Set(installed)) expect(installed.filter(value => value === group).length).toBeLessThanOrEqual(8);
+    } finally { release(); await Promise.allSettled(writes); link.mockRestore(); unlink.mockRestore(); }
+    expect(globalThis.__flujo_workspace_writer_admission_chains?.size).toBe(0);
   });
 });
