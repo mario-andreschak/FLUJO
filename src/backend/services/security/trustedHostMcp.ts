@@ -667,8 +667,8 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
   } catch {
     try {
       if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-source]', 'refused', signal?.aborted ? 'signal-aborted' : 'revision-or-read', phase);
-    } catch { /* Preserve the original source-refusal disposition. */ }
-    throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    } catch { /* Preserve the refusal disposition. */ }
+    throw new TrustedHostMcpError(signal?.aborted ? 'HOST_CONSENT_REQUIRED' : 'HOST_SOURCE_CHANGED');
   }
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const after = await trustedHostMcpApprovalAsync(captured, signal);

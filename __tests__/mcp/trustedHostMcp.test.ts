@@ -299,7 +299,7 @@ it('fresh large-file verification accepts exact bytes and refuses mutation after
     return handle;
   });
   try {
-    await expect(verifyTrustedHostMcp(config, cancellation.signal)).rejects.toThrow('package revision changed');
+    await expect(verifyTrustedHostMcp(config, cancellation.signal)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
     expect(aborted).toBe(true); expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened);
   } finally { abortSpy.mockRestore(); }
 });

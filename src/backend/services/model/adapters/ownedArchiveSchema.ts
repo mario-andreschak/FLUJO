@@ -3,7 +3,8 @@ import { types } from 'node:util';
 import { isArchivePlainObject, ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 type Json = Record<string, unknown>;
-interface Built { schema: z.ZodType; json: Readonly<Json>; objectShape?: Record<string, z.ZodType> }
+interface Built { schema: z.ZodType; json: Readonly<Json>; objectShape?: Record<string, z.ZodType>;
+  intersectionMembers?: readonly Json[] }
 const owned = new WeakMap<object, Readonly<Json>>();
 const descriptors = new WeakSet<object>();
 const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
@@ -112,17 +113,18 @@ function context(root: unknown, meter = new Meter()): Context {
   return { root, meter, defs, seen: new Set(), refDepth: 0, depth: 0, fallback: { hit: false } };
 }
 function finish(schema: z.ZodType, json: Json, ctx: Context, description?: unknown,
-  objectShape?: Record<string, z.ZodType>): Built {
+  objectShape?: Record<string, z.ZodType>, intersectionMembers?: readonly Json[]): Built {
   if (typeof description === 'string' && description) {
     ctx.meter.take(); ctx.meter.text(description);
     schema = schema.describe(description);
     json = { ...json, description };
+    intersectionMembers = undefined; // Annotated intersections do not flatten.
   }
   Object.freeze(json);
   const descriptor = Object.freeze({ $schema: DIALECT, ...json });
   descriptors.add(descriptor);
   owned.set(schema, descriptor);
-  return { schema, json, objectShape };
+  return { schema, json, objectShape, intersectionMembers };
 }
 function any(ctx: Context, description?: unknown): Built {
   ctx.meter.take(); return finish(z.any(), {}, ctx, description);
@@ -166,6 +168,96 @@ function shape(root: Json, ctx: Context): { shape: Record<string, z.ZodType>; pr
   return { shape: output, properties, required };
 }
 
+// Match Zod 4.6's public JSON representation using only our metered,
+// constructor-owned data. Never project or inspect a private Zod graph here.
+function unionJson(members: Json[], ctx: Context): Json {
+  const types: string[] = [];
+  for (const member of members) {
+    ctx.meter.take();
+    if (Object.keys(member).length !== 1 || !('type' in member)) {
+      return { anyOf: Object.freeze(members) };
+    }
+    const values = Array.isArray(member.type) ? member.type : [member.type];
+    ctx.meter.slots(values.length);
+    for (const value of values) {
+      if (typeof value !== 'string') return { anyOf: Object.freeze(members) };
+      ctx.meter.text(value);
+      if (!types.includes(value)) types.push(value);
+    }
+  }
+  return { type: types.length === 1 ? types[0] : Object.freeze(types) };
+}
+
+function sameJson(left: unknown, right: unknown, ctx: Context): boolean {
+  ctx.meter.take();
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left), other = Object.keys(right);
+  ctx.meter.slots(keys.length + other.length);
+  // Zod deduplicates by serialized representation, including declaration
+  // order. Compare the owned data in that order without allocating strings.
+  return keys.length === other.length && keys.every((key, index) => key === other[index]
+    && sameJson((left as Json)[key], (right as Json)[key], ctx));
+}
+
+function foldObjects(members: Json[], ctx: Context): Json | undefined {
+  const allowed = ['type', 'properties', 'required', 'additionalProperties'];
+  for (const member of members) {
+    ctx.meter.take();
+    const keys = Object.keys(member);
+    ctx.meter.slots(keys.length);
+    if (member.type !== 'object' || keys.some(key => !allowed.includes(key))) return;
+  }
+  const properties: Json = Object.create(null);
+  const required: string[] = [];
+  for (const member of members) {
+    const fields = object(member.properties) ? member.properties : {};
+    for (const key of Object.keys(fields)) {
+      ctx.meter.take(); ctx.meter.text(key);
+      if (Object.hasOwn(properties, key)) continue;
+      const parts: Json[] = [];
+      for (const other of members) {
+        ctx.meter.take();
+        const source = object(other.properties) ? other.properties : {};
+        if (!Object.hasOwn(source, key)) continue;
+        const part = source[key] as Json;
+        if (!parts.some(seen => sameJson(seen, part, ctx))) {
+          ctx.meter.slots(1); parts.push(part);
+        }
+      }
+      properties[key] = parts.length === 1 ? parts[0]
+        : foldObjects(parts, child(ctx)) ?? Object.freeze({ allOf: Object.freeze(parts) });
+    }
+    for (const key of Array.isArray(member.required) ? member.required : []) {
+      ctx.meter.take();
+      if (typeof key !== 'string') refuse();
+      ctx.meter.text(key);
+      if (!required.includes(key)) required.push(key);
+    }
+  }
+  const json: Json = { type: 'object', properties: Object.freeze(properties) };
+  if (required.length) json.required = Object.freeze(required);
+  return Object.freeze(json);
+}
+
+function intersectionJson(members: Json[], ctx: Context): Json {
+  const unions = members.filter(member => Array.isArray(member.anyOf));
+  ctx.meter.slots(members.length);
+  if (!unions.length) return foldObjects(members, ctx) ?? { allOf: Object.freeze(members) };
+  const union = unions[0];
+  if (Object.keys(union).length !== 1) return { allOf: Object.freeze(members) };
+  const rest = members.filter(member => member !== union);
+  const branches: Json[] = [];
+  for (const branch of union.anyOf as Json[]) {
+    ctx.meter.slots(rest.length + 1);
+    const folded = foldObjects([...rest, branch], child(ctx));
+    if (!folded) return { allOf: Object.freeze(members) };
+    branches.push(folded);
+  }
+  return { anyOf: Object.freeze(branches) };
+}
+
 function node(value: unknown, ctx: Context): Built {
   ctx.meter.take(); // Before each constructor/represented node allocation.
   if (!object(value)) return any(ctx);
@@ -183,30 +275,40 @@ function node(value: unknown, ctx: Context): Built {
   }
   if (typeof value.$ref === 'string') {
     const resolved = reference(value.$ref, ctx);
-    return finish(resolved.schema, { ...resolved.json }, ctx, description, resolved.objectShape);
+    return finish(resolved.schema, { ...resolved.json }, ctx, description, resolved.objectShape, resolved.intersectionMembers);
   }
   if (Array.isArray(value.allOf) && value.allOf.length > 0) {
     ctx.meter.slots(value.allOf.length);
     const members: Built[] = (Array.prototype.map<Built>).call(value.allOf, (member: unknown) => node(member, child(ctx)));
-    let built = members[0];
-    for (const next of members.slice(1)) {
+    if (members.length === 1) return finish(members[0].schema, { ...members[0].json }, ctx, description,
+      members[0].objectShape, members[0].intersectionMembers);
+    let schema = members[0].schema;
+    for (let index = 1; index < members.length; index++) {
       ctx.meter.take();
-      const parts = (entry: Built): unknown[] => Object.keys(entry.json).length === 1 && Array.isArray(entry.json.allOf)
-        ? entry.json.allOf : [entry.json];
-      const left = parts(built), right = parts(next);
-      ctx.meter.slots(left.length + right.length);
-      built = finish(z.intersection(built.schema, next.schema), { allOf: Object.freeze([...left, ...right]) }, ctx);
+      schema = z.intersection(schema, members[index].schema);
     }
-    return finish(built.schema, { ...built.json }, ctx, description, built.objectShape);
+    // Zod flattens the original intersection members before its final fold.
+    // Folding each constructor pair early nests overlapping constraints and
+    // changes distributed required-field order. Keep metered, immutable raw
+    // members for enclosing intersections and fold the complete group once.
+    const parts: Json[] = [];
+    for (const member of members) {
+      const count = member.intersectionMembers?.length ?? 1;
+      ctx.meter.slots(count);
+      if (member.intersectionMembers) for (const part of member.intersectionMembers) parts.push(part);
+      else parts.push(member.json);
+    }
+    return finish(schema, intersectionJson(parts, ctx), ctx, description, undefined, Object.freeze(parts));
   }
   const composition = Array.isArray(value.anyOf) ? value.anyOf : Array.isArray(value.oneOf) ? value.oneOf : undefined;
   if (composition) {
     if (!composition.length) { ctx.fallback.hit = true; return any(ctx, description); }
     ctx.meter.slots(composition.length);
     const members: Built[] = (Array.prototype.map<Built>).call(composition, (member: unknown) => node(member, child(ctx)));
-    if (members.length === 1) return finish(members[0].schema, { ...members[0].json }, ctx, description, members[0].objectShape);
+    if (members.length === 1) return finish(members[0].schema, { ...members[0].json }, ctx, description,
+      members[0].objectShape, members[0].intersectionMembers);
     return finish(z.union(members.map(member => member.schema)),
-      { anyOf: Object.freeze(members.map(member => member.json)) }, ctx, description);
+      unionJson(members.map(member => member.json), ctx), ctx, description);
   }
   if ('if' in value && !('type' in value)) { ctx.fallback.hit = true; return any(ctx, description); }
   const raw = value.type;
@@ -239,7 +341,7 @@ function node(value: unknown, ctx: Context): Built {
   }
   if (Array.isArray(raw) && Array.prototype.includes.call(raw, 'null')) {
     ctx.meter.take(2);
-    built = finish(built.schema.nullable(), { anyOf: Object.freeze([built.json, Object.freeze({ type: 'null' })]) }, ctx);
+    built = finish(built.schema.nullable(), unionJson([built.json, Object.freeze({ type: 'null' })], ctx), ctx);
   }
   return finish(built.schema, { ...built.json }, ctx, description, built.objectShape);
 }
