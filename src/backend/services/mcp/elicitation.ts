@@ -92,6 +92,7 @@ export function createElicitationHandler(
     }
 
     const ctx = getElicitationContext(config.name);
+    if (options.expectedConversationId !== undefined && ctx?.conversationId !== options.expectedConversationId) return { action: 'cancel' };
     if (!ctx && relatedTaskId) {
       log.warn(
         `Task ${relatedTaskId} on ${config.name} requested input outside an attended run; auto-cancelling`
@@ -118,21 +119,18 @@ export function createElicitationHandler(
       noteTaskInputRequested(config.name, relatedTaskId, elicitationId);
     }
 
-    // Emit SSE event to the frontend.
-    const emit = executionEventBus.emitterFor(ctx.conversationId);
-    emit({
-      type: 'run:awaiting_elicitation',
-      elicitationId,
-      message,
-      requestedSchema,
-    });
-
-    // Await the user's response (or a 5-minute timeout).
+    await assertTaskInputCurrent(options);
+    if (getElicitationContext(config.name) !== ctx || ctx.getUnattended()) return { action: 'cancel' };
+    // Install the mailbox before publishing the request, including fast answers.
     const pending = registerPendingElicitation(elicitationId);
+    const emit = executionEventBus.emitterFor(ctx.conversationId);
     const cancel = bindToCurrentWorkspace(() => {
       if (cancelElicitation(elicitationId)) emit({ type: 'run:elicitation_cancelled', elicitationId });
     });
     options.signal?.addEventListener('abort', cancel, { once: true });
+    if (options.signal?.aborted) cancel();
+    else emit({ type: 'run:awaiting_elicitation', elicitationId, message, requestedSchema });
+
     let result: ElicitResult;
     try {
       if (options.signal?.aborted) cancel();

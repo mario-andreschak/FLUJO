@@ -265,6 +265,22 @@ export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () 
   });
 }
 
+/** Authoritative ordinary-backup read: absent files are empty; interrupted or corrupt files fail. */
+export async function loadItemForBackup<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultValue;
+    throw error;
+  }
+  if (!content.trim()) throw new Error('Backup storage item is empty');
+  return JSON.parse(content) as T;
+}
+
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {
   // Returned conversation values become caller-owned once this read scope ends.
   if (key.startsWith('conversations/')) {

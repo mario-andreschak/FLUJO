@@ -1,11 +1,18 @@
-# MCP Tasks extension (issue #404)
+# MCP Tasks legacy adapter notes (issue #404)
+
+These notes record the original SDK1 client baseline. For the current modern
+extension, deployment switches, authorized server operation, migration,
+durability and qualification, see [MCP Tasks 2026](mcp-tasks-2026.md).
+The table below describes the legacy wire contract; the lifecycle notes cover
+both generations.
 
 FLUJO can consume both MCP **Tasks** generations as a *client*: a
 long-running tool call may return a task handle immediately, and FLUJO then
 polls the task to completion, durably, across restarts.
 
 The delivered client lifecycle is behind a feature flag and defaults to **off**.
-Server-side Tasks remain unfinished (#404).
+Modern server Tasks are separately enabled at `/mcp-flows`; see the linked
+deployment and authorization requirements. The legacy endpoint stays synchronous.
 
 ## Pinned protocol contract
 
@@ -177,21 +184,16 @@ creating a poll storm. An hourly cron sweeps expiry and retention per workspace.
   result), just without durable-compliance claims.
 - `ENABLE_MCP_TASKS_SERVER` (default `false`) — see below.
 
-## Server-side status (deliberately not shipped)
+## Server-side status
 
-FLUJO's own MCP endpoints (`/mcp-proxy/[server]`, `/mcp-flows`) do **not**
-advertise or implement Tasks. Both build a fresh `Server` per request on a
-stateless Streamable HTTP transport. Their workspace route wrapper now admits
-owner/scoped-bearer requests and rechecks authorization while streaming. That
-request admission does not yet bind a durable server task to its caller: server
-construction and task handlers do not receive the admitted owner authorization.
-
-Server-side delivery still needs caller/workspace-bound durable records and
-fresh authorization checks for status, results, input, cancellation and execution
-effects. Task IDs alone must never grant access. It also needs an authored
-long-running operation, bounded execution and interoperable lifecycle handlers.
-`ENABLE_MCP_TASKS_SERVER` remains off because those pieces are not implemented.
-The delivered remote-client store does not establish server-task caller ownership.
+The modern `/mcp-flows` handler supports caller/workspace-bound durable Tasks
+for saved flows when `FLUJO_MCP_TASKS_SERVER=true`. It requires the configured
+owner policy and an explicit authorized bearer, rechecks authority before
+execution and each lifecycle operation, and retains encrypted results across
+restart without replaying interrupted work. Task IDs alone grant no access.
+The feature defaults to off. The legacy `/mcp-flows` handler and `/mcp-proxy`
+remain synchronous. See [MCP Tasks 2026](mcp-tasks-2026.md) for supported profiles,
+bounds, protocol migration and the production smoke command.
 
 ## Observability
 

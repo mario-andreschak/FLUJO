@@ -2,7 +2,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
-import { assertSafeCollectionId, listCollectionItems, loadItem } from '@/utils/storage/backend';
+import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadItemForBackup } from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
@@ -41,14 +41,14 @@ async function POST_handler(request: NextRequest) {
 
   const requestId = uuidv4();
   log.info(`Handling backup request [RequestID: ${requestId}]`);
-  
+
   try {
     const { selections: requestedSelections } = await request.json();
     const selections = Array.isArray(requestedSelections)
       ? [...new Set(requestedSelections.filter((selection): selection is string =>
         typeof selection === 'string' && (ORDINARY_BACKUP_SELECTIONS as readonly string[]).includes(selection)))]
       : [];
-    
+
     if (!selections || !Array.isArray(selections) || selections.length === 0) {
       log.error(`Invalid selections [${requestId}]`);
       return NextResponse.json({ error: 'Invalid selections' }, { status: 400 });
@@ -58,23 +58,26 @@ async function POST_handler(request: NextRequest) {
     // A second read after the authority check would leave a TOCTOU window in
     // which newly Persona-attributed state could enter a non-strict backup.
     let chatHistorySnapshot: unknown = null;
+    const selectionResults: Record<string, 'completed' | 'empty' | 'failed'> = Object.fromEntries(selections.map(selection => [selection, 'empty']));
     const conversationSnapshots: Record<string, unknown>[] = [];
     if (selections.includes('chatHistory')) {
       const [historySnapshot, loadedConversations] = await Promise.all([
-        loadItem<unknown>(StorageKey.CHAT_HISTORY, null),
-        listCollectionItems<unknown>('conversations'),
+        loadItemForBackup<unknown>(StorageKey.CHAT_HISTORY, null),
+        listCollectionItemEntriesStrict<unknown>('conversations'),
       ]);
       chatHistorySnapshot = historySnapshot;
-      for (const conversation of loadedConversations) {
-        if (!isRecord(conversation) || typeof conversation.conversationId !== 'string') {
+      for (const { id, item: conversation } of loadedConversations) {
+        if (!isRecord(conversation) || typeof conversation.conversationId !== 'string' || conversation.conversationId !== id) {
           log.warn(`Skipped conversation without an id [${requestId}]`);
+          selectionResults.chatHistory = 'failed';
           continue;
         }
         try {
           assertSafeCollectionId(conversation.conversationId);
           conversationSnapshots.push(conversation);
-        } catch (error) {
-          log.warn(`Skipped conversation with an unsafe id [${requestId}]:`, error);
+        } catch {
+          selectionResults.chatHistory = 'failed';
+          log.warn(`Skipped conversation with an unsafe id [${requestId}]`);
         }
       }
       const includesPersonaConversation = historyContainsPersonaConversation(chatHistorySnapshot)
@@ -84,31 +87,15 @@ async function POST_handler(request: NextRequest) {
         if (notStrictLoopback) return notStrictLoopback;
       }
     }
-    
+
     // Create a new zip file
     const zip = new JSZip();
-    
-    // Add metadata
-    // `version` stays '1.0' so older FLUJO builds can still read new archives;
-    // the workspace fields are additive metadata that a legacy reader ignores.
-    zip.file('backup-info.json', JSON.stringify({
-      version: '1.0',
-      timestamp: new Date().toISOString(),
-      selections,
-      credentials: 'omitted',
-      omittedSelections: ['encryptionKey', 'mcpServersFolder'],
-      // #406: which workspace this archive was taken from, and which on-disk
-      // layout it assumes. An archive WITHOUT these fields is a legacy,
-      // pre-workspace backup and restores into the selected workspace.
-      workspace: getCurrentWorkspace(),
-      workspaceLayoutVersion: WORKSPACE_LAYOUT_VERSION,
-    }));
-    
+
     // Add storage files
     const storageSelections = selections.filter(s => s !== 'mcpServersFolder');
     for (const selection of storageSelections) {
       let storageKey: StorageKey | undefined;
-      
+
       // Map selection to storage key
       switch (selection) {
         case 'models':
@@ -130,52 +117,77 @@ async function POST_handler(request: NextRequest) {
           storageKey = StorageKey.GLOBAL_ENV_VARS;
           break;
       }
-      
+
       if (storageKey) {
         try {
           log.debug(`Loading storage item for backup [${requestId}]:`, storageKey);
-          
+
           // Flows now live one-file-per-flow (db/flows/<id>.json); aggregate
           // them back into the single array the zip format expects so old FLUJO
           // versions can still restore new backups. Everything else reads its
           // single storage file as before.
           const data = storageKey === StorageKey.FLOWS
-            ? await flowService.loadFlows()
+            ? await flowService.loadFlowsForBackup()
             : storageKey === StorageKey.CHAT_HISTORY
               ? chatHistorySnapshot
-            : await loadItem<unknown>(storageKey, null);
+            : await loadItemForBackup<unknown>(storageKey, null);
           if (data === null || (storageKey === StorageKey.FLOWS && Array.isArray(data) && data.length === 0)) {
             log.warn(`No data stored for key [${requestId}]:`, storageKey);
             continue;
           }
-          
+
           // Keep the zip entry layout storage/<key>.json — restore and
           // previously created backups depend on it.
-          zip.file(`storage/${storageKey}.json`, JSON.stringify(ordinaryBackupData(selection, data), null, 2));
+          const serialized = JSON.stringify(ordinaryBackupData(selection, data), null, 2);
+          if (serialized === undefined) continue;
+          zip.file(`storage/${storageKey}.json`, serialized);
+          if (selectionResults[selection] !== 'failed') selectionResults[selection] = Array.isArray(data) && data.length === 0 ? 'empty' : 'completed';
           log.debug(`Added file to backup [${requestId}]:`, `storage/${storageKey}.json`);
         } catch {
           log.error(`Error adding file to backup [${requestId}]`);
+          selectionResults[selection] = 'failed';
           // Continue with other files
         }
       }
     }
-    
+
     // Modern conversations live one-file-per-conversation. Keep the legacy
     // storage/history.json entry above for backward compatibility, and add the
     // collection snapshots independently so mixed archives preserve both.
     if (selections.includes('chatHistory')) {
-      try {
-        for (const conversation of conversationSnapshots) {
+      for (const conversation of conversationSnapshots) {
+        try {
           const conversationId = conversation.conversationId as string;
-          zip.file(
-            `storage/conversations/${conversationId}.json`,
-            JSON.stringify(ordinaryBackupData('chatHistory', conversation), null, 2),
-          );
+          zip.file(`storage/conversations/${conversationId}.json`, JSON.stringify(ordinaryBackupData('chatHistory', conversation), null, 2));
+          if (selectionResults.chatHistory !== 'failed') selectionResults.chatHistory = 'completed';
+        } catch {
+          selectionResults.chatHistory = 'failed';
+          log.error(`Error adding conversation to backup [${requestId}]`);
         }
-      } catch (error) {
-        log.error(`Error adding conversations to backup [${requestId}]:`, error);
       }
     }
+    if (Object.values(selectionResults).includes('failed') && !Object.values(zip.files).some(file => !file.dir)) {
+      return NextResponse.json({ error: 'Failed to create backup' }, { status: 500 });
+    }
+    const status = Object.values(selectionResults).includes('failed') ? 'partial' : 'complete';
+    // Add metadata
+    // `version` stays '1.0' so older FLUJO builds can still read new archives;
+    // the workspace fields are additive metadata that a legacy reader ignores.
+    zip.file('backup-info.json', JSON.stringify({
+      status,
+      selectionResults,
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      selections,
+      credentials: 'omitted',
+      omittedSelections: ['encryptionKey', 'mcpServersFolder'],
+      // #406: which workspace this archive was taken from, and which on-disk
+      // layout it assumes. An archive WITHOUT these fields is a legacy,
+      // pre-workspace backup and restores into the selected workspace.
+      workspace: getCurrentWorkspace(),
+      workspaceLayoutVersion: WORKSPACE_LAYOUT_VERSION,
+    }));
+
 
     // Generate the zip file
     log.debug(`Generating zip file [${requestId}]`);
@@ -186,13 +198,14 @@ async function POST_handler(request: NextRequest) {
         level: 9
       }
     });
-    
-    log.info(`Backup created successfully [${requestId}]`);
-    
+
+    log.info(`Backup created (${status}) [${requestId}]`);
+
     // Return the zip file
     return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
+        'X-Flujo-Backup-Status': status,
         'Cache-Control': 'no-store',
         'Content-Disposition': 'attachment; filename=flujo-backup.zip'
       }
