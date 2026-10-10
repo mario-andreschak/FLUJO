@@ -17,7 +17,9 @@ for (const [label, change] of [
   ['stale checks permitted', (f) => { f.rules.find((r) => r.type === 'required_status_checks').parameters.strict_required_status_checks_policy = false; }],
   ['missing required check', (f) => { f.rules.find((r) => r.type === 'required_status_checks').parameters.required_status_checks.pop(); }],
   ['spoofable check source', (f) => { f.rules.find((r) => r.type === 'required_status_checks').parameters.required_status_checks[0].integration_id = null; }],
-  ['extra scanner merge gate', (f) => { f.rules.push({ type: 'code_scanning', ruleset_id: 7 }); }],
+  ['missing scanner protection', (f) => { f.rules = f.rules.filter(rule => rule.type !== 'code_scanning'); }],
+  ['weakened scanner protection', (f) => { f.rules.find(rule => rule.type === 'code_scanning').parameters.code_scanning_tools[0].security_alerts_threshold = 'none'; }],
+  ['status-only extra check', (f) => { f.rules.find(rule => rule.type === 'required_status_checks').parameters.required_status_checks.push({ context: 'synthetic', integration_id: 15368 }); }],
 ]) {
   test(`auditor refuses ${label}`, () => { const f = fixture(); change(f); assert.throws(() => assertRepositoryRules(f)); });
 }

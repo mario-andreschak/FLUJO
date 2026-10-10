@@ -11,7 +11,7 @@
 # which is why HOME points at a writable, owned directory.
 
 # ---- Builder --------------------------------------------------------------
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
+FROM public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
 WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
@@ -23,6 +23,7 @@ COPY mcp-servers ./mcp-servers
 # package metadata before the later full source copy.
 COPY tooling/next-lint-glob ./tooling/next-lint-glob
 COPY packages/antigravity-cli ./packages/antigravity-cli
+COPY packages/avatar-sdk ./packages/avatar-sdk
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
@@ -33,7 +34,7 @@ ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
+FROM public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
 WORKDIR /app
 COPY --from=builder /app/bin ./bin
 COPY --from=builder /app/scripts/verify-ci-node.mjs /app/scripts/ci-node-binaries.json ./scripts/
@@ -111,6 +112,7 @@ COPY --from=builder /app/mcp-servers ./mcp-servers
 # Keep local lockfile targets available during the production install.
 COPY --from=builder /app/tooling/next-lint-glob ./tooling/next-lint-glob
 COPY --from=builder /app/packages/antigravity-cli ./packages/antigravity-cli
+COPY --from=builder /app/packages/avatar-sdk ./packages/avatar-sdk
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
 COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright

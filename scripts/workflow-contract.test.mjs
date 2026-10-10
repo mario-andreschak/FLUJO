@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { assertFullWorkflowContract } from './workflow-contract.mjs';
+import { assertFullWorkflowContract, assertWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -13,6 +13,16 @@ const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((fi
 
 test('repository workflows retain mandatory verification and immutable direct action dependencies', () => {
   assertFullWorkflowContract(readWorkflows());
+});
+
+test('the main bridge runs genuine required jobs and the broad workflow remains manual', () => {
+  const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
+    .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
+  assertWorkflowContract(files);
+  assert.equal(files['verify.yml'].jobs['production-build'].strategy.matrix.os.length, 1);
+  assert.equal(files['verify-full.yml'].jobs['production-build'].strategy.matrix.os.length, 2);
+  assert.equal(files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run,
+    files['verify-full.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run);
 });
 
 for (const [label, change] of [
@@ -36,6 +46,9 @@ for (const [label, change] of [
   ['disabled real container probes', files => { delete files['verify.yml'].jobs.test.steps.find(step => step.run === 'npm run test:ci').env.FLUJO_RUN_ISOLATION_SOURCE_PROBE; }],
   ['missing Linux Docker preparation', files => { files['verify.yml'].jobs.test.steps = files['verify.yml'].jobs.test.steps.filter(step => step.name !== 'Prepare real Linux MCP isolation image'); }],
   ['optional Linux Docker preparation', files => { files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image')['continue-on-error'] = true; }],
+  ['unpinned isolation image', files => { files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run = files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run.replace("digest='sha256:", "digest='moving:"); }],
+  ['unbounded registry retries', files => { files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run = files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run.replace('for attempt in 1 2; do', 'while true; do'); }],
+  ['optional isolation image identity', files => { files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run = files['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run.replace('test -n "$image_ref"', 'true'); }],
   ['optional assertion baseline', (files) => { files['verify.yml'].jobs.test.steps.find((step) => step.run?.startsWith('npm run verify:test-baseline'))['continue-on-error'] = true; }],
   ['omitted final dependency', (files) => { files['verify.yml'].jobs.verification.needs.pop(); }],
   ['conditionally skipped final gate', (files) => { delete files['verify.yml'].jobs.verification.if; }],
@@ -219,4 +232,60 @@ test('Worker publisher scripts parse in Bash and reject the nested heredoc inden
   });
   assert.ifError(checked.error);
   assert.equal(checked.status, 0, checked.stderr);
+});
+
+test('actual isolation setup retries identical manifest mirrors and fails closed without an image', t => {
+  const tempRoot = realpathSync.native(os.tmpdir());
+  const root = realpathSync.native(mkdtempSync(path.join(tempRoot, 'flujo-isolation-mirrors-')));
+  t.after(() => {
+    const relative = path.relative(tempRoot, realpathSync.native(root));
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    rmSync(root, { recursive: true, force: true });
+  });
+  const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(git.status, 0, git.stderr);
+  const bash = process.platform === 'win32' ? path.resolve(git.stdout.trim(), '..', '..', '..', 'bin', 'bash.exe') : 'bash';
+  const preparation = readWorkflows()['verify.yml'].jobs.test.steps.find(step => step.name === 'Prepare real Linux MCP isolation image').run;
+  const image = `sha256:${'a'.repeat(64)}`;
+  // Run the actual YAML with fixture commands; no real daemon or registry is used.
+  const fixture = `
+docker() {
+  test "$1" = --host && test "$2" = unix:///var/run/docker.sock || return 2
+  shift 2
+  case "$1" in
+    info) printf '%s\\n' linux/2 ;;
+    pull)
+      printf '%s\\n' "$2" >> "$PULL_LOG"
+      test "\${2##*@}" = 'sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392' || return 2
+      test "$MODE" = primary && return 0
+      if test "$MODE" = mirror && [[ "$2" = public.ecr.aws/* ]]; then return 0; fi
+      test "$MODE" = malformed && return 0
+      return 1 ;;
+    image)
+      test "$2" = inspect || return 2
+      if test "$MODE" = malformed; then printf '%s\\n' bogus; else printf '%s\\n' '${image}'; fi ;;
+    *) return 2 ;;
+  esac
+}
+sleep() { :; }
+`;
+  for (const [mode, expectedAttempts, expectedStatus] of [['primary', 1, 0], ['mirror', 3, 0], ['failed', 4, 1], ['malformed', 1, 1]]) {
+    const envFile = path.join(root, `${mode}.env`);
+    const pullLog = path.join(root, `${mode}.pulls`);
+    writeFileSync(envFile, '');
+    writeFileSync(pullLog, '');
+    const result = spawnSync(bash, ['-e', '-c', fixture + preparation], {
+      cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10_000,
+      env: { ...process.env, MODE: mode, GITHUB_ENV: envFile, PULL_LOG: pullLog },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, expectedStatus, `${mode}: ${result.stderr}`);
+    const pulls = readFileSync(pullLog, 'utf8').trim().split('\n');
+    assert.equal(pulls.length, expectedAttempts);
+    for (const ref of pulls) assert.match(ref, /@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392$/);
+    if (mode === 'mirror') assert.match(pulls.at(-1), /^public\.ecr\.aws\/docker\/library\/node:/);
+    const output = readFileSync(envFile, 'utf8');
+    if (expectedStatus === 0) assert.ok(output.includes(`FLUJO_TEST_ISOLATION_IMAGE=${image}\n`));
+    else assert.equal(output, '', 'A failed pull or malformed image must not supply probe environment.');
+  }
 });

@@ -87,8 +87,20 @@ jobs:
           docker_path="$(command -v docker)"
           daemon='unix:///var/run/docker.sock'
           test "$("$docker_path" --host "$daemon" info --format '{{.OSType}}/{{.CgroupVersion}}')" = 'linux/2'
-          "$docker_path" --host "$daemon" pull node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
-          image="$("$docker_path" --host "$daemon" image inspect node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 --format '{{.Id}}')"
+          # Both registries must provide the same pinned upstream manifest.
+          digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
+          image_ref=''
+          for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do
+            for attempt in 1 2; do
+              if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
+                image_ref="$registry@$digest"
+                break 2
+              fi
+              sleep "$attempt"
+            done
+          done
+          test -n "$image_ref"
+          image="$("$docker_path" --host "$daemon" image inspect "$image_ref" --format '{{.Id}}')"
           [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]
           printf '%s\n' "FLUJO_TEST_ISOLATION_DOCKER=$docker_path" "FLUJO_TEST_ISOLATION_DAEMON=$daemon" "FLUJO_TEST_ISOLATION_IMAGE=$image" >> "$GITHUB_ENV"
       # This verification builds and packs the exact version commit and smoke

@@ -7,7 +7,7 @@ const needs = () => Object.fromEntries(REQUIRED_JOB_IDS.map((id) => [id, { resul
 const context = { runId: 100, revision: 'a'.repeat(40), workflowId: 42 };
 const run = { id: 100, workflow_id: 42, head_sha: context.revision, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', run_attempt: 2, path: '.github/workflows/verify.yml' };
 
-test('the single focused job must complete successfully', () => {
+test('every real prerequisite must complete successfully', () => {
   assertDependencyResults(needs());
   for (const id of REQUIRED_JOB_IDS) {
     for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
@@ -17,7 +17,7 @@ test('the single focused job must complete successfully', () => {
   assert.throws(() => assertDependencyResults(null));
 });
 
-test('publication requires successful focused exact-source verification', () => {
+test('publication requires all twelve successful exact-source checks', () => {
   assertVerificationJobs(jobs());
   for (const name of REQUIRED_CHECK_NAMES) {
     const remaining = jobs().filter((job) => job.name !== name);

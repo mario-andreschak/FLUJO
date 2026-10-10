@@ -1,3 +1,3 @@
 'use client';
-export { default } from '@/vendor/avatar/client/Eyes';
-export type { AvatarStyle, EyePhase } from '@/vendor/avatar/client/Eyes';
+export { Eyes as default } from '@flujo-ai/avatar-sdk/eyes';
+export type { AvatarStyle, EyePhase } from '@flujo-ai/avatar-sdk/eyes';

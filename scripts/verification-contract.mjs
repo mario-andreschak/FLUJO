@@ -20,11 +20,10 @@ export function assertFullDependencyResults(needs) {
   }
 }
 
-export const REQUIRED_JOB_IDS = Object.freeze(['verification']);
-export const REQUIRED_CHECK_NAMES = Object.freeze(['verification']);
-export function assertDependencyResults(needs) {
-  if (!needs || needs.verification?.result !== 'success') throw new Error('Required verification job verification concluded unsuccessfully.');
-}
+// Match the twelve genuine GitHub checks in the active main ruleset.
+export const REQUIRED_JOB_IDS = FULL_JOB_IDS;
+export const REQUIRED_CHECK_NAMES = Object.freeze(FULL_CHECK_NAMES.filter(name => name !== 'Production build (windows-latest)'));
+export const assertDependencyResults = assertFullDependencyResults;
 
 /** A green aggregate workflow can still contain skipped or removed jobs. */
 export function assertVerificationJobs(jobs) {

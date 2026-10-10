@@ -163,7 +163,7 @@ test('installer validation retains explicit manual availability', () => {
 test('installer helper changes cannot introduce another automatic PR workflow', () => {
   const files = workflows();
   files['installer.yml'].on.pull_request = { paths: ['scripts/installer-release.mjs'] };
-  assert.throws(() => assertWorkflowContract(files), /Only focused verification/);
+  assert.throws(() => assertWorkflowContract(files), /Only main integration verification/);
 });
 
 for (const job of ['installer-attest', 'installer-publish']) {

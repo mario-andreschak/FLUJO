@@ -1,5 +1,5 @@
 {
-  "name": "main focused automated verification",
+  "name": "main automated verification",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [],
@@ -35,8 +35,64 @@
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           {
+            "context": "Production build (ubuntu-latest)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Release safety (ubuntu-latest)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Release safety (windows-latest)",
+            "integration_id": 15368
+          },
+          {
+            "context": "typecheck",
+            "integration_id": 15368
+          },
+          {
+            "context": "lint",
+            "integration_id": 15368
+          },
+          {
+            "context": "test",
+            "integration_id": 15368
+          },
+          {
+            "context": "test-isolated",
+            "integration_id": 15368
+          },
+          {
+            "context": "workflow-contract",
+            "integration_id": 15368
+          },
+          {
+            "context": "dependency-security",
+            "integration_id": 15368
+          },
+          {
+            "context": "CodeQL (javascript-typescript)",
+            "integration_id": 15368
+          },
+          {
+            "context": "CodeQL (actions)",
+            "integration_id": 15368
+          },
+          {
             "context": "verification",
             "integration_id": 15368
+          }
+        ]
+      }
+    },
+    {
+      "type": "code_scanning",
+      "parameters": {
+        "code_scanning_tools": [
+          {
+            "tool": "CodeQL",
+            "alerts_threshold": "errors",
+            "security_alerts_threshold": "high_or_higher"
           }
         ]
       }

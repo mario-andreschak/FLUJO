@@ -84,6 +84,7 @@ const nextConfig = {
     ];
   },
   transpilePackages: [
+    '@flujo-ai/avatar-sdk',
     '@mui/material',
     '@mui/icons-material',
     '@mui/system',

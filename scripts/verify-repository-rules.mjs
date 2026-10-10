@@ -31,7 +31,10 @@ export function assertRepositoryRules({ rules, rulesets }) {
       throw new Error(`Missing required up-to-date GitHub Actions check: ${name}.`);
     }
   }
-  if (rules.some(rule => rule.type === 'code_scanning' || (rule.type === 'required_status_checks' && rule.parameters.required_status_checks.some(check => !REQUIRED_CHECK_NAMES.includes(check.context))))) throw new Error('Focused merge policy cannot require former hosted contexts or a separate scanner run.');
+  if (!rules.some(rule => rule.type === 'code_scanning' && rule.parameters?.code_scanning_tools?.some(tool => tool.tool === 'CodeQL'
+      && ['errors', 'errors_and_warnings', 'all'].includes(tool.alerts_threshold)
+      && ['high_or_higher', 'medium_or_higher', 'all'].includes(tool.security_alerts_threshold)))) throw new Error('CodeQL high/critical findings protection must remain enforced.');
+  if (rules.some(rule => rule.type === 'required_status_checks' && rule.parameters.required_status_checks.some(check => !REQUIRED_CHECK_NAMES.includes(check.context)))) throw new Error('Unexpected required checks need explicit workflow qualification.');
 }
 
 export function inspectRepositoryRules({ api, branch = 'main' }) {

@@ -285,6 +285,10 @@ jobs:
       - run: npm run typecheck
       - run: npm run typecheck:mcp
       - run: node scripts/generate-api-inventory.mjs --check
+      - name: Verify packed Avatar SDK installation
+        run: |
+          npm run verify:avatar-sdk
+          node --test scripts/avatar-sdk-packed-dependency.test.mjs
 
   workflow-contract:
     name: workflow-contract
@@ -301,7 +305,7 @@ jobs:
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
-      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs scripts/selector-parser-security.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/required-check-workflow.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs scripts/selector-parser-security.test.mjs
 
   dependency-security:
     name: dependency-security
@@ -328,8 +332,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # Administrator prerequisite: disable CodeQL default setup before this
-  # advanced setup can upload results. See docs/engineering-verification.md.
+  # Genuine two-language extended scans and processed result uploads.
+  # If default setup is enabled, an administrator must switch it to advanced.
   codeql:
     name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-latest
@@ -405,14 +409,30 @@ jobs:
           docker_path="$(command -v docker)"
           daemon='unix:///var/run/docker.sock'
           test "$("$docker_path" --host "$daemon" info --format '{{.OSType}}/{{.CgroupVersion}}')" = 'linux/2'
-          "$docker_path" --host "$daemon" pull node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
-          image="$("$docker_path" --host "$daemon" image inspect node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 --format '{{.Id}}')"
+          # Both registries must provide the same pinned upstream manifest.
+          digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
+          image_ref=''
+          for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do
+            for attempt in 1 2; do
+              if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
+                image_ref="$registry@$digest"
+                break 2
+              fi
+              sleep "$attempt"
+            done
+          done
+          test -n "$image_ref"
+          image="$("$docker_path" --host "$daemon" image inspect "$image_ref" --format '{{.Id}}')"
           [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]
           printf '%s\n' "FLUJO_TEST_ISOLATION_DOCKER=$docker_path" "FLUJO_TEST_ISOLATION_DAEMON=$daemon" "FLUJO_TEST_ISOLATION_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Exercise real Linux MCP discovery and cleanup before the full suite
         env:
           FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1'
         run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand __tests__/mcp/isolatedMcpContainerSource.test.ts
+      - name: Critical backend regressions
+        run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/settings/backupRestoreRoutes.test.ts __tests__/settings/backupStrictStorage.test.ts __tests__/workspace/workspaceListRoute.test.ts __tests__/workspace/workspaceCreateMcpRecords.test.ts __tests__/workspace/workspaceRouteWrapper.test.ts __tests__/flow/conversationLogReadAdmission.test.ts __tests__/flow/conversationSnapshotAdmission.test.ts __tests__/flow/modelTurnArchiveWriteBudget.test.ts __tests__/mcp/toolDiscoveryPagination.test.ts __tests__/mcp/storedTransportAdmission.test.ts __tests__/mcp/tasksGenerationsProtocol.test.ts __tests__/mcp/clientTasksLifecycle.test.ts __tests__/mcp/tasksExtensionSession.test.ts __tests__/mcp/serverTasks.test.ts __tests__/mcp/flowsTasksServer.test.ts __tests__/mcp/flowsTasksRouteClassification.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/model/orcarouterProvider.test.ts __tests__/ollama/ollamaClient.test.ts __tests__/ollama/pullRoute.test.ts __tests__/packages/workspaceMcpPreparationMarker.test.ts __tests__/security/ownerAccess.test.ts __tests__/security/isolatedMcp.test.ts __tests__/mcp/isolatedMcpTransport.test.ts __tests__/mcp/securityReviewSource.test.ts __tests__/mcp/securityReviewReport.test.ts __tests__/mcp/securityReviewRoute.test.ts __tests__/mcp/securityReviewLifecycle.test.ts __tests__/mcp/securityReviewRunner.test.ts __tests__/mcp/modelRiskEvidence.test.ts __tests__/mcp/modelRiskAssessment.test.ts __tests__/mcp/modelRiskAssessmentRoute.test.ts __tests__/model/readOnlyAssessmentAdapter.test.ts __tests__/mcp/discoverySearch.test.ts __tests__/mcp/registryDiscovery.test.ts __tests__/mcp/assistedPreferences.test.ts __tests__/mcp/assistedRanking.test.ts __tests__/mcp/assistedInstall.test.ts __tests__/mcp/assistantRoute.test.ts __tests__/mcp/registryInstall.test.ts __tests__/mcp/registryIconsRoute.test.ts __tests__/mcp/registryDiscoveryClient.test.ts __tests__/mcp/registryDiscoveryRoute.test.ts __tests__/mcp/registryWorkspaceIsolation.test.ts __tests__/mcp/quality/orchestrator.test.ts __tests__/mcp/installBestAssistedTool.test.ts __tests__/mcp/assistedDiscoveryBody.test.ts
+      - name: Critical frontend regressions
+        run: node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath __tests__/frontend/components/DayViewMiniMonth.test.tsx __tests__/frontend/components/ChatHistory.test.tsx __tests__/frontend/components/PersonaGoalCard.test.tsx __tests__/frontend/components/PersonaGoalValidation.test.tsx __tests__/frontend/components/BackupSettings.test.tsx __tests__/frontend/components/ModelConnectionWizard.test.tsx __tests__/frontend/components/McpConnectionWizard.test.tsx __tests__/frontend/components/McpAiConnectionPanel.test.tsx __tests__/frontend/components/McpServerManagerWizardOwnership.test.tsx __tests__/frontend/components/oauthPopup.test.ts __tests__/frontend/components/CardPickerGrid.test.tsx __tests__/frontend/components/PersonaCreationWizard.test.tsx __tests__/frontend/components/RoleVersionCardLocalization.test.tsx __tests__/frontend/components/McpSecurityReviewPanel.test.tsx __tests__/frontend/components/McpModelRiskAssessmentPanel.test.tsx __tests__/frontend/components/ServerModalDiscoverySession.test.tsx __tests__/frontend/components/MarketplaceTab.test.tsx
       # Jest's own exit code is deliberately not the gate: the baseline script
       # below is, because it distinguishes "a quarantined flake failed" from
       # "a suite stopped executing". It still records the raw results.

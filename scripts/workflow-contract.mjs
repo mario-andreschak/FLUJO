@@ -1,5 +1,5 @@
 import { assertRequiredCheckWorkflow } from './required-check-workflow.mjs';
-import { FULL_JOB_IDS as REQUIRED_JOB_IDS, FULL_CHECK_NAMES as REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
+import { FULL_JOB_IDS as REQUIRED_JOB_IDS, FULL_CHECK_NAMES as REQUIRED_CHECK_NAMES, REQUIRED_CHECK_NAMES as MAIN_CHECK_NAMES } from './verification-contract.mjs';
 import { CI_NODE_PROFILES } from './verify-ci-node.mjs';
 import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
 
@@ -128,7 +128,7 @@ function assertInstallerProvenance(workflow) {
   }
 }
 
-export function assertFullWorkflowContract(workflows) {
+export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
@@ -185,7 +185,7 @@ export function assertFullWorkflowContract(workflows) {
     throw new Error('Selected-release journeys must verify ancestry from the workflow checkout before detaching or installing, without shared caches.');
   }
   const workflow = workflows['verify.yml'];
-  if (!workflow || !Object.hasOwn(workflow.on, 'workflow_dispatch') || Object.hasOwn(workflow.on, 'pull_request') || Object.hasOwn(workflow.on, 'push')) {
+  if (!workflow || !Object.hasOwn(workflow.on, 'workflow_dispatch') || (!mainIntegration && (Object.hasOwn(workflow.on, 'pull_request') || Object.hasOwn(workflow.on, 'push')))) {
     throw new Error('Broad qualification must be explicitly dispatched; it cannot run on every PR or push.');
   }
   for (const id of REQUIRED_JOB_IDS) {
@@ -200,8 +200,8 @@ export function assertFullWorkflowContract(workflows) {
     }
   }
   for (const id of ['production-build', 'release-safety']) {
-    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])) {
-      throw new Error(`${id} must cover Ubuntu and Windows.`);
+    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(mainIntegration && id === 'production-build' ? ['ubuntu-latest'] : ['ubuntu-latest', 'windows-latest'])) {
+      throw new Error(`${id} has an unexpected platform matrix.`);
     }
   }
   const names = [...REQUIRED_JOB_IDS, 'verification'].flatMap((id) => {
@@ -212,7 +212,7 @@ export function assertFullWorkflowContract(workflows) {
         ? job.strategy.matrix.language.map((language) => job.name.replace('${{ matrix.language }}', language))
         : [job.name];
   });
-  if (JSON.stringify(names) !== JSON.stringify(REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
+  if (JSON.stringify(names) !== JSON.stringify(mainIntegration ? MAIN_CHECK_NAMES : REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
   const build = workflow.jobs['production-build'].steps;
   if (build.some(step => step.if === APPLICATION_CHANGED)) {
     const selection = build.find(step => step.id === 'application-change');
@@ -248,6 +248,16 @@ export function assertFullWorkflowContract(workflows) {
       || mainTests[suite].env?.FLUJO_RUN_ISOLATION_SOURCE_PROBE !== '1') {
     throw new Error('Main CI must prepare a real Linux Docker image and execute both MCP isolation probes.');
   }
+  const preparation = mainTests[isolation].run;
+  if (!preparation.includes("digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'")
+      || !preparation.includes('for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do')
+      || !preparation.includes('for attempt in 1 2; do')
+      || !preparation.includes('pull "$registry@$digest"')
+      || !preparation.includes('test -n "$image_ref"')
+      || !preparation.includes('image inspect "$image_ref"')
+      || !preparation.includes('[[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]')) {
+    throw new Error('Isolation pulls must retry bounded identical-digest mirrors and fail closed before publishing the inspected image identity.');
+  }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
@@ -259,9 +269,10 @@ export function assertFullWorkflowContract(workflows) {
 export function assertWorkflowContract(workflows) {
   assertRequiredCheckWorkflow(workflows['verify.yml']);
   for (const [name, workflow] of Object.entries(workflows)) {
-    if (name !== 'verify.yml' && (Object.hasOwn(workflow.on ?? {}, 'pull_request') || Object.hasOwn(workflow.on ?? {}, 'pull_request_target'))) throw new Error('Only focused verification may run on pull requests: ' + name);
+    if (name !== 'verify.yml' && (Object.hasOwn(workflow.on ?? {}, 'pull_request') || Object.hasOwn(workflow.on ?? {}, 'pull_request_target'))) throw new Error('Only main integration verification may run on pull requests: ' + name);
   }
   const { 'verify-full.yml': full, ...other } = workflows;
   if (!full) throw new Error('Manual broad qualification is missing.');
+  assertFullWorkflowContract(other, { mainIntegration: true });
   assertFullWorkflowContract({ ...other, 'verify.yml': full });
 }

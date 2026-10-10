@@ -1,4 +1,7 @@
-/** The hosted contract is deliberately focused; broad coverage remains local/manual. */
+import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
+import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
+
+/** Critical local and hosted regressions are retained alongside genuine merge checks. */
 export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/settings/backupRestoreRoutes.test.ts',
   '__tests__/settings/backupStrictStorage.test.ts',
@@ -70,41 +73,29 @@ export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
 ]);
 export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {
-  if (!Object.hasOwn(workflow?.on ?? {}, 'pull_request') || workflow.on.pull_request != null
-      || !workflow.on.push?.branches?.includes('main') || workflow.on.push.paths || workflow.on.push['paths-ignore']) {
-    throw new Error('Focused verification must run on every pull request and main push.');
+  const events = workflow?.on ?? {};
+  if (JSON.stringify(events.pull_request) !== JSON.stringify({ branches: ['main'] })
+      || JSON.stringify(events.push) !== JSON.stringify({ branches: ['main'] })
+      || !Object.hasOwn(events, 'workflow_dispatch') || Object.hasOwn(events, 'pull_request_target')) {
+    throw new Error('Integration verification must run on all main-target PRs and main pushes, plus explicit dispatch.');
   }
-  if (JSON.stringify(Object.keys(workflow.jobs ?? {})) !== JSON.stringify(['verification'])) throw new Error('Exactly one hosted verification job is required.');
-  const job = workflow.jobs.verification;
-  if (job.name !== 'verification' || job['runs-on'] !== 'ubuntu-latest' || job.if !== undefined || job.needs !== undefined
-      || job.strategy !== undefined || job['continue-on-error'] !== undefined || job.env?.NODE_OPTIONS || workflow.env?.NODE_OPTIONS
-      || job['timeout-minutes'] !== 45) throw new Error('The focused verification job must execute directly and fail normally.');
+  const expectedJobs = [...REQUIRED_JOB_IDS, 'verification', 'persona-memory-profile'].sort();
+  if (JSON.stringify(Object.keys(workflow.jobs ?? {}).sort()) !== JSON.stringify(expectedJobs)) throw new Error('The genuine required jobs cannot be replaced or supplemented by status-only jobs.');
   if (workflow.permissions?.contents !== 'read' || Object.values(workflow.permissions).some(value => !['read', 'none'].includes(value))) throw new Error('Verification defaults must be read-only.');
-  const steps = job.steps ?? [];
-  for (const step of steps) {
-    if (step.uses && !/^[\w.-]+\/[\w./-]+@[a-f0-9]{40}$/.test(step.uses)) throw new Error('Actions must be immutable.');
-    if (step.run && (step.if !== undefined || step['continue-on-error'] !== undefined || step.env?.NODE_OPTIONS
-        || /NODE_OPTIONS=|--max-old-space-size|\|\|\s*true/.test(step.run))) throw new Error('Critical commands cannot skip or tolerate failure.');
+  const names = REQUIRED_JOB_IDS.flatMap(id => {
+    const job = workflow.jobs[id];
+    if (!job || job.if !== undefined || job['continue-on-error']) throw new Error('Real prerequisites must run and fail normally.');
+    return job.strategy?.matrix?.os ? job.strategy.matrix.os.map(os => job.name.replace('${{ matrix.os }}', os))
+      : job.strategy?.matrix?.language ? job.strategy.matrix.language.map(language => job.name.replace('${{ matrix.language }}', language)) : [job.name];
+  });
+  if (JSON.stringify([...names, workflow.jobs.verification.name]) !== JSON.stringify(REQUIRED_CHECK_NAMES)) throw new Error('Actual job names must match all twelve active required contexts.');
+  const gate = workflow.jobs.verification;
+  if (gate.name !== 'verification' || gate.if !== 'always()' || gate['continue-on-error']
+      || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
+      || !gate.steps?.some(step => step.run?.includes('assertFullDependencyResults') && step.if === undefined && !step['continue-on-error'])) throw new Error('Verification must fail closed over every real prerequisite.');
+  assertScannerWorkflowContract(workflow);
+  for (const command of [CRITICAL_TEST_COMMAND, CRITICAL_FRONTEND_TEST_COMMAND]) {
+    const matches = workflow.jobs.test.steps.filter(step => step.run === command);
+    if (matches.length !== 1 || matches[0].if !== undefined || matches[0]['continue-on-error']) throw new Error('Critical regression commands must run unfiltered and fail normally.');
   }
-  const checkout = steps.filter(step => step.uses?.startsWith('actions/checkout@'));
-  if (checkout.length !== 1 || steps[0] !== checkout[0] || checkout[0].with?.['persist-credentials'] !== false || checkout[0].with?.ref) throw new Error('Check the actual event source without persisted credentials.');
-  const setups = steps.filter(step => step.uses?.startsWith('actions/setup-node@'));
-  if (setups.length !== 1 || setups[0].with?.['node-version'] !== '24.21.0' || setups[0].if !== undefined) throw new Error('Select one supported pinned runtime.');
-  const setupIndex = steps.indexOf(setups[0]);
-  if (steps[setupIndex + 1]?.run !== 'node scripts/verify-ci-node.mjs 24.21.0 --record'
-      || steps.slice(0, setupIndex).some(step => step.run)) throw new Error('Verify official Node before commands.');
-  const commands = steps.flatMap(step => (step.run ?? '').split('\n')).filter(Boolean);
-  for (const command of ['npm ci --include=dev', 'npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', CRITICAL_TEST_COMMAND, CRITICAL_FRONTEND_TEST_COMMAND]) {
-    if (commands.filter(value => value === command).length !== 1) throw new Error('Missing or duplicated critical command: ' + command);
-  }
-  const install = commands.indexOf('npm ci --include=dev');
-  const build = commands.indexOf('npm run build');
-  if (install >= build || build >= commands.indexOf('npm run validate:mcp-release') || build >= commands.indexOf(CRITICAL_TEST_COMMAND) || build >= commands.indexOf(CRITICAL_FRONTEND_TEST_COMMAND)) throw new Error('Install, build and test the same artifacts in order.');
-  const contracts = steps.find(step => step.name === 'Verify workflow and release contracts')?.run?.split(/\s+/) ?? [];
-  for (const file of ['verification-contract', 'workflow-contract', 'required-check-workflow', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security', 'require-release-verification', 'release-verification']) {
-    if (!contracts.includes('scripts/' + file + '.test.mjs')) throw new Error('Missing contract regression: ' + file);
-  }
-  if (contracts[0] !== 'node' || contracts[1] !== '--test' || contracts.slice(2).some(file => !/^scripts\/[\w.-]+\.test\.mjs$/.test(file))) throw new Error('Contract tests must execute without filters.');
-  if (!steps.some(step => step.uses?.startsWith('actions/upload-artifact@') && step.if === 'always()'
-      && !step['continue-on-error'] && step.with?.path === 'ci-node-runtime/' && step.with['if-no-files-found'] === 'error')) throw new Error('Runtime measurement must be retained.');
 }

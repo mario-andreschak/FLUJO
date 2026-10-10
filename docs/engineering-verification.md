@@ -1,18 +1,20 @@
-# Local-first verification and repository enforcement
+# Local-first qualification and main integration checks
 
 Bundle implementation changes and qualify them locally before pushing. Run `node scripts/verify-local.mjs --install --full` with a supported Node runtime. This installs once, builds once, validates release inventory, runs critical regressions, typechecks, lints, audits dependencies, exercises packed artifacts and runs the ordinary full suite with its assertion baseline. Add `--isolated` only after preparing the existing Docker/process/browser dependencies. Use `--tests-only` to reuse already built local artifacts; it does not claim a fresh build.
 
-GitHub `verify.yml` runs exactly one job named `verification` on PRs and main pushes. It selects official Node 24.21.0, installs once, builds once with the default heap, validates MCP types/release inventory, runs workflow/release contracts and explicit critical API/MCP/workspace-transfer regressions. This is focused hosted coverage, not the full platform, runtime or soak matrix.
+Active main ruleset `24434701` still requires twelve genuine GitHub Actions checks and CodeQL high/critical findings protection. The current account has no administrator permission. The compatibility bridge in `verify.yml` therefore runs real production/release checks, source and MCP types, lint, ordinary and isolated suites, workflow contracts, dependency audit, and two extended CodeQL scans before the fail-closed `verification` aggregate. Publication verifies every required job from the latest successful exact-main-SHA attempt. No status-only substitutes or repository-policy bypasses are used.
 
-The broad Windows/Linux, four-runtime, full-suite, isolated and CodeQL qualification remains available through explicit `verify-full.yml` manual dispatch and existing local commands. Installer, Worker candidate image, Persona acceptance and scorecard workflows no longer run on every PR. Post-merge publication and selected release workflows retain their source/artifact validation.
+Automatic verification runs only for PRs targeting `main` and pushes to `main`; intermediate feature branches remain locally qualified. The Ubuntu production job builds once on verified official Node 24.21.0 with the default heap, then exercises the same packed artifacts on the four declared runtime profiles. Release safety still covers Ubuntu and Windows. Explicit `verify-full.yml` dispatch retains the additional Windows production qualification; it is not automatically triggered alongside integration checks. Installer, Worker candidate image, Persona acceptance and scorecard workflows remain manual/release-only.
 
-The ruleset template requires only GitHub Actions `verification`, with no human approvals, Code Owner approval or last-pusher approval. Resolved review threads, branch deletion/force-push protection and strict check freshness remain. Actual repository settings must be transitioned separately; source YAML cannot change them. CodeQL remains a manual broad qualification tool rather than a separate hosted merge prerequisite.
+Critical backend and rendered interface suites remain explicit fail-on-error steps and shared local-runner constants. The ordinary/isolated full suites retain their existing completed-assertion and quarantine baseline gates. Docker isolation setup retries bounded pulls from Docker Hub and public ECR using the identical pinned Node manifest digest; it fails if neither registry supplies it and publishes only the inspected immutable image identity to the probes. It does not skip isolation when the registry fails.
 
-Release publication checks the exact main-push SHA, latest successful authoritative workflow attempt, and successful `verification` job. It does not manufacture the former matrix contexts or claim they ran. Original candidate bytes, version, provenance and signature checks remain enforced.
+Read-only reconciliation on October 9, 2026 found advanced CodeQL result uploads and processing succeeded for exact main `8a39263282dd7c4d765a7371f09bd79129851425` in run `37997014991`; both language analyses were fresh. The default-setup settings API remained unauthorized, so its setting was not directly verified. That run failed on an ECR `toomanyrequests` image pull, followed by the aggregate refusing its failed prerequisite. Candidate scans and all genuine required checks must still pass on the reconciled integration source before merging.
+
+The ruleset template now matches the existing twelve required contexts, scanner protection, zero human approvals, resolved review threads and strict freshness. Source files do not change active settings. A future switch to one focused hosted check still requires an authorized administrator to reconcile policy and source together; this bridge does not claim that transition has occurred.
 
 ## Historical broad qualification recipe
 
-The following records the former automatic matrix and its rationale. Where it describes mandatory hosted jobs or human-review settings, the current local-first policy above supersedes it.
+The following records earlier qualification and administrator recipes. Historical permissions, approval settings, observations and runtime pins below are not fresh state; use the current compatibility bridge and observations above.
 
 # Verification and repository enforcement (#565)
 
@@ -25,8 +27,9 @@ merge, release, deployment, provider run or live controller operation.
 `scripts/verification-contract.mjs` lists the required jobs and displayed check
 names. `verify.yml` runs on every PR and main push; its final `verification`
 check runs even after failure and rejects any missing, failed, cancelled or
-skipped prerequisite. Ubuntu and Windows production jobs build with the normal
-Node heap, typecheck MCP workspaces, validate release payloads and install the
+skipped prerequisite. One Ubuntu production job on Node 22.23.3 (matching the
+container) builds once with the normal Node heap, typechecks MCP workspaces,
+validates release payloads and installs the
 packed app/MCP tarballs into a disposable consumer before exercising actual
 process boundaries. Browser/operator journeys remain separate release gates.
 
@@ -147,3 +150,6 @@ Retain source SHA, OS/Node/npm versions, exact commands, failures/skips,
 run/attempt IDs, artifact hashes and human owner in #564/#578's evidence ledger.
 The drill, fresh scanner/remediation evidence, installed-release acceptance,
 human security/release tabletop and independent reassessment remain open.
+
+CI pulls the pinned Node image from Docker's public ECR mirror to avoid Docker Hub's anonymous pull limit. Both the container index and Linux isolation image retain their original SHA-256 digests; the signed Node executable checks remain mandatory. Obsolete Worker image candidate runs are cancelled when a newer commit arrives.
+
