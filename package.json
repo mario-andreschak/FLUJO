@@ -108,7 +108,7 @@
     "@emotion/styled": "^11.14.1",
     "@flujo-ai/antigravity-cli": "file:packages/antigravity-cli",
     "@google/genai": "^2.15.0",
-    "@isomorphic-git/lightning-fs": "^4.7.0",
+    "@isomorphic-git/lightning-fs": "^4.10.3",
     "@mario.andreschak/mcp-bash": "3.46.3",
     "@mario.andreschak/mcp-browser": "3.46.3",
     "@mario.andreschak/mcp-filesystem": "3.46.3",
