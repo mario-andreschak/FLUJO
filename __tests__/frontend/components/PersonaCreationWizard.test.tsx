@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import type { ComponentProps } from 'react';
+import { StrictMode, type ComponentProps } from 'react';
 
 const createMock = jest.fn();
 const createDraftMock = jest.fn();
@@ -19,6 +19,7 @@ const creationReadinessMock = jest.fn();
 const loadFlowsMock = jest.fn();
 const discoveryOptionsMock = jest.fn();
 const refreshAppsMock = jest.fn();
+const i18nOverrideMock = jest.fn();
 
 jest.mock('@/frontend/services/personas', () => {
   class PersonasApiError extends Error {
@@ -99,7 +100,8 @@ jest.mock('@/frontend/contexts/I18nContext', () => {
   };
 
   return {
-    useI18n: () => ({
+    ...jest.requireActual('@/frontend/contexts/I18nContext'),
+    useI18n: () => i18nOverrideMock() ?? ({
       t,
       tp: (key: string, count: number) => `${key}:${count}`,
       formatNumber: (value: number) => String(value),
@@ -108,6 +110,9 @@ jest.mock('@/frontend/contexts/I18nContext', () => {
 });
 
 import PersonaCreationWizard from '@/frontend/components/Personas/PersonaCreationWizard';
+import { I18nProvider } from '@/frontend/contexts/I18nContext';
+import { LOCALE_STORAGE_KEY } from '@/frontend/i18n/locales';
+import { PersonasApiError } from '@/frontend/services/personas';
 import type {
   PersonaCreationDraft,
   PersonaCreationDraftPayload,
@@ -209,6 +214,7 @@ function deferred<T>() {
 describe('PersonaCreationWizard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    i18nOverrideMock.mockReset();
     rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [role] });
     loadFlowsMock.mockResolvedValue([flow, behaviorFlow]);
     readinessMock.mockResolvedValue({ state: 'ready', issues: [] });
@@ -239,6 +245,7 @@ describe('PersonaCreationWizard', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    window.localStorage.removeItem(LOCALE_STORAGE_KEY);
   });
 
   it('blocks a model-less Role before creation and recovers after configuring a model', async () => {
@@ -334,6 +341,103 @@ describe('PersonaCreationWizard', () => {
       payload: fullPayload,
       revision: 5,
     }));
+  });
+
+  it('preserves saved Apps when Strict Mode repeats the opening effects', async () => {
+    render(<StrictMode>{wizard({ draft: draftRecord() })}</StrictMode>);
+    expect(await screen.findByText('personas.create.behaviorsTitle')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+    await waitFor(() => expect(updateDraftMock).toHaveBeenCalledWith('draft_existing', {
+      expectedRevision: 4,
+      payload: fullPayload,
+    }));
+  });
+
+  it('preserves resumed draft edits and progress when language changes across tabs', async () => {
+    const actualI18n = jest.requireActual<typeof import('@/frontend/contexts/I18nContext')>(
+      '@/frontend/contexts/I18nContext',
+    );
+    i18nOverrideMock.mockImplementation(actualI18n.useI18n);
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, 'en');
+    render(<I18nProvider>{wizard({ draft: draftRecord({ ...fullPayload, step: 0 }) })}</I18nProvider>);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Edited Mina' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'One-sentence purpose (optional)' }), {
+      target: { value: 'Keep the edited mission.' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Picture URL (optional)' }), {
+      target: { value: 'https://example.test/edited.png' },
+    });
+    fireEvent(window, new StorageEvent('storage', { key: LOCALE_STORAGE_KEY, newValue: 'es' }));
+
+    expect(await screen.findByRole('textbox', { name: 'Nombre' })).toHaveValue('Edited Mina');
+    expect(screen.getByText('Borrador guardado abierto.')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Propósito en una frase (opcional)' })).toHaveValue('Keep the edited mission.');
+    expect(screen.getByRole('textbox', { name: 'URL de imagen (opcional)' })).toHaveValue('https://example.test/edited.png');
+    const next = screen.getByRole('button', { name: 'Siguiente' });
+    await waitFor(() => expect(next).toBeEnabled());
+    fireEvent.click(next);
+    fireEvent(window, new StorageEvent('storage', { key: LOCALE_STORAGE_KEY, newValue: 'en' }));
+    expect(screen.queryByRole('textbox', { name: 'Name' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(updateDraftMock).toHaveBeenCalledWith('draft_existing', {
+      expectedRevision: 4,
+      payload: {
+        ...fullPayload,
+        step: 1,
+        name: 'Edited Mina',
+        mission: 'Keep the edited mission.',
+        avatarUrl: 'https://example.test/edited.png',
+      },
+    }));
+  });
+
+  it('keeps local edits and the original revision when the same draft is refreshed', async () => {
+    const draft = draftRecord({ ...fullPayload, step: 0 });
+    const view = render(wizard({ draft }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Unsaved Mina' },
+    });
+    view.rerender(wizard({ draft: { ...draft, payload: { ...draft.payload } } }));
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Unsaved Mina');
+
+    view.rerender(wizard({ draft: { ...draft, revision: 5, payload: { ...draft.payload, name: 'Remote Mina' } } }));
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Unsaved Mina');
+    updateDraftMock.mockRejectedValueOnce(new PersonasApiError(409, 'Draft changed elsewhere.'));
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+    expect(await screen.findByText('personas.create.draftConflict')).toBeInTheDocument();
+    expect(updateDraftMock).toHaveBeenCalledWith('draft_existing', {
+      expectedRevision: 4,
+      payload: { ...fullPayload, step: 0, name: 'Unsaved Mina' },
+    });
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Unsaved Mina');
+  });
+
+  it('restores the saved payload when the same draft is opened again', async () => {
+    const draft = draftRecord({ ...fullPayload, step: 0 });
+    const view = render(wizard({ draft }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Unsaved Mina' },
+    });
+    view.rerender(wizard({ draft, open: false }));
+    view.rerender(wizard({ draft, open: true }));
+    expect(await screen.findByRole('textbox', { name: 'Name' })).toHaveValue('Mina');
+  });
+
+  it.each([
+    { id: 'another_draft', workspaceId: 'test' },
+    { id: 'draft_existing', workspaceId: 'another_workspace' },
+  ])('restores a different draft identity: $workspaceId/$id', async (identity) => {
+    const draft = draftRecord({ ...fullPayload, step: 0 });
+    const view = render(wizard({ draft }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Unsaved Mina' },
+    });
+    view.rerender(wizard({ draft: { ...draft, ...identity, payload: { ...draft.payload, name: 'Other Persona' } } }));
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Other Persona');
   });
 
   it('checks selected Flows in Persona model-fallback mode', async () => {
