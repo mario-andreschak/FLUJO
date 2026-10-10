@@ -19,6 +19,10 @@ class RegistryResponseLimitError extends Error {
   constructor() { super('MCP Registry response exceeded its byte limit'); }
 }
 
+class RegistryTimeoutError extends Error {
+  constructor(message = 'MCP Registry request timed out') { super(message); }
+}
+
 export const REGISTRY_ORIGIN = 'https://registry.modelcontextprotocol.io';
 
 /**
@@ -34,7 +38,7 @@ function http2GetJson(url: URL, timeoutMs: number, options: RegistryRequestOptio
     if (options.signal?.aborted) { reject(options.signal.reason); return; }
     const client = http2.connect(url.origin);
     let settled = false;
-    const deadline = setTimeout(() => finish(() => reject(new Error('MCP Registry request timed out'))), timeoutMs);
+    const deadline = setTimeout(() => finish(() => reject(new RegistryTimeoutError())), timeoutMs);
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -46,7 +50,7 @@ function http2GetJson(url: URL, timeoutMs: number, options: RegistryRequestOptio
     const onAbort = () => finish(() => reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError')));
 
     client.setTimeout(timeoutMs, () =>
-      finish(() => reject(new Error(`HTTP/2 session timed out after ${timeoutMs}ms`)))
+      finish(() => reject(new RegistryTimeoutError(`HTTP/2 session timed out after ${timeoutMs}ms`)))
     );
     client.on('error', err => finish(() => reject(err)));
 
@@ -56,7 +60,7 @@ function http2GetJson(url: URL, timeoutMs: number, options: RegistryRequestOptio
       accept: 'application/json'
     });
     req.setTimeout(timeoutMs, () =>
-      finish(() => reject(new Error(`HTTP/2 request timed out after ${timeoutMs}ms`)))
+      finish(() => reject(new RegistryTimeoutError(`HTTP/2 request timed out after ${timeoutMs}ms`)))
     );
     req.on('error', err => finish(() => reject(err)));
 
@@ -85,7 +89,7 @@ function http2GetJson(url: URL, timeoutMs: number, options: RegistryRequestOptio
 /** HTTP/1.1 fallback for environments where HTTP/2 is blocked (e.g. some proxies). */
 async function http1GetJson(url: URL, timeoutMs: number, options: RegistryRequestOptions): Promise<{ status: number; body: string }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(new RegistryTimeoutError()), timeoutMs);
   const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
   try {
     const response = await fetch(url, {
@@ -128,8 +132,9 @@ export async function registryGetRaw(
   } catch (h2Error) {
     options.signal?.throwIfAborted();
     const remainingMs = timeoutMs - (Date.now() - startedAt);
-    // A large body or an exhausted deadline must not trigger a second download.
-    if (h2Error instanceof RegistryResponseLimitError || remainingMs <= 0) throw h2Error;
+    // Terminal limits must not trigger a second download, even if a timer fires
+    // before the wall clock reports the entire allotted duration.
+    if (h2Error instanceof RegistryResponseLimitError || h2Error instanceof RegistryTimeoutError || remainingMs <= 0) throw h2Error;
     log.warn(
       'HTTP/2 request to registry failed, retrying over HTTP/1.1',
       h2Error instanceof Error ? h2Error.message : h2Error

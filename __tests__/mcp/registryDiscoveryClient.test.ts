@@ -1,3 +1,4 @@
+import http from 'node:http';
 import http2 from 'node:http2';
 import { registryGetRaw } from '@/backend/utils/registryClient';
 
@@ -28,10 +29,14 @@ describe('Registry discovery transport bounds', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address() as { port: number };
     const fetch = jest.spyOn(global, 'fetch');
+    // Keep real timers and traffic, but force elapsed wall time to remain below
+    // the deadline: a terminal timeout must never depend on clock rounding.
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now());
     try {
       await expect(registryGetRaw(new URL(`http://127.0.0.1:${address.port}/servers`), 150, { maxBytes: 1000 })).rejects.toThrow('timed out');
       expect(fetch).not.toHaveBeenCalled();
     } finally {
+      clock.mockRestore();
       fetch.mockRestore();
       clearInterval(timer);
       await new Promise<void>(resolve => server.close(() => resolve()));
@@ -50,6 +55,30 @@ describe('Registry discovery transport bounds', () => {
       expect(fetch).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({ redirect: 'error', signal: expect.any(AbortSignal) }));
       expect(cancelled).toBe(true);
     } finally { connect.mockRestore(); fetch.mockRestore(); }
+  });
+
+  it('keeps a useful timeout reason when an HTTP/1 fallback keeps sending data', async () => {
+    const server = http.createServer();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    server.on('request', (_request, response) => {
+      response.writeHead(200);
+      timer = setInterval(() => response.write('x'), 10);
+      response.on('close', () => clearInterval(timer));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as { port: number };
+    const connect = jest.spyOn(http2, 'connect').mockImplementationOnce(() => { throw new Error('h2 unavailable'); });
+    const fetch = jest.spyOn(global, 'fetch');
+    try {
+      await expect(registryGetRaw(new URL(`http://127.0.0.1:${address.port}/servers`), 150, { maxBytes: 1000 })).rejects.toThrow('timed out');
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      connect.mockRestore();
+      fetch.mockRestore();
+      clearInterval(timer);
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 
   it('cancels an actually opened HTTP/2 request without fallback or a lingering connection', async () => {
