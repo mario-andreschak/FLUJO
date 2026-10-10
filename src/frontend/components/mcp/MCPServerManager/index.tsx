@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback, useId } from 'react';
 import { useRouter } from 'next/navigation';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
@@ -115,6 +115,18 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConnectionWizard, setShowConnectionWizard] = useState(false);
+  const connectionWizardEpoch = useRef(0);
+  const connectionWizardId = useId();
+  const connectionWizardOpen = useRef(false);
+  const setConnectionWizardOpen = useCallback((open: boolean) => {
+    connectionWizardEpoch.current += 1;
+    connectionWizardOpen.current = open;
+    setShowConnectionWizard(open);
+  }, []);
+  useEffect(() => () => {
+    connectionWizardEpoch.current += 1;
+    connectionWizardOpen.current = false;
+  }, []);
   const [initialSetupTab, setInitialSetupTab] = useState<ServerSetupTab>('spotlight');
   const [editingServer, setEditingServer] = useState<MCPServerConfig | null>(null);
   // Import/export dialog + format-dropdown state.
@@ -328,7 +340,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const modern = visualStyle === 'modern';
 
   const openServerSetup = (tab: ServerSetupTab = 'spotlight') => {
-    setShowConnectionWizard(false);
+    setConnectionWizardOpen(false);
     setEditingServer(null);
     setInitialSetupTab(tab);
     setShowAddModal(true);
@@ -338,7 +350,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   useEffect(() => {
     const listener = (event: Event) => {
       if (!isBigTutorialEvent(event) || event.detail.type !== 'open-app-marketplace') return;
-      setShowConnectionWizard(false);
+      setConnectionWizardOpen(false);
       setEditingServer(null);
       setInitialSetupTab('marketplace');
       setShowAddModal(true);
@@ -346,12 +358,12 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     };
     window.addEventListener(BIG_TUTORIAL_EVENT, listener);
     return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
-  }, [onServerModalToggle]);
+  }, [onServerModalToggle, setConnectionWizardOpen]);
 
   const handleConnectApp = () => {
     setEditingServer(null);
     if (modern) {
-      setShowConnectionWizard(true);
+      setConnectionWizardOpen(true);
       return;
     }
     openServerSetup();
@@ -645,8 +657,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // The AI installer persists an exact, approved Registry plan on the backend. For
   // OAuth recommendations, finish the same initiate → popup flow without saving a
   // duplicate config from the wizard.
+  const wizardCallbackEpoch = connectionWizardEpoch.current;
   const handleAiAuthenticate = async (serverName: string): Promise<void> => {
-    const popup = reserveOAuthPopup(`oauth_${serverName}`);
+    const epoch = wizardCallbackEpoch;
+    const ownsWizard = () => connectionWizardOpen.current && connectionWizardEpoch.current === epoch;
+    if (!ownsWizard()) return;
+    const windowName = `oauth_${serverName}_wizard_${connectionWizardId}_${epoch}`;
+    const popup = reserveOAuthPopup(windowName);
     try {
       const response = await fetch('/api/oauth/initiate', {
         method: 'POST',
@@ -654,14 +671,16 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         body: JSON.stringify({ serverName }),
       });
       const data = await response.json().catch(() => ({}));
+      if (!ownsWizard()) return;
       if (!response.ok) {
         throw new Error(data.error || (data.needsClientCredentials
           ? t('mcp.ai.clientCredentialsRequired')
           : t('mcp.server.oauthFailed')));
       }
       if (!data.alreadyAuthorized && data.authorizationUrl) {
-        await openOAuthPopup({ popup, url: data.authorizationUrl, windowName: `oauth_${serverName}` });
+        await openOAuthPopup({ popup, url: data.authorizationUrl, windowName });
       }
+      if (!ownsWizard()) return;
       await retryServer(serverName);
     } finally {
       popup.close();
@@ -669,8 +688,18 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   const handleAiInstalled = async (serverName: string): Promise<void> => {
+    const epoch = wizardCallbackEpoch;
+    if (!connectionWizardOpen.current || connectionWizardEpoch.current !== epoch) return;
     await retryServer(serverName);
-    setShowConnectionWizard(false);
+    if (connectionWizardOpen.current && connectionWizardEpoch.current === epoch) setConnectionWizardOpen(false);
+  };
+
+  const handleAiConfigureExisting = (serverName: string): void => {
+    if (!connectionWizardOpen.current || connectionWizardEpoch.current !== wizardCallbackEpoch) return;
+    const current = servers.find(server => server.name === serverName);
+    if (!current) throw new Error('The server is no longer available in this workspace.');
+    setConnectionWizardOpen(false);
+    handleEditServer(current);
   };
 
   const serverGroups = useMemo<CardGroup<ServerState>[]>(() => {
@@ -1217,10 +1246,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       {modern ? (
         <McpConnectionWizard
           open={showConnectionWizard}
-          onClose={() => setShowConnectionWizard(false)}
+          onClose={() => setConnectionWizardOpen(false)}
           onChooseSetup={openServerSetup}
           onManualCreation={() => openServerSetup('spotlight')}
           onInstalled={handleAiInstalled}
+          onConfigureExisting={handleAiConfigureExisting}
           onAuthenticate={handleAiAuthenticate}
         />
       ) : null}

@@ -19,6 +19,7 @@ jest.mock('@/backend/services/mcp/registryInstall', () => ({
 }));
 jest.mock('@/utils/mcp/oauthProbe', () => ({ probeOAuthSupport: (...args: unknown[]) => probeOAuthSupportMock(...args) }));
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ warn: jest.fn() }) }));
+jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn().mockResolvedValue({}) }));
 
 import { readUtf8TextPrefix } from '@/utils/http/readUtf8TextPrefix';
 import { researchMcpServers } from '@/backend/services/mcp/assistedInstall';
@@ -292,7 +293,7 @@ describe('offline actual MCP research body admission', () => {
     getModelMock.mockResolvedValue({ ApiKey: 'offline-reference', adapter: 'openai', maxTokens: 2048 });
     resolveKeyMock.mockResolvedValue('offline-test-credential');
     createCompletionMock.mockImplementation(async ({ messages }: { messages: Array<{ role: string; content: string }> }) => ({
-      completion: { choices: [{ message: { content: JSON.stringify(messages[0].content.startsWith('Turn a user request')
+      completion: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(messages[0].content.startsWith('Turn a user request')
         ? { service: 'calendar', suggestedName: 'calendar', searches: ['calendar'] }
         : { summary: 'Offline evidence summary', notes: {} }) } }] },
     }));
@@ -323,11 +324,12 @@ describe('offline actual MCP research body admission', () => {
   }
 
   const research = () => researchMcpServers({ query: 'calendar', modelId: 'offline-model' });
-  const explanationEvidence = () => JSON.parse(createCompletionMock.mock.calls[1][0].messages[1].content);
   const expectNoSideEffects = () => {
     expect(installRegistryServerMock).not.toHaveBeenCalled();
     expect(probeOAuthSupportMock).not.toHaveBeenCalled();
-    expect(createCompletionMock).toHaveBeenCalledTimes(2);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(createCompletionMock.mock.calls[0][0].messages[1].content).toBe('calendar');
+    expect(createCompletionMock.mock.calls[0][0].tools).toBeUndefined();
     expect(getModelMock).toHaveBeenCalledWith('offline-model');
   };
 
@@ -336,7 +338,6 @@ describe('offline actual MCP research body admission', () => {
     const second = bodyFixture([encode('unrelated list')]);
     const controls = mockDiscovery([first.response, second.response]);
     const result = await research();
-    expect(explanationEvidence().web.awesome).toEqual([{ label: 'Alpha Bridge', url: 'https://example.test/alpha', line: 'calendar [Alpha Bridge](https://example.test/alpha) calendar connector' }]);
     expect(result.candidates.map(candidate => [candidate.registryName, candidate.score, candidate.recommended])).toEqual([
       ['io.example/alpha', 0.755, true], ['io.example/beta', 0.695, false],
     ]);
@@ -347,7 +348,9 @@ describe('offline actual MCP research body admission', () => {
     const rawCalls = controls.fetch.mock.calls.filter(([url]) => RAW_LISTS.includes(String(url)));
     expect(rawCalls.map(([url]) => url)).toEqual(RAW_LISTS);
     for (const [, init] of rawCalls) expect(init).toEqual({ signal: expect.any(AbortSignal) });
-    expect(controls.timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([12_000, 12_000, 12_000, 12_000]);
+    expect(controls.timeout.mock.calls.filter(([milliseconds]) => milliseconds === 12_000)).toHaveLength(4);
+    expect(controls.timeout.mock.calls.filter(([milliseconds]) => milliseconds === 90_000)).toHaveLength(1);
+    expect(controls.timeout.mock.calls.filter(([milliseconds]) => milliseconds === 30_000)).toHaveLength(1);
     expect(first.text).not.toHaveBeenCalled();
     expect(second.text).not.toHaveBeenCalled();
     expectNoSideEffects();
@@ -356,12 +359,10 @@ describe('offline actual MCP research body admission', () => {
   it('keeps nested tags and unmatched delimiters out of discovery snippets', async () => {
     const hostile = `${ALPHA_LINE} <scr<script>ipt>alert(1)</scr</script>ipt> <SCRIPT>upper</SCRIPT> <unfinished`;
     mockDiscovery([bodyFixture([encode(hostile)]).response, bodyFixture([encode('unrelated list')]).response]);
-    await research();
-    const [snippet] = explanationEvidence().web.awesome;
-    expect(snippet.label).toBe('Alpha Bridge');
-    expect(snippet.url).toBe('https://example.test/alpha');
-    expect(snippet.line).not.toMatch(/[<>]/);
-    expect(snippet.line).toContain('calendar connector');
+    const result = await research();
+    expect(result.candidates[0].registryName).toBe('io.example/alpha');
+    expect(result.candidates[0].reasons).toContain('Also listed by an Awesome MCP community index');
+    expect(JSON.stringify(result)).not.toMatch(/[<>]|alert\(1\)|unfinished/);
     expectNoSideEffects();
   });
 
@@ -371,7 +372,7 @@ describe('offline actual MCP research body admission', () => {
     first.cancel.mockImplementationOnce(() => new Promise<void>(() => {}));
     mockDiscovery([first.response, new Response('unrelated')]);
     const result = await research();
-    expect(explanationEvidence().web.awesome.map((entry: { label: string }) => entry.label)).toEqual(['Alpha Bridge']);
+    expect(result.sources.find(source => source.id === 'awesome-mcp')?.detail).toBe('1 relevant result inspected');
     expect(result.candidates.map(candidate => candidate.score)).toEqual([0.755, 0.695]);
     expect(first.pull).toHaveBeenCalledTimes(1);
     expect(first.cancel).toHaveBeenCalledTimes(1);
@@ -383,7 +384,6 @@ describe('offline actual MCP research body admission', () => {
   it('keeps the surviving list useful when the other fetch fails', async () => {
     mockDiscovery([new Error('offline failed list'), new Response(BETA_LINE)]);
     const result = await research();
-    expect(explanationEvidence().web.awesome.map((entry: { label: string }) => entry.label)).toEqual(['Beta Bridge']);
     expect(result.candidates[0].registryName).toBe('io.example/beta');
     expect(result.sources.find(source => source.id === 'awesome-mcp')?.detail).toBe('1 relevant result inspected');
     expectNoSideEffects();
@@ -394,19 +394,17 @@ describe('offline actual MCP research body admission', () => {
     mockDiscovery([new Response(failed), new Response(BETA_LINE)]);
     const result = await research();
     expect(result.candidates[0].registryName).toBe('io.example/beta');
-    expect(explanationEvidence().web.awesome).toHaveLength(1);
+    expect(result.sources.find(source => source.id === 'awesome-mcp')?.detail).toBe('1 relevant result inspected');
     expect(failed.locked).toBe(false);
     expectNoSideEffects();
   });
 
-  it('retains per-list, merged, model-evidence and snippet limits', async () => {
+  it('retains per-list and merged result limits without sending community evidence to another model call', async () => {
     const lines = Array.from({ length: 12 }, (_, index) => `calendar [Alpha ${index} ${'z'.repeat(130)}](https://example.test/${index}) ${'x'.repeat(600)}`).join('\n');
     mockDiscovery([new Response(lines), new Response(lines)]);
     const result = await research();
-    const awesome = explanationEvidence().web.awesome as Array<{ label: string; line: string }>;
     expect(result.sources.find(source => source.id === 'awesome-mcp')?.detail).toBe('15 relevant results inspected');
-    expect(awesome).toHaveLength(5);
-    for (const entry of awesome) { expect(entry.label).toHaveLength(120); expect(entry.line).toHaveLength(500); }
+    expect(JSON.stringify(result)).not.toContain('x'.repeat(600));
     expectNoSideEffects();
   });
 
