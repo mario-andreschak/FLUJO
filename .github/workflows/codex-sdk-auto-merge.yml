@@ -1,0 +1,53 @@
+name: Enable qualified Codex SDK updates
+
+on:
+  workflow_run:
+    workflows: [verify]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  enable:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.actor.login == 'dependabot[bot]' && github.event.workflow_run.pull_requests[0].number
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Read only trusted main; never check out the dependency PR in this job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Require a Codex-only manifest change, then wait for the normal required checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json author,headRepository,headRefOid,baseRefName,state > "$RUNNER_TEMP/codex-update-pr.json"
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate > "$RUNNER_TEMP/codex-update-files.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const pr = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/codex-update-pr.json', 'utf8'));
+          if (pr.author?.login !== 'app/dependabot' && pr.author?.login !== 'dependabot[bot]') process.exit(1);
+          if (pr.state !== 'OPEN' || pr.baseRefName !== 'main' || pr.headRefOid !== process.env.HEAD_SHA || pr.headRepository?.nameWithOwner !== process.env.REPOSITORY) process.exit(1);
+          const files = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/codex-update-files.json', 'utf8'));
+          if (!Array.isArray(files) || files.length !== 2 || files.some(f => !['package.json', 'package-lock.json'].includes(f.filename))) process.exit(1);
+          const manifest = files.find(f => f.filename === 'package.json');
+          const changed = manifest.patch?.split('\n').filter(line => /^[+-]/.test(line) && !/^([+]{3}|[-]{3})/.test(line));
+          if (!changed || changed.length !== 2 || changed.some(line => !/^[+-]\s*"@openai\/codex-sdk": "\d+\.\d+\.\d+",?$/.test(line))) process.exit(1);
+          NODE
+          gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --auto --squash --match-head-commit "$HEAD_SHA"

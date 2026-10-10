@@ -3,6 +3,7 @@ import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { fetchCodexModels } from './adapters/codexDiscovery';
 import { 
   ModelServiceResponse, 
   ModelOperationResponse, 
@@ -446,6 +447,20 @@ class ModelService {
       const adapter: ModelAdapter =
         profile?.adapter ?? storedModel?.adapter ?? 'openai';
       const usesNativeGemini = provider === 'gemini' && adapter === 'gemini';
+      const usesCodex = provider === 'codex' && adapter === 'codex-cli';
+
+      if (usesCodex) {
+        // Subscription discovery cannot send a stored key to an edited endpoint.
+        if (baseUrl.trim()) return [];
+        const suppliedKey = apiKey && apiKey !== MASKED_API_KEY ? await resolveAndDecryptApiKey(apiKey) : null;
+        const savedKey = !suppliedKey && storedModel?.provider === 'codex'
+          ? await resolveAndDecryptApiKey(storedModel.ApiKey) : null;
+        // Explicit API-billed connections use their API catalogue, never the subscription login.
+        const models = suppliedKey || savedKey
+          ? await fetchModelsFromProvider('openai', 'https://api.openai.com/v1', suppliedKey || savedKey, 'openai')
+          : await fetchCodexModels();
+        return searchTerm?.trim() ? filterModels(models, searchTerm) : models;
+      }
 
       if (!baseUrl.trim() && !usesNativeGemini) {
         log.warn('Provider catalogue discovery requires a base URL', {

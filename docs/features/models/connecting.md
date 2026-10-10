@@ -29,6 +29,13 @@ existing OpenAI-compatible path. Provider routing, caching, pricing and budgets
 remain subject to the provider and your account settings. This integration does
 not enroll the connection in a partner program or add referral attribution.
 
+## Codex
+
+Codex models are discovered from the running server's workspace login instead of
+a fixed model-name list. Ordinary runtimes check for stable CLI updates daily,
+qualify candidates separately and retain active calls on their original version.
+See [Codex model and runtime updates](codex-updates.md).
+
 ## Antigravity CLI
 
 Choose **Antigravity CLI** in guided setup or manual creation. FLUJO installs a pinned native executable for its model runs. Enter a Gemini API key, or confirm an existing local Google account login. Model availability and quota depend on your account or API key.

@@ -28,6 +28,7 @@ import { createOwnedCodexThread, nativeCodexEnvironment } from './codexOwnedThre
 import { paceToolCallArguments } from './toolArgumentPacing';
 import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
+import { acquireOrdinaryCodexExecutable } from './codexRuntimeUpdate';
 import { mapCodexUsage, subtractCodexUsage, type CodexUsageLike } from './codexUsage';
 import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
 import {
@@ -809,15 +810,20 @@ export class CodexAdapter implements CompletionAdapter {
     let contextUsage: CompletionResult['contextUsage'] = null;
     let privateRuntimeCleanup: (() => Promise<void>) | undefined;
     let modelCatalogCleanup: (() => Promise<void>) | undefined;
+    let codexLeaseCleanup: (() => Promise<void>) | undefined;
 
     try {
       if (effectiveBridgeTools.length > 0) {
         bridge = await startCodexToolBridge(effectiveBridgeTools, CODEX_FLUJO_INSTRUCTIONS, Boolean(nativeToolPort), Boolean(nativeOriginalProcessHost));
       }
 
+      const ordinaryCodex = executionExtensionContext || nativeOriginalProcessHost || nativeToolPort
+        ? undefined : await acquireOrdinaryCodexExecutable();
+      codexLeaseCleanup = ordinaryCodex?.release;
+      const codexExecutable = privateCodexPath ?? ordinaryCodex?.executable;
       const ordinaryModelCatalog = executionExtensionContext
         ? undefined
-        : await prepareCodexModelCatalogSnapshot(abortController.signal);
+        : await prepareCodexModelCatalogSnapshot(abortController.signal, codexExecutable);
       modelCatalogCleanup = ordinaryModelCatalog?.cleanup;
       const restrictedRuntime = executionExtensionContext
         ? await prepareRestrictedCodexRuntimeEnvironment(privateCodexProfile!)
@@ -866,7 +872,7 @@ export class CodexAdapter implements CompletionAdapter {
       if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
       const codex = nativeOriginalProcessHost ? undefined : new Codex({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
-        ...(privateCodexPath ? { codexPathOverride: privateCodexPath } : {}),
+        ...(codexExecutable ? { codexPathOverride: codexExecutable } : {}),
         ...(restrictedRuntime ? { configOverrides: restrictedRuntime.configOverrides } : {}),
         env: runtime.env,
         ...(Object.keys(config).length > 0 ? { config } : {}),
@@ -1254,6 +1260,7 @@ export class CodexAdapter implements CompletionAdapter {
           await privateRuntimeCleanup?.();
         } finally {
           await modelCatalogCleanup?.().catch(() => log.warn('Failed to remove Codex model catalog snapshot'));
+          await codexLeaseCleanup?.().catch(() => log.warn('Failed to release Codex CLI lease'));
         }
       }
     }

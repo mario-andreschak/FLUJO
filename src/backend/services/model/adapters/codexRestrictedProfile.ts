@@ -84,7 +84,7 @@ function baseEnvironment(): Record<string, string> {
 }
 
 /** Match the SDK's native-package resolver, then invoke only the checked path. */
-export function bundledCodexExecutable(): string {
+export function bundledCodexExecutable(installationRoot = process.cwd()): string {
   const triples: Record<string, string> = {
     'linux:x64': 'x86_64-unknown-linux-musl', 'linux:arm64': 'aarch64-unknown-linux-musl',
     'darwin:x64': 'x86_64-apple-darwin', 'darwin:arm64': 'aarch64-apple-darwin',
@@ -93,7 +93,7 @@ export function bundledCodexExecutable(): string {
   const triple = triples[`${process.platform}:${process.arch}`];
   if (!triple) throw new Error('Restricted Codex profile does not support this platform.');
   const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
-  const localRequire = nativeCreateRequire(path.join(process.cwd(), 'package.json'));
+  const localRequire = nativeCreateRequire(path.join(installationRoot, 'package.json'));
   const codexRequire = nativeCreateRequire(localRequire.resolve('@openai/codex/package.json'));
   const platformPackage = `@openai/codex-${process.platform}-${process.arch}`;
   const root = path.dirname(codexRequire.resolve(`${platformPackage}/package.json`));

@@ -52,7 +52,7 @@ async function POST_handler(request: NextRequest) {
       });
     }
     const usesNativeGemini = profile?.id === 'gemini-native';
-    if (!baseUrl && !usesNativeGemini) {
+    if (!baseUrl && !usesNativeGemini && profile?.id !== 'codex') {
       return new Response(JSON.stringify({ error: 'Base URL is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },

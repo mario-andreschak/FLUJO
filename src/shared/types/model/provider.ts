@@ -218,12 +218,9 @@ export function getModelConfigurationCapabilities(
   }
 
   if (resolvedAdapter === 'codex-cli') {
-    const effortLevels: ModelReasoningEffort[] =
-      /^(?:gpt-6-astra|gpt-5\.6-(?:sol|terra))$/i.test(name)
-        ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-        : /^gpt-5\.6-/i.test(name)
-          ? ['low', 'medium', 'high', 'xhigh', 'max']
-          : ['low', 'medium', 'high', 'xhigh'];
+    // The picker narrows this vocabulary using model/list. The CLI validates
+    // availability; new model names must not lose valid efforts at save time.
+    const effortLevels: ModelReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
     return {
       effortLevels,
       // Current mini/spark/review catalog entries do not advertise Fast mode.
@@ -667,17 +664,9 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'Codex SDK',
     baseUrl: '',
     showBaseUrl: false,
-    // Hints only — the field stays free-text. Keep this aligned with the
-    // user-facing catalog bundled by the supported Codex CLI.
-    defaultModels: [
-      'gpt-6-astra',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
-    ],
+    supportsModelDiscovery: true,
+    // No static catalogue: preserve manually entered/saved IDs during outages.
+    defaultModels: [],
   },
   {
     id: 'antigravity-cli',
