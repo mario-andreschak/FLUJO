@@ -1,3 +1,7 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 /** Real MCP persistence and crypto, confined to jest.setup.ts's temporary data root. */
 import { readFile } from 'fs/promises';
 import path from 'path';

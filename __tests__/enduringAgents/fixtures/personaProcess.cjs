@@ -1,8 +1,6 @@
 'use strict';
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const ts = require('typescript');
@@ -16,49 +14,10 @@ const Module = require('module');
 // cost — not any product behaviour — is what made the readiness wait time out
 // under CPU contention. Caching the emitted JavaScript by content hash makes
 // every spawn after the first one nearly free, and is shared across the whole
-// run (and across runs on the same machine).
+// run, in a private directory allocated by the parent harness.
 // ---------------------------------------------------------------------------
-const transpileCacheDir = process.env.FLUJO_PERSONA_TRANSPILE_CACHE_DIR
-  || path.join(os.tmpdir(), `flujo-persona-transpile-cache-ts${ts.version}`);
-let transpileCacheUsable = true;
-try {
-  fs.mkdirSync(transpileCacheDir, { recursive: true });
-} catch {
-  transpileCacheUsable = false;
-}
-
-function transpileCached(variant, filename, source, compilerOptions) {
-  if (!transpileCacheUsable) {
-    return ts.transpileModule(source, { compilerOptions, fileName: filename }).outputText;
-  }
-  const key = crypto
-    .createHash('sha1')
-    .update(variant)
-    .update('\0')
-    .update(source)
-    .digest('hex');
-  const cacheFile = path.join(transpileCacheDir, `${variant}-${key}.js`);
-  try {
-    return fs.readFileSync(cacheFile, 'utf8');
-  } catch {
-    // Cache miss: fall through and compile.
-  }
-  const outputText = ts.transpileModule(source, { compilerOptions, fileName: filename }).outputText;
-  // Write via a unique temp file so concurrent children can never observe a
-  // half-written cache entry.
-  const tempFile = `${cacheFile}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    fs.writeFileSync(tempFile, outputText, 'utf8');
-    fs.renameSync(tempFile, cacheFile);
-  } catch {
-    try {
-      fs.rmSync(tempFile, { force: true });
-    } catch {
-      // The cache is an optimisation; never fail the child over it.
-    }
-  }
-  return outputText;
-}
+const { createTranspileCache } = require('./personaTranspileCache.cjs');
+const transpileCached = createTranspileCache(ts, process.env.FLUJO_PERSONA_TRANSPILE_CACHE_DIR);
 
 const repositoryRoot = process.cwd();
 const stdioOAuthDist = path.join(repositoryRoot, 'node_modules', 'mcp-stdio-oauth', 'dist');
@@ -105,6 +64,21 @@ require.extensions['.ts'] = function transpileTypeScript(module, filename) {
 const workspaceId = process.argv[2];
 if (!workspaceId) throw new Error('A workspace id is required.');
 
+async function startPersonaFixture() {
+// Source transpilation emits require, but the Tasks extension exposes only
+// native import conditions. Load the actual public namespaces before importing
+// the source graph, as the worker-transfer child does for stdio OAuth. Do not
+// bypass export maps or replace protocol/schema behavior with fixture stubs.
+const nativeTasks = new Map(await Promise.all([
+  '@modelcontextprotocol/ext-tasks/core',
+  '@modelcontextprotocol/ext-tasks/core/v2',
+  '@modelcontextprotocol/ext-tasks/client',
+].map(async name => [name, await import(name)])));
+const originalLoad = Module._load;
+Module._load = function loadNativeTasks(request, parent, isMain) {
+  return nativeTasks.has(request) ? nativeTasks.get(request) : originalLoad.call(this, request, parent, isMain);
+};
+
 const enduringAgents = require(path.join(
   repositoryRoot,
   'src/backend/services/enduringAgents/index.ts',
@@ -118,7 +92,7 @@ const {
 ));
 const { StorageKey } = require(path.join(repositoryRoot, 'src/shared/types/storage/index.ts'));
 const { saveItem } = require(path.join(repositoryRoot, 'src/utils/storage/backend.ts'));
-const { runWithWorkspace } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
+const { runWithWorkspace, getWorkspaceDataDir } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
 const { withWorkspaceMutation, withWorkspaceRecoveryCapture } = require(path.join(
   repositoryRoot, 'src/backend/services/workspace/workspaceMutationGate.ts',
 ));
@@ -144,6 +118,31 @@ let recoveryCheckpoint;
 async function execute(command) {
   return runWithWorkspace(workspaceId, async () => {
     switch (command.type) {
+      // Ordinary local detached launches share this real-storage process harness;
+      // killing the fixture loses their launcher, never replays their effects.
+      case 'launchDetachedTask': {
+        const { createTask } = require(path.join(repositoryRoot, 'src/backend/services/subflowTasks/index.ts'));
+        const { initializeRecovery } = require(path.join(repositoryRoot, 'src/backend/execution/flow/recoveryCheckpoint.ts'));
+        const task = await createTask({
+          originConversationId: 'restart-parent', originLogicalRunId: 'restart-parent-run',
+          flowId: 'restart-child-flow', childConversationId: command.childConversationId,
+          input: { prompt: 'harmless pending child' },
+        });
+        if (!task) throw new Error('Could not create detached fixture task');
+        const child = {
+          conversationId: task.childConversationId, flowId: task.flowId,
+          parentRunId: task.originConversationId, parentLogicalRunId: task.originLogicalRunId,
+          status: 'running', messages: [],
+          trackingInfo: { executionId: 'restart-child', startTime: Date.now(), nodeExecutionTracker: [] },
+        };
+        initializeRecovery(child, 'restart-child-run');
+        await saveItem(`conversations/${task.childConversationId}`, child);
+        return task;
+      }
+      case 'getDetachedTask':
+        return require(path.join(repositoryRoot, 'src/backend/services/subflowTasks/index.ts')).getTask(command.taskId);
+      case 'reconcileDetachedTasks':
+        return require(path.join(repositoryRoot, 'src/backend/services/subflowTasks/index.ts')).reconcileOrphanedTasks();
       case 'readFlow': return flowService.getFlow(command.flowId);
       case 'saveFlow': return flowService.saveFlow(command.flow);
       case 'previewDeletion': return enduringAgents.previewPersonaDeletion(command.personaId);
@@ -189,6 +188,10 @@ async function execute(command) {
         };
         state.done = (command.mode === 'flow'
           ? require(path.join(repositoryRoot, 'src/backend/services/flow/personaOwnedFlows.ts')).withFlowMutationLock(task)
+          : command.mode === 'snapshot-store'
+          ? require(path.join(repositoryRoot, 'src/backend/services/snapshot/snapshotLock.ts')).withSnapshotStoreLease(
+            path.join(getWorkspaceDataDir(), 'snapshots'), 'capture', task,
+          )
           : command.mode === 'writer'
           ? withWorkspaceMutation(task)
           : withWorkspaceRecoveryCapture(task, { timeoutMs: command.timeoutMs }))
@@ -357,5 +360,11 @@ void announceReady().catch((error) => {
     error instanceof Error ? error.stack ?? error.message : String(error)
   }\n`);
   input.close();
+  process.exitCode = 1;
+});
+}
+
+void startPersonaFixture().catch(error => {
+  process.stderr.write(`Persona child module loading failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

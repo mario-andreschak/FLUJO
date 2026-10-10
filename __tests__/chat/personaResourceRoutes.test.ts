@@ -34,6 +34,8 @@ jest.mock('@/utils/logger', () => ({
 
 import { GET as listResources } from '@/app/v1/chat/conversations/[conversationId]/resources/route';
 import { GET as readResource } from '@/app/v1/chat/conversations/[conversationId]/resources/[resourceId]/content/route';
+import { RunResourceIndexPressureError } from '@/backend/services/runResources/indexCache';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 
 const conversationContext = {
   params: Promise.resolve({ conversationId: 'conversation_persona' }),
@@ -47,6 +49,17 @@ function request(path: string) {
 }
 
 describe('Persona run-resource HTTP boundaries', () => {
+  it.each([
+    ['CONVERSATION_LOG_READ_BUSY', 429],
+    ['CONVERSATION_LOG_READ_MEMORY', 503],
+  ] as const)('preserves %s for the shared HTTP wrapper before reading resources', async (code, status) => {
+    const pressure = new ConversationLogReadPressureError(code, status);
+    loadConversationStateMock.mockRejectedValue(pressure);
+    await expect(listResources(request('/v1/chat/conversations/conversation_persona/resources'), conversationContext)).rejects.toBe(pressure);
+    await expect(readResource(request('/v1/chat/conversations/conversation_persona/resources/resource_1/content'), resourceContext)).rejects.toBe(pressure);
+    expect(listRunResourcesMock).not.toHaveBeenCalled();
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
   let ownershipMarkers: Record<string, unknown>;
 
   beforeEach(() => {
@@ -108,5 +121,24 @@ describe('Persona run-resource HTTP boundaries', () => {
     expect(assertLocalRequestMock).toHaveBeenCalledWith(contentReq);
     expect(buildRunResourceUriMock).not.toHaveBeenCalled();
     expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('returns actionable redacted index pressure after the local authority gate', async () => {
+    assertLocalRequestMock.mockReturnValue(null);
+    listRunResourcesMock.mockRejectedValueOnce(new RunResourceIndexPressureError());
+    const response = await listResources(request('/v1/chat/conversations/conversation_persona/resources'), conversationContext);
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Retry-After')).toBe('1');
+    expect(await response.json()).toEqual({ code: 'RUN_RESOURCE_INDEX_PRESSURE', retryable: true,
+      error: 'Resource index reads are busy. Retry after current reads finish.' });
+  });
+
+  it('keeps unrelated index failures redacted and distinct from pressure', async () => {
+    assertLocalRequestMock.mockReturnValue(null);
+    listRunResourcesMock.mockRejectedValueOnce(new Error('private fixture index path'));
+    const response = await listResources(request('/v1/chat/conversations/conversation_persona/resources'), conversationContext);
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Retry-After')).toBeNull();
+    expect(await response.json()).toEqual({ error: 'Internal server error listing run resources' });
   });
 });

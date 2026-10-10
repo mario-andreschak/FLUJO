@@ -16,6 +16,7 @@ import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import type { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ModelCard from '@/frontend/components/models/list/ModelCard';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import type { CardGroup } from '@/utils/shared/cardGrouping';
 import type { Model } from '@/shared/types';
@@ -126,6 +127,7 @@ const InspectorModelBinding: React.FC<InspectorModelBindingProps> = ({
         </Tooltip>
       </Stack>
 
+      {selectedModelId && <AllowanceBar modelIds={selectedModel?.fallbackPolicy?.modelIds ?? [selectedModelId]} />}
       {!selectedModelId ? (
         <Typography variant="caption" color="error.main" fontWeight={700} display="block" sx={{ px: 1.25, pb: 1.25 }}>
           {beginnerMode ? t('flows.inspector.noStepAi') : t('flows.inspector.noBoundModel')}

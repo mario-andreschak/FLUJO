@@ -23,6 +23,7 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { v4 as uuidv4 } from 'uuid';
 
 import ModelList from '@/frontend/components/models/list/ModelList';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import ModelModal from '@/frontend/components/models/modal';
 import ModelConnectionWizard, {
   GuidedCreationResult,
@@ -31,6 +32,7 @@ import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
+import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { getModelService, ModelResult } from '@/frontend/services/model';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
@@ -43,6 +45,7 @@ import { flowService } from '@/frontend/services/flow';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { navigateWorkspaceRoute } from '@/frontend/utils/workspaceNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import FallbackPolicyDialog from '@/frontend/components/models/FallbackPolicyDialog';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -72,6 +75,7 @@ export default function ModelClient() {
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+  const [policyDraft, setPolicyDraft] = useState<Model | null>(null);
   // #374: whether THIS instance pushed the current `?edit=`/`?add=` history
   // entry (vs. it being present on initial load from a deep link) — lets
   // closing prefer `router.back()` (a clean history stack) over `router.push`
@@ -257,7 +261,7 @@ export default function ModelClient() {
         // correction or a rotated key).
         const match = known.find((model) =>
           model.provider === candidate.provider &&
-          (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
+          resolveModelAdapter(model.provider, model.adapter) === resolveModelAdapter(candidate.provider, candidate.adapter) &&
           model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase() &&
           (candidate.provider !== 'azure' || (
             (model.baseUrl || '').replace(/\/+$/, '').toLowerCase() ===
@@ -266,8 +270,12 @@ export default function ModelClient() {
           ))
         );
         if (match) {
-          if (candidate.ApiKey?.trim() && candidate.provider !== 'ollama') {
-            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey });
+          // The Antigravity wizard explicitly chooses between an API key and
+          // the host account login. Clearing a saved key applies that choice.
+          const clearsAntigravityKey = candidate.provider === 'antigravity-cli' &&
+            !candidate.ApiKey?.trim() && Boolean(match.ApiKey?.trim());
+          if ((candidate.ApiKey?.trim() && candidate.provider !== 'ollama') || clearsAntigravityKey) {
+            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey ?? '' });
             if (!result.success || !result.model) {
               setModels(await service.loadModels());
               return { success: false, created, existing, error: result.error || t('models.saveFailed') };
@@ -503,7 +511,10 @@ export default function ModelClient() {
             }}
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
-          <>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button variant="outlined" startIcon={<AddIcon />} onClick={() => setPolicyDraft({
+              id: uuidv4(), name: 'policy/', ApiKey: '', fallbackPolicy: { modelIds: [] },
+            })}>{t('models.policy.create')}</Button>
             <ButtonGroup variant="contained" color="primary" aria-label={t('models.connectionOptionsAria')}>
               <Button startIcon={<AddIcon />} onClick={handleAdd} data-tour="add-model">
                 {t('models.connectAi')}
@@ -535,10 +546,11 @@ export default function ModelClient() {
                 <ListItemText primary={t('models.manualCreation')} secondary={t('models.manualCreationDescription')} />
               </MenuItem>
             </Menu>
-          </>
+          </Box>
         </Box>
       </Paper>
       </StickySearchBar>
+      <AllowanceBar overview />
 
       {error && (
         <Box sx={{ mb: 2 }}>
@@ -587,7 +599,20 @@ export default function ModelClient() {
       />
 
       {/* Only render modal when we have a valid model ID */}
-      {isModalOpen && currentModel ? (
+      {(policyDraft || (isModalOpen && currentModel?.fallbackPolicy)) && (
+        <FallbackPolicyDialog key={(policyDraft || currentModel)!.id} model={(policyDraft || currentModel)!} models={models}
+          onClose={() => { if (policyDraft) setPolicyDraft(null); else void handleCloseModal(); }}
+          onSave={async policy => {
+            const service = getModelService();
+            const result = policyDraft ? await service.addModel(policy) : await service.updateModel(policy);
+            if (result.success) {
+              setModels(await service.loadModels());
+              if (policyDraft) setPolicyDraft(null); else await handleCloseModal();
+            }
+            return result;
+          }} />
+      )}
+      {isModalOpen && currentModel && !currentModel.fallbackPolicy ? (
           <ModelModal
             open={isModalOpen}
             model={currentModel}

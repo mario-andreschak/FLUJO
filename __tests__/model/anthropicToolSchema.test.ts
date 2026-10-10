@@ -47,3 +47,43 @@ it('promotes oneOf fields and only requires names shared by all branches', () =>
   }, required: ['kind'] });
   expect(result).not.toHaveProperty('oneOf');
 });
+
+it('keeps prototype-like tool argument names as ordinary own schema fields', () => {
+  const fields = JSON.parse('{"__proto__":{"type":"string"},"constructor":{"type":"number"},"toString":{"type":"boolean"}}');
+  const result = toAnthropicToolSchema({ allOf: [{ properties: fields, required: Object.keys(fields) }] });
+  expect(result.properties).toEqual(fields);
+  expect(Object.getPrototypeOf(result.properties)).toBe(Object.prototype);
+  expect(Object.hasOwn(result.properties as object, '__proto__')).toBe(true);
+  expect(result.required).toEqual(Object.keys(fields));
+  expect(JSON.parse(JSON.stringify(result)).properties).toEqual(fields);
+});
+
+it('ignores inherited compositions and rejects cyclic or excessively deep own compositions', () => {
+  const inherited = Object.create({ anyOf: [{ required: ['ignored'] }] });
+  inherited.type = 'object';
+  expect(toAnthropicToolSchema(inherited)).toBe(inherited);
+  const cycle: Record<string, unknown> = {};
+  cycle.allOf = [cycle];
+  expect(() => toAnthropicToolSchema(cycle)).toThrow('Tool schema');
+  let deep: Record<string, unknown> = { type: 'object' };
+  for (let depth = 0; depth < 70; depth++) deep = { allOf: [deep] };
+  expect(() => toAnthropicToolSchema(deep)).toThrow('Tool schema');
+});
+
+it('never treats missing prototype-like fields as inherited branch constraints', () => {
+  const fields = JSON.parse('{"__proto__":{"type":"string"},"constructor":{"type":"number"},"toString":{"type":"boolean"}}');
+  const branches = [{ properties: fields }, { properties: { unrelated: { type: 'number' } } }];
+  expect(toAnthropicToolSchema({ allOf: branches }).properties).toEqual({ ...fields, unrelated: { type: 'number' } });
+  expect(toAnthropicToolSchema({ anyOf: branches }).properties).toEqual({
+    ...Object.fromEntries(Object.keys(fields).map(name => [name, {}])), unrelated: {},
+  });
+});
+
+it('refuses schema getters without invoking them and allows repeated acyclic definitions', () => {
+  const getter = jest.fn(() => []);
+  const schema = Object.defineProperty({}, 'allOf', { enumerable: true, get: getter });
+  expect(() => toAnthropicToolSchema(schema)).toThrow('Tool schema');
+  expect(getter).not.toHaveBeenCalled();
+  const branch = { properties: { value: { type: 'string' } } };
+  expect(toAnthropicToolSchema({ allOf: [branch, branch] }).properties).toHaveProperty('value');
+});

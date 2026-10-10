@@ -25,15 +25,15 @@ describe('worker HTTP ingress', () => {
     } });
   }
   it.each(['/api/env', '/api/storage', '/v1/chat/completions', '/mcp-proxy/server', '/mcp-flows'])
-  ('requires credentials on %s even with a loopback Host header', route => {
+  ('requires credentials on %s even with a loopback Host header', async route => {
     setWorkerBootstrapStatus({ state: 'ready' });
-    expect(proxy(request(route)).status).toBe(401);
-    expect(proxy(request(route, true)).status).toBe(200);
+    expect((await proxy(request(route))).status).toBe(401);
+    expect((await proxy(request(route, true))).status).toBe(200);
   });
-  it('blocks execution until startup completes while allowing authenticated MCP discovery', () => {
+  it('blocks execution until startup completes while allowing authenticated MCP discovery', async () => {
     setWorkerBootstrapStatus({ state: 'installing' });
     // Proxy authenticates using env only; readiness is checked in the route runtime.
-    expect(proxy(request('/v1/chat/completions', true)).status).toBe(200);
+    expect((await proxy(request('/v1/chat/completions', true))).status).toBe(200);
     expect(assertWorkerRequestReady(request('/v1/chat/completions'), 'research')?.status).toBe(503);
     expect(assertWorkerRequestReady(request('/api/mcp/flujo/tools'), 'research')).toBeNull();
     expect(assertWorkerRequestReady(request('/api/mcp/flujo/flows'), 'research')?.status).toBe(503);

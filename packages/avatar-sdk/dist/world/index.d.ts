@@ -1,0 +1,10 @@
+import type WorldScene from './canonical/src/frontend/components/AvatarWorld/WorldScene.js';
+export { default as WorldScene } from './canonical/src/frontend/components/AvatarWorld/WorldScene.js';
+export type WorldSceneProps = Parameters<typeof WorldScene>[0];
+export type { AvatarWorldSnapshot, AvatarWorldObject } from './canonical/src/shared/types/avatar.js';
+export { WorldSky } from './WorldSky.js';
+export type { WorldSkyProps } from './WorldSky.js';
+export { currentWorldSkySelection } from './selection.js';
+export type { WorldSkyModel, WorldSkySelection, WorldSkyIntent, WorldSkyLayer } from './selection.js';
+export { default as Eyes } from '../client/Eyes.js';
+export type { EyesProps, AvatarStyle, EyePhase } from '../client/Eyes.js';

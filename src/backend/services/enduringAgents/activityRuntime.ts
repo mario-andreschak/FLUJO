@@ -2171,6 +2171,73 @@ export async function assertPersonaActivityLease(value: unknown): Promise<Person
   });
 }
 
+export interface HeldPersonaActivityRead {
+  /** Fresh lease, Persona, runnable Activity, expiry and lock ownership checks. */
+  readonly assertCurrent: () => Promise<void>;
+}
+
+const heldPersonaActivityReads = new WeakSet<object>();
+
+/** Provenance and lifetime only; this never substitutes for assertCurrent. */
+export function assertHeldPersonaActivityRead(value: unknown): asserts value is HeldPersonaActivityRead {
+  if (!value || typeof value !== 'object' || !heldPersonaActivityReads.has(value)) {
+    throw new Error('A live held Persona Activity reader is required.');
+  }
+}
+
+/**
+ * Reuse the actual cross-process lock for a bounded read callback, never a
+ * previously established authority verdict. Every assertion reloads the full
+ * fencing tuple. Readers cease to be valid before the runtime lock is released.
+ * The callback must neither acquire this lock recursively nor start background
+ * work. Goal and private execution guards belong to the trusted caller and must
+ * still run at every original checkpoint.
+ */
+export async function readWithPersonaActivityLease<T>(
+  value: unknown,
+  task: (reader: HeldPersonaActivityRead) => Promise<T>,
+): Promise<T> {
+  const fence = LeaseFenceSchema.parse(value) as PersonaLeaseFence;
+  return withPersonaRuntimeLock(fence.personaId, async (lock) => {
+    const deadline = runtimeClock.monotonicNow() + 5_000;
+    let active = true;
+    const pending = new Set<Promise<void>>();
+    const assertLifetime = () => {
+      if (!active || runtimeClock.monotonicNow() >= deadline) {
+        throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read expired.');
+      }
+    };
+    const reader: HeldPersonaActivityRead = Object.freeze({
+      assertCurrent: () => {
+        const check = (async () => {
+          assertLifetime();
+          await lock.assertOwned();
+          assertLifetime();
+          await requireActiveRunnableLease(lock, fence);
+          await lock.assertOwned();
+          assertLifetime();
+        })();
+        pending.add(check);
+        void check.then(() => pending.delete(check), () => pending.delete(check));
+        return check;
+      },
+    });
+    heldPersonaActivityReads.add(reader);
+    try {
+      await reader.assertCurrent();
+      const result = await task(reader);
+      await reader.assertCurrent();
+      return result;
+    } finally {
+      active = false;
+      heldPersonaActivityReads.delete(reader);
+      // An escaped in-flight assertion must finish before releasing the lock;
+      // its final lifetime check fails, and no assertion can start after close.
+      await Promise.allSettled([...pending]);
+    }
+  });
+}
+
 /**
  * Hold the exact Persona Activity generation across a caller-supplied durable
  * write. The fence is validated after the cross-process runtime lock is held,

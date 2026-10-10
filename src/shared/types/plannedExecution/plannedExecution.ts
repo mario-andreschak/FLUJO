@@ -1,4 +1,5 @@
 import type { UsageTotals } from '@/shared/types/execution/events';
+import type { WorkerRecoveryStatus } from './workerRecovery';
 
 /**
  * Planned Executions (#10): flows that run headlessly on triggers.
@@ -336,6 +337,15 @@ export interface RunRecord {
   outputText?: string;
   usage?: UsageTotals;
   error?: string;
+  /** Bounded Static MCP failure classification, retained even for ephemeral runs.
+   * Does not include raw protocol results, arguments, or provider stacks. */
+  errorDetails?: {
+    type?: string;
+    code?: string;
+    name?: string;
+    param?: string;
+    status?: number;
+  };
   /**
    * Set when a HEADLESS run hit a tool that needs approval (issue #115): the
    * run either failed fast (approvalPolicy 'fail') or is parked awaiting
@@ -425,6 +435,7 @@ export interface TriggerFirePayload {
 /** Live (non-persisted) status of an execution's armed trigger, for the UI. */
 export interface PlannedExecutionStatus {
   armed: boolean;
+  workerRecovery?: WorkerRecoveryStatus;
   /**
    * When NOT armed, why — so the UI can show a truthful reason instead of a
    * bare "Not armed" (issue #118). 'paused' = the global pause switch gates

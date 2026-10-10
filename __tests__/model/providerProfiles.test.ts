@@ -5,6 +5,9 @@ import {
   getProviderProfileById,
   supportsProviderModelDiscovery,
   resolveModelAdapter,
+  isSelfOrchestratingAdapter,
+  supportsLocalModelAuth,
+  ANTIGRAVITY_CLI_API_KEY_MODELS,
 } from '@/shared/types/model/provider';
 
 describe('provider profiles', () => {
@@ -16,6 +19,7 @@ describe('provider profiles', () => {
       'openrouter',
       'openrouter-messages',
       'openrouter-agent',
+      'orcarouter',
       'requesty',
       'xai',
       'ollama',
@@ -27,6 +31,7 @@ describe('provider profiles', () => {
       'anthropic-native',
       'claude-subscription',
       'codex',
+      'antigravity-cli',
       'openai',
     ]);
     // Mistral must not be selectable in the modal.
@@ -40,6 +45,7 @@ describe('provider profiles', () => {
     expect(getProviderProfile('anthropic', 'openai').id).toBe('anthropic-openai');
     expect(getProviderProfile('claude-subscription', 'claude-cli').id).toBe('claude-subscription');
     expect(getProviderProfile('codex', 'codex-cli').id).toBe('codex');
+    expect(getProviderProfile('antigravity-cli', 'antigravity-cli').id).toBe('antigravity-cli');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
     expect(getProviderProfile('openrouter', 'openrouter-agent').id).toBe('openrouter-agent');
     expect(resolveModelAdapter('openrouter', 'openrouter-agent')).toBe('openrouter-agent');
@@ -63,7 +69,8 @@ describe('provider profiles', () => {
 
   it('defaults LiteLLM to Responses while preserving an explicit Chat Completions choice', () => {
     expect(getProviderProfileById('litellm')?.adapter).toBe('openai-responses');
-    expect(resolveModelAdapter('litellm', undefined)).toBe('openai-responses');
+    // Existing saved connections keep their legacy route; new profiles select Responses explicitly.
+    expect(resolveModelAdapter('litellm', undefined)).toBe('openai');
     expect(getProviderProfile('litellm', 'openai-responses').id).toBe('litellm');
     expect(getProviderProfile('litellm', 'openai').id).toBe('litellm-chat-completions');
     expect(resolveModelAdapter('litellm', 'openai')).toBe('openai');
@@ -137,15 +144,51 @@ describe('provider profiles', () => {
     expect(GEMINI_NATIVE_FALLBACK_MODELS).not.toContain('gemini-2.0-flash');
   });
 
-  it('offers the current Codex CLI model catalog', () => {
-    expect(getProviderProfileById('codex')?.defaultModels).toEqual([
-      'gpt-6-astra',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
+  it('discovers Codex without a URL instead of freezing a release-specific catalogue', () => {
+    const codex = getProviderProfileById('codex')!;
+    expect(supportsProviderModelDiscovery(codex, '')).toBe(true);
+    expect(codex.defaultModels).toEqual([]);
+  });
+
+  it('keeps Antigravity CLI local authentication separate from native Gemini', () => {
+    expect(getProviderProfileById('antigravity-cli')).toMatchObject({
+      provider: 'antigravity-cli', adapter: 'antigravity-cli', sdkLabel: 'Antigravity CLI',
+      baseUrl: '', showBaseUrl: false, supportsModelDiscovery: false,
+      defaultModels: [
+        'default',
+        'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+        'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
+        'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
+        'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
+        'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium',
+      ],
+    });
+    expect(resolveModelAdapter('antigravity-cli')).toBe('antigravity-cli');
+    expect(getProviderProfile('antigravity-cli').id).toBe('antigravity-cli');
+    expect(supportsProviderModelDiscovery(getProviderProfileById('antigravity-cli')!, '')).toBe(false);
+    for (const adapter of ['codex-cli', 'antigravity-cli']) {
+      expect(supportsLocalModelAuth(adapter)).toBe(true);
+      expect(isSelfOrchestratingAdapter(adapter)).toBe(true);
+    }
+    for (const adapter of [undefined, 'gemini', 'gemini-cli', 'openai', 'claude-cli']) {
+      expect(supportsLocalModelAuth(adapter)).toBe(false);
+    }
+    expect(isSelfOrchestratingAdapter('gemini')).toBe(false);
+  });
+
+  it('suggests only the verified Gemini slugs for Antigravity API-key mode', () => {
+    expect(ANTIGRAVITY_CLI_API_KEY_MODELS).toEqual([
+      'default',
+      'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+      'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
+      'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
+      'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
     ]);
   });
+});
+
+it('keeps OrcaRouter on Chat Completions for new and saved connections', () => {
+  expect(getProviderProfile('orcarouter')).toMatchObject({ id: 'orcarouter', provider: 'orcarouter', adapter: 'openai', baseUrl: 'https://api.orcarouter.ai/v1', showBaseUrl: true });
+  expect(resolveModelAdapter('orcarouter', 'openai')).toBe('openai');
+  expect(supportsProviderModelDiscovery(getProviderProfile('orcarouter'), 'https://api.orcarouter.ai/v1')).toBe(true);
 });

@@ -1,0 +1,158 @@
+# Source proposal: draft publication is inert; a separately selected PR transition exports.
+name: Export immutable 8fe Windows worker payload
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  export:
+    if: >-
+      ${{ github.repository == 'mario-andreschak/FLUJO'
+          && github.event_name == 'pull_request'
+          && github.event.action == 'ready_for_review'
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.head.repo.full_name == 'mario-andreschak/FLUJO'
+          && github.event.pull_request.head.ref == 'codex/worker-payload-runtime-guard-b5'
+          && github.event.pull_request.base.repo.full_name == 'mario-andreschak/FLUJO'
+          && github.event.pull_request.base.ref == 'codex/scorecard-integration'
+          && github.run_attempt == '1' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: compiled-source
+    env:
+      NODE_OPTIONS: ''
+      NEXT_TELEMETRY_DISABLED: '1'
+      FLUJO_BUILD_REVISION: 8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5
+      FLUJO_SKIP_PATCHRIGHT_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PROPOSAL_SHA: ${{ github.event.pull_request.head.sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      ACTUAL_EVENT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: proposal-tools
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5
+          path: compiled-source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.3'
+          architecture: x64
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Bind reviewed workflow, exact source, signed runtime and lock
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($taskSha in @($env:PROPOSAL_SHA, $env:WORKFLOW_SHA, $env:ACTUAL_EVENT_SHA)) {
+            if ($taskSha -notmatch '^[a-f0-9]{40}$') { throw 'Missing exact proposal/workflow/event source.' }
+          }
+          if ((git -C ../proposal-tools rev-parse HEAD) -cne $env:PROPOSAL_SHA) { throw 'Exporter source mismatch.' }
+          if ((git -C ../proposal-tools rev-parse 'HEAD^') -cne 'b5abe6eb27270b4360d980c3b1919db0f7f94e08') { throw 'Unreviewed proposal ancestry.' }
+          if ((git -C ../workflow-source rev-parse HEAD) -cne $env:WORKFLOW_SHA) { throw 'Actual workflow source mismatch.' }
+          $taskPaths = @('.github/workflows/worker-payload-export.yml','scripts/export-worker-payload.mjs','scripts/export-worker-payload.test.mjs','scripts/worker-payload-route.mjs')
+          $taskDeclaredChangedPaths = @('.github/workflows/worker-payload-export.yml','scripts/export-worker-payload.test.mjs','scripts/worker-payload-route.mjs')
+          $taskChanged = @(git -C ../proposal-tools diff --name-only 'HEAD^' HEAD | Sort-Object)
+          if (($taskChanged -join "`n") -cne (($taskDeclaredChangedPaths | Sort-Object) -join "`n")) { throw 'Unexpected proposal scope.' }
+          $taskSourceBindings = foreach ($taskPath in $taskPaths) {
+            $taskProposalObject = git -C ../proposal-tools ls-tree HEAD -- $taskPath
+            $taskWorkflowObject = git -C ../workflow-source ls-tree HEAD -- $taskPath
+            if (-not $taskProposalObject -or $taskProposalObject -cne $taskWorkflowObject) { throw "Workflow/exporter object mismatch: $taskPath" }
+            [ordered]@{path=$taskPath;object=$taskProposalObject;sha256=(Get-FileHash -LiteralPath (Join-Path ../proposal-tools $taskPath) -Algorithm SHA256).Hash.ToLowerInvariant()}
+          }
+          if ((git -C ../proposal-tools status --porcelain=v1) -or (git -C ../workflow-source status --porcelain=v1)) { throw 'Dirty proposal/workflow source.' }
+          if ((git rev-parse HEAD) -cne '8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5') { throw 'Application source mismatch.' }
+          if ((git rev-parse 'HEAD^{tree}') -cne '4f318966afccb7fc7b44f04b51b6fbaeb7ee94ae') { throw 'Application tree mismatch.' }
+          if (git status --porcelain=v1) { throw 'Dirty source.' }
+          $taskNode = (Get-Command node.exe).Source
+          $taskSignature = Get-AuthenticodeSignature -LiteralPath $taskNode
+          if ($taskSignature.Status -ne 'Valid') { throw 'Unsigned official runtime.' }
+          node scripts/verify-ci-node.mjs 22.23.3 --record
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
+          node ../proposal-tools/scripts/worker-payload-route.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact route refused.' }
+          node ../proposal-tools/scripts/export-worker-payload.mjs --validate-package (Join-Path $PWD.Path 'package.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Immutable package selection differs.' }
+          $taskExport = Join-Path $env:RUNNER_TEMP 'worker-payload-export'
+          New-Item -ItemType Directory -Path $taskExport -ErrorAction Stop | Out-Null
+          [ordered]@{applicationSource=(git rev-parse HEAD);applicationTree=(git rev-parse 'HEAD^{tree}');proposalSource=$env:PROPOSAL_SHA;proposalParent=(git -C ../proposal-tools rev-parse 'HEAD^');workflowSource=$env:WORKFLOW_SHA;actualEventSource=$env:ACTUAL_EVENT_SHA;workflowParents=@(git -C ../workflow-source show -s --format=%P HEAD);declaredChangedPaths=@($taskDeclaredChangedPaths);actualChangedPaths=@($taskChanged);sourceBindings=@($taskSourceBindings);event='pull_request';action='ready_for_review';lockSha256=(Get-FileHash package-lock.json -Algorithm SHA256).Hash.ToLowerInvariant();nodeSha256=(Get-FileHash -LiteralPath $taskNode -Algorithm SHA256).Hash.ToLowerInvariant();signatureStatus=$taskSignature.Status.ToString();signerThumbprint=$taskSignature.SignerCertificate.Thumbprint;os=[Environment]::OSVersion.VersionString;architecture=$env:PROCESSOR_ARCHITECTURE;runId=$env:GITHUB_RUN_ID;runAttempt=$env:GITHUB_RUN_ATTEMPT;defaultHeap=$true;appOrProviderEntry=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Encoding utf8
+      - name: Check the nine export and route predicate fixtures only
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/verify-ci-node.mjs 22.23.3 --record
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
+          node --test --test-concurrency=1 ../proposal-tools/scripts/export-worker-payload.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Export predicate fixtures failed.' }
+      - name: Fresh own lock installation and one production build
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/verify-ci-node.mjs 22.23.3 --record
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
+          npm ci --include=dev --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Build graph installation failed.' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Compiled build failed.' }
+      - name: Capture exact package selection and own production dependency graph
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/verify-ci-node.mjs 22.23.3 --record
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
+          $taskExport = Join-Path $env:RUNNER_TEMP 'worker-payload-export'
+          npm pack --ignore-scripts --json --pack-destination $taskExport > (Join-Path $taskExport 'npm-pack-report.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Package selection failed.' }
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Production graph installation failed.' }
+      - name: Export sanitized physical Windows payload and content inventory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/verify-ci-node.mjs 22.23.3 --record
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
+          $taskExport = Join-Path $env:RUNNER_TEMP 'worker-payload-export'
+          $taskStage = Join-Path $env:RUNNER_TEMP 'worker-payload-stage'
+          node ../proposal-tools/scripts/export-worker-payload.mjs --source $PWD.Path --stage $taskStage --output $taskExport --pack-report (Join-Path $taskExport 'npm-pack-report.json') --workflow-sha $env:WORKFLOW_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Payload content export failed.' }
+          $taskArchive = Join-Path $taskExport 'worker-payload.tgz'
+          tar -czf $taskArchive -C $taskStage .
+          if ($LASTEXITCODE -ne 0) { throw 'Archive export failed.' }
+          $taskInputs = Get-Content -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Raw | ConvertFrom-Json
+          if ((Get-FileHash package-lock.json -Algorithm SHA256).Hash.ToLowerInvariant() -cne $taskInputs.lockSha256) { throw 'Source lock changed.' }
+          [ordered]@{applicationSource='8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5';applicationTree='4f318966afccb7fc7b44f04b51b6fbaeb7ee94ae';proposalSource=$env:PROPOSAL_SHA;workflowSource=$env:WORKFLOW_SHA;actualEventSource=$env:ACTUAL_EVENT_SHA;buildInputsSha256=(Get-FileHash -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Algorithm SHA256).Hash.ToLowerInvariant();archiveSha256=(Get-FileHash -LiteralPath $taskArchive -Algorithm SHA256).Hash.ToLowerInvariant();archiveBytes=(Get-Item -LiteralPath $taskArchive).Length;contentManifestSha256=(Get-FileHash -LiteralPath (Join-Path $taskExport 'payload-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant();runId=$env:GITHUB_RUN_ID;runAttempt=$env:GITHUB_RUN_ATTEMPT;appOrProviderEntry=$false;actualWorkerAcceptance='UNRUN'} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskExport 'archive-provenance.json') -Encoding utf8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: worker-payload-win32-x64-8fe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/worker-payload-export/worker-payload.tgz
+            ${{ runner.temp }}/worker-payload-export/payload-manifest.json
+            ${{ runner.temp }}/worker-payload-export/archive-provenance.json
+            ${{ runner.temp }}/worker-payload-export/build-inputs.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain source/runtime/export diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: worker-payload-diagnostics-8fe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            compiled-source/ci-node-runtime/
+            ${{ runner.temp }}/worker-payload-export/build-inputs.json
+            ${{ runner.temp }}/worker-payload-export/npm-pack-report.json
+          if-no-files-found: warn

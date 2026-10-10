@@ -1,10 +1,11 @@
 import path from 'path';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { EnvVarValue, MCPLaunchSpec, MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 import { getWorkspaceDataDir, remapLegacyDefaultWorkspaceReference } from '@/utils/workspace';
+import { assertMcpTransport, McpTransportError, storedMcpTransport } from './transportAdmission';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -100,8 +101,8 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
     const mcpServers = await loadItem<Record<string, StoredServerConfig>>(StorageKey.MCP_SERVERS, {});
     
     const configs = Object.entries(mcpServers).map(([name, serverConfig]) => {
-      // Determine the transport type
-      const transport = serverConfig.transport || 'stdio';
+      // Legacy records may omit this tag; explicit malformed tags never mean stdio.
+      const transport = storedMcpTransport(serverConfig.transport);
 
       // Layout-v2 compatibility: old GitHub installs persisted absolute paths
       // into the legacy managed MCP root. Normalize them in memory after the
@@ -149,6 +150,7 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           : undefined;
       serverConfig = {
         ...serverConfig,
+        transport,
         rootPath: remapMcpPath(serverConfig.rootPath),
         cwd: remapMcpPath(serverConfig.cwd),
         command: remapMcpPath(serverConfig.command),
@@ -280,6 +282,10 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
 
     return configs;
   } catch (error) {
+    if (error instanceof McpTransportError) {
+      log.warn('Stored MCP transport is invalid');
+      return { success: false, error: error.message, statusCode: 400 };
+    }
     log.warn('Failed to load server configs', error);
     return {
       success: false,
@@ -335,6 +341,7 @@ function toStoredConfig(config: MCPServerConfig): Record<string, unknown> {
 export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise<MCPServiceResponse> {
   log.debug('Entering saveConfig method');
   try {
+    for (const config of configs.values()) assertMcpTransport(config);
     const mcpServers = Object.fromEntries(
       // Return each entry with the server name as the key
       Array.from(configs.entries()).map(([name, config]) => [name, toStoredConfig(config)])
@@ -343,6 +350,10 @@ export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise
     await saveItem(StorageKey.MCP_SERVERS, mcpServers);
     return { success: true };
   } catch (error) {
+    if (error instanceof McpTransportError) {
+      log.warn('MCP transport is invalid');
+      return { success: false, error: error.message, statusCode: 400 };
+    }
     log.warn('Failed to save config', error);
     return {
       success: false,

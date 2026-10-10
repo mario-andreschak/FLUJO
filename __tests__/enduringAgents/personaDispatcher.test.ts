@@ -38,6 +38,7 @@ import type {
   RoleVersion,
 } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
+import { _setPersonaRuntimeLockProcessBirthProbeForTests } from '@/backend/services/enduringAgents/runtimeLock';
 
 let workspaceSequence = 0;
 
@@ -667,7 +668,13 @@ function takeWorkspaceSteering(workspaceId: string, conversationId: string): voi
 }
 
 describe('Persona Flow dispatcher', () => {
+  beforeEach(() => {
+    // Keep durable ownership checks deterministic under parallel Windows CI load.
+    _setPersonaRuntimeLockProcessBirthProbeForTests(async (pid) => `win32-v2:${pid}`);
+  });
+
   afterEach(() => {
+    _setPersonaRuntimeLockProcessBirthProbeForTests(undefined);
     FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
     FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     jest.restoreAllMocks();

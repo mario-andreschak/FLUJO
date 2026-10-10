@@ -83,6 +83,9 @@ export type FlowSpecStaticEntry =
       result: string;
       executionMode?: 'mock' | 'real';
       serverName?: string;
+      captureVariable?: string;
+      resultFormat?: 'text' | 'json';
+      onError?: 'continue' | 'fail';
     };
 
 /** An MCP server a process step may call tools on. */
@@ -134,6 +137,8 @@ export interface FlowSpecNode {
    * + a tool + a bounded maxTurns loops internally without a multi-node loop construct.
    */
   maxTurns?: number;
+  /** process only: require tool-free engine routing to a sole bare Finish edge. */
+  terminalRouting?: 'tool-free';
   /** process only: drop the bound model's base/system prompt from the rendered prompt. */
   excludeModelPrompt?: boolean;
   /** process only: drop the start node's prompt from this step's rendered prompt. */
@@ -171,6 +176,8 @@ export interface FlowSpecNode {
   entries?: FlowSpecStaticEntry[];
   /** static only (issue #358/#380): inject only the first time the node is traversed in a run. */
   injectOnce?: boolean;
+  /** static only: deterministic output template, resolved after the entries. */
+  outputTemplate?: string;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
@@ -753,6 +760,10 @@ export function compileFlowSpec(
           }
         }
 
+        if (specNode.terminalRouting !== undefined) {
+          if (specNode.terminalRouting === 'tool-free') properties.terminalRouting = 'tool-free';
+          else error('invalid-terminal-routing', `Node "${key}": terminalRouting must be "tool-free" or absent.`, key);
+        }
         // maxTurns (1b): per-node agentic-turn cap. Clamp to a sane range; absent ⇒ inherit.
         if (specNode.maxTurns !== undefined) {
           if (typeof specNode.maxTurns === 'number' && !Number.isNaN(specNode.maxTurns)) {
@@ -944,9 +955,23 @@ export function compileFlowSpec(
             if (typeof toolName === 'string' && toolName.trim() && typeof argumentsJson === 'string' && typeof result === 'string') {
               const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
               const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
+              const captureOptions: Pick<Extract<FlowSpecStaticEntry, { kind: 'toolCall' }>, 'captureVariable' | 'resultFormat' | 'onError'> = {
+                ...(typeof entry.captureVariable === 'string' && entry.captureVariable.trim() ? { captureVariable: entry.captureVariable.trim() } : {}),
+                ...(entry.resultFormat === 'text' || entry.resultFormat === 'json' ? { resultFormat: entry.resultFormat } : {}),
+                ...(entry.onError === 'continue' || entry.onError === 'fail' ? { onError: entry.onError } : {}),
+              };
+              if (entry.onError !== undefined && entry.onError !== 'continue' && entry.onError !== 'fail') {
+                issues.push({ severity: 'error', code: 'static-invalid-onerror', message: `Node "${key}": onError must be continue or fail.`, nodeKey: key });
+              }
+              if (entry.onError === 'fail' && (executionMode !== 'real' || !serverName)) {
+                issues.push({ severity: 'error', code: 'static-mock-fail-policy', message: `Node "${key}": fail policy requires a real call with an MCP server.`, nodeKey: key });
+              }
+              if (entry.resultFormat !== undefined && entry.resultFormat !== 'text' && entry.resultFormat !== 'json') {
+                issues.push({ severity: 'error', code: 'static-invalid-result-format', message: `Node "${key}": resultFormat must be text or json.`, nodeKey: key });
+              }
               if (executionMode === 'real' && !serverName) {
                 warn('static-real-toolcall-missing-server', `Node "${key}": real tool-call entry #${i + 1} needs a serverName; kept as a mock.`, key);
-                clean.push({ kind: 'toolCall', toolName, argumentsJson, result, executionMode: 'mock' });
+                clean.push({ kind: 'toolCall', toolName, argumentsJson, result, executionMode: 'mock', ...captureOptions });
               } else {
                 clean.push({
                   kind: 'toolCall',
@@ -955,6 +980,7 @@ export function compileFlowSpec(
                   result,
                   ...(entry.executionMode === 'real' || entry.executionMode === 'mock' ? { executionMode } : {}),
                   ...(serverName ? { serverName } : {}),
+                  ...captureOptions,
                 });
               }
               if (argumentsJson.trim()) {
@@ -984,6 +1010,7 @@ export function compileFlowSpec(
         } else if (specNode.injectOnce !== undefined && typeof specNode.injectOnce !== 'boolean') {
           warn('static-invalid-injectonce', `Node \"${key}\": injectOnce must be a boolean; value ignored.`, key);
         }
+        if (typeof specNode.outputTemplate === 'string') properties.outputTemplate = specNode.outputTemplate;
       }
       // finish: no properties.
 
@@ -1543,6 +1570,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (props.allowCallerPrompt === false) specNode.allowCallerPrompt = false;
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.maxTurns === 'number' && props.maxTurns > 0) specNode.maxTurns = props.maxTurns;
+      if (props.terminalRouting === 'tool-free') specNode.terminalRouting = 'tool-free';
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
       if (props.excludeStartNodePrompt === true) specNode.excludeStartNodePrompt = true;
       if (props.excludeSystemPrompt === true) specNode.excludeSystemPrompt = true;
@@ -1623,6 +1651,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       // Issue #358/#380: round-trip entries so AI-Improve never drops static nodes.
       if (Array.isArray(props.entries) && props.entries.length > 0) specNode.entries = props.entries;
       if (props.injectOnce === true) specNode.injectOnce = true;
+      if (typeof props.outputTemplate === 'string') specNode.outputTemplate = props.outputTemplate;
       const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     }

@@ -1,10 +1,11 @@
 /**
  * Official MCP Tasks extension — wire contract (issue #404).
  *
- * PROTOCOL FREEZE (plan step 1). The contract below is pinned against the
- * repository's resolved `@modelcontextprotocol/sdk` (1.30.0,
+ * Legacy compatibility contract. The original contract below is pinned against the
+ * repository's resolved `@modelcontextprotocol/sdk` (1.x,
  * `experimental/tasks`), which is the only Tasks implementation FLUJO can
- * actually interoperate with today. Two deviations from the planning notes are
+ * 2025-11-25 generation. The 2026-07-28 extension is validated separately and
+ * normalized only after explicit generation selection. Two legacy differences are
  * deliberate and load-bearing:
  *
  *  - There is NO `resultType: "task"` discriminator and no `pollIntervalMs`
@@ -26,7 +27,12 @@
  */
 
 /** Extension identifier, used for logging/documentation and capability gating. */
+import { CreateTaskResultV2Schema, GetTaskResultV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
+import { CreateMessageRequestSchema, ElicitRequestSchema, ListRootsRequestSchema, CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+
 export const MCP_TASKS_EXTENSION_ID = 'io.modelcontextprotocol/tasks';
+export type McpTaskGeneration = '2025-11-25' | '2026-07-28';
+export type McpTaskInputRequest = { method: 'elicitation/create' | 'sampling/createMessage' | 'roots/list'; params?: Record<string, unknown> };
 
 /** `_meta` key that relates an inbound request to an in-flight task. */
 export const MCP_RELATED_TASK_META_KEY = 'io.modelcontextprotocol/related-task';
@@ -37,6 +43,7 @@ export const MCP_TASK_METHODS = {
   result: 'tasks/result',
   cancel: 'tasks/cancel',
   list: 'tasks/list',
+  update: 'tasks/update',
 } as const;
 
 /** Deferred, explicitly out of baseline scope (see issue #404). */
@@ -77,11 +84,15 @@ export function isTerminalMcpTaskStatus(status: McpTaskStatus): boolean {
 /**
  * A pollable task as defined by the Tasks extension. `taskId` and `status` are
  * the only fields FLUJO requires: `ttl`/`createdAt`/`lastUpdatedAt` are
- * required by SDK 1.30.0 but have moved across draft revisions, so they are
+ * required by SDK 1.x but have moved across draft revisions, so they are
  * validated when present and tolerated when absent rather than rejected (a
  * missing timestamp cannot change any lifecycle decision FLUJO makes).
  */
 export interface McpTask {
+  generation?: McpTaskGeneration;
+  result?: Record<string, unknown>;
+  error?: { code: number; message: string; data?: unknown };
+  inputRequests?: Record<string, McpTaskInputRequest>;
   taskId: string;
   status: McpTaskStatus;
   /** Retention window in ms after completion; `null` means unlimited. */
@@ -113,6 +124,76 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Bound decoded remote JSON before schema traversal or durable retention. */
+export function isBoundedTaskJson(value: unknown): boolean {
+  let entries = 0, chars = 0;
+  const seen = new Set<object>();
+  const visit = (item: unknown, depth: number): boolean => {
+    if (++entries > 10_000 || depth > 32) return false;
+    if (typeof item === 'string') { chars += item.length; return chars <= 1024 * 1024; }
+    if (item === null || typeof item === 'boolean') return true;
+    if (typeof item === 'number') return Number.isFinite(item);
+    if (typeof item !== 'object' || seen.has(item)) return false;
+    seen.add(item);
+    const keys = Object.keys(item);
+    if (keys.length > 10_000) return false;
+    for (const key of keys) {
+      chars += key.length;
+      const descriptor = Object.getOwnPropertyDescriptor(item, key);
+      if (chars > 1024 * 1024 || !descriptor || !('value' in descriptor) || !visit(descriptor.value, depth + 1)) return false;
+    }
+    seen.delete(item); return true;
+  };
+  return visit(value, 0);
+}
+
+export function isValidTaskToolResult(value: unknown): value is Record<string, unknown> {
+  // Modern structuredContent is any JSON value, while SDK 1.x restricts it to
+  // an object. Validate the remaining tool result using the pinned SDK without
+  // coercing or dropping the separately bounded modern structured value.
+  if (!isPlainObject(value) || !Array.isArray(value.content) || !isBoundedTaskJson(value)) return false;
+  const { structuredContent: _structuredContent, ...sdkResult } = value;
+  return CallToolResultSchema.safeParse(sdkResult).success;
+}
+
+export function parseModernTask(value: unknown, creation = false): McpTaskParseResult {
+  const invalid = (reason: string): McpTaskParseResult => ({ ok: false, reason });
+  if (!isPlainObject(value) || !isBoundedTaskJson(value)) return invalid('unbounded or invalid modern task');
+  if (!(creation ? CreateTaskResultV2Schema : GetTaskResultV2Schema).safeParse(value).success) return invalid('invalid official modern task schema');
+  if (value.resultType !== (creation ? 'task' : 'complete') || 'task' in value || 'ttl' in value || 'pollInterval' in value) return invalid('invalid modern discriminator or mixed generation');
+  if (creation && ('content' in value || 'structuredContent' in value)) return invalid('invalid creation payload');
+  if (!(value.ttlMs === null || (Number.isSafeInteger(value.ttlMs) && Number(value.ttlMs) >= 0))) return invalid('invalid ttlMs');
+  if (value.pollIntervalMs !== undefined && (!Number.isSafeInteger(value.pollIntervalMs) || Number(value.pollIntervalMs) < 0)) return invalid('invalid pollIntervalMs');
+  for (const field of ['createdAt', 'lastUpdatedAt']) {
+    if (typeof value[field] !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value[field]) || !Number.isFinite(Date.parse(value[field]))) return invalid('invalid task timestamp');
+  }
+  const parsed = parseMcpTask({ taskId: value.taskId, status: value.status, createdAt: value.createdAt,
+    lastUpdatedAt: value.lastUpdatedAt, statusMessage: value.statusMessage, ttl: value.ttlMs, pollInterval: value.pollIntervalMs });
+  if (!parsed.ok) return parsed;
+  const task: McpTask = { ...parsed.task, generation: '2026-07-28' };
+  if (!creation || 'result' in value || 'error' in value || 'inputRequests' in value) {
+    if (task.status === 'completed') {
+      if (!isValidTaskToolResult(value.result)) return invalid('invalid terminal tool result');
+      task.result = value.result;
+    } else if (task.status === 'failed') {
+      if (!isPlainObject(value.error) || !Number.isSafeInteger(value.error.code) || typeof value.error.message !== 'string' || value.error.message.length > 4096) return invalid('invalid task JSON-RPC error');
+      task.error = { code: Number(value.error.code), message: value.error.message, ...('data' in value.error ? { data: value.error.data } : {}) };
+    } else if (task.status === 'input_required') {
+      if (!isPlainObject(value.inputRequests) || Object.keys(value.inputRequests).length > 32) return invalid('invalid input request map');
+      const requests: Record<string, McpTaskInputRequest> = Object.create(null);
+      for (const [key, request] of Object.entries(value.inputRequests)) {
+        if (!key || key.length > 512 || !isPlainObject(request) || (request.params !== undefined && !isPlainObject(request.params))) return invalid('invalid input request');
+        const schema = request.method === 'elicitation/create' ? ElicitRequestSchema : request.method === 'sampling/createMessage' ? CreateMessageRequestSchema : request.method === 'roots/list' ? ListRootsRequestSchema : undefined;
+        if (!schema?.safeParse(request).success) return invalid('unsupported or invalid input request');
+        requests[key] = request as McpTaskInputRequest;
+      }
+      task.inputRequests = requests;
+    }
+    if ((task.status !== 'completed' && 'result' in value) || (task.status !== 'failed' && 'error' in value) || (task.status !== 'input_required' && 'inputRequests' in value)) return invalid('inconsistent task status payload');
+  }
+  return { ok: true, task };
+}
+
 /** Truncate untrusted status text without changing its meaning. */
 export function boundStatusMessage(
   message: string | undefined,
@@ -132,6 +213,7 @@ export function boundStatusMessage(
  */
 export function parseMcpTask(value: unknown): McpTaskParseResult {
   if (!isPlainObject(value)) return { ok: false, reason: 'task is not an object' };
+  if ('ttlMs' in value || 'pollIntervalMs' in value || 'resultType' in value) return { ok: false, reason: 'modern task supplied to legacy parser' };
 
   const { taskId, status, ttl, createdAt, lastUpdatedAt, pollInterval, statusMessage } =
     value as Record<string, unknown>;
@@ -179,20 +261,24 @@ export function parseMcpTask(value: unknown): McpTaskParseResult {
 }
 
 /** Validate a `CreateTaskResult` (`{ task: Task }`) returned by tools/call. */
-export function parseCreateTaskResult(value: unknown): McpTaskParseResult {
+export function parseCreateTaskResult(value: unknown, generation: McpTaskGeneration = '2025-11-25'): McpTaskParseResult {
+  if (generation === '2026-07-28') return parseModernTask(value, true);
   if (!isPlainObject(value)) return { ok: false, reason: 'result is not an object' };
+  if ('resultType' in value || 'ttlMs' in value) return { ok: false, reason: 'mixed task generations' };
   if (!('task' in value)) return { ok: false, reason: 'result has no task field' };
   return parseMcpTask(value.task);
 }
 
 /**
- * Validate a `tasks/get` / `tasks/cancel` result. SDK 1.30.0 merges the Task
+ * Validate a `tasks/get` / `tasks/cancel` result. SDK 1.x merges the Task
  * into the *top level* of those results, while `CreateTaskResult` nests it
  * under `task`; both shapes are accepted so FLUJO interoperates with servers
  * built against either revision.
  */
-export function parseTaskStatusResult(value: unknown): McpTaskParseResult {
+export function parseTaskStatusResult(value: unknown, generation: McpTaskGeneration = '2025-11-25'): McpTaskParseResult {
+  if (generation === '2026-07-28') return parseModernTask(value, false);
   if (!isPlainObject(value)) return { ok: false, reason: 'result is not an object' };
+  if ('resultType' in value || 'ttlMs' in value || 'pollIntervalMs' in value) return { ok: false, reason: 'mixed task generations' };
   const direct = parseMcpTask(value);
   if (direct.ok) return direct;
   if ('task' in value) return parseMcpTask(value.task);
@@ -218,9 +304,19 @@ export type ToolCallResultKind =
 
 export function classifyToolCallResult(
   response: unknown,
-  options: { taskRequested: boolean },
+  options: { taskRequested: boolean; generation?: McpTaskGeneration },
 ): ToolCallResultKind {
   if (!isPlainObject(response)) return { kind: 'classic' };
+  if (options.generation !== '2026-07-28' && response.resultType === 'task') return { kind: 'protocol-invalid', reason: 'modern task on legacy connection' };
+  if (options.generation === '2026-07-28') {
+    if (response.resultType === 'task') {
+      if (!options.taskRequested) return { kind: 'protocol-invalid', reason: 'unnegotiated modern task' };
+      const parsed = parseCreateTaskResult(response, options.generation);
+      return parsed.ok ? { kind: 'task', task: parsed.task } : { kind: 'protocol-invalid', reason: parsed.reason };
+    }
+    if ('task' in response && !('content' in response || 'structuredContent' in response)) return { kind: 'protocol-invalid', reason: 'legacy task on modern connection' };
+    return { kind: 'classic' };
+  }
 
   // A payload with tool-result fields is a classic result even when it also
   // carries a `task` key: the synchronous result is the documented fallback
@@ -265,6 +361,11 @@ export function computeTaskExpiresAt(
   nowMs: number,
   fallbackTtlMs: number,
 ): number | undefined {
+  if (task.generation === '2026-07-28') {
+    if (task.ttl === null) return undefined;
+    const created = Date.parse(task.createdAt ?? '');
+    return created + Math.min(task.ttl ?? fallbackTtlMs, MCP_TASK_MAX_TTL_MS);
+  }
   if (task.ttl === null) return undefined;
   const ttl =
     typeof task.ttl === 'number' && Number.isFinite(task.ttl) && task.ttl > 0

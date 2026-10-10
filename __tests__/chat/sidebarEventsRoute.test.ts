@@ -12,6 +12,7 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 
 import { GET } from '@/app/v1/chat/events/route';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 
 const readDataEvent = async (
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -89,5 +90,70 @@ describe('global sidebar lifecycle event stream', () => {
 
     expect(response.status).toBe(403);
     expect(assertLocalRequestMock).toHaveBeenCalledWith(request);
+  });
+});
+
+describe('global execution stream recovery and compatibility', () => {
+  const request = (query = '', lastEventId?: string) => ({
+    nextUrl: new URL('http://localhost/v1/chat/events' + query),
+    headers: new Headers(lastEventId === undefined ? {} : { 'last-event-id': lastEventId }),
+    signal: new AbortController().signal,
+  }) as unknown as NextRequest;
+
+  it('keeps default IDs numeric and uses the browser cursor ahead of the original query', async () => {
+    const firstSeq = executionEventBus.currentGlobalSeq();
+    executionEventBus.emit('numeric-cursor', { type: 'run:start', flowId: 'f' });
+    executionEventBus.emit('numeric-cursor', { type: 'run:done', status: 'completed' });
+    const response = await GET(request('?fromSeq=' + firstSeq, String(firstSeq)));
+    const reader = response.body!.getReader();
+    try {
+      await reader.read(); // connected comment
+      const frame = new TextDecoder().decode((await reader.read()).value);
+      expect(frame).toContain('id: ' + (firstSeq + 1) + '\n');
+      expect(frame).toContain('"type":"run:done"');
+      expect(frame).not.toContain('flujo-stream-control');
+    } finally { await reader.cancel(); }
+  });
+
+  it('uses epoch-bound IDs only when the caller opts in', async () => {
+    const window = executionEventBus.globalReplayWindow();
+    executionEventBus.emit('epoch-cursor', { type: 'run:start', flowId: 'f' });
+    const response = await GET(request('?cursorVersion=1&fromSeq=' + window.epoch + ':' + window.nextSeq));
+    const reader = response.body!.getReader();
+    try {
+      await reader.read();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('id: ' + window.epoch + ':' + window.nextSeq);
+    } finally { await reader.cancel(); }
+  });
+
+  it.each(['bad:0', 'old-epoch:0', '-1', '9007199254740992'])('recovers an invalid versioned cursor %s without replaying execution events', async cursor => {
+    const response = await GET(request('?cursorVersion=1&fromSeq=' + cursor));
+    const body = await response.text();
+    expect(body).toContain('event: flujo-stream-control');
+    expect(body).toContain('"reason":"cursor-reset"');
+    expect(body).not.toContain('"type":"run:');
+  });
+
+  it('recovers a byte-evicted prefix without trying to replay a partial suffix', async () => {
+    const fromSeq = executionEventBus.currentGlobalSeq();
+    for (let index = 0; index < 8; index++) executionEventBus.emit('evicted-global', {
+      type: 'model:delta', messageId: 'draft', delta: 'x'.repeat(700 * 1024),
+    });
+    const response = await GET(request('?fromSeq=' + fromSeq));
+    const body = await response.text();
+    expect(body).toContain('"reason":"replay-gap"');
+    expect(body).not.toContain('"messageId":"draft"');
+  });
+
+  it('rejects admission before constructing a stream and preserves exposure checks', async () => {
+    const releases: Array<() => void> = [];
+    while (true) { const release = executionStreamAdmission.reserve(); if (!release) break; releases.push(release); }
+    try {
+      const response = await GET(request());
+      expect(response.status).toBe(503);
+      expect(response.headers.get('Retry-After')).toBe('3');
+      assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+      expect((await GET(request())).status).toBe(403);
+    } finally { releases.forEach(release => release()); }
   });
 });

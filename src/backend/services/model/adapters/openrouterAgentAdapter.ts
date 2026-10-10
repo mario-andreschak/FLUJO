@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import type { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { assertReadOnlyAssessmentInput } from './types';
 import { contextUsageFromCompletion } from './contextUsage';
 import {
   fromResponse, toResponsesInput, toResponsesTools,
@@ -39,6 +41,9 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
   }
 
   private async complete(input: CompletionInput, streaming: boolean): Promise<CompletionResult> {
+    // Agent requests remain outside the restricted repository assessment route.
+    assertReadOnlyAssessmentInput(input);
+    input.signal?.throwIfAborted();
     const { OpenRouter, tool, stepCountIs } = await import('@openrouter/agent');
     const effort = input.model.reasoningEffort;
     if (effort === 'ultra') throw new Error('OpenRouter Agent SDK does not support ultra reasoning effort');
@@ -47,6 +52,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
     const messages = translateMessagesForProvider(input.messages, translation);
     const nativeTools = toResponsesTools(tools);
     const dispatchIds: string[] = [];
+    let admissionError: unknown;
     const liveMessageId = streaming ? uuidv4() : undefined;
     const client = new OpenRouter({
       apiKey: input.apiKey,
@@ -54,6 +60,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
       appTitle: 'FLUJO',
       hooks: {
         beforeRequest: async (_context, request) => {
+          input.signal?.throwIfAborted();
           const body = await request.clone().json();
           // Manual tools do not run or validate arguments inside the SDK. Keep
           // MCP's original JSON Schema intact, including refs and composition,
@@ -67,8 +74,11 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
             });
             if (id) dispatchIds.push(id);
           } catch (error) {
-            rethrowFlowExecutionAuthorityError(error);
+            if (error instanceof ModelTurnArchiveMemoryError) { admissionError = error; throw error; }
+            try { rethrowFlowExecutionAuthorityError(error); }
+            catch (fatal) { admissionError = fatal; throw fatal; }
           }
+          input.signal?.throwIfAborted();
           return outgoing;
         },
       },
@@ -95,7 +105,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
         ...(effort ? { reasoning: { effort } } : {}),
         ...(input.conversationId ? { sessionId: input.conversationId } : {}),
         signal: input.signal,
-      }, { timeoutMs: LLM_REQUEST_TIMEOUT_MS });
+      }, { timeoutMs: LLM_REQUEST_TIMEOUT_MS, retries: { strategy: 'none' } });
       if (streaming) {
         const toolIndexes = new Map<number, number>();
         for await (const event of result.getFullResponsesStream()) {
@@ -118,8 +128,16 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
         }
       }
       const response = await result.getResponse();
+      input.signal?.throwIfAborted();
+      if (response.status === 'cancelled') {
+        outcome = 'cancelled';
+        throw new Error('OpenRouter Agent SDK response was cancelled');
+      }
       if (response.error || response.status === 'failed') {
         throw new Error(response.error?.message || 'OpenRouter Agent SDK response failed');
+      }
+      if (response.status !== 'completed' && response.status !== 'incomplete') {
+        throw new Error(`OpenRouter Agent SDK returned a nonterminal response: ${response.status}`);
       }
       const { completion: nativeCompletion, reasoning, media } = fromResponse(
         mapOpenRouterEnvelopeKeys(response, true) as OpenAI.Responses.Response, input.model.name);
@@ -131,8 +149,8 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
         ...(liveMessageId ? { liveMessageId } : {}),
       };
     } catch (error) {
-      outcome = input.signal?.aborted ? 'cancelled' : 'error';
-      throw error;
+      if (outcome !== 'cancelled') outcome = input.signal?.aborted ? 'cancelled' : 'error';
+      throw admissionError ?? (input.signal?.aborted ? input.signal.reason ?? error : error);
     } finally {
       for (const dispatchId of dispatchIds) {
         await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(rethrowFlowExecutionAuthorityError);

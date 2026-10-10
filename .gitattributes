@@ -1,3 +1,12 @@
 # Shell scripts must keep LF endings even on Windows checkouts (autocrlf=true),
 # or bash rejects them with "\r: command not found".
 *.sh text eol=lf
+
+# Historical versions contain a literal NUL in the runtime-key string. The
+# source now uses an equivalent escape; render the old/new source for review.
+src/backend/services/mcp/lifecycleCoordinator.ts text diff
+src/vendor/avatar/** text eol=lf
+public/avatar-audio-capture.js text eol=lf
+
+# Preserve the exact bytes extracted from the pinned Avatar SDK archive.
+packages/avatar-sdk/** -text

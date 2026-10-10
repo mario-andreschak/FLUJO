@@ -17,6 +17,7 @@
 // down modules and writing to a disposed test workspace. Scheduling behavior
 // belongs to its own tests; this suite only exercises startup orchestration.
 jest.mock('croner', () => ({ Cron: jest.fn() }));
+jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: (handler: unknown) => handler }));
 
 // Plain jest.fn()s (untyped, so the `(...a)` delegators below type-check).
 // Async return values are configured in beforeEach; a bare undefined return is
@@ -45,6 +46,11 @@ const loadServerConfigsMock = jest.fn();
 const getServerStatusMock = jest.fn();
 const reconcileOrphanedTasksMock = jest.fn();
 const resumeRemoteMcpTasksMock = jest.fn();
+const workerRecoveryConfiguredMock = jest.fn();
+
+jest.mock('@/backend/services/scheduler/workerLocalRecovery', () => ({
+  isWorkerLocalRecoveryConfigured: () => workerRecoveryConfiguredMock(),
+}));
 
 jest.mock('@/backend/services/workspace/snapshotRestore', () => ({
   restoreConfiguredWorkerSnapshot: (...a: unknown[]) => restoreWorkerSnapshotMock(...a),
@@ -114,6 +120,8 @@ import {
 } from '@/backend/init';
 import { ensureWorkspaceDirs } from '@/utils/workspace';
 import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import { NextRequest } from 'next/server';
+import { GET as initializeRoute } from '@/app/api/init/route';
 
 function clearGlobals(): void {
   (global as any).__flujo_init_promise = undefined;
@@ -154,6 +162,7 @@ describe('backend init startup gating (#78)', () => {
     getServerStatusMock.mockResolvedValue({ status: 'connected' });
     reconcileOrphanedTasksMock.mockResolvedValue(undefined);
     resumeRemoteMcpTasksMock.mockResolvedValue(undefined);
+    workerRecoveryConfiguredMock.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -229,6 +238,60 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
     expect(startPersonaGoalRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it('the init response joins deferred services after a completed locked boot and an unlock', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    await ensureBackendInitialized();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+
+    isEncryptionLockedMock.mockResolvedValue(false);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+    migrateInternalMcpServersMock.mockImplementation(async () => { entered(); await gate; });
+    const unlocking = onUnlocked();
+    await enteredGate;
+    let responded = false;
+    const response = initializeRoute(new NextRequest('http://localhost/api/init'));
+    void response.then(() => { responded = true; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(responded).toBe(false);
+      expect(startEnabledServersMock).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await unlocking;
+      await response;
+    }
+    expect((await response).status).toBe(200);
+    expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the init response propagates deferred startup failure after a completed locked boot', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    await ensureBackendInitialized();
+    isEncryptionLockedMock.mockResolvedValue(false);
+    migrateInternalMcpServersMock.mockRejectedValue(new Error('synthetic shipped-service startup failure'));
+    const response = await initializeRoute(new NextRequest('http://localhost/api/init'));
+    expect(response.status).toBe(500);
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+  });
+
+  it('the init route retains the locked boot path without starting secret-dependent effects', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    const response = await initializeRoute(new NextRequest('http://localhost/api/init'));
+    expect(response.status).toBe(200);
+    expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 
   it('onUnlocked starts services once and re-kicks durable Persona work on later unlocks', async () => {
@@ -308,7 +371,7 @@ describe('backend init startup gating (#78)', () => {
     expect(unlockWorkerSnapshotMock).toHaveBeenCalledTimes(1);
     expect(reinstallWorkspaceMcpServersMock).toHaveBeenCalledTimes(1);
     expect(reinstallWorkspaceMcpServersMock.mock.invocationCallOrder[0]).toBeLessThan(startEnabledServersMock.mock.invocationCallOrder[0]);
-    expect(reconcileOrphanedTasksMock).not.toHaveBeenCalled();
+    expect(reconcileOrphanedTasksMock).toHaveBeenCalledTimes(1);
     expect(resumeRemoteMcpTasksMock).not.toHaveBeenCalled();
     expect(reconcilePersonaRoleBehaviorsMock).not.toHaveBeenCalled();
     expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
@@ -333,11 +396,35 @@ describe('backend init startup gating (#78)', () => {
     expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 
+  it('starts configured worker-local recovery only after all MCP dependencies are ready, once', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    workerRecoveryConfiguredMock.mockReturnValue(true);
+    schedulerStartMock.mockImplementationOnce(async () => {
+      expect(getWorkerBootstrapStatus().state).toBe('ready');
+    });
+    await ensureBackendInitialized(); await ensureBackendInitialized();
+    expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+    expect(startEnabledServersMock.mock.invocationCallOrder[0]).toBeLessThan(schedulerStartMock.mock.invocationCallOrder[0]);
+    expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
+    expect(resumeRemoteMcpTasksMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start opted-in recovery when worker dependency installation fails', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    workerRecoveryConfiguredMock.mockReturnValue(true);
+    reinstallWorkspaceMcpServersMock.mockResolvedValueOnce({ ok: false, servers: [{ name: 'broken', status: 'failed' }] });
+    await expect(ensureBackendInitialized()).rejects.toThrow('MCP dependency');
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+    expect(getWorkerBootstrapStatus().state).toBe('error');
+  });
+
   it('worker readiness rejects a server whose startup silently failed', async () => {
     process.env.FLUJO_WORKER_MODE = '1';
+    workerRecoveryConfiguredMock.mockReturnValue(true);
     getServerStatusMock.mockResolvedValue({ status: 'error', message: 'credential-bearing diagnostic' });
     await expect(ensureBackendInitialized()).rejects.toThrow('MCP startup failed');
     expect(getWorkerBootstrapStatus().state).toBe('error');
     expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain('credential-bearing diagnostic');
+    expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 });

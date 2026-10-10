@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { fetchCodexModels } from './adapters/codexDiscovery';
 import { 
   ModelServiceResponse, 
   ModelOperationResponse, 
@@ -16,6 +16,8 @@ import {
   ModelAdapter,
   getProviderProfileById,
   isSelfOrchestratingAdapter,
+  supportsLocalModelAuth,
+  resolveModelAdapter,
   normalizeModelTemperature,
   validateModelConfiguration,
 } from '@/shared/types/model/provider';
@@ -34,10 +36,13 @@ import {
   getProviderFromBaseUrl
 } from './provider';
 import { modelCache, filterModels } from './cache';
+import { sameCatalogueEndpoint } from './catalogueDestination';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getCompletionAdapter } from './adapters';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import { materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
+import { FallbackRoutingError } from './adapters/fallbackAdapter';
 
 /**
  * Result of a direct (single-turn) chat completion through ModelService.
@@ -47,12 +52,15 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 export type DirectCompletionResult =
   | {
       success: true;
-      completion: OpenAI.Chat.Completions.ChatCompletion;
+      completion: OpenAI.Chat.Completions.ChatCompletion & {
+        flujo_routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
+      };
       media?: ModelMediaPart[];
     }
   | {
       success: false;
-      error: { message: string; type: string; code: string; param?: string | null };
+      error: { message: string; type: string; code: string; param?: string | null;
+        flujo_routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt };
       statusCode: number;
     };
 
@@ -89,7 +97,7 @@ class ModelService {
       
       if (model) {
         log.debug(`getModel: Model ${modelId} found`);
-        return model;
+        return materializeFallbackPolicy(model, models);
       }
       
       log.debug(`getModel: Model ${modelId} not found`);
@@ -113,6 +121,10 @@ class ModelService {
 
       // Load current models
       const models = await this.loadModels();
+
+      const policyError = validateFallbackPolicy(model, models);
+      if (policyError) return { success: false, error: policyError };
+      if (models.some(item => item.id === model.id)) return { success: false, error: 'Model ID already exists' };
 
       // Duplicate detection is by DISPLAY name only (case-insensitive). The technical
       // `name` is the provider's model id and is intentionally allowed to repeat — e.g.
@@ -220,7 +232,7 @@ class ModelService {
       }
 
       // Validate model data
-      if (!model.provider) {
+      if (!model.provider && !model.fallbackPolicy) {
         log.warn('updateModel: Missing provider', { modelId: model.id });
         return { success: false, error: 'Provider is required' };
       }
@@ -228,6 +240,12 @@ class ModelService {
       const configurationError = validateModelConfiguration(model);
       if (configurationError) {
         return { success: false, error: configurationError };
+      }
+
+      const policyError = validateFallbackPolicy(model, models);
+      if (policyError) return { success: false, error: policyError };
+      if (model.fallbackPolicy && models.some(item => item.id !== model.id && item.fallbackPolicy?.modelIds.includes(model.id))) {
+        return { success: false, error: 'A referenced model cannot become a fallback policy' };
       }
 
       // Check for duplicate display name (excluding the current model)
@@ -317,6 +335,10 @@ class ModelService {
       // Load current models
       const models = await this.loadModels();
 
+      if (models.some(item => item.fallbackPolicy?.modelIds.includes(id))) {
+        return { success: false, error: 'Remove this model from its fallback policies before deleting it' };
+      }
+
       // Check if model exists
       const existingModel = models.find(m => m.id === id);
       if (!existingModel) {
@@ -399,11 +421,10 @@ class ModelService {
     profileId?: string,
   ): Promise<NormalizedModel[]> {
     log.debug('fetchProviderModels: Fetching provider catalogue', {
-      baseUrl,
-      modelId,
-      profileId,
+      hasModelId: Boolean(modelId),
+      hasProfile: Boolean(profileId),
       hasApiKey: Boolean(apiKey),
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      hasSearch: Boolean(searchTerm),
     });
 
     try {
@@ -426,6 +447,20 @@ class ModelService {
       const adapter: ModelAdapter =
         profile?.adapter ?? storedModel?.adapter ?? 'openai';
       const usesNativeGemini = provider === 'gemini' && adapter === 'gemini';
+      const usesCodex = provider === 'codex' && adapter === 'codex-cli';
+
+      if (usesCodex) {
+        // Subscription discovery cannot send a stored key to an edited endpoint.
+        if (baseUrl.trim()) return [];
+        const suppliedKey = apiKey && apiKey !== MASKED_API_KEY ? await resolveAndDecryptApiKey(apiKey) : null;
+        const savedKey = !suppliedKey && storedModel?.provider === 'codex'
+          ? await resolveAndDecryptApiKey(storedModel.ApiKey) : null;
+        // Explicit API-billed connections use their API catalogue, never the subscription login.
+        const models = suppliedKey || savedKey
+          ? await fetchModelsFromProvider('openai', 'https://api.openai.com/v1', suppliedKey || savedKey, 'openai')
+          : await fetchCodexModels();
+        return searchTerm?.trim() ? filterModels(models, searchTerm) : models;
+      }
 
       if (!baseUrl.trim() && !usesNativeGemini) {
         log.warn('Provider catalogue discovery requires a base URL', {
@@ -437,12 +472,22 @@ class ModelService {
       }
 
       // Resolve the credential before consulting the cache because catalogue
-      // visibility can vary by account. Only its one-way digest enters the key.
+      // visibility can vary by account. Only its cache-lifetime keyed fingerprint enters the key.
       let resolvedApiKey: string | null = null;
       if (apiKey && apiKey !== MASKED_API_KEY) {
         resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
         log.debug('Using directly supplied API key for provider fetch');
       } else if (storedModel) {
+        const storedProvider = storedModel.provider ?? getProviderFromBaseUrl(storedModel.baseUrl ?? '');
+        const storedNativeGemini = storedProvider === 'gemini' && storedModel.adapter === 'gemini';
+        // A masked/missing key cannot authorize sending the stored credential to
+        // an unsaved URL or another native provider. Native Gemini's SDK has a
+        // fixed destination; HTTP-compatible adapters share the saved endpoint.
+        if (provider !== storedProvider || usesNativeGemini !== storedNativeGemini
+          || (!usesNativeGemini && !sameCatalogueEndpoint(storedModel.baseUrl, baseUrl))) {
+          log.warn('Stored catalogue credential cannot be reused for a changed destination or provider');
+          return [];
+        }
         resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
         log.debug('Resolved stored API key for provider fetch');
       } else if (modelId) {
@@ -451,9 +496,7 @@ class ModelService {
         log.warn('Provider fetch will be unauthenticated');
       }
 
-      const credentialFingerprint = createHash('sha256')
-        .update(resolvedApiKey ?? '')
-        .digest('hex');
+      const credentialFingerprint = modelCache.credentialFingerprint(resolvedApiKey ?? '');
       const cacheIdentity = {
         baseUrl,
         provider,
@@ -492,14 +535,9 @@ class ModelService {
       }
 
       return allModels;
-    } catch (error) {
-      log.error('fetchProviderModels: Provider catalogue fetch failed', {
-        baseUrl,
-        modelId,
-        profileId,
-        message: error instanceof Error ? error.message : 'Unknown provider error',
-      });
-      throw error;
+    } catch {
+      log.error('fetchProviderModels: Provider catalogue fetch failed');
+      throw new Error('Provider catalogue request failed');
     }
   }
 
@@ -538,11 +576,24 @@ class ModelService {
     if (modelId) {
       storedModel = await this.getModel(modelId);
       if (storedModel) {
+        if (storedModel.fallbackPolicy) {
+          const started = Date.now();
+          const result = await this.generateChatCompletion({
+            modelIdentifier: storedModel.name,
+            messages: [{ role: 'user', content: 'Reply with OK.' }], maxTokens: 16,
+          });
+          const attempt = result.success
+            ? { ok: true, durationMs: Date.now() - started, content: result.completion.choices[0]?.message.content ?? undefined }
+            : { ok: false, durationMs: Date.now() - started, error: { message: result.error.message } };
+          const skipped = { ok: false, skipped: true, durationMs: 0, content: 'Policy routes through member adapters.' };
+          return { ok: result.success, model: storedModel.name, sdk: skipped, axios: skipped, adapter: attempt,
+            diagnosis: result.success ? 'Fallback policy completed successfully.' : 'Fallback policy failed.' };
+        }
         modelName = modelName || storedModel.name;
         baseUrl = baseUrl || storedModel.baseUrl;
         provider = provider || storedModel.provider;
         adapter = adapter || storedModel.adapter;
-        if (!resolvedApiKey) {
+        if (apiKey === undefined || apiKey === MASKED_API_KEY) {
           resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
         }
       }
@@ -551,9 +602,12 @@ class ModelService {
     if (!modelName) {
       throw new Error('Model name is required to run a test');
     }
+    adapter = resolveModelAdapter(provider, adapter);
     if (!resolvedApiKey) {
-      // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
-      if (adapter === 'codex-cli') {
+      const configuredKey = apiKey !== undefined && apiKey !== MASKED_API_KEY ? apiKey : storedModel?.ApiKey;
+      // Empty-key CLI models use the operator's local login. A failed key
+      // binding/decryption must still fail rather than selecting another account.
+      if (supportsLocalModelAuth(adapter) && !configuredKey?.trim()) {
         resolvedApiKey = '';
       } else {
         throw new Error('Could not resolve an API key for this model');
@@ -630,10 +684,10 @@ class ModelService {
       const models = await this.loadModels();
       const needle = modelIdentifier.trim().toLowerCase();
 
-      let candidates = models.filter(
-        m => (m.displayName?.trim().toLowerCase() || '') === needle
-      );
-      if (candidates.length === 0) {
+      let candidates = modelIdentifier.startsWith('policy/')
+        ? models.filter(m => m.fallbackPolicy && m.name.toLowerCase() === needle)
+        : models.filter(m => (m.displayName?.trim().toLowerCase() || '') === needle);
+      if (candidates.length === 0 && !modelIdentifier.startsWith('policy/')) {
         candidates = models.filter(m => (m.name || '').trim().toLowerCase() === needle);
       }
 
@@ -663,13 +717,13 @@ class ModelService {
           statusCode: 400,
         };
       }
-      const model = candidates[0];
+      const model = materializeFallbackPolicy(candidates[0], models);
 
       // The self-orchestrating adapters (Claude subscription / Codex) run an
       // agentic loop when given tools, which diverges from standard OpenAI tool
       // semantics (the CLIENT is supposed to execute its own tools). Reject
       // rather than silently diverge.
-      if (isSelfOrchestratingAdapter(model.adapter) && tools && tools.length > 0) {
+      if (!model.fallbackPolicy && isSelfOrchestratingAdapter(resolveModelAdapter(model.provider, model.adapter)) && tools && tools.length > 0) {
         return {
           success: false,
           error: {
@@ -683,11 +737,11 @@ class ModelService {
       }
 
       // --- Resolve + decrypt the API key (never logged, never returned) ---
-      // Codex may run keyless: an empty key means "use the machine's ChatGPT
-      // plan login from `codex login`" (the adapter then omits the apiKey).
+      // Local-auth CLI connections use their host login only when the saved
+      // key is empty. Failed nonempty credentials must never select that path.
       const resolvedKey = await resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+        resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,
@@ -722,7 +776,7 @@ class ModelService {
         maxTokens: resolvedMaxTokens,
       });
 
-      const { completion, media } = await adapter.createCompletion({
+      const { completion, media, routing } = await adapter.createCompletion({
         model,
         apiKey: decryptedApiKey,
         messages,
@@ -731,6 +785,8 @@ class ModelService {
         maxTokens: resolvedMaxTokens,
         // Only relevant for self-orchestrating adapters: keep it single-turn.
         maxTurns: 1,
+        directCompletion: true,
+        temperatureOverride: params.temperature,
       });
 
       // Some providers (e.g. OpenRouter) return HTTP 200 with an error object
@@ -765,10 +821,19 @@ class ModelService {
       // public model id so clients see the identifier they addressed.
       return {
         success: true,
-        completion: { ...completion, model: `model-${modelIdentifier}` },
+        completion: {
+          ...completion,
+          model: model.fallbackPolicy ? completion.model : `model-${modelIdentifier}`,
+          ...(routing ? { flujo_routing: routing } : {}),
+        },
         ...(media?.length ? { media } : {}),
       };
     } catch (error) {
+      if (error instanceof FallbackRoutingError) {
+        return { success: false, statusCode: error.status, error: {
+          message: error.message, type: 'api_error', code: error.code, flujo_routing: error.routing,
+        } };
+      }
       // Never include the key or the raw provider payload in what goes back out.
       log.error('generateChatCompletion: provider call failed', {
         modelIdentifier,

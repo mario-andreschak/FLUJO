@@ -130,7 +130,8 @@ async function resolveString(text: string, context: ToolReferenceContext): Promi
     const ref = parseDynamicReference(match.fullMatch);
     if (!ref) return { match, value: match.fullMatch as unknown };
     const entity = await entityForReference(ref, context);
-    return { match, value: entity[ref.field] ?? '' };
+    // An unavailable current-context value must not silently erase a command.
+    return { match, value: entity[ref.field] ?? (ref.fullMatch.startsWith('@current.') ? ref.fullMatch : '') };
   }));
 
   if (resolved.length === 1 && resolved[0].match.index === 0 && resolved[0].match.fullMatch.length === text.length) {
@@ -150,9 +151,10 @@ async function resolveRecursive(value: unknown, context: ToolReferenceContext): 
   if (typeof value === 'string') return resolveString(value, context);
   if (Array.isArray(value)) return Promise.all(value.map((item) => resolveRecursive(item, context)));
   if (value && typeof value === 'object') {
-    const output: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) output[key] = await resolveRecursive(item, context);
-    return output;
+    const output = new Map<string, unknown>();
+    for (const [key, item] of Object.entries(value)) output.set(key, await resolveRecursive(item, context));
+    // JSON keys are data, including __proto__; do not invoke inherited setters.
+    return Object.fromEntries(output);
   }
   return value;
 }

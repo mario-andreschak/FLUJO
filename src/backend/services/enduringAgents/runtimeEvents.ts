@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import type { BigIntStats } from 'fs';
 import path from 'path';
 import { z } from 'zod';
@@ -480,7 +480,7 @@ async function scanLogLines(
 ): Promise<LogScanResult> {
   let handle;
   try {
-    handle = await fs.open(filePath, 'r');
+    handle = await fs.open(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return { tailBytes: carry, endOffset: start, bytesRead: 0, stopped: false };
@@ -488,6 +488,7 @@ async function scanLogLines(
     throw error;
   }
   try {
+    if (!(await handle.stat()).isFile()) throw new Error('Persona runtime event segment is not a regular file.');
     let position = start;
     let bytesRead = 0;
     let pending = carry;

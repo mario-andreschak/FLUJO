@@ -104,7 +104,10 @@ export function ConversationChainGraph() {
   // a fan-out produces one refreshed projection rather than one per lane.
   useEffect(() => {
     if (typeof chatService.subscribeToSidebarEvents !== 'function') return;
-    const stream = chatService.subscribeToSidebarEvents({
+    let stream: EventSource | undefined;
+    let retryTimer: number | undefined;
+    let disposed = false;
+    const connect = () => { if (!disposed) stream = chatService.subscribeToSidebarEvents({
       onEvent: () => {
         if (liveRefreshTimerRef.current !== null) window.clearTimeout(liveRefreshTimerRef.current);
         liveRefreshTimerRef.current = window.setTimeout(() => {
@@ -112,11 +115,20 @@ export function ConversationChainGraph() {
           liveRefreshTimerRef.current = null;
         }, 450);
       },
-    });
+      onReset: () => {
+        if (disposed) return;
+        window.clearTimeout(retryTimer);
+        setReloadToken(token => token + 1);
+        retryTimer = window.setTimeout(connect, 3000);
+      },
+    }); };
+    connect();
     return () => {
+      disposed = true;
+      window.clearTimeout(retryTimer);
       if (liveRefreshTimerRef.current !== null) window.clearTimeout(liveRefreshTimerRef.current);
       liveRefreshTimerRef.current = null;
-      stream.close();
+      stream?.close();
     };
   }, []);
 

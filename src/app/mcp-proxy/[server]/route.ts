@@ -31,8 +31,7 @@ import {
   proxyListResources,
   proxyListResourceTemplates,
   proxyReadResource,
-  getProxyAppsCapability,
-  getProxySkillsCapability,
+  getProxyCapabilities,
   proxyGetSkill,
   proxyListSkills,
   proxyReadSkillDirectory,
@@ -52,7 +51,7 @@ import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-proxy/[server]/route');
-const PROXY_VERSION = '3.46.0';
+const PROXY_VERSION = '3.46.3';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -86,12 +85,10 @@ function buildProxyServer(
     // resources/* requests at all (Tier 3: the internal "flujo" server serves
     // run-scoped resources; other exposed servers get passthrough).
     //
-    // MCP Tasks (#404) is deliberately NOT advertised here: `tasks/get`,
-    // `tasks/result` and `tasks/cancel` are not registered, and this endpoint
-    // has no authenticated caller identity (localhost + explicit exposure are
-    // an exposure boundary, NOT per-task ownership), so task lookup would be
-    // reachable by task id alone. Advertising it would also claim partial
-    // support. See docs/features/mcp-tasks.md ("Server-side status") and the
+    // MCP Tasks (#404) is not advertised: task lifecycle handlers are absent.
+    // The route wrapper admits callers, but this server does not receive their
+    // authorization or establish durable caller/workspace task ownership.
+    // See docs/features/mcp-tasks.md ("Server-side status") and the
     // FEATURES.ENABLE_MCP_TASKS_SERVER flag.
     {
       capabilities: {
@@ -138,11 +135,8 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
-  // Keep downstream connection establishment serialized. On the first proxy
-  // request, racing two connectServer calls can launch duplicate stdio
-  // processes for the same configured server.
-  const skillsCapability = await getProxySkillsCapability(serverName);
-  const appsCapability = await getProxyAppsCapability(serverName);
+  // One freshly authorized connection supplies both negotiated extensions.
+  const { skillsCapability, appsCapability } = await getProxyCapabilities(serverName);
   const server = buildProxyServer(serverName, skillsCapability, appsCapability);
 
   try {

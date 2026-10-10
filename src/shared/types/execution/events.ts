@@ -126,6 +126,7 @@ export type ExecutionEventType =
   | 'run:paused'
   | 'run:awaiting_approval'
   | 'run:awaiting_elicitation'
+  | 'run:elicitation_cancelled'
   | 'run:awaiting_question'
   | 'run:done'
   | 'recovery:checkpoint'
@@ -210,6 +211,10 @@ export interface RunPausedEvent extends ExecutionEventBase {
 export interface RunAwaitingApprovalEvent extends ExecutionEventBase {
   type: 'run:awaiting_approval';
   pendingToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[];
+}
+export interface RunElicitationCancelledEvent extends ExecutionEventBase {
+  type: 'run:elicitation_cancelled';
+  elicitationId: string;
 }
 export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
   type: 'run:awaiting_elicitation';
@@ -394,6 +399,8 @@ export interface ToolResultEvent extends ExecutionEventBase {
   toolCallId: string;
   name: string;
   result?: string;
+  /** Exact UTF-8 MCP tool-message content after rewriting; transport/protocol failures omit this binding. `result` can be a preview. */
+  resultContentBinding?: { serialization: 'utf8-string-v1'; sha256: string; bytes: number };
   isError?: boolean;
 }
 export interface HandoffEvent extends ExecutionEventBase {
@@ -420,7 +427,8 @@ export interface MessageEvent extends ExecutionEventBase {
   type: 'message';
   node?: NodeRef;
   message: FlujoChatMessage;
-  /** Set by the execution/admission boundary, never copied from message input. */
+  /** External admission (including API/agent inbox) vs runtime generation;
+   * never a claim of human identity or copied from message input. */
   messageOrigin?: 'input' | 'internal';
 }
 /**
@@ -547,6 +555,7 @@ export type ExecutionEvent =
   | RunPausedEvent
   | RunAwaitingApprovalEvent
   | RunAwaitingElicitationEvent
+  | RunElicitationCancelledEvent
   | RunAwaitingQuestionEvent
   | RunDoneEvent
   | RecoveryCheckpointEvent

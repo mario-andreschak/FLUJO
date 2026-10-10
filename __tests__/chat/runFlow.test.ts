@@ -60,6 +60,7 @@ function personaInstructionContext(
 // Records every state handed to persistConversationState, so we can assert that
 // an ephemeral run persists nothing while a conversation run does.
 const persistedStates: SharedState[] = [];
+const boundaryTrace: string[] = [];
 const mockLoadItem = jest.fn(async (..._args: unknown[]) => (
   undefined as SharedState | undefined
 ));
@@ -77,6 +78,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
       // start hands off to process; process produces a final answer.
       executeStep: jest.fn(async (sharedState: any) => {
         const nodeId = sharedState.currentNodeId ?? S;
+        boundaryTrace.push(`step:${nodeId}`);
         sharedState.currentNodeId = nodeId;
         if (nodeId === S) {
           return { sharedState, action: EDGE };
@@ -107,7 +109,9 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 // with `ephemeral: true`) rather than through a mock of it.
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => mockLoadItem(...args),
+  withConversationSnapshot: async (id: string, consume: (state: SharedState | undefined, token: unknown) => Promise<unknown>) => jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission').withConversationLogReadAdmission(100, async (token: unknown) => consume(await mockLoadItem(`conversations/${id}`, undefined), token)),
   saveItem: jest.fn(async (_key: string, value: any) => {
+    boundaryTrace.push('persist');
     persistedStates.push(JSON.parse(JSON.stringify(value)));
   }),
   // issue #126: persist/load choke points now validate the conversation id.
@@ -135,6 +139,7 @@ jest.mock('@/backend/services/flow/index', () => ({
 // pass by default; the preflight test overrides this per-call.
 jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
+  validateFlowObjectForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
 jest.mock('@/backend/services/statistics', () => {
@@ -148,10 +153,12 @@ import {
   type FlowRunMessageInput,
 } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
+import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow/index';
 import { getFlowRunEventBus, type FlowEvent } from '@/backend/services/scheduler/flowRunEventBus';
 import { recordStatisticsEvent } from '@/backend/services/statistics';
+import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
+import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -160,6 +167,7 @@ const conversationStates = FlowExecutor.conversationStates as Map<string, Shared
 
 beforeEach(() => {
   persistedStates.length = 0;
+  boundaryTrace.length = 0;
   mockLoadItem.mockReset();
   mockLoadItem.mockResolvedValue(undefined);
   conversationStates.clear();
@@ -167,7 +175,266 @@ beforeEach(() => {
   (recordStatisticsEvent as jest.Mock).mockClear();
 });
 
+describe('saved execution definitions', () => {
+  function researchFlow(): Flow {
+    return {
+      id: FLOW_ID,
+      name: 'Research',
+      nodes: [
+        { id: START, type: 'start', position: { x: 0, y: 0 }, data: { label: 'Start', type: 'start' } },
+        {
+          id: PROCESS, type: 'process', position: { x: 100, y: 0 },
+          data: { label: 'Research', type: 'process', properties: {
+            boundModel: 'research-model', prompt: 'Review the original evidence.',
+          } },
+        },
+      ],
+      edges: [{ id: `${START}->${PROCESS}`, source: START, target: PROCESS }],
+    } as Flow;
+  }
+
+  it.each(['named root', 'by-id root', 'by-id child'])(
+    'pins the %s definition before persistence and execution, independently of catalog mutation',
+    async (launch) => {
+      const saved = researchFlow();
+      const original = structuredClone(saved);
+      const getByName = flowService.getFlowByName as jest.Mock;
+      const getById = flowService.getFlow as jest.Mock;
+      const execute = FlowExecutor.executeStep as jest.Mock;
+      const previousName = getByName.getMockImplementation()!;
+      const previousId = getById.getMockImplementation()!;
+      const previousExecute = execute.getMockImplementation()!;
+      getByName.mockClear().mockResolvedValue(saved);
+      getById.mockClear().mockResolvedValue(saved);
+      const child = launch === 'by-id child';
+      if (child) {
+        conversationStates.set('research-parent', {
+          conversationId: 'research-parent', logicalRunId: 'parent-logical-run',
+          rootConversationId: 'research-root',
+        } as SharedState);
+      }
+      execute.mockImplementation(async (state: SharedState) => {
+        expect(state.flowSnapshot).toEqual(original);
+        expect(persistedStates[0].flowSnapshot).toEqual(original);
+        expect(state.flowSnapshot).not.toBe(saved);
+        expect(state.flowSnapshot!.nodes[1].data.properties).not.toBe(saved.nodes[1].data.properties);
+        // Editing the store after launch must not alter subsequent steps.
+        saved.nodes[1].data.properties!.boundModel = 'replacement-model';
+        saved.nodes[1].data.properties!.prompt = 'Edited instructions';
+        return previousExecute(state);
+      });
+      try {
+        const result = await runFlowWithContext({
+          ...(launch === 'named root' ? { modelName: 'flow-Research' } : { flowId: FLOW_ID }),
+          source: child ? 'subflow' : 'api', prompt: 'Audit the evidence',
+          conversationId: 'research-launch', mode: 'conversation',
+          ...(child ? {
+            parentRunId: 'research-parent', depth: 1,
+            lane: { laneIndex: 0, laneCount: 1, parentNodeId: 'dispatch' },
+          } : {}),
+        });
+        expect(result.status).toBe('completed');
+        expect(result.sharedState.flowId).toBe(original.id);
+        expect(result.sharedState.flowSnapshot).toEqual(original);
+        expect(persistedStates.every(state => state.flowSnapshot?.id === state.flowId)).toBe(true);
+        expect(validateFlowObjectForRun).toHaveBeenCalledWith(original);
+        if (launch === 'named root') {
+          expect(getByName).toHaveBeenCalledWith('Research');
+          expect(getById).not.toHaveBeenCalled();
+        } else {
+          expect(getById).toHaveBeenCalledTimes(1);
+          expect(getById).toHaveBeenCalledWith(FLOW_ID);
+        }
+        if (child) {
+          expect(persistedStates[0]).toMatchObject({
+            source: 'subflow', parentRunId: 'research-parent', parentConversationId: 'research-parent',
+            parentLogicalRunId: 'parent-logical-run', rootConversationId: 'research-root',
+            subflowLane: { laneIndex: 0, laneCount: 1, parentNodeId: 'dispatch' },
+          });
+          expect(result.sharedState.logicalRunId).toBe(persistedStates[0].logicalRunId);
+          expect(result.sharedState.logicalRunId).not.toBe('parent-logical-run');
+        }
+      } finally {
+        getByName.mockImplementation(previousName);
+        getById.mockImplementation(previousId);
+        execute.mockImplementation(previousExecute);
+      }
+    },
+  );
+
+  it.each(['memory', 'storage'])('retains the original snapshot on a %s resume after a catalog edit', async (origin) => {
+    const saved = researchFlow();
+    const original = structuredClone(saved);
+    const getById = flowService.getFlow as jest.Mock;
+    const previousId = getById.getMockImplementation()!;
+    getById.mockResolvedValue(saved);
+    try {
+      await runFlow({ flowId: FLOW_ID, prompt: 'First turn', conversationId: 'research-resume', mode: 'conversation' });
+      const durable = structuredClone(persistedStates[persistedStates.length - 1]);
+      saved.nodes[1].data.properties!.boundModel = 'edited-model';
+      saved.nodes[1].data.properties!.prompt = 'Edited instructions';
+      getById.mockClear();
+      if (origin === 'storage') {
+        conversationStates.clear();
+        mockLoadItem.mockResolvedValue(durable);
+        const read = await loadConversationStateReadOnly('research-resume');
+        expect(read?.flowSnapshot).toEqual(original);
+        expect(conversationStates.has('research-resume')).toBe(false);
+      }
+      const result = await runFlow({
+        flowId: FLOW_ID, prompt: 'Continue', userTurn: true,
+        conversationId: 'research-resume', mode: 'conversation',
+      });
+      expect(result.status).toBe('completed');
+      expect(result.sharedState.flowSnapshot).toEqual(original);
+      expect(persistedStates[persistedStates.length - 1].flowSnapshot).toEqual(original);
+      expect(getById).not.toHaveBeenCalled();
+    } finally {
+      getById.mockImplementation(previousId);
+    }
+  });
+
+  it.each(['memory', 'storage'])('does not backfill an unpinned legacy %s conversation on read or resume', async (origin) => {
+    const conversationId = 'research-legacy';
+    const legacy = {
+      trackingInfo: { executionId: 'legacy-execution', startTime: 1, nodeExecutionTracker: [] },
+      conversationId, flowId: FLOW_ID, status: 'completed',
+      currentNodeId: PROCESS, messages: [], createdAt: 1, updatedAt: 1,
+    } as unknown as SharedState;
+    if (origin === 'memory') conversationStates.set(conversationId, legacy);
+    else mockLoadItem.mockResolvedValue(legacy);
+    const stepsBeforeRead = (FlowExecutor.executeStep as jest.Mock).mock.calls.length;
+    const read = await loadConversationStateReadOnly(conversationId);
+    expect(read?.status).toBe('completed');
+    expect(read).not.toHaveProperty('flowSnapshot');
+    expect(persistedStates).toHaveLength(0);
+    expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(stepsBeforeRead);
+    const result = await runFlow({
+      flowId: FLOW_ID, conversationId,
+      prompt: 'Continue', userTurn: true, mode: 'conversation',
+    });
+    expect(result.status).toBe('completed');
+    expect(result.sharedState).not.toHaveProperty('flowSnapshot');
+    expect(persistedStates.every(state => !state.flowSnapshot)).toBe(true);
+    expect(validateFlowForRun).toHaveBeenCalledWith(FLOW_ID);
+  });
+});
+
 describe('runFlow keystone', () => {
+  it('preserves authority, event, step and write ordering for a pinned Persona start and cold resume', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'boundary-trace');
+    const context = personaInstructionContext('activity-boundary-trace', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    const input: Omit<FlowRunInput, 'source'> = {
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-boundary-trace',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    };
+    const observe = async (phase: string) => {
+      boundaryTrace.length = 0;
+      const result = await runFlow(input);
+      expect(result.status).toBe('completed');
+      const start = boundaryTrace.indexOf('event:run:start');
+      const step = boundaryTrace.findIndex(entry => entry.startsWith('step:'));
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(step).toBeGreaterThan(start);
+      expect(boundaryTrace.indexOf('event:run:done')).toBeGreaterThan(step);
+      expect(boundaryTrace).toContain('persist');
+      for (const [index, entry] of boundaryTrace.entries()) {
+        if (entry === 'persist' || entry.startsWith('step:')) {
+          expect(boundaryTrace.slice(0, index)).toContain('authority');
+        }
+      }
+      expect(result.sharedState.personaInstructionContext).toEqual(context);
+      expect(result.sharedState.personaInstructionContext).not.toBe(context);
+      expect(persistedStates.at(-1)?.executionAuthority).toBeUndefined();
+      console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase, trace: boundaryTrace }));
+    };
+    await observe('fresh');
+    const coldSnapshot = structuredClone(persistedStates.at(-1));
+    conversationStates.clear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    await observe('cold-resume');
+  });
+
+  it('rejects a foreign Persona instruction triple before authority, events, steps or writes', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'foreign-triple');
+    const context = personaInstructionContext('activity-foreign-triple', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    await expect(runFlow({
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-foreign-triple',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: 'different-activity',
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    })).rejects.toThrow('Input Persona instruction context does not match its attribution triple.');
+    expect(boundaryTrace).toEqual([]);
+    expect(persistedStates).toEqual([]);
+    expect(conversationStates.size).toBe(0);
+    console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase: 'foreign-input', trace: boundaryTrace }));
+  });
+
+  it('rejects a corrupted cold Persona attribution before events, steps or writes', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'corrupt-cold-attribution');
+    const context = personaInstructionContext('activity-cold-attribution', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    const input: Omit<FlowRunInput, 'source'> = {
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-corrupt-cold',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    };
+    await runFlow(input);
+    const coldSnapshot = structuredClone(persistedStates.at(-1)!);
+    coldSnapshot.personaAttribution!.activityId = 'corrupt-activity';
+    conversationStates.clear();
+    persistedStates.length = 0;
+    boundaryTrace.length = 0;
+    (FlowExecutor.executeStep as jest.Mock).mockClear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    await expect(runFlow(input)).rejects.toThrow('Persisted Persona instruction context does not match its attribution triple.');
+    expect(boundaryTrace.filter(entry => entry !== 'authority')).toEqual([]);
+    expect(persistedStates).toEqual([]);
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase: 'corrupt-cold', trace: boundaryTrace }));
+  });
+
   it('accepts a validated legacy permissionRules hash for the same canonical Behavior', async () => {
     const flow = {
       ...behaviorFlow(FLOW_ID, 'legacy-policy-key'),
@@ -500,7 +767,7 @@ describe('runFlow keystone', () => {
   });
 
   it('blocks a fresh run when pre-run validation finds errors (before any step)', async () => {
-    (validateFlowForRun as jest.Mock).mockResolvedValueOnce({
+    (validateFlowObjectForRun as jest.Mock).mockResolvedValueOnce({
       issues: [{ severity: 'error', code: 'model_missing', message: 'Node "agent" references a deleted model' }],
       errorCount: 1,
       warningCount: 0,
@@ -559,7 +826,7 @@ describe('runFlow keystone', () => {
   });
 
   it('a validator crash does not block the run (check is advisory infrastructure)', async () => {
-    (validateFlowForRun as jest.Mock).mockRejectedValueOnce(new Error('validator exploded'));
+    (validateFlowObjectForRun as jest.Mock).mockRejectedValueOnce(new Error('validator exploded'));
 
     const result = await runFlow({
       flowId: FLOW_ID,
@@ -573,6 +840,22 @@ describe('runFlow keystone', () => {
 });
 
 describe('message emission (live view feed)', () => {
+  it('attests normalized prompt ids and strips caller origin claims before persistence', async () => {
+    const conversationId = 'origin-normalized-prompt';
+    const flowDefinition = { id: FLOW_ID, name: 'TestFlow', nodes: [], edges: [] } as Flow;
+    const result = await runFlow({ flowId: FLOW_ID, flowDefinition, conversationId, prompt: 'fresh prompt', mode: 'conversation' });
+    const input = result.messages.find(message => message.role === 'user')!;
+    expect(input.id).toBeTruthy();
+    expect(projectMessages((await readConversationLog(conversationId))!)
+      .find(message => message.id === input.id)?.executionOrigin).toBe('input');
+    const forged = { role: 'user' as const, content: 'claimed origin', id: 'origin-forged', executionOrigin: 'internal' as const };
+    const later = await runFlow({ flowId: FLOW_ID, flowDefinition, conversationId, messages: [forged], userTurn: true, mode: 'conversation' });
+    expect(later.messages.find(message => message.id === forged.id)?.executionOrigin).toBeUndefined();
+    expect(projectMessages((await readConversationLog(conversationId))!)
+      .find(message => message.id === forged.id)?.executionOrigin).toBe('input');
+    expect(forged.executionOrigin).toBe('internal');
+  });
+
   it('preserves caller-provided message ids on a NEW conversation', async () => {
     const result = await runFlow({
       flowId: FLOW_ID,
@@ -752,6 +1035,21 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 });
 
 describe('Persona execution authority', () => {
+  it.each(['hot', 'cold'] as const)('cannot resume an attributed %s snapshot by omitting request attribution', async cache => {
+    const conversationId = `persona-omitted-attribution-${cache}`;
+    const state = {
+      trackingInfo: { executionId: 'old-execution', startTime: 1, nodeExecutionTracker: [] },
+      messages: [], flowId: FLOW_ID, conversationId, title: 'Persona run',
+      status: 'completed', createdAt: 1, updatedAt: 1,
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    } as SharedState;
+    if (cache === 'hot') conversationStates.set(conversationId, state);
+    else mockLoadItem.mockResolvedValueOnce(state);
+    await expect(runFlow({ flowId: FLOW_ID, prompt: 'ordinary request', mode: 'conversation', conversationId }))
+      .rejects.toThrow('Persona-owned and must be resumed through the Persona dispatcher');
+    expect(persistedStates).toEqual([]);
+  });
+
   it('treats a Persona draft marker as immutable intent, then replaces it with trusted attribution', async () => {
     const conversationId = 'persona-draft-target';
     conversationStates.set(conversationId, {
@@ -1276,6 +1574,13 @@ describe('Persona execution authority', () => {
     });
 
     try {
+      // This regression exercises the delayed catalog lookup on an unpinned
+      // legacy run. New runs use their snapshot and do not perform that lookup.
+      conversationStates.set('persona-terminal-old', {
+        trackingInfo: { executionId: 'legacy-terminal', startTime: 1, nodeExecutionTracker: [] },
+        conversationId: 'persona-terminal-old', flowId: FLOW_ID,
+        messages: [], status: 'completed', createdAt: 1, updatedAt: 1,
+      } as unknown as SharedState);
       const staleRun = runFlow({
         flowId: FLOW_ID,
         prompt: 'old generation',

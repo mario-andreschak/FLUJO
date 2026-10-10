@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import { 
   Box, 
   Paper, 
@@ -69,6 +69,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   prefill,
 }) => {
   const { t, formatNumber } = useI18n();
+  const toolSelectLabelId = useId();
+  const timeoutInputId = useId();
   const { settings } = useStorage();
   const autoOpenMcpApps = settings?.experimental?.requireMcpAppLaunchClick !== true;
   log.debug('Props:', { serverName, toolsCount: tools?.length });
@@ -77,6 +79,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   log.debug('Tools array:', { count: toolsArray.length });
   const [selectedTool, setSelectedTool] = useState<string>('');
   const [params, setParams] = useState<Record<string, unknown>>({});
+  const [paramsValid, setParamsValid] = useState(true);
+  const [formRevision, setFormRevision] = useState(0);
   const [result, setResult] = useState<ToolTestResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [timeoutValue, setTimeoutValue] = useState<number>(60);
@@ -97,6 +101,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     appliedPrefillRef.current = prefill;
     setSelectedTool(prefill.toolName);
     setParams({ ...prefill.arguments });
+    setParamsValid(true);
+    setFormRevision(revision => revision + 1);
     setResult(null);
     setProgress(null);
     setActiveProgressToken(null);
@@ -106,7 +112,10 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const handleToolSelect = (toolName: string) => {
     setSelectedTool(toolName);
     setParams({});
+    setParamsValid(true);
+    setFormRevision(revision => revision + 1);
     setResult(null);
+    setErrorNotification(null);
   };
 
   const handleTimeoutChange = (value: string) => {
@@ -125,6 +134,10 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   };
 
   const handleTest = async () => {
+    if (!paramsValid) {
+      setErrorNotification(t('schema.invalidJson'));
+      return;
+    }
     log.debug(`Testing tool: ${selectedTool} with params:`, JSON.stringify(params));
     log.debug(`Timeout: ${timeoutValue} seconds`);
     
@@ -135,37 +148,38 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     
     try {
       // Ensure parameters are correctly typed according to the schema before sending
-      const typedParams: Record<string, unknown> = {};
+      const typedParams = new Map<string, unknown>();
       const selectedToolData = toolsArray.find((t) => t.name === selectedTool);
       
       if (selectedToolData?.inputSchema?.properties) {
         const schemaProperties = asRecord(selectedToolData.inputSchema.properties) ?? {};
         // Process each parameter according to its schema type
         Object.entries(params).forEach(([key, value]) => {
-          const schema = asRecord(schemaProperties[key]);
+          const schema = Object.hasOwn(schemaProperties, key) ? asRecord(schemaProperties[key]) : undefined;
           if (!schema) {
-            typedParams[key] = value;
+            typedParams.set(key, value);
             return;
           }
           
           if (schema.type === 'number' || schema.type === 'integer') {
             // Ensure number parameters are actually numbers, not strings
             const numValue = typeof value === 'string' ? parseFloat(value) : value;
-            typedParams[key] = isNaN(numValue as number) ? 0 : numValue;
+            typedParams.set(key, isNaN(numValue as number) ? 0 : numValue);
           } else if (schema.type === 'boolean') {
             // Ensure boolean parameters are actually booleans
-            typedParams[key] = Boolean(value);
+            typedParams.set(key, Boolean(value));
           } else {
-            typedParams[key] = value;
+            typedParams.set(key, value);
           }
         });
       } else {
         // If no schema is available, use params as is
-        Object.assign(typedParams, params);
+        for (const [key, value] of Object.entries(params)) typedParams.set(key, value);
       }
       
-      log.debug(`Sending typed params:`, JSON.stringify(typedParams));
-      const result = await onTestTool(selectedTool, typedParams, timeoutValue);
+      const argumentData = Object.fromEntries(typedParams);
+      log.debug(`Sending typed params:`, JSON.stringify(argumentData));
+      const result = await onTestTool(selectedTool, argumentData, timeoutValue);
       log.debug(`Test result:`, JSON.stringify(result));
       
       // Store the progress token if available
@@ -269,6 +283,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
       <Box sx={{ mb: 2 }}>
         <Typography 
           component="label" 
+          id={toolSelectLabelId}
           variant="body2" 
           sx={{ 
             display: 'block', 
@@ -280,6 +295,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
           {t('mcp.tester.select')}
         </Typography>
         <Select
+          labelId={toolSelectLabelId}
           fullWidth
           value={selectedTool}
           onChange={(e) => handleToolSelect(e.target.value)}
@@ -315,14 +331,17 @@ const ToolTester: React.FC<ToolTesterProps> = ({
 
           <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <SchemaParamsForm
+              key={formRevision}
               schema={selectedToolData.inputSchema}
               values={params}
               onChange={setParams}
+              onValidityChange={setParamsValid}
             />
 
             <Box>
               <Typography 
                 component="label" 
+                htmlFor={timeoutInputId}
                 variant="body2" 
                 sx={{ 
                   display: 'block', 
@@ -334,6 +353,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                 {t('mcp.tester.timeout')}
               </Typography>
               <TextField
+                id={timeoutInputId}
                 type="number"
                 fullWidth
                 size="small"
@@ -365,7 +385,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
               variant="contained"
               color="primary"
               onClick={handleTest}
-              disabled={isLoading}
+              disabled={isLoading || !paramsValid}
               startIcon={isLoading && <Spinner size="small" color="white" />}
             >
               {isLoading ? t('mcp.tester.testing') : t('mcp.tester.test')}

@@ -26,7 +26,7 @@ jest.mock('@/utils/workspace', () => ({
 // A shared fake git object whose `remote` behaviour each test controls.
 jest.mock('simple-git', () => {
   const git: { remote: jest.Mock } = { remote: jest.fn() };
-  return { __esModule: true, default: jest.fn(() => git), __git: git };
+  return { __esModule: true, simpleGit: jest.fn(() => git), __git: git };
 });
 
 jest.mock('@/utils/storage/backend', () => ({

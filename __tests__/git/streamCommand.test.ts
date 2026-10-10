@@ -1,3 +1,7 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Regression test for the streaming Install / Build git actions (issue #65).
  *
@@ -19,7 +23,7 @@ jest.mock('child_process', () => {
 });
 
 // The route imports simple-git at module load; it is not used by the streaming path.
-jest.mock('simple-git', () => ({ __esModule: true, default: () => ({}) }));
+jest.mock('simple-git', () => ({ __esModule: true, simpleGit: () => ({}) }));
 
 import { POST } from '@/app/api/git/route';
 import { createNdjsonParser } from '@/shared/utils/ndjson';

@@ -1,3 +1,6 @@
+import { AsyncResource } from 'node:async_hooks';
+import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -11,6 +14,7 @@ import {
   PlannedExecutionStatus,
   RunRecord,
   TriggerFirePayload,
+  type WorkerRecoveryStatus,
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
@@ -26,7 +30,6 @@ import { ArmedTrigger } from './triggers/types';
 import {
   armSchedule,
   catchUpOccurrence,
-  isCatchUpDue,
   validateSchedule,
 } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
@@ -87,6 +90,12 @@ import {
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
 import { removePendingApprovalsForPersonaId } from './pendingApprovals';
+import { isWorkerMode, getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import {
+  assertWorkerOccurrenceCurrent, claimWorkerOccurrence, enrollWorkerRecovery,
+  inspectWorkerRecovery, observeWorkerOccurrence, recordWorkerLocalCreation,
+  recordWorkerTerminalObservation, reconcileWorkerTerminalObservation,
+} from './workerLocalRecovery';
 
 const log = createLogger('backend/services/scheduler/index');
 
@@ -102,6 +111,14 @@ const STALE_PERSONA_EXECUTION_AUTHORITY_ERROR =
 
 function hasOwn(value: object, field: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function runtimeConfiguration(execution: PlannedExecution): string {
+  const config: Partial<PlannedExecution> = { ...execution };
+  delete config.folder;
+  delete config.updatedAt;
+  return JSON.stringify(config, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) : value);
 }
 
 function isIncompletePersonaControlledExecution(
@@ -233,9 +250,23 @@ interface PersonaAdmissionObserver {
  * one serving API routes, and armed croner timers/watchers must live exactly
  * once).
  */
+function createSchedulerServiceResource(): AsyncResource {
+  // A request cannot manufacture a service context by clearing its authority.
+  if (getAuthorizedBundledFlujoWorkloadToolNames() !== undefined || hasExecutionExtensionContext()) {
+    throw new BundledFlujoWorkloadError();
+  }
+  return new AsyncResource('FLUJO:SchedulerService');
+}
+
 export class SchedulerService {
+  private readonly serviceResource = createSchedulerServiceResource();
+  private workerRecoveryStatuses = new Map<string, WorkerRecoveryStatus>();
+  private workerLocalClaims = new Set<string>();
   /** Armed trigger per enabled execution id. */
   private armed = new Map<string, ArmedTrigger>();
+  /** Config captured by each callback; unchanged timers survive reconciliation. */
+  private armedConfigurations = new Map<string, string>();
+  private scheduleStateChains = new Map<string, Promise<unknown>>();
   /**
    * In-flight runs per execution id, mapped runId → ISO start time. A nested
    * map (rather than a single start time) lets the 'parallel' overlap strategy
@@ -317,6 +348,9 @@ export class SchedulerService {
     this.started = true;
     log.info('Starting scheduler');
     await this.reconcile();
+    // Worker snapshots never resume Persona deliveries, file-watch intents or
+    // terminal event fan-out. Only explicitly enrolled ordinary cron plans arm.
+    if (isWorkerMode()) return;
     // Subscribers are armed by reconcile before recovery publication, so a
     // terminal event pending from the prior process cannot be dropped at boot.
     await this.drainTerminalPublications();
@@ -325,34 +359,70 @@ export class SchedulerService {
   }
 
   /**
-   * Dispose every armed trigger and re-arm from the persisted configs. The
+   * Reconcile armed triggers with the persisted configs. The
    * single write-path for arming state; all mutations funnel through here.
    */
   reconcile(): Promise<void> {
+    return this.queueReconcile();
+  }
+
+  private reconcileCommitted(execution: PlannedExecution): Promise<void> {
+    return this.queueReconcile(Object.freeze({ id: execution.id, configuration: runtimeConfiguration(execution) }));
+  }
+
+  private queueReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
     const run = this.reconcileChain
       .catch(() => { /* prior reconcile's error surfaced to its own caller */ })
-      .then(() => this.inWorkspace(() => this.doReconcile()));
+      .then(async () => {
+        await assertBundledFlujoWorkloadEffectCurrent();
+        // Only service-owned code enters this resource; no caller task is accepted.
+        return this.serviceResource.runInAsyncScope(() => this.inWorkspace(() => this.doReconcile(committed)));
+      });
     this.reconcileChain = run;
     return run;
   }
 
-  private async doReconcile(): Promise<void> {
+  private async doReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
+    // Keep timers alive while reading storage. Disposing before this await can
+    // lose a due occurrence and re-arm directly at the following cron boundary.
+    const file = await this.loadFile();
+    if (committed) {
+      const current = file.executions.find(execution => execution.id === committed.id);
+      if (!current || runtimeConfiguration(current) !== committed.configuration) {
+        throw new Error('Committed schedule changed before service admission');
+      }
+    }
+    this.pausedCache = file.paused;
+    if (isWorkerMode()) {
+      this.workerRecoveryStatuses.clear();
+      for (const execution of file.executions) {
+        const status = await this.refreshWorkerRecoveryStatus(execution, file.paused);
+        if (status) this.workerRecoveryStatuses.set(execution.id, status);
+      }
+    }
+    const configurations = new Map(file.executions
+      .filter(execution => !file.paused && execution.enabled
+        && !execution.personaRetired && !execution.personaArchived
+        && !isIncompletePersonaControlledExecution(execution)
+        && (!isWorkerMode() || this.workerRecoveryStatuses.get(execution.id)?.eligible === true))
+      .map(execution => [execution.id, runtimeConfiguration(execution)] as const));
     for (const [id, trigger] of this.armed) {
+      if (configurations.get(id) === this.armedConfigurations.get(id)) continue;
       try {
         trigger.dispose();
       } catch (error) {
         log.warn(`Failed to dispose trigger for ${id}:`, error);
       }
+      this.armed.delete(id);
+      this.armedConfigurations.delete(id);
     }
-    this.armed.clear();
-
-    const file = await this.loadFile();
-    this.pausedCache = file.paused;
     if (file.paused) {
       log.info('Scheduler is paused — nothing armed');
       return;
     }
+    const arming: Promise<void>[] = [];
     for (const execution of file.executions) {
+      if (isWorkerMode() && !this.workerRecoveryStatuses.get(execution.id)?.eligible) continue;
       if (!execution.enabled || execution.personaRetired || execution.personaArchived) {
         continue;
       }
@@ -364,98 +434,146 @@ export class SchedulerService {
         );
         continue;
       }
-      try {
-        await this.armExecution(execution);
-      } catch (error) {
+      if (this.armed.has(execution.id)) {
+        if (execution.trigger.type === 'schedule') {
+          arming.push(this.initializeSchedule(execution, Date.now()));
+        }
+        continue;
+      }
+      arming.push(this.armExecution(execution).then(() => {
+        if (this.armed.has(execution.id)) {
+          this.armedConfigurations.set(execution.id, configurations.get(execution.id)!);
+        }
+      }).catch(error => {
+        this.armed.get(execution.id)?.dispose();
+        this.armed.delete(execution.id);
+        this.armedConfigurations.delete(execution.id);
         const message = error instanceof Error ? error.message : String(error);
         this.lastTriggerErrors.set(execution.id, message);
         log.error(`Failed to arm "${execution.name}" (${execution.id}):`, error);
-      }
+      }));
     }
+    // Install all cron timers before awaiting any cursor initialization.
+    await Promise.all(arming);
     log.info(`Scheduler armed ${this.armed.size} execution(s)`);
   }
 
+  private withScheduleState<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const pending = (this.scheduleStateChains.get(id) ?? Promise.resolve())
+      .catch(() => undefined).then(task);
+    this.scheduleStateChains.set(id, pending);
+    void pending.finally(() => {
+      if (this.scheduleStateChains.get(id) === pending) this.scheduleStateChains.delete(id);
+    }).catch(() => undefined);
+    return pending;
+  }
+
+  private initializeSchedule(execution: PlannedExecution, armedAt: number): Promise<void> {
+    return this.withScheduleState(execution.id, () => this.initializeScheduleState(execution, armedAt));
+  }
+
+  private async assertCurrentSchedule(execution: PlannedExecution): Promise<void> {
+    if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before effect');
+  }
+
+  private async isCurrentSchedule(execution: PlannedExecution): Promise<boolean> {
+    const file = await this.loadFile();
+    const current = file.executions.find(candidate => candidate.id === execution.id);
+    const recovery = current ? await inspectWorkerRecovery(current, file.paused, this.workerLocalClaims) : undefined;
+    return (!isWorkerMode() || recovery?.eligible === true)
+      && !file.paused && !!current?.enabled && !current.personaRetired && !current.personaArchived
+      && runtimeConfiguration(current) === runtimeConfiguration(execution);
+  }
+
+  private async initializeScheduleState(execution: PlannedExecution, armedAt: number): Promise<void> {
+    const trigger = execution.trigger;
+    if (trigger.type !== 'schedule') return;
+    const state = await loadExecutionState(execution.id);
+    if (!await this.isCurrentSchedule(execution)) return;
+    const baseline = new Date(armedAt).toISOString();
+    if (!state.lastScheduledFireAt) {
+      await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
+      return;
+    }
+    // Catch up only occurrences due before arming. A future tick during slow
+    // storage initialization is owned by the already-installed live timer.
+    const occurrence = trigger.catchUp
+      ? catchUpOccurrence(trigger, state.lastScheduledFireAt, armedAt)
+      : null;
+    if (!occurrence) return;
+    const payload: TriggerFirePayload = {
+      kind: 'schedule-catchup',
+      summary: 'Schedule (missed while FLUJO was closed — ran once at startup)',
+      context: { scheduledOccurrence: occurrence.toISOString() },
+      ...(execution.personaId
+        ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
+        : {}),
+    };
+    if (execution.personaId) {
+      const admitted = await this.admitPersonaFire(execution, payload);
+      await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
+      void admitted.completion.catch(error =>
+        log.error(`Catch-up continuation failed for ${execution.id}:`, error));
+    } else {
+      await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
+      void this.fireOrdinarySchedule(execution, payload, occurrence.toISOString()).catch(error => {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.lastTriggerErrors.set(execution.id, `Schedule catch-up failed: ${reason.slice(0, 1024)}`);
+        log.error(`Catch-up fire failed for ${execution.id}:`, error);
+      });
+    }
+  }
+
   private async armExecution(execution: PlannedExecution): Promise<void> {
+    if (!await this.isCurrentSchedule(execution)) return;
     const trigger = execution.trigger;
     switch (trigger.type) {
       case 'schedule': {
-        const state = await loadExecutionState(execution.id);
-        if (!state.lastScheduledFireAt) {
-          // Prime the catch-up baseline so a brand-new schedule never
-          // "catches up" a run that was simply never due.
-          const baseline = new Date().toISOString();
-          if (execution.personaId) {
-            await advanceLastScheduledFireAt(execution.id, baseline);
-          } else {
-            await saveExecutionState(execution.id, {
-              ...state,
-              lastScheduledFireAt: baseline,
-            });
-          }
-        } else if (trigger.catchUp && isCatchUpDue(trigger, state.lastScheduledFireAt)) {
-          // One catch-up run, never a replay of every missed occurrence.
-          log.info(`Catch-up run for "${execution.name}" (missed while closed)`);
-          const occurrence = catchUpOccurrence(trigger, state.lastScheduledFireAt)
-            ?? new Date(state.lastScheduledFireAt);
-          const payload: TriggerFirePayload = {
-            kind: 'schedule-catchup',
-            summary: 'Schedule (missed while FLUJO was closed — ran once at startup)',
-            ...(execution.personaId
-              ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
-              : {}),
-          };
-          if (execution.personaId) {
-            // The baseline moves only after the mailbox durably owns this exact
-            // missed occurrence. A crash before this state write re-admits the
-            // same delivery id and the mailbox deduplicates it.
-            const admitted = await this.admitPersonaFire(execution, payload);
-            await advanceLastScheduledFireAt(execution.id, new Date().toISOString());
-            void admitted.completion.catch((error) =>
-              log.error(`Catch-up continuation failed for ${execution.id}:`, error)
-            );
-          } else {
-            // Preserve the legacy catch-up ordering and fire-and-forget behavior.
-            await saveExecutionState(execution.id, {
-              ...state,
-              lastScheduledFireAt: new Date().toISOString(),
-            });
-            void this.fire(execution, payload);
-          }
-        }
-        this.armed.set(
-          execution.id,
-          armSchedule(trigger, this.bindToWorkspace(async (occurrence) => {
-            try {
+        const armedAt = Date.now();
+        // Arm synchronously before loading/priming the cursor. A tick during
+        // that I/O waits for initialization rather than disappearing entirely.
+        this.armed.set(execution.id, armSchedule(trigger, this.bindToWorkspace(async (occurrence) => {
+          try {
+            await initialized;
+            const payload: TriggerFirePayload = {
+              kind: 'schedule',
+              summary: 'Schedule',
+              context: { scheduledOccurrence: occurrence.toISOString() },
+              ...(execution.personaId
+                ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
+                : {}),
+            };
+            let completion: Promise<RunRecord> | undefined;
+            await this.withScheduleState(execution.id, async () => {
+              // Config changes persist before their reconcile can finish. A
+              // tick queued behind initialization must honor pause/disable/
+              // deletion and replacement rather than dispatch its old snapshot.
+              if (!await this.isCurrentSchedule(execution)) return;
               const current = await loadExecutionState(execution.id);
-              const payload: TriggerFirePayload = {
-                kind: 'schedule',
-                summary: 'Schedule',
-                ...(execution.personaId
-                  ? { deliveryId: this.sourceDeliveryId(
-                    execution,
-                    'schedule',
-                    occurrence.toISOString(),
-                  ) }
-                  : {}),
-              };
+              if (current.lastScheduledFireAt
+                && Date.parse(current.lastScheduledFireAt) >= occurrence.getTime()) return;
               if (execution.personaId) {
                 const admitted = await this.admitPersonaFire(execution, payload);
-                await advanceLastScheduledFireAt(execution.id, occurrence.toISOString());
-                void admitted.completion.catch((error) =>
-                  log.error(`Scheduled continuation failed for ${execution.id}:`, error)
-                );
-                return;
+                completion = admitted.completion;
               }
-              await saveExecutionState(execution.id, {
-                ...current,
-                lastScheduledFireAt: new Date().toISOString(),
-              });
-              await this.fire(execution, payload);
-            } catch (error) {
-              log.error(`Scheduled fire failed for ${execution.id}:`, error);
-            }
-          }))
-        );
+              await advanceLastScheduledFireAt(execution.id, occurrence.toISOString(), () => this.assertCurrentSchedule(execution));
+              this.lastTriggerErrors.delete(execution.id);
+              if (!execution.personaId) completion = this.fireOrdinarySchedule(execution, payload, occurrence.toISOString());
+            });
+            // Cursor/admission serialization does not serialize Flow lifetimes:
+            // the authored overlap policy still handles later occurrences.
+            await completion;
+          } catch (error) {
+            // Operators must see a failed callback even when storage failure
+            // prevents writing the history/cursor for this occurrence.
+            const reason = error instanceof Error ? error.message : String(error);
+            this.lastTriggerErrors.set(execution.id,
+              `Schedule occurrence ${occurrence.toISOString()} failed: ${reason.slice(0, 1024)}`);
+            log.error(`Scheduled fire failed for ${execution.id}:`, error);
+          }
+        })));
+        const initialized = this.initializeSchedule(execution, armedAt);
+        await initialized;
         break;
       }
       case 'webhook':
@@ -541,6 +659,7 @@ export class SchedulerService {
             callTool: this.bindToWorkspace(async (serverName, toolName, args) => {
               // Lazy import: don't pull the MCP stack into scheduler tests.
               const { mcpService } = await import('@/backend/services/mcp');
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before polling');
               const response = await mcpService.callTool(serverName, toolName, args);
               return {
                 success: response.success === true,
@@ -551,7 +670,8 @@ export class SchedulerService {
             loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
             saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
-              await saveExecutionState(execution.id, { ...current, ...patch });
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
+              await saveExecutionState(execution.id, { ...current, ...patch }, () => this.assertCurrentSchedule(execution));
             }),
             // Await the run and report its outcome so the poll can advance its
             // change baseline only after a successful run (commit-after-success,
@@ -559,6 +679,7 @@ export class SchedulerService {
             // naturally prevents an overlapping poll of the same trigger.
             onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
+              await assertBundledFlujoWorkloadEffectCurrent();
               const record = await this.fire(execution, {
                 kind: 'mcp-poll',
                 summary,
@@ -572,6 +693,7 @@ export class SchedulerService {
             evaluateAiGate: this.bindToWorkspace(async (result, gateConfig, state) => {
               // Lazy import: the gate pulls in the model/flow stack.
               const { evaluateAiGate } = await import('./triggers/llmGate');
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before AI gate');
               return evaluateAiGate(result, gateConfig, state);
             }),
           })
@@ -582,15 +704,20 @@ export class SchedulerService {
         this.armed.set(
           execution.id,
           armUrlWatch(trigger, {
+            assertCurrent: this.bindToWorkspace(async () => {
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before URL effect');
+            }),
             loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
             saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
-              await saveExecutionState(execution.id, { ...current, ...patch });
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
+              await saveExecutionState(execution.id, { ...current, ...patch }, () => this.assertCurrentSchedule(execution));
             }),
             // Await + report outcome so the baseline hash advances only after a
             // successful run (commit-after-success, issue #75).
             onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
+              await assertBundledFlujoWorkloadEffectCurrent();
               const record = await this.fire(execution, {
                 kind: 'url-watch',
                 summary,
@@ -734,17 +861,76 @@ export class SchedulerService {
   async list(): Promise<PlannedExecutionListEntry[]> {
     const file = await this.loadFile();
     return Promise.all(
-      file.executions.map(async execution => ({
-        execution,
-        status: this.getStatus(execution),
-        lastRun: await loadLastRunRecord(execution.id),
-      }))
+      file.executions.map(async execution => {
+        const recovery = await this.refreshWorkerRecoveryStatus(execution, file.paused);
+        if (recovery) this.workerRecoveryStatuses.set(execution.id, recovery);
+        return { execution, status: this.getStatus(execution), lastRun: await loadLastRunRecord(execution.id) };
+      })
     );
   }
 
   async get(id: string): Promise<PlannedExecution | null> {
     const file = await this.loadFile();
     return file.executions.find(e => e.id === id) ?? null;
+  }
+
+  private async refreshWorkerRecoveryStatus(execution: PlannedExecution, paused: boolean) {
+    let status = await inspectWorkerRecovery(execution, paused, this.workerLocalClaims);
+    if (status?.pending && !this.workerLocalClaims.has(status.pending.runId)
+        && ['unresolved-admission', 'not-opted-in', 'definition-changed'].includes(status.reason)) {
+      // Only a signed installation-local observation can clear uncertainty.
+      // Imported/caller-written history, ACKs and approval rows confer no authority.
+      if (await reconcileWorkerTerminalObservation(execution)) {
+        status = await inspectWorkerRecovery(execution, paused, this.workerLocalClaims);
+      }
+    }
+    return status;
+  }
+
+  async setWorkerLocalRecovery(id: string, input: {
+    enabled: boolean; expectedGenerationId: string; expectedDefinitionSha256: string;
+  }): Promise<void> {
+    if (!isWorkerMode() || getWorkerBootstrapStatus().state !== 'ready') {
+      throw new Error('Worker is not ready for local recovery enrollment');
+    }
+    await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async lock => {
+      const file = await this.loadFile();
+      const execution = file.executions.find(candidate => candidate.id === id);
+      if (!execution) throw new Error('Planned execution not found');
+      if (input.enabled && this.isRunning(id)) throw new Error('Plan has a live run; enrollment cannot replace it');
+      await lock.assertOwned();
+      await enrollWorkerRecovery(execution, input.enabled, input.expectedGenerationId, input.expectedDefinitionSha256);
+    });
+    await this.reconcile();
+  }
+
+  private async fireOrdinarySchedule(execution: PlannedExecution, payload: TriggerFirePayload,
+    occurrenceAt: string): Promise<RunRecord> {
+    if (!isWorkerMode()) return this.fire(execution, payload);
+    const runId = uuidv4();
+    // Register the local waiter before publishing its durable claim. A reconcile
+    // crossing the atomic write must not mistake this live owner for a restart.
+    this.workerLocalClaims.add(runId);
+    let admitted;
+    try { admitted = await claimWorkerOccurrence(execution, occurrenceAt, runId); }
+    catch (error) { this.workerLocalClaims.delete(runId); throw error; }
+    if (admitted !== 'eligible') {
+      this.workerLocalClaims.delete(runId);
+      const now = new Date().toISOString();
+      const record: RunRecord = { runId, executionGenerationId: this.executionGenerationId(execution),
+        conversationId: '', firedAt: now, finishedAt: now, status: 'skipped',
+        triggerSummary: payload.summary, error: `Worker schedule suppressed: ${admitted}` };
+      this.recordSchedulerSkip(execution, runId, record.error!);
+      return this.finishFireRecord(execution, payload, record);
+    }
+    try {
+      const result = await this.fire(execution, payload, runId);
+      await observeWorkerOccurrence(execution, result);
+      return result;
+    } finally {
+      this.workerLocalClaims.delete(runId);
+      await this.reconcile();
+    }
   }
 
   /**
@@ -923,6 +1109,10 @@ export class SchedulerService {
       const personaTargetError = await this.validatePersonaTarget(execution);
       if (personaTargetError) return { error: personaTargetError };
       await lock.assertOwned();
+      if (isWorkerMode()) {
+        if (getWorkerBootstrapStatus().state !== 'ready') throw new Error('Worker is not ready for local plan creation');
+        await recordWorkerLocalCreation(execution);
+      }
       await this.saveFile({ ...file, executions: [...file.executions, execution] });
       // A deliberate recreation establishes a new generation. Clear the
       // execution-wide admission fence while retaining old projection-id
@@ -937,7 +1127,7 @@ export class SchedulerService {
       };
     }
     if (mutation.error) return { error: mutation.error };
-    await this.reconcile();
+    await this.reconcileCommitted(execution);
     return { execution };
   }
 
@@ -1006,7 +1196,7 @@ export class SchedulerService {
     if (!runtimeConfigChanged) {
       return { execution: merged };
     }
-    await this.reconcile();
+    await this.reconcileCommitted(merged);
     // A queued fire captured the PRE-update snapshot (stale flowId/prompt/
     // overlapStrategy) at enqueue time (issue #122). Cancel those stale fires
     // rather than silently running the old config; storage still exists so the
@@ -1711,6 +1901,24 @@ export class SchedulerService {
 
   // --- status --------------------------------------------------------------
 
+  /** Observation only: no storage, reconcile, admission, approval or timer mutation. */
+  inspectOperations(executions: readonly PlannedExecution[]) {
+    return {
+      workspace: this.workspace,
+      started: this.started,
+      pausedAtLastReconcile: this.pausedCache,
+      armedTriggers: this.armed.size,
+      runningRuns: Array.from(this.running.values()).reduce((sum, runs) => sum + runs.size, 0),
+      overlapQueued: Array.from(this.queued.values()).reduce((sum, queue) => sum + queue.length, 0),
+      maxOverlapDepth: Array.from(this.queued.values()).reduce((depth, queue) => Math.max(depth, queue.length), 0),
+      exclusiveWaiting: this.exclusiveWaiting.length,
+      blockedByExclusive: this.blockedByExclusive.length,
+      queueCap: SchedulerService.MAX_QUEUE_DEPTH,
+      ownedWorkerRunIds: new Set(this.workerLocalClaims),
+      statuses: executions.map(execution => ({ id: execution.id, status: this.getStatus(execution) })),
+    };
+  }
+
   getStatus(execution: PlannedExecution): PlannedExecutionStatus {
     const trigger = this.armed.get(execution.id);
     const personaRuntimeBlocked = Boolean(
@@ -1720,7 +1928,10 @@ export class SchedulerService {
     );
     // Webhook triggers have no armed component — they count as armed whenever
     // the execution is enabled and the scheduler isn't paused.
+    const workerRecovery = this.workerRecoveryStatuses.get(execution.id);
     const armed =
+      (!isWorkerMode() || workerRecovery?.eligible === true)
+      &&
       !personaRuntimeBlocked
       && (
         trigger !== undefined
@@ -1750,6 +1961,7 @@ export class SchedulerService {
       && this.isExclusiveActive();
     return {
       armed,
+      ...(workerRecovery ? { workerRecovery: { ...workerRecovery, state: armed ? 'armed' as const : workerRecovery.state } } : {}),
       notArmedReason,
       nextRun: trigger?.nextRun ? trigger.nextRun() : undefined,
       lastTriggerError: this.lastTriggerErrors.get(execution.id),
@@ -1777,6 +1989,7 @@ export class SchedulerService {
       return { error: 'A retired Persona planned execution cannot be run' };
     }
     const runId = uuidv4();
+    await assertBundledFlujoWorkloadEffectCurrent();
     const record = await this.fire(execution, {
       kind: 'manual',
       summary: 'Manual run',
@@ -1907,6 +2120,10 @@ export class SchedulerService {
     record: RunRecord,
     terminalPublication?: StableTerminalPublicationReceipt,
   ): Promise<StableRunRecordUpsertResult> {
+    if (isWorkerMode() && this.workerLocalClaims.has(record.runId)) {
+      record = { ...record, executionGenerationId: this.executionGenerationId(execution) };
+      await recordWorkerTerminalObservation(execution, record);
+    }
     if (this.stablePersonaDeliveryId(execution, payload)) {
       return upsertStableRunRecord(execution.id, record, terminalPublication);
     }
@@ -2284,6 +2501,14 @@ export class SchedulerService {
     // the durable row before dispatch so a callback already in flight cannot
     // submit work after Persona deletion retired (or anonymized) that config.
     const currentExecution = await this.get(execution.id);
+    if (isWorkerMode() && (payload.kind === 'schedule' || payload.kind === 'schedule-catchup')
+        && !this.workerLocalClaims.has(runId)) {
+      return this.finishFireRecord(execution, payload, {
+        runId, executionGenerationId: this.executionGenerationId(execution), conversationId: '',
+        firedAt, finishedAt: firedAt, status: 'skipped', triggerSummary: payload.summary,
+        error: 'Worker automatic schedule execution requires a local recovery admission',
+      });
+    }
     if (
       execution.personaRetired
       || execution.personaArchived
@@ -2727,6 +2952,10 @@ export class SchedulerService {
         const scheduled = payload.kind === 'manual'
           || payload.kind === 'schedule'
           || payload.kind === 'schedule-catchup';
+        if (payload.kind !== 'manual' && !await this.isCurrentSchedule(execution)) {
+          throw new Error('Schedule changed before Persona dispatch');
+        }
+        await assertBundledFlujoWorkloadEffectCurrent();
         const submission = await submitPersonaFlowDispatch({
           personaId: execution.personaId,
           idempotencyKey: `planned:${execution.id}:${payload.deliveryId ?? runId}`,
@@ -2771,6 +3000,18 @@ export class SchedulerService {
         // Lazy import keeps the execution stack out of module-load paths and
         // mirrors SubflowNode's approach to the engine's import cycles.
         const { runFlow } = await import('@/backend/execution/flow/runFlow');
+        if (isWorkerMode() && this.workerLocalClaims.has(runId)) {
+          const file = await this.loadFile();
+          const current = file.executions.find(candidate => candidate.id === execution.id);
+          if (file.paused || !current || !current.enabled || runtimeConfiguration(current) !== runtimeConfiguration(execution)) {
+            throw new Error('Worker schedule definition or stop controls changed before execution');
+          }
+          await assertWorkerOccurrenceCurrent(current, runId);
+        }
+        if (payload.kind !== 'manual' && !await this.isCurrentSchedule(execution)) {
+          throw new Error('Schedule changed before execution');
+        }
+        await assertBundledFlujoWorkloadEffectCurrent();
         const result = await runFlow({
           flowId: execution.flowId,
           ...flowInput,
@@ -2783,6 +3024,7 @@ export class SchedulerService {
         });
       }
     } catch (error) {
+      if (error instanceof BundledFlujoWorkloadError) throw error;
       record = {
         runId,
         conversationId,
@@ -2811,6 +3053,9 @@ export class SchedulerService {
       this.drainExclusive();
       // Start the next queued fire (if any) now that this run has ended.
       this.drainQueue(execution.id);
+    }
+    if (isWorkerMode() && this.workerLocalClaims.has(runId)) {
+      record.executionGenerationId = this.executionGenerationId(execution);
     }
     return this.finishFireRecord(execution, payload, record);
   }
@@ -2881,6 +3126,13 @@ export class SchedulerService {
         result.status === 'completed' || result.status === 'capped'
           ? undefined
           : result.error?.message ?? `Run ended with status "${result.status}"`,
+      ...(result.error?.details?.code?.startsWith('static_') ? { errorDetails: {
+        type: result.error.details.type?.slice(0, 200),
+        code: result.error.details.code.slice(0, 200),
+        name: result.error.details.name?.slice(0, 200),
+        param: result.error.details.param?.slice(0, 200),
+        status: result.error.details.status,
+      } } : {}),
     };
   }
 

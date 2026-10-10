@@ -16,6 +16,7 @@ const createJestConfig = nextJest({ dir: "./" });
 
 // Shared across both projects: the "@/" alias.
 const moduleNameMapper = {
+  '^@flujo-ai/avatar-sdk/native-voice$': '<rootDir>/node_modules/@flujo-ai/avatar-sdk/dist/native-voice.js',
   "^@/(.*)$": "<rootDir>/src/$1",
   "^uuid$": "<rootDir>/__tests__/uuidJestAdapter.ts",
   // Direct backend compatibility tests retain their existing mocked policy
@@ -28,6 +29,8 @@ const moduleNameMapper = {
     "<rootDir>/node_modules/mcp-stdio-oauth/dist/$1/index.js",
   "^mcp-stdio-oauth/client/transport$":
     "<rootDir>/node_modules/mcp-stdio-oauth/dist/client/transport.js",
+  "^@modelcontextprotocol/ext-tasks/(client|core|core/v1|core/v2|receiver)$":
+    "<rootDir>/node_modules/@modelcontextprotocol/ext-tasks/dist/$1/index.js",
   // NodeNext source imports retain their runtime .js suffix. During tests the
   // colocated source is still TypeScript, so let Jest resolve the same relative
   // path with its transformed extension.
@@ -47,6 +50,7 @@ const esmOnlyTestPackages = [
   "chokidar",
   "readdirp",
   "@modelcontextprotocol/ext-apps",
+  "@modelcontextprotocol/ext-tasks",
 ];
 
 function allowEsmOnlyPackages(patterns = []) {
@@ -128,6 +132,9 @@ async function buildConfig() {
     }
   }
   return {
+    // Recycle accumulated test heaps between completed files. The serial
+    // process stage and each test's workload and deadlines remain unchanged.
+    workerIdleMemoryLimit: "1GB",
     projects: [node, jsdom],
   };
 }

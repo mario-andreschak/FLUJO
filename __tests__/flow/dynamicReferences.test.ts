@@ -31,6 +31,9 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => {
 
 import { flowService } from '@/backend/services/flow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { modelService } from '@/backend/services/model';
+import { mcpService } from '@/backend/services/mcp';
+import { promises as fs } from 'fs';
 import {
   applyPresetArguments,
   resolvePromptDynamicReferences,
@@ -40,6 +43,20 @@ const mockedGetFlow = flowService.getFlow as jest.Mock;
 const mockedLoadConversation = loadConversationState as jest.Mock;
 
 describe('dynamic @ reference resolution', () => {
+  it('preserves prototype-like authored data keys without replacing output prototypes', async () => {
+    const value = JSON.parse('{"__proto__":{"name":"@current.flow.name"},"constructor":"@current.flow.name","toString":"literal","nested":[{"__proto__":"@current.flow.id"}]}');
+    const result = await resolvePromptDynamicReferences(value, { flowId: 'flow-1' }) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.hasOwn(result, '__proto__')).toBe(true);
+    expect(result['__proto__']).toEqual({ name: 'Daily report' });
+    expect(result.constructor).toBe('Daily report');
+    expect(result.toString).toBe('literal');
+    const nested = (result.nested as Record<string, unknown>[])[0];
+    expect(Object.getPrototypeOf(nested)).toBe(Object.prototype);
+    expect(Object.hasOwn(nested, '__proto__')).toBe(true);
+    expect(nested['__proto__']).toBe('flow-1');
+    expect(Object.hasOwn(Object.prototype, 'name')).toBe(false);
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     mockedGetFlow.mockResolvedValue({
@@ -48,7 +65,7 @@ describe('dynamic @ reference resolution', () => {
       folder: 'Finance',
       createdAt: 100,
       updatedAt: 200,
-      nodes: [{ id: 'node-1', data: { label: 'Research', properties: {} } }],
+      nodes: [{ id: 'node-1', data: { label: 'Research', properties: { createdAt: 500, updatedAt: 600 } } }],
       edges: [],
     });
     mockedLoadConversation.mockResolvedValue({
@@ -56,6 +73,57 @@ describe('dynamic @ reference resolution', () => {
       createdAt: 300,
       updatedAt: 400,
     });
+    (modelService.getModel as jest.Mock).mockResolvedValue({ id: 'model-1', displayName: 'Demo model', createdAt: 700, updatedAt: 800 });
+    (mcpService.loadServerConfigs as jest.Mock).mockResolvedValue([{ name: 'bank', createdAt: 900, updatedAt: 1000 }]);
+  });
+
+  const context = { conversationId: 'slack-team-thread-1', flowId: 'flow-1', nodeId: 'node-1', modelId: 'model-1', appId: 'bank' };
+  const entities = [
+    ['conversation', ['slack-team-thread-1', 'Quarterly planning', 300, 400]],
+    ['flow', ['flow-1', 'Daily report', 100, 200]],
+    ['flows', ['flow-1', 'Daily report', 100, 200]],
+    ['node', ['node-1', 'Research', 500, 600]],
+    ['model', ['model-1', 'Demo model', 700, 800]],
+    ['app', ['bank', 'bank', 900, 1000]],
+    ['folder', ['Finance', 'Finance', 100, 200]],
+  ] as const;
+  it.each(entities.flatMap(([kind, values]) => ['id', 'name', 'created', 'updated'].map((field, index) =>
+    [`@current.${kind}.${field}`, values[index]] as const)))('resolves %s from this execution', async (command, expected) => {
+    await expect(resolvePromptDynamicReferences(command, context)).resolves.toBe(expected);
+  });
+
+  it('resolves every date/time field using the executing process clock', async () => {
+    jest.useFakeTimers();
+    try {
+      const now = new Date('2026-09-28T17:08:09Z');
+      jest.setSystemTime(now);
+      for (const kind of ['date', 'time']) {
+        const id = kind === 'time' ? now.toTimeString().slice(0, 8)
+          : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        for (const [field, expected] of [['id', id], ['name', id], ['created', now.getTime()], ['updated', now.getTime()]] as const) {
+          await expect(resolvePromptDynamicReferences(`@current.${kind}.${field}`, context)).resolves.toBe(expected);
+        }
+      }
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('resolves selected file/folder metadata and keeps missing current context explicit', async () => {
+    const stat = jest.spyOn(fs, 'stat').mockResolvedValue({ birthtimeMs: 1100, mtimeMs: 1200 } as Awaited<ReturnType<typeof fs.stat>>);
+    try {
+      for (const kind of ['file', 'folder']) {
+        for (const [field, expected] of [['id', '/workspace/report.txt'], ['name', 'report.txt'], ['created', 1100], ['updated', 1200]] as const) {
+          await expect(resolvePromptDynamicReferences(`@${kind}[%2Fworkspace%2Freport.txt].${field}`, context)).resolves.toBe(expected);
+        }
+      }
+      await expect(resolvePromptDynamicReferences('@current.model.id', {})).resolves.toBe('@current.model.id');
+      await expect(resolvePromptDynamicReferences('@current.file.id', context)).resolves.toBe('@current.file.id');
+    } finally { stat.mockRestore(); }
+  });
+
+  it('resolves current commands recursively in hidden presets while overriding forged values', async () => {
+    await expect(applyPresetArguments({ conversation_id: 'foreign' }, {
+      conversation_id: '@current.conversation.id', flow_id: '@current.flow.id', nested: ['@current.node.id'],
+    }, context)).resolves.toEqual({ conversation_id: 'slack-team-thread-1', flow_id: 'flow-1', nested: ['node-1'] });
   });
 
   it('resolves current entities, selected metadata fields, and complete-token primitive values', async () => {

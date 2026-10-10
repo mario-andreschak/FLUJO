@@ -90,6 +90,12 @@ export interface ModelCallInput {
   signal?: AbortSignal;
   /** Runtime-only fencing authority. It is never copied into provider input. */
   executionAuthority?: FlowExecutionAuthority;
+  /** Trusted in-process opt-in; never populated from HTTP JSON or a saved Flow. */
+  nativeBrokerAuthority?: import('../handlers/nativeToolBroker').NativeBrokerAuthority;
+  /** Trusted opt-in to publish the original native SDK session in-process. */
+  nativeInvocationSessionHook?: import('../handlers/nativeInvocationSession').NativeInvocationSessionHook;
+  nativeOriginalHost?: Awaited<ReturnType<typeof import('../handlers/nativeOriginalHost').createPersonaNativeOriginalHost>>;
+    executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   personaAttribution?: PersonaAttribution;
   /** Final authority checks immediately before external side effects. */
   beforeModelDispatch?: () => Promise<void>;
@@ -179,6 +185,7 @@ export interface ToolCallProcessingInput {
    */
   unattended?: boolean;
   executionAuthority?: FlowExecutionAuthority;
+    executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   personaAttribution?: PersonaAttribution;
   beforeToolDispatch?: () => Promise<void>;
 }

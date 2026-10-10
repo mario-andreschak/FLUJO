@@ -1,4 +1,6 @@
 import {
+  DEFAULT_PERSONA_NATIVE_ABILITY_IDS,
+  PERSONA_NATIVE_ABILITY_IDS,
   PERSONA_CAPABILITY_AREAS,
   PERSONA_CAPABILITY_MANIFEST,
   PERSONA_UI_MAPPED_BACKEND_ENDPOINTS,
@@ -10,6 +12,10 @@ import path from 'path';
 const TECHNICAL_UI_JARGON = /\b(?:api|backend|database|schema|lease|fencing?|grant|revision id|identifier|slot key|persona tools?|capability intersection|autonomy enum)\b/i;
 
 describe('Persona capability manifest', () => {
+  it('keeps Goal runtime inspection an explicit native opt-in', () => {
+    expect(PERSONA_NATIVE_ABILITY_IDS).toContain('work_item_runtime_read');
+    expect(DEFAULT_PERSONA_NATIVE_ABILITY_IDS).not.toContain('work_item_runtime_read');
+  });
   it('maps every shipped backend operation to exactly one friendly UI area', () => {
     const operationOwner = new Map<string, string>();
     const endpointOwner = new Map<string, string>();

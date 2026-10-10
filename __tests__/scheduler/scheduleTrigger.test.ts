@@ -42,17 +42,29 @@ describe('scheduleNextRuns', () => {
 });
 
 describe('isCatchUpDue', () => {
-  const daily = { type: 'schedule' as const, cron: '0 9 * * *' };
+  const daily = { type: 'schedule' as const, cron: '0 9 * * *', timezone: 'UTC' };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
 
   it('is due when an occurrence fell between the last fire and now', () => {
-    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    jest.setSystemTime(new Date('2026-10-05T09:00:36.000Z'));
+    const twoDaysAgo = '2026-10-03T09:00:00.000Z';
     expect(isCatchUpDue(daily, twoDaysAgo)).toBe(true);
   });
 
-  it('is not due when the last fire is recent enough', () => {
-    // Last "fire" 1 minute ago: the next daily-9am occurrence is in the future.
-    const justNow = new Date(Date.now() - 60 * 1000).toISOString();
-    expect(isCatchUpDue(daily, justNow)).toBe(false);
+  it.each([
+    { name: 'is not due just before 09:00', now: '2026-10-05T08:59:59.999Z', lastFire: '2026-10-05T08:59:00.000Z', due: false },
+    { name: 'is due exactly at 09:00', now: '2026-10-05T09:00:00.000Z', lastFire: '2026-10-05T08:59:00.000Z', due: true },
+    { name: 'is due when a recent fire still precedes 09:00', now: '2026-10-05T09:00:36.000Z', lastFire: '2026-10-05T08:59:36.000Z', due: true },
+    { name: 'is not due after the 09:00 occurrence was recorded', now: '2026-10-05T09:00:36.000Z', lastFire: '2026-10-05T09:00:00.000Z', due: false },
+  ])('$name', ({ now, lastFire, due }) => {
+    jest.setSystemTime(new Date(now));
+    expect(isCatchUpDue(daily, lastFire)).toBe(due);
   });
 });
 
@@ -83,6 +95,16 @@ describe('armSchedule', () => {
     const next = trigger.nextRun ? trigger.nextRun() : null;
     expect(next).toBeTruthy();
     expect(new Date(next as string).getTime()).toBeGreaterThan(Date.now());
+    trigger.dispose();
+  });
+
+  it('reports the intended occurrence when the timer callback arrives late', () => {
+    jest.setSystemTime(new Date('2026-10-01T12:59:59.000Z'));
+    const onFire = jest.fn();
+    const trigger = armSchedule({ type: 'schedule', cron: '*/15 * * * *', timezone: 'America/Bogota' }, onFire);
+    jest.setSystemTime(new Date('2026-10-01T13:00:05.000Z'));
+    jest.advanceTimersByTime(1000);
+    expect(onFire).toHaveBeenCalledWith(new Date('2026-10-01T13:00:00.000Z'));
     trigger.dispose();
   });
 });

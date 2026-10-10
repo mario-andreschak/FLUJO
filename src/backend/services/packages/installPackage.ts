@@ -30,7 +30,38 @@
  * Secrets posture: secret VALUES are used to build env / API keys and are NEVER
  * written to the summary, the ledger, or any log.
  */
-import { createHash } from 'crypto';
+import type {
+  PackageEntityType,
+  InstallEntityRef,
+  InstallServerResult,
+  PackageDeclarationSource,
+  PackageDeclarationInfo,
+  PackageServerInfo,
+  PackageFlowInfo,
+  PackageTriggerInfo,
+  InstallStepStatus,
+  InstallStep,
+  InstallPreview,
+  InstallSummary,
+} from '@/shared/types/package/install';
+export type {
+  PackageEntityType,
+  InstallEntityRef,
+  InstallServerResult,
+  PackageDeclarationSource,
+  PackageDeclarationInfo,
+  PackageServerInfo,
+  PackageFlowInfo,
+  PackageTriggerInfo,
+  PackageSecretInfo,
+  PackageGlobalInfo,
+  PackageIdentityInfo,
+  InstallStepStatus,
+  InstallStepPhase,
+  InstallStep,
+  InstallPreview,
+  InstallSummary,
+} from '@/shared/types/package/install';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
@@ -41,11 +72,10 @@ import type {
   FlujoPackage,
   PackagedFlow,
   PackagedMcpServer,
-  PackagedMcpTransport,
   PackagedModel,
   PackagedPlannedExecution,
 } from '@/shared/types/package/package';
-import type { EnvDeclaration, McpInstallOrigin, McpSourceType } from '@/shared/types/package/installOrigin';
+import type { EnvDeclaration, McpInstallOrigin } from '@/shared/types/package/installOrigin';
 import {
   effectiveName,
   validateRenameMap,
@@ -64,247 +94,10 @@ import type { Flow } from '@/shared/types/flow';
 import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 import { remapFlowModelBindings } from '@/utils/shared/flowModelReplacement';
+import { hasConflictingFlowClaim, resolvePackageFlowIds } from './packageFlowIdentity';
+export { deterministicFlowId } from './packageFlowIdentity';
 
 const log = createLogger('backend/services/packages/installPackage');
-
-export type PackageEntityType = 'server' | 'model' | 'flow' | 'plannedExecution';
-
-export interface InstallEntityRef {
-  type: PackageEntityType;
-  /** Human-readable name (server name / displayName / flow name / execution name). */
-  name: string;
-  /** The id the entity was persisted under, when applicable. */
-  id?: string;
-  /** Why an entity was skipped or left disabled. */
-  note?: string;
-}
-
-export interface InstallServerResult {
-  localName: string;
-  source: string;
-  installed: boolean;
-  serverName?: string;
-  alreadyExisted?: boolean;
-  disabled?: boolean;
-  needsEnv?: string[];
-  error?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Inspection contract (issue #407)
-//
-// The install wizard needs to SHOW a package before touching the host: which
-// apps/MCP servers it carries, where they come from, what they need, which
-// flows and triggers it contains, and which secrets/globals feed what. These
-// types are ADDITIVE — every pre-existing `InstallPreview` / `InstallSummary`
-// field is preserved for older clients.
-//
-// Secrets posture: inspection data is derived from the PUBLIC manifest only.
-// Declaration NAMES and reference NAMES are exposed; submitted secret VALUES
-// never are.
-// ---------------------------------------------------------------------------
-
-/** Where a single env/header declaration of a packaged server gets its value. */
-export type PackageDeclarationSource = 'secret' | 'global' | 'template' | 'environment';
-
-export interface PackageDeclarationInfo {
-  /** The env var / header name the server reads. */
-  name: string;
-  /** The package marked this value as sensitive (masked, encrypted at rest). */
-  isSecret: boolean;
-  source: PackageDeclarationSource;
-  /** Manifest secret this declaration binds to (`source: 'secret'`). */
-  secretRef?: string;
-  /** Host global this declaration binds to (`source: 'global'`). */
-  globalVar?: string;
-  /** True when the bound manifest secret is declared required. */
-  required: boolean;
-  /** True when a value for the bound secret was supplied with this request. */
-  provided: boolean;
-}
-
-/** Everything the wizard shows about one packaged app / MCP server. */
-export interface PackageServerInfo {
-  localName: string;
-  transport: PackagedMcpTransport;
-  sourceType: McpSourceType;
-  /** Same compact `type:ref` string the legacy preview/result uses. */
-  source: string;
-  /** Safe, absolute http(s) link to the repository / registry entry, if any. */
-  link?: string;
-  ref?: string;
-  gitRef?: string;
-  subdirectory?: string;
-  installCommand?: string;
-  buildCommand?: string;
-  url?: string;
-  /** The package ships this server disabled. */
-  disabled: boolean;
-  folder?: string;
-  /** Positional argument templates the origin declares (no secret values). */
-  argTemplates: Array<{ index: number; value: string }>;
-  env: PackageDeclarationInfo[];
-  headers: PackageDeclarationInfo[];
-  /** Env/header names whose REQUIRED secret has no value yet. */
-  requiredEnvMissing: string[];
-}
-
-/** A packaged flow, including a read-only graph payload for browsing. */
-export interface PackageFlowInfo {
-  /** Manifest-local flow id (stable rename key). */
-  localId: string;
-  name: string;
-  /** Display name after the requested bulk rename (equals `name` by default). */
-  effectiveName: string;
-  nodeCount: number;
-  edgeCount: number;
-  /** Textual fallback for screen readers and unrenderable graphs. */
-  nodeSummary: Array<{ id: string; type: string; label: string }>;
-  /** Raw, non-executing ReactFlow payload. Null when the graph is malformed. */
-  graph: { nodes: unknown[]; edges: unknown[] } | null;
-  /** Why `graph` is null. */
-  graphError?: string;
-  references?: { flowIds?: string[]; modelIds?: string[]; mcpServerNames?: string[] };
-}
-
-/** A packaged planned execution + its trigger, described without secrets. */
-export interface PackageTriggerInfo {
-  /** Manifest execution name (stable rename key AND deterministic-id source). */
-  key: string;
-  name: string;
-  effectiveName: string;
-  triggerType: string;
-  /** Manifest-local flow id this execution runs. */
-  flowLocalId: string;
-  flowName?: string;
-  /** Planned executions are always installed disabled for review. */
-  enabledAfterInstall: false;
-  /** Safe key/value trigger configuration (tokens and secrets excluded). */
-  details: Array<{ label: string; value: string }>;
-}
-
-export interface PackageSecretInfo {
-  key: string;
-  description?: string;
-  required: boolean;
-  provided: boolean;
-  /** Entities that stop working (or install disabled) without this secret. */
-  usedBy: Array<{ type: PackageEntityType; name: string }>;
-}
-
-export interface PackageGlobalInfo {
-  name: string;
-  description?: string;
-  required: boolean;
-  isSecret: boolean;
-  /** True when this host already has the global set in Settings. */
-  present: boolean;
-  usedBy: Array<{ type: PackageEntityType; name: string }>;
-}
-
-export interface PackageIdentityInfo {
-  id: string;
-  name: string;
-  version: string;
-  description?: string;
-  author?: string;
-  publisher?: string;
-  tags: string[];
-}
-
-/** One ordered, user-visible installation step. */
-export type InstallStepStatus =
-  | 'ok'
-  | 'created'
-  | 'updated'
-  | 'adopted'
-  | 'skipped'
-  | 'disabled'
-  | 'failed';
-
-export type InstallStepPhase =
-  | 'manifest'
-  | 'server'
-  | 'model'
-  | 'flow'
-  | 'plannedExecution';
-
-export interface InstallStep {
-  /** 1-based position in the real execution order. */
-  order: number;
-  phase: InstallStepPhase;
-  entityType?: PackageEntityType;
-  name: string;
-  status: InstallStepStatus;
-  /** Persisted id / server name, when the step produced one. */
-  id?: string;
-  /** Sanitized reason — always present for skipped/disabled/failed steps. */
-  detail?: string;
-}
-
-export interface InstallPreview {
-  servers: Array<{
-    localName: string;
-    source: string;
-    requiredEnvMissing: string[];
-    installCommand?: string;
-    buildCommand?: string;
-  }>;
-  models: Array<{ id: string; displayName: string; apiKeyFrom?: string; missingRequiredSecret?: boolean }>;
-  installedModels: Array<{ id: string; displayName: string; name: string }>;
-  flows: Array<{ name: string }>;
-  plannedExecutions: Array<{ name: string }>;
-  secrets: Array<{ key: string; label?: string; required: boolean; provided: boolean }>;
-  /** Host-global declarations whose values may be collected before install. */
-  globals: NonNullable<FlujoPackage['globals']>;
-  /**
-   * `${global:VAR}` names this package expects the host to already have set
-   * (in Settings), that are NOT currently set. Unlike `secrets[]` these are
-   * host-level config, not something install can collect a value for — the
-   * consent screen surfaces them so the user knows to set them afterwards.
-   */
-  missingGlobals: string[];
-
-  // --- issue #407 inspection data (additive; always present on new servers) ---
-  /** Package identity/description metadata for the wizard header. */
-  info?: PackageIdentityInfo;
-  /** Full per-server metadata (superset of `servers[]`). */
-  serverDetails?: PackageServerInfo[];
-  /** Packaged flows with read-only graph payloads. */
-  flowDetails?: PackageFlowInfo[];
-  /** Packaged planned executions / triggers. */
-  triggerDetails?: PackageTriggerInfo[];
-  /** Declared secrets plus which entities depend on them. */
-  secretDetails?: PackageSecretInfo[];
-  /** Declared host globals plus which entities depend on them. */
-  globalDetails?: PackageGlobalInfo[];
-  /** Errors produced by validating the requested bulk-rename map. */
-  renameErrors?: string[];
-}
-
-export interface InstallSummary {
-  ok: boolean;
-  dryRun: boolean;
-  package?: { name: string; version: string; publisher?: string };
-  /** Present on a dry-run (consent preview). */
-  preview?: InstallPreview;
-  created: InstallEntityRef[];
-  updated: InstallEntityRef[];
-  skipped: InstallEntityRef[];
-  /** Entities installed but left disabled (missing required secret). */
-  disabled: InstallEntityRef[];
-  servers: InstallServerResult[];
-  errors: string[];
-  /** `requiredGlobals` names that are still unset on this host after install. */
-  missingGlobals: string[];
-  /**
-   * Ordered per-entity outcome of the real install (issue #407), in the exact
-   * order the orchestrator executed them. Every packaged entity appears here
-   * exactly once with a terminal status and — when not successful — a safe
-   * reason, so the wizard can show partial success honestly.
-   */
-  steps?: InstallStep[];
-}
 
 export interface InstallPackageInput {
   source: 'registry';
@@ -344,7 +137,8 @@ interface PackageInstallRecord {
     plannedExecutions: string[];
   };
   /**
-   * Per-entity provenance (issue #211): the ids the install NEWLY CREATED, as
+   * Per-entity provenance (issue #211): newly created ids, plus retained
+   * package-created flow ownership across re-installs, as
    * opposed to entities it merely adopted/updated in place (e.g. a pre-existing
    * model matched by displayName). Uninstall only deletes created entities.
    * Optional so ledgers written before this field (3.27.0) still parse.
@@ -358,6 +152,13 @@ interface PackageInstallRecord {
 }
 type PackageInstallsFile = Record<string, PackageInstallRecord>;
 type LedgerCreated = NonNullable<PackageInstallRecord['created']>;
+
+interface FlowInstallIdentity {
+  idMap: Record<string, string>;
+  retainedIds: Record<string, string>;
+  existingIds: ReadonlySet<string>;
+  ownedCreatedIds: ReadonlySet<string>;
+}
 
 // ---------------------------------------------------------------------------
 // Uninstall (issue #211)
@@ -412,18 +213,6 @@ function slug(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-function shortHash(value: string): string {
-  return createHash('sha1').update(value).digest('hex').slice(0, 8);
-}
-
-/** Flow ids must match /^[A-Za-z0-9_-]{1,64}$/ (assertSafeCollectionId). */
-export function deterministicFlowId(packageName: string, localId: string): string {
-  const base = `pkg-${slug(packageName)}-${slug(localId)}`;
-  const safe = base.replace(/[^A-Za-z0-9_-]/g, '-');
-  if (safe.length <= 64) return safe;
-  return `${safe.slice(0, 55)}-${shortHash(`${packageName}::${localId}`)}`;
-}
-
 /** Planned-execution ids allow /^[A-Za-z0-9._:-]{1,128}$/. */
 export function deterministicExecutionId(packageName: string, name: string): string {
   const base = `pkg-${slug(packageName)}-${slug(name)}`;
@@ -474,11 +263,8 @@ function resolveSecretPlaceholders<T>(value: T, secrets: Record<string, string>)
   }
   if (Array.isArray(value)) return value.map((v) => resolveSecretPlaceholders(v, secrets)) as unknown as T;
   if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = resolveSecretPlaceholders(v, secrets);
-    }
-    return out as unknown as T;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key, resolveSecretPlaceholders(item, secrets)])) as T;
   }
   return value;
 }
@@ -504,8 +290,8 @@ async function computeMissingGlobals(manifest: Pick<FlujoPackage, 'requiredGloba
 
 /** Keep only well-formed string entries so a hostile body cannot smuggle values in. */
 function sanitizeRenameRecord(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (typeof entry === 'string') out[key] = entry.trim();
   }
@@ -530,7 +316,7 @@ function executionRenameCandidates(manifest: FlujoPackage): RenameCandidate[] {
 
 /**
  * Re-run the wizard's rename validation on the server. Host entities this
- * package already owns (deterministic ids) are excluded from the collision set
+ * package already owns (unambiguous ledger mappings) are excluded from the collision set
  * so a re-install never collides with itself.
  */
 async function collectRenameErrors(
@@ -544,7 +330,11 @@ async function collectRenameErrors(
 
   let existingFlowNames: string[] = [];
   try {
-    const ownedFlowIds = new Set(flowCandidates.map((c) => deterministicFlowId(manifest.name, c.key)));
+    const ledger = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const owned = Object.hasOwn(ledger, manifest.name) ? ledger[manifest.name].entities?.flows ?? {} : {};
+    const ownedFlowIds = new Set(Object.entries(owned)
+      .filter(([localId, flowId]) => !hasConflictingFlowClaim(ledger, manifest.name, localId, flowId))
+      .map(([, flowId]) => flowId));
     const flows = await flowService.loadFlows();
     existingFlowNames = (flows ?? [])
       .filter((f) => !ownedFlowIds.has(f.id))
@@ -806,6 +596,29 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     return s;
   }
 
+  // Resolve every flow identity before installing servers/models or changing
+  // schedules. Retained legacy IDs remain valid only for one recorded owner.
+  let flowIdentity: FlowInstallIdentity;
+  try {
+    const ledger = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const previous = Object.hasOwn(ledger, manifest.name) ? ledger[manifest.name] : undefined;
+    const existingIds = new Set((await flowService.loadFlows()).map((flow) => flow.id));
+    const retainedIds = resolvePackageFlowIds(manifest.name, Object.keys(previous?.entities?.flows ?? {}), ledger, existingIds);
+    const retainedFlowIds = new Set(Object.values(retainedIds));
+    const previouslyCreated = previous?.created === undefined ? [...retainedFlowIds] : previous.created.flows;
+    flowIdentity = {
+      idMap: resolvePackageFlowIds(manifest.name, (manifest.flows ?? []).map((flow) => flow.flow.id), ledger, existingIds),
+      retainedIds,
+      existingIds,
+      ownedCreatedIds: new Set(previouslyCreated.filter((id) => retainedFlowIds.has(id))),
+    };
+  } catch {
+    const s = empty();
+    s.dryRun = false;
+    s.errors.push('Package flow identities conflict or their ownership could not be verified.');
+    return s;
+  }
+
   const installedModels = await modelService.loadModels();
   const packageModelIds = new Set((manifest.models ?? []).map((model) => model.id));
   const installedModelsById = new Map(installedModels.map((model) => [model.id, model]));
@@ -837,15 +650,16 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   const resolvedModels = (manifest.models ?? []).map((m) => resolveSecretPlaceholders(m, secrets));
   const resolvedFlows = (manifest.flows ?? []).map((f) => resolveSecretPlaceholders(f, secrets));
   const resolvedPlannedExecutions = (manifest.plannedExecutions ?? []).map((p) => resolveSecretPlaceholders(p, secrets));
+  const publicFlows = (manifest.flows ?? []).map((f) => ({ id: f.flow.id, name: f.flow.name }));
 
   const ledgerEntities: PackageInstallRecord['entities'] = {
-    flows: {},
-    models: {},
+    flows: Object.assign(Object.create(null), flowIdentity.retainedIds),
+    models: Object.create(null),
     servers: [],
     plannedExecutions: [],
   };
   const ledgerCreated: LedgerCreated = {
-    flows: [],
+    flows: [...flowIdentity.ownedCreatedIds],
     models: [],
     servers: [],
     plannedExecutions: [],
@@ -888,9 +702,10 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   //    so flow nodes' `properties.boundModel` (which binds by id) can be
   //    remapped in step 6 — otherwise every process node bound to a packaged
   //    model comes out "unbound" after install (the model gets a fresh id).
-  const modelIdMap: Record<string, { id: string; name: string }> = {};
+  const modelIdMap: Record<string, { id: string; name: string }> = Object.create(null);
   for (const model of resolvedModels) {
-    const mappedModelId = input.modelMappings?.[model.id];
+    const mappedModelId = input.modelMappings && Object.prototype.hasOwnProperty.call(input.modelMappings, model.id)
+      ? input.modelMappings[model.id] : undefined;
     if (mappedModelId) {
       const mappedModel = installedModelsById.get(mappedModelId)!;
       modelIdMap[model.id] = { id: mappedModel.id, name: mappedModel.name };
@@ -917,11 +732,11 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
-  const flowIdMap = await installFlows(manifest.name, resolvedFlows, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
+  const flowIdMap = await installFlows(manifest.name, resolvedFlows, publicFlows, flowIdentity, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
 
   // 7. Planned executions — remapped flowId, created DISABLED.
-  for (const pe of resolvedPlannedExecutions) {
-    await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities, ledgerCreated, executionRenames);
+  for (const [index, pe] of resolvedPlannedExecutions.entries()) {
+    await installPlannedExecution(pe, manifest.name, manifest.plannedExecutions[index].name, flowIdMap, summary, ledgerEntities, ledgerCreated, executionRenames);
   }
 
   // 7b. Ordered, per-entity outcomes for the install wizard.
@@ -932,7 +747,8 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 
   // 8. Persist the ledger (idempotency + last-summary for the status endpoint).
   try {
-    const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const stored = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const file: PackageInstallsFile = Object.assign(Object.create(null), stored);
     file[manifest.name] = {
       packageName: manifest.name,
       version: manifest.version,
@@ -952,7 +768,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 /** Read the last recorded install summary for a package (status endpoint). */
 export async function getLastInstallSummary(packageName: string): Promise<InstallSummary | null> {
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-  return file[packageName]?.summary ?? null;
+  return Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName]?.summary ?? null : null;
 }
 
 /** List every installed package recorded in the ledger (for the UI list). */
@@ -1010,7 +826,7 @@ export async function inspectPackageUninstall(
   packageName: string,
 ): Promise<PackageUninstallInspection> {
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-  const record = file[packageName];
+  const record = Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName] : undefined;
   if (!record) return { exists: false, requiresPersonaControl: false };
   return {
     exists: true,
@@ -1044,7 +860,7 @@ export async function uninstallPackage(
   };
 
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-  const record = file[packageName];
+  const record = Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName] : undefined;
   if (!record) {
     // Unknown package / already uninstalled: clean no-op.
     return summary;
@@ -1062,6 +878,16 @@ export async function uninstallPackage(
       id: 'protected',
       reason: 'Persona-targeted planned executions require strict-loopback control.',
     });
+    return summary;
+  }
+
+  // A colliding legacy ID can be referenced by several installs. Retain all
+  // entities and the ledger rather than deleting an arbitrarily chosen owner.
+  if (Object.entries(record.entities?.flows ?? {}).some(([localId, flowId]) =>
+    hasConflictingFlowClaim(file, packageName, localId, flowId))) {
+    summary.ok = false;
+    summary.hasErrors = true;
+    summary.errors.push({ kind: 'flow', id: 'conflicting', reason: 'Package flow ownership requires reconciliation before uninstall.' });
     return summary;
   }
 
@@ -2054,6 +1880,8 @@ async function installModel(
 async function installFlows(
   packageName: string,
   flows: PackagedFlow[],
+  publicFlows: Array<{ id: string; name: string }>,
+  identity: FlowInstallIdentity,
   modelIdMap: Record<string, { id: string; name: string }>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
@@ -2061,32 +1889,29 @@ async function installFlows(
   /** Manifest-local flow id -> requested display name (issue #407). */
   flowRenames: Record<string, string> = {},
 ): Promise<Record<string, string>> {
-  // Build the manifest-local-id -> installed-id map first, so cross-flow
-  // (subflow) references can be remapped regardless of flow order.
-  const idMap: Record<string, string> = {};
-  for (const f of flows) {
-    idMap[f.flow.id] = deterministicFlowId(packageName, f.flow.id);
-  }
+  const { idMap, existingIds, ownedCreatedIds } = identity;
 
-  const existingIds = new Set((await flowService.loadFlows()).map((f) => f.id));
-
-  for (const packagedFlow of flows) {
-    const localId = packagedFlow.flow.id;
+  for (const [index, packagedFlow] of flows.entries()) {
+    const publicFlow = publicFlows[index];
+    const localId = publicFlow.id;
     const newId = idMap[localId];
     const flow = remapFlow(packagedFlow, newId, idMap, modelIdMap);
     flow.folder = packageName;
     // Display-name-only rename: the deterministic id above is derived from the
     // manifest-local id, so renaming never breaks reinstall / uninstall.
-    const displayName = effectiveName(flowRenames, localId, packagedFlow.flow.name);
+    const displayName = effectiveName(flowRenames, localId, publicFlow.name);
     flow.name = displayName;
     const wasPresent = existingIds.has(newId);
     const res = await flowService.saveFlow(flow);
     if (res.success) {
       ledgerEntities.flows[localId] = newId;
       const ref: InstallEntityRef = { type: 'flow', name: displayName, id: newId };
-      if (wasPresent) summary.updated.push(ref);
+      if (wasPresent) {
+        if (ownedCreatedIds.has(newId) && !ledgerCreated.flows.includes(newId)) ledgerCreated.flows.push(newId);
+        summary.updated.push(ref);
+      }
       else {
-        ledgerCreated.flows.push(newId);
+        if (!ledgerCreated.flows.includes(newId)) ledgerCreated.flows.push(newId);
         summary.created.push(ref);
       }
     } else {
@@ -2137,6 +1962,7 @@ function remapFlow(
 async function installPlannedExecution(
   pe: PackagedPlannedExecution,
   packageName: string,
+  publicName: string,
   flowIdMap: Record<string, string>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
@@ -2148,8 +1974,8 @@ async function installPlannedExecution(
   // The deterministic id stays derived from the ORIGINAL manifest name so a
   // renamed execution still updates in place on re-install and is still found
   // by uninstall. Only the display name changes.
-  const id = deterministicExecutionId(packageName, pe.name);
-  const displayName = effectiveName(executionRenames, pe.name, pe.name);
+  const id = deterministicExecutionId(packageName, publicName);
+  const displayName = effectiveName(executionRenames, publicName, publicName);
   const mappedFlowId = flowIdMap[pe.flowId] ?? pe.flowId;
 
   // Re-check at the mutation boundary to close a concurrent retarget between

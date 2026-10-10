@@ -1,6 +1,8 @@
 import OpenAI from 'openai';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
+import { supportsMcpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
 import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
@@ -89,6 +91,15 @@ export interface ModelSteering {
 }
 
 export interface CompletionInput {
+  /** Internal restrictive request policy: one non-streaming, tool-free text attempt.
+   * Callers own the deadline controller and final response byte/schema limits. */
+  readOnlyAssessment?: boolean;
+  directCompletion?: boolean;
+  temperatureOverride?: number;
+  /** Re-check execution authority immediately before every policy member. */
+  beforeModelDispatch?: () => Promise<void>;
+  /** Metadata only, used to attribute native dispatches and usage correctly. */
+  onRoutingModel?: (model: Model) => Promise<void>;
   /** The model record (used for name, baseUrl, provider, adapter, ...). */
   model: Model;
   /** The decrypted API key / OAuth token. Never log this. */
@@ -109,6 +120,15 @@ export interface CompletionInput {
     dispatchId: string;
     outcome: 'completed' | 'error' | 'cancelled';
   }) => Promise<void>;
+  /** Strict native-only: first event actually observed from the original SDK
+   * stream. It does not prove a host handle survives a process restart. */
+  onNativeSdkLive?: () => Promise<void>;
+  /** Strict native-only: original SDK stream has ended, before durable outcome acknowledgement. */
+  onNativeSdkFinished?: () => void;
+  /** Runtime-only, origin-owned policy port. A JSON value cannot satisfy its
+   *  module-private capability check in either native adapter. */
+  nativeToolPort?: NativeToolPort;
+  nativeOriginalProcessHost?: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -218,6 +238,7 @@ export interface CompletionInput {
   signal?: AbortSignal;
   /** Runtime-only lease/fence assertion immediately before a tool side effect. */
   beforeToolDispatch?: () => Promise<void>;
+  executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   /** Call-time authorization for Persona Core-injected MCP handles. */
   authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
   /** Runtime-only lease/generation assertion immediately after a long tool call. */
@@ -289,6 +310,33 @@ export interface CompletionInput {
   promptCacheMode?: 'explicit';
 }
 
+export interface NativeToolPortResult {
+  result: import('@modelcontextprotocol/sdk/types.js').CallToolResult;
+  transcriptText: string;
+  kind: 'mcp' | 'synthetic' | 'handoff';
+  ui?: NonNullable<FlujoChatMessage['ui']>;
+}
+
+export interface NativeToolPort {
+  readonly invocationId: string;
+  readonly inventoryDigest: string;
+  /** Confirm deferred handoff receipts only after the owned SDK process closes. */
+  confirmHandoffTermination?(toolInvocationIds: readonly string[]): Promise<void>;
+  readonly advertised: ReadonlyArray<{
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+    annotations?: ToolAnnotations;
+  }>;
+  dispatch(input: {
+    toolInvocationId: string;
+    name: string;
+    args: Record<string, unknown>;
+    signal: AbortSignal;
+  }): Promise<NativeToolPortResult>;
+  cancel(): void;
+}
+
 /**
  * What an adapter returns. The OpenAI-shaped `completion` carries the final
  * answer + usage + any routing tool_calls (so downstream consumers work
@@ -298,6 +346,9 @@ export interface CompletionInput {
  * them in the conversation. Request/response adapters omit it.
  */
 export interface CompletionResult {
+  /** True only after the original native SDK emitted its terminal turn/result. */
+  nativeSdkTerminal?: boolean;
+  routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
   completion: OpenAI.Chat.Completions.ChatCompletion;
   /** null means the adapter cannot report current context; usage is not a substitute. */
   contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;
@@ -329,6 +380,23 @@ export interface CompletionAdapter {
   createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
 }
 
+/** Reject authority-bearing inputs before any client, lookup, or remote request. */
+export function assertReadOnlyAssessmentInput(input: CompletionInput): void {
+  if (!input.readOnlyAssessment) return;
+  if (!supportsMcpModelRiskAssessment(input.model) || !input.signal
+    || !Number.isSafeInteger(input.maxTokens) || input.maxTokens! < 1 || input.maxTokens! > 4096
+    || input.tools !== undefined || input.toolNameMap !== undefined || input.localToolExecutors !== undefined
+    || input.nativeToolPort || input.nativeOriginalProcessHost || input.executionExtensionContext
+    || input.beforeToolDispatch || input.afterToolDispatch || input.requestToolApproval || input.authorizePersonaCoreMcp
+    || input.conversationId || input.nodeId || input.sessionResume || input.codexSession || input.steering
+    || input.consumeSteeringMessages || input.runResourceMarkers
+    || input.messages.some(message => !['system', 'developer', 'user'].includes(message.role)
+      || typeof message.content !== 'string')) {
+    throw new Error('Read-only assessment requires a bounded, cancellable, tool-free text request.');
+  }
+  input.signal.throwIfAborted();
+}
+
 /**
  * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
  * failures remain best-effort, except a lost execution fence: an obsolete
@@ -344,6 +412,7 @@ export async function observeSdkRequest<T>(
   try {
     dispatchId = await input.onSdkRequest?.(snapshot);
   } catch (error) {
+    if (error instanceof ModelTurnArchiveMemoryError) throw error;
     rethrowFlowExecutionAuthorityError(error);
     dispatchId = undefined;
   }

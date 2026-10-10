@@ -596,3 +596,10 @@ export function stopPersonaGoalRuntime(): void {
   current.timer?.clear();
   current.timer = undefined;
 }
+
+export async function stopAndDrainPersonaGoalRuntime(): Promise<void> {
+  stopPersonaGoalRuntime();
+  // A timer callback may already be reading or writing this workspace. Drain
+  // it before workspace retirement removes the namespace beneath it.
+  await runtime().running;
+}

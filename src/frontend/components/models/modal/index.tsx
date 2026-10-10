@@ -36,6 +36,9 @@ import {
   getProviderProfile,
   resolveModelAdapter,
   supportsProviderModelDiscovery,
+  supportsLocalModelAuth,
+  ANTIGRAVITY_CLI_API_KEY_MODELS,
+  getAntigravityCliModelLabel,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
@@ -309,6 +312,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     fetchModels,
   ]);
 
+  // Refresh the live Codex catalogue while the editor is open.
+  useEffect(() => {
+    if (!open || currentProfile.id !== 'codex') return;
+    // Pick up account/catalogue changes and a completed background CLI update.
+    const interval = setInterval(() => {
+      fetchModels('', undefined, 'codex', discoveryCredential);
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [open, currentProfile.id, discoveryCredential, fetchModels]);
+
   // Cleanup timeout on component unmount
   useEffect(() => {
     return () => {
@@ -342,7 +355,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         // Otherwise, mask the existing API key
         setFormState(prev => ({
           ...prev,
-          ApiKey: !model.name ? '' : MASKED_API_KEY
+          ApiKey: !model.name || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim())
+            ? '' : MASKED_API_KEY
         }));
       }
     } else {
@@ -377,6 +391,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     formState.adapter,
     formState.name,
   );
+  const discoveredEfforts = openRouterModels.find(candidate => candidate.id === formState.name)?.reasoningEfforts;
+  if (currentProfile.id === 'codex' && discoveredEfforts?.length) {
+    configurationCapabilities.effortLevels = discoveredEfforts as NonNullable<typeof configurationCapabilities.effortLevels>;
+  }
   const visibleProviderModels = useMemo(
     () => settings?.experimental?.showModelsWithoutToolCapabilities
       ? openRouterModels
@@ -389,13 +407,28 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const handleSelectProfile = (profileId: string) => {
     const profile = PROVIDER_PROFILES.find(p => p.id === profileId);
     if (!profile) return;
-    setFormState(prev => ({
-      ...prev,
-      provider: profile.provider,
-      adapter: profile.adapter,
-      baseUrl: profile.baseUrl,
-      azureApiVersion: profile.defaultApiVersion ?? '',
-    }));
+    setFormState(prev => {
+      const previousAdapter = resolveModelAdapter(prev.provider, prev.adapter);
+      const leavesAntigravityCli = previousAdapter === 'antigravity-cli' && profile.adapter !== 'antigravity-cli';
+      return {
+        ...prev,
+        provider: profile.provider,
+        adapter: profile.adapter,
+        baseUrl: profile.baseUrl,
+        azureApiVersion: profile.defaultApiVersion ?? '',
+        ...(leavesAntigravityCli ? {
+          // Remove only the restrictions imposed by the CLI profile. Other
+          // provider changes retain discovered or explicitly saved metadata.
+          inputModalities: prev.inputModalities?.length === 1 && prev.inputModalities[0] === 'text'
+            ? undefined : prev.inputModalities,
+          visionInputCapability: prev.visionInputCapability === 'unsupported'
+            ? undefined : prev.visionInputCapability,
+        } : {}),
+        ...(profile.adapter === 'antigravity-cli'
+          ? { inputModalities: ['text'], visionInputCapability: 'unsupported' as const, supportsTools: true }
+          : {}),
+      };
+    });
     setErrors(prev => ({ ...prev, baseUrl: '' }));
   };
 
@@ -465,8 +498,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         });
       }
     }
-    // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
-    if (!isApiKeyBound && !formState.ApiKey?.trim() && currentProfile.adapter !== 'codex-cli') {
+    // Local-auth CLI profiles can use the login on the host running FLUJO.
+    if (!isApiKeyBound && !formState.ApiKey?.trim() && !supportsLocalModelAuth(currentProfile.adapter)) {
       newErrors.ApiKey = t('models.modal.apiKeyRequired');
     }
 
@@ -643,7 +676,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     ? ` ${t('models.modal.claudeAuthHelp')}`
                     : currentProfile.adapter === 'codex-cli'
                       ? ` ${t('models.modal.codexAuthHelp')}`
-                      : ''}
+                      : currentProfile.adapter === 'antigravity-cli'
+                        ? ` ${t('models.modal.antigravityCliAuthHelp')}`
+                        : ''}
                 </Typography>
 
                 {currentProfile.showBaseUrl && (
@@ -686,14 +721,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     margin="dense"
                     label={t('models.modal.apiKey')}
                     fullWidth
-                    required={!isApiKeyBound && currentProfile.adapter !== 'codex-cli'}
+                    required={!isApiKeyBound && !supportsLocalModelAuth(currentProfile.adapter)}
                     type={isApiKeyBound ? "text" : "password"}
                     value={formState.ApiKey || ''}
                     onChange={(e) => handleChange('ApiKey', e.target.value)}
                     error={!!errors.ApiKey}
                     helperText={errors.ApiKey || (currentProfile.adapter === 'codex-cli'
                       ? t('models.modal.apiKeyOptionalCodex')
-                      : t('models.modal.apiKeyRequiredProvider'))}
+                      : currentProfile.adapter === 'antigravity-cli'
+                        ? t('models.modal.apiKeyOptionalAntigravityCli')
+                        : t('models.modal.apiKeyRequiredProvider'))}
                     InputProps={{
                       readOnly: isApiKeyBound,
                       endAdornment: (
@@ -727,8 +764,15 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   options={
                     canDiscoverProviderModels && visibleProviderModels.length > 0
                       ? visibleProviderModels.map(model => model.id)
-                      : (currentProfile.defaultModels ?? [])
+                      : currentProfile.adapter === 'antigravity-cli' && (isApiKeyBound || formState.ApiKey?.trim())
+                        ? [...ANTIGRAVITY_CLI_API_KEY_MODELS]
+                        : (currentProfile.defaultModels ?? [])
                   }
+                  groupBy={currentProfile.adapter === 'antigravity-cli'
+                    ? option => option === 'default' ? t('models.modal.antigravityCli.defaultGroup')
+                      : option.startsWith('gemini-') ? 'Gemini'
+                        : option.startsWith('claude-') ? 'Claude' : 'GPT-OSS'
+                    : undefined}
                   value={formState.name || ''}
                   onChange={(_, newValue) => {
                     const selected = openRouterModels.find(candidate => candidate.id === newValue);
@@ -792,7 +836,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       error={!!errors.name}
                       helperText={errors.name || (currentProfile.adapter === 'azure'
                         ? t('models.modal.azureDeploymentHelp')
-                        : t('models.modal.technicalNameHelp'))}
+                        : currentProfile.adapter === 'antigravity-cli'
+                          ? t('models.modal.antigravityCli.modelHelp')
+                          : t('models.modal.technicalNameHelp'))}
                       InputProps={{
                         ...params.InputProps,
                         endAdornment: (
@@ -811,7 +857,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     return (
                       <li key={key} {...otherProps} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)', padding: '8px 16px' }}>
                         <Box>
-                          <Typography variant="body1" fontWeight="bold">{option}</Typography>
+                          <Typography variant="body1" fontWeight="bold">{currentProfile.adapter === 'antigravity-cli' ? getAntigravityCliModelLabel(option) : option}</Typography>
+                          {currentProfile.adapter === 'antigravity-cli' && <Typography variant="caption" color="text.secondary">{option}</Typography>}
                           {model?.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
                               {model.description}

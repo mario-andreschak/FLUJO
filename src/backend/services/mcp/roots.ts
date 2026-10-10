@@ -1,3 +1,4 @@
+import { registerTaskInputHandler } from './taskInputHandlers';
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
@@ -7,6 +8,9 @@ import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { StorageKey, type Settings } from '@/shared/types/storage';
+import { isMcpTransport } from './transportAdmission';
+import { assertHostMcpLaunchAllowed } from './isolation';
+import { getManagedTrustedHost } from './trustedHost';
 import {
   bindToCurrentWorkspace,
   DEFAULT_WORKSPACE,
@@ -269,23 +273,22 @@ export async function resolveServerRoots(
 /**
  * The freshest config for a server: re-read from storage by name so a roots or rootPath
  * edit made AFTER connect is served correctly (roots changes never rebuild the client,
- * so the closed-over connect-time config can go stale). Falls back to the connect-time
- * config when storage can't provide one (e.g. load failure, or a rename that is about
- * to reconnect anyway).
+ * so the closed-over connect-time config can go stale). A missing or invalid current
+ * config cannot authorize host roots through that stale snapshot.
  */
-async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPServerConfig> {
+async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPServerConfig | undefined> {
   try {
     // Dynamic import to keep module init order flat (roots.ts is imported by connection.ts).
     const { loadServerConfigs } = await import('./config');
     const configs = await loadServerConfigs();
     if (Array.isArray(configs)) {
       const current = configs.find((c) => c.name === connectTimeConfig.name);
-      if (current) return current;
+      if (current && isMcpTransport(current.transport)) return current;
     }
-  } catch (error) {
-    log.warn(`Could not re-load config for ${connectTimeConfig.name}, using connect-time config:`, error);
+  } catch {
+    log.warn(`Could not re-load config for ${connectTimeConfig.name}; roots/list denied`);
   }
-  return connectTimeConfig;
+  return undefined;
 }
 
 /**
@@ -295,8 +298,46 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
  * live — so they always reflect the current state without ever needing a
  * reconnect.
  */
-export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
+export function createRootsListHandler(config: MCPServerConfig,
+  owner?: { readonly transport?: unknown; close(): Promise<void> },
+): () => Promise<{ roots: Root[] }> {
   return bindToCurrentWorkspace(async () => {
+    // Container paths are granted by the private OS policy. Do not advertise
+    // installation roots or interpolate host secrets into an isolated server.
+    if (config.isolation !== undefined) return { roots: [] };
+    const current = await freshestConfig(config);
+    if (!current || current.disabled || current.isolation !== undefined) {
+      if (getManagedTrustedHost(owner?.transport)) {
+        getManagedTrustedHost(owner?.transport)!.retire();
+        try { await owner?.close(); } catch { /* retain lifecycle cleanup uncertainty */ }
+      }
+      return { roots: [] };
+    }
+    if (config.trustedHost !== undefined || current.trustedHost !== undefined) {
+      try {
+        const managed = owner && getManagedTrustedHost(owner.transport);
+        if (!managed || current.transport !== 'stdio' || managed.serverName !== config.name) throw new Error();
+        await managed.assertCurrent(current);
+        // Trusted host roots describe only the exact approved server request.
+        // Workspace/node overlays and shared-secret interpolation are not grants.
+        const entries = current.roots?.length ? current.roots : current.rootPath ? [current.rootPath] : [];
+        const seen = new Set<string>();
+        const roots: Root[] = [];
+        for (const entry of entries) {
+          const uri = normalizeRootUri(entry);
+          if (uri && !seen.has(uri)) { seen.add(uri); roots.push({ uri, name: rootName(uri) }); }
+        }
+        return { roots };
+      } catch {
+        getManagedTrustedHost(owner?.transport)?.retire();
+        try { await owner?.close(); } catch { /* retain lifecycle cleanup uncertainty */ }
+        return { roots: [] };
+      }
+    }
+    if (current.transport === 'stdio') {
+      try { assertHostMcpLaunchAllowed(current); }
+      catch { return { roots: [] }; }
+    }
     const [restricted, workspaceRoots] = await Promise.all([
       loadMcpRootsRestriction(),
       loadWorkspaceRoots(),
@@ -304,7 +345,7 @@ export function createRootsListHandler(config: MCPServerConfig): () => Promise<{
     // Choosing workspace folders is itself an explicit scope. Preserve the
     // legacy unrestricted-host behavior only while no workspace scope exists.
     const roots = restricted || workspaceRoots.length > 0
-      ? await resolveServerRoots(await freshestConfig(config), workspaceRoots)
+      ? await resolveServerRoots(current, workspaceRoots)
       : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
@@ -317,5 +358,7 @@ export function createRootsListHandler(config: MCPServerConfig): () => Promise<{
  * capability is always declared).
  */
 export function registerRootsHandler(client: Client, config: MCPServerConfig): void {
-  client.setRequestHandler(ListRootsRequestSchema, createRootsListHandler(config));
+  const handler = createRootsListHandler(config, client);
+  registerTaskInputHandler(client, 'roots/list', handler);
+  client.setRequestHandler(ListRootsRequestSchema, handler);
 }

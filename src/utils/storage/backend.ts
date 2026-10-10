@@ -1,10 +1,16 @@
-import { promises as fs } from 'fs';
+import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
+import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
+import { withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
+import { readPlainFile } from '@/utils/readPlainFile';
+import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
-import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
+import { withWorkspaceMutation, assertWorkspaceMutationOwned } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('utils/storage/backend');
 
@@ -103,8 +109,6 @@ export async function verifyStorage(): Promise<void> {
 // Per-key write chains so same-key writes run one at a time. Different keys
 // still write concurrently.
 const writeChains = new Map<string, Promise<unknown>>();
-// Monotonic counter to keep temp file names unique within this process.
-let tmpCounter = 0;
 
 // Windows has no share-mode equivalent of POSIX's "rename over an open file is
 // fine": libuv opens files WITHOUT FILE_SHARE_DELETE, so while any reader in
@@ -123,9 +127,10 @@ const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const MAX_RENAME_ATTEMPTS = 15;
 const MAX_RENAME_BACKOFF_MS = 100;
 
-async function renameWithRetry(tmpPath: string, filePath: string): Promise<void> {
+async function renameWithRetry(tmpPath: string, filePath: string, validate: () => Promise<void>): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
+      await validate();
       await fs.rename(tmpPath, filePath);
       return;
     } catch (renameError) {
@@ -139,25 +144,99 @@ async function renameWithRetry(tmpPath: string, filePath: string): Promise<void>
   }
 }
 
-export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
+export async function writeFileAtomic(filePath: string, data: string, assertCurrent?: () => Promise<void>): Promise<void> {
+  await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
+    await assertCredentialStoreReady(filePath);
+    await assertWorkspaceMutationOwned();
     const dirPath = path.dirname(filePath);
+    await assertBundledFlujoWorkloadEffectCurrent();
+    if (assertCurrent) {
+      await assertCurrent();
+      await assertWorkspaceMutationOwned();
+      await assertBundledFlujoWorkloadEffectCurrent();
+    }
     await fs.mkdir(dirPath, { recursive: true });
+    const directory = await fs.lstat(dirPath, { bigint: true });
+    const canonicalDirectory = await fs.realpath(dirPath);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Atomic write parent is unsafe');
     // Temp file lives next to the target (same filesystem) so rename is atomic.
-    const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
+    const tmpPath = `${filePath}.tmp.${randomUUID()}`;
+    let created = false;
+    let owned: BigIntStats | undefined;
     try {
-      await fs.writeFile(tmpPath, data);
-      await renameWithRetry(tmpPath, filePath);
+      await assertWorkspaceMutationOwned();
+      await assertBundledFlujoWorkloadEffectCurrent();
+      if (assertCurrent) {
+        await assertCurrent();
+        await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+      }
+      const handle = await fs.open(tmpPath, 'wx', 0o600);
+      created = true;
+      try {
+        owned = await handle.stat({ bigint: true });
+        await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+        if (assertCurrent) {
+          await assertCurrent();
+          await assertWorkspaceMutationOwned();
+          await assertBundledFlujoWorkloadEffectCurrent();
+        }
+        await handle.writeFile(data);
+        await assertWorkspaceMutationOwned();
+        await handle.sync();
+        await assertWorkspaceMutationOwned();
+        owned = await handle.stat({ bigint: true });
+      } finally { await handle.close(); }
+      await renameWithRetry(tmpPath, filePath, async () => {
+        const witnesses = await Promise.allSettled([
+          fs.lstat(tmpPath, { bigint: true }),
+          fs.lstat(dirPath, { bigint: true }),
+          fs.realpath(dirPath),
+        ]);
+        const [fileWitness, parentWitness, canonicalWitness] = witnesses;
+        if (fileWitness.status === 'rejected') throw fileWitness.reason;
+        if (parentWitness.status === 'rejected') throw parentWitness.reason;
+        if (canonicalWitness.status === 'rejected') throw canonicalWitness.reason;
+        const current = fileWitness.value;
+        const parent = parentWitness.value;
+        const canonicalParent = canonicalWitness.value;
+        if (!owned || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
+            || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size
+            || current.mtimeNs !== owned.mtimeNs || current.ctimeNs !== owned.ctimeNs
+            || current.mode !== owned.mode || current.uid !== owned.uid || current.gid !== owned.gid
+            || !parent.isDirectory() || parent.isSymbolicLink() || parent.dev !== directory.dev
+            || parent.ino !== directory.ino || parent.mode !== directory.mode || parent.uid !== directory.uid
+            || parent.gid !== directory.gid || canonicalParent !== canonicalDirectory) {
+          throw new Error('Atomic write file or parent changed');
+        }
+        await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+        if (assertCurrent) {
+          await assertCurrent();
+          await assertWorkspaceMutationOwned();
+          await assertBundledFlujoWorkloadEffectCurrent();
+        }
+      });
+      created = false;
+      await assertWorkspaceMutationOwned();
     } catch (error) {
       // Best-effort cleanup so a failed write doesn't leave temp files behind.
-      try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }
+      if (created) {
+        try {
+          const current = await fs.lstat(tmpPath, { bigint: true });
+          if (owned && current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) await fs.unlink(tmpPath);
+        } catch { /* never clean up an unowned replacement */ }
+      }
       throw error;
     }
   });
 }
 
-export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
+export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () => Promise<void>): Promise<void> {
   const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     // Serialize against any in-flight write for the same key. We chain off the
     // previous write (ignoring its outcome) so a failure doesn't wedge the key.
@@ -168,7 +247,7 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
     const previous = writeChains.get(chainKey) ?? Promise.resolve();
     const run = previous
       .catch(() => { /* prior write's error is surfaced to its own caller */ })
-      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
+      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2), assertCurrent));
     writeChains.set(chainKey, run);
 
     try {
@@ -186,7 +265,29 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
   });
 }
 
+/** Authoritative ordinary-backup read: absent files are empty; interrupted or corrupt files fail. */
+export async function loadItemForBackup<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultValue;
+    throw error;
+  }
+  if (!content.trim()) throw new Error('Backup storage item is empty');
+  return JSON.parse(content) as T;
+}
+
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  // Returned conversation values become caller-owned once this read scope ends.
+  if (key.startsWith('conversations/')) {
+    return withConversationSnapshot<T, T>(key.slice('conversations/'.length), async state => state === undefined ? defaultValue : state);
+  }
+  // Outside tolerant recovery: a pending migration must never look like empty data.
+  await assertCredentialStoreReady(getFilePath(key));
   try {
     await ensureStorageDir();
     const filePath = getFilePath(key);
@@ -235,9 +336,46 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
   }
 }
 
+/** Opt-in conversation hydration: reserve before materialization and retain through adoption.
+ * The descriptor is closed before parsing/consumer work so recovery writes can rename on Windows.
+ */
+export async function withConversationSnapshot<T, R>(conversationId: string,
+  consume: (state: T | undefined, reservation: ConversationReadReservation) => Promise<R>): Promise<R> {
+  assertSafeCollectionId(conversationId);
+  const key = `conversations/${conversationId}` as StorageKey;
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let expected: BigIntStats;
+  try { expected = await fs.lstat(filePath, { bigint: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return withConversationLogReadAdmission(0, reservation => consume(undefined, reservation));
+    }
+    throw error;
+  }
+  const size = Number(expected.size);
+  return withConversationLogReadAdmission(size, async reservation => {
+    const content = (await readPlainFile(filePath, { expected })).toString('utf8');
+    if (!content.trim()) return consume(undefined, reservation);
+    let state: T;
+    try { state = JSON.parse(content) as T; }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      const backupPath = `${filePath}.corrupted.${Date.now()}.bak`;
+      try { await fs.writeFile(backupPath, content); }
+      catch (backupError) { log.error('Failed to back up corrupted conversation snapshot:', backupError); }
+      throw new Error(`Failed to parse JSON from ${filePath}. A backup has been created at ${backupPath}. Original error: ${error.message}`);
+    }
+    return consume(state, reservation);
+  });
+}
+
 export async function clearItem(key: StorageKey): Promise<void> {
   const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
+    await assertCredentialStoreReady(filePath);
     try {
       await fs.unlink(filePath);
       log.verbose(`Successfully cleared item: ${filePath}`); // Added verbose log
@@ -385,23 +523,8 @@ async function assertLinkFreeDirectory(
   return shardDir;
 }
 
-type TextFileWithStats = {
-  content: string;
-  mtimeMs: number;
-  sizeBytes: number;
-};
-
-async function readTextWithStatsOrNull(filePath: string): Promise<TextFileWithStats | null> {
-  const stats = await lstatOrNull(filePath);
-  if (!stats) return null;
-  if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new Error(`Persona record path is not a regular link-free file: ${filePath}`);
-  }
-  return {
-    content: await fs.readFile(filePath, 'utf8'),
-    mtimeMs: stats.mtimeMs,
-    sizeBytes: stats.size,
-  };
+async function readTextWithStatsOrNull(filePath: string): Promise<PersonaRecordText | null> {
+  return readPersonaRecordText(filePath, storageDir());
 }
 
 async function readTextOrNull(filePath: string): Promise<string | null> {
@@ -527,6 +650,7 @@ export async function saveShardedCollectionItem<T extends { id: string; personaI
     }
     await writeFileAtomic(shardedPath, JSON.stringify(value, null, 2));
     try {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(legacyPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -575,11 +699,14 @@ async function readPersonaShardDirectory<T>(
     const recordId = entry.slice(0, -'.json'.length);
     assertSafeCollectionId(recordId);
     const filePath = path.join(shardDir, entry);
-    const stats = await fs.lstat(filePath);
+    const stats = await fs.lstat(filePath, { bigint: true });
     if (!stats.isFile() || stats.isSymbolicLink()) {
       throw new Error(`Persona shard item is not a regular link-free file: ${filePath}`);
     }
-    const content = await fs.readFile(filePath, 'utf8');
+    const content = (await readPlainFile(filePath, {
+      expected: stats,
+      verifyPath: async () => { await assertLinkFreeDirectory(collection, personaId, false); },
+    })).toString('utf8');
     values.push(parsePersonaShardRecord<T>(content, collection, personaId, recordId));
   }
   return values;
@@ -688,6 +815,7 @@ export async function migrateLegacyCollectionItem(
           throw new Error(`Could not verify migrated Persona record ${JSON.stringify(recordId)}.`);
         }
       }
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(legacyPath);
       return 'migrated';
     },
@@ -761,6 +889,10 @@ export async function saveCollectionItem<T>(collection: string, id: string, valu
 
 export async function loadCollectionItem<T>(collection: string, id: string, defaultValue: T): Promise<T> {
   assertSafeCollectionId(id);
+  // Other collections retain their existing read policy and parsing behavior.
+  if (collection === 'conversations') {
+    return withConversationSnapshot<T, T>(id, async state => state === undefined ? defaultValue : state);
+  }
   const filePath = getCollectionItemPath(collection, id);
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -804,6 +936,7 @@ export async function deleteCollectionItem(collection: string, id: string): Prom
   // the same item.
   await runInWriteChain(`${collection}/${id}`, async () => {
     try {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(filePath);
       log.verbose(`Successfully deleted collection item: ${filePath}`);
     } catch (error) {
@@ -969,6 +1102,7 @@ export async function migrateArrayFileToCollection<T>(
 
   if (content.trim().length === 0) {
     // Empty legacy file: just archive it out of the way.
+    await assertBundledFlujoWorkloadEffectCurrent();
     await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
     return 0;
   }
@@ -1008,6 +1142,7 @@ export async function migrateArrayFileToCollection<T>(
   }
 
   // Archive the legacy file only after every item has been (re)written.
+  await assertBundledFlujoWorkloadEffectCurrent();
   await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
   log.info(`Migration: moved ${items.length} ${collection} item(s) from ${key}.json to per-item storage.`);
   return items.length;

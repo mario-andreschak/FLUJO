@@ -1,0 +1,78 @@
+# MCP execution consent contract
+
+This Source layer addresses #568's missing default host-launch consent. At its predecessor, a stdio configuration without an isolation policy or private approval file can launch on the host. A server's stored trust checkbox, installation assessment, imported configuration, or browser login does not constitute a runtime grant. Source guards below are implemented; exact-graph whole-suite, installed-artifact and complete #568 qualification remain pending.
+
+Two execution profiles remain distinct:
+
+| Profile | Enforcement and consent |
+| --- | --- |
+| Isolated Linux container | Existing immutable image digest, separately protected owner approval, named read-only mounts and environment, no network, resource limits, generation-bound cleanup. An unavailable local Linux Docker daemon refuses execution. |
+| Explicitly trusted host | Separately protected, expiring owner approval for this workspace, server, executable, package revision and capabilities. This authorizes the host account's filesystem, network and child-process privileges; it provides no OS confinement or isolation claim. |
+
+Missing, malformed, expired, revoked, foreign-owner or stale approvals refuse launch and dispatch. There is no default host fallback, including for bundled terminal servers. An isolation grant cannot be bypassed by deleting the isolation field from an imported configuration. Remote servers retain their external-data/trust boundary and do not acquire a local execution profile.
+
+Trusted host configuration describes the requested profile; effective authority resides in `FLUJO_MCP_TRUSTED_HOST_FILE`, independently protected outside workspace data and matched to `FLUJO_OWNER_AUTH_FILE`. Approval binds the workspace/server, exact absolute executable and arguments, working directory, source-tree and executable digests, named environment injection, and requested host broker capabilities. Changing package bytes, command, arguments or capabilities requires renewed consent. An imported profile never imports approval.
+
+Package fingerprinting reads a bounded regular-file tree without executing inspected code. Symlinks, hard links, reparse paths, unstable file identities and over-limit trees refuse admission. Executable identity is checked separately. Unresolved relative executables and unmaterialized or floating package-runner code refuse admission. A protected `npx` profile can authorize an exact, already materialized local package closure as described below; an immutable approved container remains a separate execution profile.
+
+## Protected package runners
+
+The `npx` trusted-host profile binds the exact Node executable, copied npm CLI
+and dependencies, selected package and dependency tree, regular binary shims,
+shell executable, npm configuration files, arguments, environment, capabilities
+and working directory to the protected owner grant. It invokes the genuine
+`npx-cli.js` with `-y package@exact-version`; it does not replace package-runner
+execution with a direct package entrypoint. Installation and materialization
+happen before review. Launch uses offline resolution and ignored install
+scripts, without an installation fallback or permission to download code.
+
+Use the existing owner host-consent preview and approval transaction to inspect
+and authorize the stored proposal. Importing that proposal transfers no grant.
+Changed source, npm or package revision, shell, arguments, environment, cwd or
+capabilities require a fresh proposal and approval; expiry and durable revocation
+continue to deny the captured transport. The source digest includes the npm
+closure, package dependencies and shims. Npm's actual default binary selection
+must match the declared binary. Because npm prepends cwd and ancestor
+`node_modules/.bin` directories ahead of PATH even with an explicit prefix,
+unreviewed binary-resolution directories there refuse admission.
+
+Runtime-home selection follows global override, then server setting, then
+workspace default, then host mode. The effective mode must match the grant.
+Isolated mode uses the deterministic private per-server cwd outside the managed
+source root and separate workspace/server HOME, configuration, cache and temp
+paths. These paths redirect application state; the approved process still runs
+with the owner's account privileges and can access the host filesystem, network
+and child processes. Runtime-home isolation provides no OS containment.
+
+The [package-runner operator guide](protected-package-runner.md) describes the
+materialized layout and review steps. Both SDK transport factories use the same
+launch and fresh-authority checks. Fixed-source profiles retain their source cwd
+and existing bundled provenance requirements.
+
+Approval is checked before launch, immediately before transport start, after awaited SDK startup, before tool discovery/argument preparation, and again before tool dispatch. Trusted-host launch performs no shipped-package readiness, installation or build execution. Both SDK generations suppress unapproved inherited environment defaults; a trusted-host profile does not implicitly receive every host environment value. Scope-specific runtime credentials remain separate from persisted configuration and cannot become a blanket host grant.
+
+Trusted-host arguments do not interpolate the shared global secret store. Roots advertise only the exact approved literal server entries, with no inherited workspace roots, node overlay or unrestricted-drive fallback. The roots handler uses the actual managed transport generation; renewed same-name capabilities cannot authorize an older client. Beta local clients use legacy negotiation because automatic negotiation can clone an untracked sibling process.
+
+Environment consent and launch share admission of own string data properties. Inherited fields, accessors and non-string values refuse admission without invoking getters. The launch environment has a null prototype, preserving explicitly approved names such as `__proto__` as data properties.
+
+Both execution profiles read private owner and approval files through the same bounded, stable-descriptor reader. Links, multiple hard links, changing identities, invalid UTF-8 and files inside application data refuse admission. POSIX ownership and permission checks apply; Windows ACL privacy qualification remains open.
+
+The Windows followup inspects native SID/DACL authority through a fixed system PowerShell executable, with profiles disabled, clean environment, JSON-only filename input, five-second timeout and 64 KiB output bound. Private files permit only the current user and privileged Windows principals; ancestors must prevent foreign ownership/DACL changes, deletion of children and replacement by renaming. The ACL chain is fingerprinted before and after the stable descriptor read. Missing or unverifiable inspection refuses admission. An actual Windows Source fixture demonstrated foreign-read and parent-rename refusal, stable private grants and rejection of a DACL changed during the descriptor read. Whole-suite and installed-artifact qualification of this followup remain pending.
+
+Reproduce the owned Windows control with `node scripts/security/windows-private-authority-source-control.cjs <source-checkout> <fixture-parent>`. The fixture parent must already have protected ancestry; the control changes permissions only on its newly created fixture. It transpiles Source with the checkout's TypeScript dependency and does not execute inspected server code. A successful receipt establishes this control's scope, not the complete Windows or installed conformance matrix.
+
+Trusted-host runtime-home selection is explicit in the consent policy (`runtimeHome: host | isolated`). A different effective launch option refuses admission until the profile is renewed. Isolated home selection uses the existing runtime-directory admission checks and requires declarations for every injected HOME/cache/temp environment name. Fixed native and Node entries keep their approved source working directory; this profile authorizes no package-runner working-directory rewrite. Server runtime-home mode also participates in the consent digest. The owned fixture helper can create a fixed Node source entry for real-process tests, with actual executable/package fingerprints and separately protected synthetic approval. On Windows its default fixture parent is LOCALAPPDATA; a temporary directory with foreign replacement rights cannot establish private authority.
+
+The authority followup opens a no-follow/nonblocking descriptor first, validates its regular-file identity and bounds, and compares the current canonical pathname before reading any bytes. It retains the descriptor through the final identity check. Actual synchronous and asynchronous path-swap controls refused the replacement before any inspected bytes were read. Credential-bearing consent commitments use scrypt with N=16384, r=8, p=1, a workspace/server/source-root salt and a 64 MiB memory bound; public executable/package fingerprints remain SHA-256. The v2 commitment requires renewed approval for earlier v1 digests. These Source controls do not establish CodeQL clearance; the reported alerts remain open until the changed Source is scanned.
+
+Byte verification yields, so admission reloads the authoritative stored configuration afterward and checks its enabled state, transport and captured digest along with fresh private approval. Retaining an old grant cannot authorize a config disabled, removed or retargeted during fingerprinting. Broker environment validation runs only on the trusted-host branch; the isolated branch retains its existing attach-helper environment. Failures after broker issuance revoke its lease, and both profile generations revoke on transport retirement.
+
+Installation and build scripts remain a separate execution boundary. Runtime approval does not authorize package installation, image pulls, lifecycle scripts, a registry's latest version or inspection-time tool execution. Existing installation assessments remain assistive evidence. A preinstalled package's consent can authorize only its declared, fingerprinted runtime revision.
+
+Required qualification covers unapproved default launches, valid explicit host consent, foreign owner/workspace/server, expiry and revocation, package/executable/argument/capability changes, forged imported approval, both SDK factories, final-start rechecks, named environment injection, existing isolated-policy no-fallback behavior, supported Windows/Linux behavior, and owned-process cleanup. Source checks cannot establish installed, human or external acceptance. #566–#568 and the A− reassessment remain open until their full requirements are verified.
+
+A controlled Source experiment exercised both actual SDK transport/client factories, initialization and tool requests with real owned Node children against real private-profile storage. Approved synthetic environment values arrived, unrelated host secrets and inherited HOME/NODE_OPTIONS were absent, literal arguments arrived and shared-secret references were refused. Disabling actual stored config during a paused native fingerprint read denied dispatch while the old grant remained valid. Approval revocation denied dispatch, the retained exact root process IDs were absent after awaited close, and a refused broker environment left no issued capability behind. The experiment transpiled Source and selected the dependency's declared ESM import entry; the local physical SDK graph does not match the lock. It does not prove packed/installed behavior, descendant-process absence, Windows ACL privacy, a closed Node dependency/import graph, or scanner coverage. Those gaps, owner approval/review flows and the complete installation threat model remain open. Package-tree hashing alone does not prove that arbitrary trusted-host code cannot load or execute code elsewhere under its expressly granted host-account privileges.
+
+Approved host launches reserve the goal fixture and worker snapshot token names, including case variants: persisted values refuse admission. A runner-issued goal token requires the matching staged absolute entry and source revision, profile, URL, agent root and run identity, plus explicit consent for its environment name. A changed runner token or binding retires admission for the captured transport. The worker token is not released through descriptor/name matching; the genuine packaged provenance path remains required. Source controls use real private grant storage and do not execute inspected fixture code. Measured local Windows Source admission took 1221 ms synchronously; five scrypt commitments delayed the event loop by 358 ms. Async authority verification remains necessary, with fresh final configuration, grant and file identity checks retained.
+
+Dispatch verification now computes the same scrypt commitment asynchronously and gathers fresh Windows ACL evidence through bounded native subprocesses. Abort and timeout kill only the owned ACL helper; verification settles after its close event. No grant or ACL cache is introduced. Protected file contents retain identity checks across the asynchronous post-read ACL check. The final stored configuration is reread after async authority checks and compared with the entire admitted consent input. Initial synchronous factory admission remains and is still a latency limitation. The Source control exercises a real private grant, event-loop heartbeats, cancellation, actual file mutation and native ACL changes on fresh owned fixtures; installed qualification remains open.

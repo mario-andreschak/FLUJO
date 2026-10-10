@@ -13,6 +13,7 @@ import {
   ISOLATED_TEST_FILES,
   isolatedTestPathIgnorePatterns,
   shouldExcludeIsolatedSuites,
+  testPatternsForRoot,
 } from '../../jest.testMatch.mjs';
 
 const {
@@ -29,7 +30,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;
 };
-const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify.yml'), 'utf8');
+const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify-full.yml'), 'utf8');
 
 describe('isolated test stage', () => {
   it('lists only files that exist', () => {
@@ -43,9 +44,9 @@ describe('isolated test stage', () => {
     const isolatedScript = packageJson.scripts['test:isolated'];
     expect(isolatedScript).toBeDefined();
     expect(isolatedScript).toContain('--runInBand');
-    for (const file of ISOLATED_TEST_FILES) {
-      expect(isolatedScript).toContain(file);
-    }
+    const selectedFiles = isolatedScript.match(/__tests__\/[^\s]+\.test\.tsx?/g) ?? [];
+    expect([...selectedFiles].sort()).toEqual([...ISOLATED_TEST_FILES].sort());
+    expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
   });
 
   it('builds standalone MCP artifacts before running the isolated suites', () => {
@@ -72,11 +73,15 @@ describe('isolated test stage', () => {
   });
 
   it('produces ignore patterns that match exactly those files', () => {
-    const rootDir = '/repo';
-    for (const [index, pattern] of isolatedTestPathIgnorePatterns.entries()) {
-      const regex = new RegExp(pattern.replace('<rootDir>', rootDir));
-      expect(regex.test(`${rootDir}/${ISOLATED_TEST_FILES[index]}`)).toBe(true);
-      expect(regex.test(`${rootDir}/__tests__/meta/isolatedTestStage.test.ts`)).toBe(false);
+    const physicalRoot = fs.realpathSync.native(ROOT).replaceAll('\\', '/');
+    expect(isolatedTestPathIgnorePatterns).toEqual(testPatternsForRoot(ROOT).isolatedTestPathIgnorePatterns);
+    for (const rootDir of ['/repo', physicalRoot]) {
+      for (const [index, pattern] of testPatternsForRoot(rootDir).isolatedTestPathIgnorePatterns.entries()) {
+        const regex = new RegExp(pattern);
+        expect(regex.test(`${rootDir}/${ISOLATED_TEST_FILES[index]}`)).toBe(true);
+        expect(regex.test(`${rootDir}/__tests__/meta/isolatedTestStage.test.ts`)).toBe(false);
+        expect(regex.test(`${rootDir}/${ISOLATED_TEST_FILES[index]}.extra`)).toBe(false);
+      }
     }
   });
 });

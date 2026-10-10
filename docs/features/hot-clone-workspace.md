@@ -176,7 +176,10 @@ never overwritten. A matching restore marker makes process restarts reuse worker
 results instead of restoring the original archive again. Host external roots are
 cleared. Only the restored workspace is initialized.
 
-Worker mode suppresses scheduler catch-up, Persona dispatch and remote task resume.
+Worker mode suppresses copied-schedule catch-up, Persona dispatch and remote task
+resume by default. [Worker-local schedule recovery](worker-local-schedule-recovery.md)
+offers separate, explicit provenance-bound enrollment for ordinary cron plans
+created on a persistent worker; generic plan edits cannot enroll copied schedules.
 It rebuilds the MCP dependencies, verifies connection status, and exposes
 `GET /api/worker/status`. States include `restoring`, `locked`, `installing`,
 `ready`, and `error`. Worker API/MCP ingress requires the worker bearer token;
@@ -189,6 +192,15 @@ workspace selector and conversation ID. Interactive questions/tool approvals kee
 their existing execution-engine policy, with worker requests classified as
 unattended internal runs. This does not clone in-flight process memory or resume local
 background jobs on the cloud machine.
+
+Detached tasks launched locally after this upgrade carry installation, workspace,
+and process ownership. Startup and task reads can mark a task `failed` with
+`failureReason: process-restart` once its exact child has a durable interruption
+outcome and its launching process is proven dead. The task records that manual
+recovery is required. This never replays a child or its effects. The installation
+identity is stored outside snapshot subtrees, so copied tasks are not treated as
+local launches. Live owners, unknown ownership, and older tasks without launch
+provenance are left untouched; older task records still require manual recovery.
 
 ## Validation
 

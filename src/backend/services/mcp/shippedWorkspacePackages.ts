@@ -1,9 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import * as nodeModule from 'node:module';
 import { SHIPPED_MCP_SERVERS, shippedMcpAppRoot } from './shippedServers';
+import { inspectBundledMcpDependencyGraph } from '../security/bundledMcpDependencyGraph';
+import { consentDiagnosticStage } from '../security/bundledConsentDiagnostic';
 
 // Application packages are templates. Copy only distributed code/build inputs,
 // never a developer's node_modules, Git checkout, profile, or runtime userdata.
@@ -41,26 +43,80 @@ async function copyAsset(source: string, destination: string): Promise<void> {
   }
 }
 
-async function packageDigest(root: string, runtimeOnly = false): Promise<string> {
+function samePackageFile(first: BigIntStats, second: BigIntStats): boolean {
+  return first.dev === second.dev && first.ino === second.ino && first.size === second.size
+    && first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs;
+}
+
+async function readPackageAsset(file: string, expected: BigIntStats): Promise<Buffer> {
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !samePackageFile(expected, opened)) {
+      throw new Error('A copied package asset changed before it could be read.');
+    }
+    // Read the admitted object, even if the pathname changes after admission.
+    // Hard links remain supported; parent-directory containment is unchanged.
+    const bytes = await handle.readFile();
+    const named = await fs.lstat(file, { bigint: true });
+    if (named.isSymbolicLink()) throw new Error('A copied package contains an unsupported linked asset.');
+    if (!named.isFile() || BigInt(bytes.length) !== opened.size
+      || !samePackageFile(opened, await handle.stat({ bigint: true })) || !samePackageFile(opened, named)) {
+      throw new Error('A copied package asset changed while it was being read.');
+    }
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function packageDigests(root: string, distributedOnly = false): Promise<{ assetSha256: string; runtimeSha256: string; portableRuntimeSha256: string }> {
   const hash = createHash('sha256');
-  const walk = async (directory: string, prefix: string) => {
+  const runtimeHash = createHash('sha256');
+  const portableRuntimeHash = createHash('sha256');
+  const update = (entry: string, runtime: boolean, portableEntry = entry, portable = true) => {
+    hash.update(entry);
+    if (runtime) {
+      runtimeHash.update(entry);
+      if (portable) portableRuntimeHash.update(portableEntry);
+    }
+  };
+  const walk = async (directory: string, prefix: string, parentRuntime: boolean) => {
     for (const name of (await fs.readdir(directory)).sort()) {
-      if (!prefix && (['node_modules', '.git', TEMPLATE_MARKER].includes(name)
-        || (runtimeOnly && !['package.json', 'dist', 'scripts'].includes(name)))) continue;
+      if (!prefix && ['node_modules', '.git', TEMPLATE_MARKER].includes(name)) continue;
+      if (!prefix && distributedOnly && !PACKAGE_ASSETS.includes(name)) continue;
+      const runtime = prefix ? parentRuntime : ['package.json', 'dist', 'scripts'].includes(name);
       const relative = prefix ? `${prefix}/${name}` : name;
       const file = path.join(directory, name);
-      const stat = await fs.lstat(file);
+      const stat = await fs.lstat(file, { bigint: true });
       if (stat.isSymbolicLink()) throw new Error('A copied package contains an unsupported linked asset.');
       if (stat.isDirectory()) {
-        hash.update(`directory:${relative}\0`);
-        await walk(file, relative);
+        update(`directory:${relative}\0`, runtime);
+        await walk(file, relative, runtime);
       } else if (stat.isFile()) {
-        hash.update(`file:${relative}\0${createHash('sha256').update(await fs.readFile(file)).digest('hex')}\0`);
+        // Both digests must describe these same bytes. A second runtime walk
+        // could hash edits that were never checked against template provenance.
+        const bytes = await readPackageAsset(file, stat);
+        const rawDigest = createHash('sha256').update(bytes).digest('hex');
+        // Windows checkouts may use CRLF for text files shipped as LF in the
+        // Linux image. Keep the raw digest for template provenance, and compare
+        // only newline-normalized text for cross-platform runtime identity.
+        const textAsset = /\.(?:cjs|cts|js|json|map|mjs|mts|sh|ts)$/i.test(relative);
+        // Latin-1 is byte-preserving here: unlike UTF-8 decoding, malformed
+        // bytes cannot collapse to the same replacement character.
+        const portableBytes = runtime && textAsset
+          ? Buffer.from(bytes.toString('latin1').replace(/\r\n/g, '\n'), 'latin1') : bytes;
+        const portableDigest = createHash('sha256').update(portableBytes).digest('hex');
+        // npm omits test scripts from the packed Source while the OCI image
+        // retains them. They cannot be launched as a bundled server runtime.
+        const portable = !/^scripts\/.*\.test\.[cm]?[jt]s$/i.test(relative);
+        update(`file:${relative}\0${rawDigest}\0`, runtime, `file:${relative}\0${portableDigest}\0`, portable);
       } else throw new Error('A copied package contains an unsupported asset.');
     }
   };
-  await walk(root, '');
-  return hash.digest('hex');
+  await walk(root, '', false);
+  return { assetSha256: hash.digest('hex'), runtimeSha256: runtimeHash.digest('hex'),
+    portableRuntimeSha256: portableRuntimeHash.digest('hex') };
 }
 
 async function validatePackage(root: string, name: string): Promise<{ name: string; version?: string }> {
@@ -116,6 +172,57 @@ async function dependencyLayout(appRoot: string, name: string) {
   return { packages, sharedRoot: roots.length === 1 ? await fs.realpath(roots[0]) : undefined };
 }
 
+/** Inspection only. Returned data is not consent or permission to execute. */
+export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, packageDirectory: string, appRoot = shippedMcpAppRoot()) {
+  return consentDiagnosticStage('ASSETS', async () => {
+  if (!SHIPPED_MCP_SERVERS.some(item => item.packageDirectory === packageDirectory)) throw new Error('Unknown shipped package.');
+  const installation = await fs.realpath(appRoot);
+  await realDirectory(installation);
+  const source = path.join(installation, 'mcp-servers', packageDirectory);
+  const destination = path.join(path.resolve(workspaceRoot), 'mcp-servers', packageDirectory);
+  await validatePackage(source, packageDirectory);
+  await validatePackage(destination, packageDirectory);
+  // Compare the same distributed assets clonePackage copies. Installation
+  // userdata is excluded from that copy; snapshot edit detection stays broader.
+  const [installed, copied] = await Promise.all([packageDigests(source, true), packageDigests(destination, true)]);
+  if (installed.assetSha256 !== copied.assetSha256) throw new Error('Copied package differs from the installed revision.');
+  const layout = await consentDiagnosticStage('DEP_LAYOUT', () => dependencyLayout(installation, packageDirectory));
+  const { runtimeDependencies, dependencyNamespaceRoot } = await consentDiagnosticStage('DEP_LAYOUT', async () => {
+  const runtimeManifest = JSON.parse(await fs.readFile(path.join(source, 'package.json'), 'utf8'));
+  const runtimeNames = new Set(Object.keys({ ...runtimeManifest.dependencies, ...runtimeManifest.optionalDependencies }));
+  const runtimeDependencies = layout.packages.filter(item => runtimeNames.has(item.name));
+  let dependencyNamespaceRoot = installation;
+  if (path.basename(path.dirname(installation)) === 'node_modules') {
+    const application = JSON.parse(await fs.readFile(path.join(installation, 'package.json'), 'utf8'));
+    if (application.name !== 'flujo-ai') throw new Error('Unrecognized flattened application installation.');
+    dependencyNamespaceRoot = await fs.realpath(path.dirname(installation));
+  }
+  return { runtimeDependencies, dependencyNamespaceRoot };
+  });
+  const dependencyGraph = await consentDiagnosticStage('DEP_GRAPH', () => inspectBundledMcpDependencyGraph(dependencyNamespaceRoot, runtimeDependencies.map(item => item.directory)));
+  const links = await consentDiagnosticStage('DEP_LINKS', async () => {
+  const target = path.join(destination, 'node_modules');
+  const links: Array<{ link: string; target: string }> = [];
+  if (layout.sharedRoot) {
+    if (!(await fs.lstat(target)).isSymbolicLink() || await fs.realpath(target) !== layout.sharedRoot) throw new Error('Copied dependency target differs from the installation.');
+    links.push({ link: target, target: layout.sharedRoot });
+  } else {
+    await realDirectory(target);
+    for (const dependency of layout.packages) {
+      const link = path.join(target, dependency.name);
+      if (!(await fs.lstat(link)).isSymbolicLink() || await fs.realpath(link) !== dependency.directory) throw new Error('Copied dependency target differs from the installation.');
+      links.push({ link, target: dependency.directory });
+    }
+  }
+  return links;
+  });
+  // Neither a workspace marker nor a source/name flag proves this comparison.
+  return { installation, packageDirectory, sourceRoot: destination, assetDigest: copied.assetSha256,
+    runtimeDigest: copied.runtimeSha256, dependencyLinks: links,
+    dependencies: runtimeDependencies.map(item => ({ name: item.name, directory: item.directory })), dependencyNamespaceRoot, dependencyGraph };
+  });
+}
+
 async function ensureDependencies(root: string, appRoot: string, name: string): Promise<void> {
   const target = path.join(root, 'node_modules');
   const existing = await optionalStat(target);
@@ -165,6 +272,21 @@ async function ensureDependencies(root: string, appRoot: string, name: string): 
 
 /** Snapshot recipes cannot silently discard edits to workspace-owned package code. */
 export async function shippedWorkspacePackageRuntimeDigest(root: string): Promise<string> {
+  return (await validatedWorkspacePackageDigests(root)).runtimeSha256;
+}
+
+/** Both identities come from the same verified read of the source package. */
+export async function shippedWorkspacePackageRuntimeDigests(root: string) {
+  const { runtimeSha256, portableRuntimeSha256 } = await validatedWorkspacePackageDigests(root);
+  return { runtimeSha256, portableRuntimeSha256 };
+}
+
+/** Runtime identity that tolerates only checkout newline conversion in text assets. */
+export async function shippedWorkspacePackagePortableRuntimeDigest(root: string): Promise<string> {
+  return (await validatedWorkspacePackageDigests(root)).portableRuntimeSha256;
+}
+
+async function validatedWorkspacePackageDigests(root: string) {
   await realDirectory(root);
   const markerPath = path.join(root, TEMPLATE_MARKER);
   const stat = await optionalStat(markerPath);
@@ -174,10 +296,11 @@ export async function shippedWorkspacePackageRuntimeDigest(root: string): Promis
   let marker: { version?: number; assetSha256?: string };
   try { marker = JSON.parse(await fs.readFile(markerPath, 'utf8')); }
   catch { throw new Error('The copied MCP package template provenance is invalid.'); }
-  if (marker.version !== 1 || marker.assetSha256 !== await packageDigest(root)) {
+  const digests = marker.version === 1 ? await packageDigests(root) : undefined;
+  if (!digests || marker.assetSha256 !== digests.assetSha256) {
     throw new Error('This copied MCP package has local changes. Export it as a pinned GitHub package; a workspace snapshot will not discard those edits.');
   }
-  return packageDigest(root, true);
+  return digests;
 }
 
 async function clonePackage(root: string, appRoot: string, name: string): Promise<void> {
@@ -213,7 +336,7 @@ async function clonePackage(root: string, appRoot: string, name: string): Promis
       copiedAt: new Date().toISOString(),
       sourcePackageVersion: manifest.version,
       sourceManifestSha256: createHash('sha256').update(await fs.readFile(path.join(source, 'package.json'))).digest('hex'),
-      assetSha256: await packageDigest(stage),
+      assetSha256: (await packageDigests(stage)).assetSha256,
       dependencyPolicy: 'installation-resolution',
     }), { flag: 'wx' });
     try {

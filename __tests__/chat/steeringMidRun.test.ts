@@ -149,6 +149,27 @@ describe('mid-run steering', () => {
     expect(rawMessages.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
   });
 
+  it('attests only the admitted steering ids when an internal message is waiting for emission', async () => {
+    const convId = 'conv-steer-origins';
+    clearSteeringInbox(convId);
+    enqueueSteeringMessage(convId, { ...steering('use Python', 'steer-input'), executionOrigin: 'internal' });
+    enqueueSteeringMessage(convId, { ...steering('and test it', ''), executionOrigin: 'internal' });
+    script.push(finalStep('done'));
+    const events: any[] = [];
+    const result = await runFlow({ flowId: FLOW_ID, prompt: 'do the thing', conversationId: convId,
+      mode: 'conversation', emit: event => {
+        events.push(event);
+        if (event.type === 'run:start') conversationStates.get(convId)!.messages.push(steering('internal context', 'internal-pending'));
+      } });
+    expect(result.status).toBe('completed');
+    expect(events.find(event => event.type === 'message' && event.message.id === 'steer-input').messageOrigin).toBe('input');
+    expect(events.find(event => event.type === 'message' && event.message.id === 'internal-pending').messageOrigin).toBe('internal');
+    const normalized = events.find(event => event.type === 'message' && event.message.content === 'and test it');
+    expect(normalized.message.id).toBeTruthy();
+    expect(normalized.messageOrigin).toBe('input');
+    expect(result.messages.find(message => message.id === 'steer-input')?.executionOrigin).toBeUndefined();
+  });
+
   it('delivers a message that arrives MID-run on the very next step', async () => {
     const convId = 'conv-steer-midrun';
     clearSteeringInbox(convId);

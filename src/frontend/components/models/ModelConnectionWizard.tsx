@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -45,6 +45,7 @@ import WorkspacePremiumRoundedIcon from '@mui/icons-material/WorkspacePremiumRou
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { Model } from '@/shared/types';
+import { modelService } from '@/frontend/services/model';
 import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import {
@@ -54,6 +55,7 @@ import {
 } from './connectionWizardCatalog';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
+import { useSetupStepFocus } from '@/frontend/hooks/useSetupStepFocus';
 
 type Experience = 'beginner' | 'familiar';
 type WizardStep =
@@ -149,6 +151,15 @@ const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
     keyLabel: 'models.wizard.openrouterKey',
     note: 'models.wizard.openrouterPaid.note',
   },
+  'orcarouter-paid': {
+    eyebrow: 'models.wizard.copy.paygOnline',
+    title: 'models.wizard.orcarouter.title',
+    summary: 'models.wizard.orcarouter.summary',
+    accountUrl: 'https://www.orcarouter.ai',
+    accountLabel: 'models.wizard.orcarouter.account',
+    keyLabel: 'models.wizard.orcarouter.key',
+    note: 'models.wizard.orcarouter.note',
+  },
   'requesty-paid': {
     eyebrow: 'models.wizard.copy.paygOnline',
     title: 'models.wizard.requestyPaid.title',
@@ -179,6 +190,13 @@ const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
     title: 'models.wizard.codex.title',
     summary: 'models.wizard.codex.summary',
     note: 'models.wizard.codex.note',
+  },
+  'antigravity-cli': {
+    eyebrow: 'models.wizard.antigravityCli.eyebrow',
+    title: 'models.wizard.antigravityCli.title',
+    summary: 'models.wizard.antigravityCli.summary',
+    keyLabel: 'models.wizard.gemini.key',
+    note: 'models.wizard.antigravityCli.note',
   },
   'gemini-native': {
     eyebrow: 'models.wizard.copy.googleNative',
@@ -228,6 +246,7 @@ function OptionCard({
           borderColor: alpha(theme.palette.primary.main, 0.7),
           boxShadow: `0 16px 38px ${alpha(theme.palette.primary.main, 0.16)}`,
         },
+        '@media (prefers-reduced-motion: reduce)': { transition: 'none', '&:hover': { transform: 'none' } },
         '&:focus-visible': {
           outline: `3px solid ${alpha(theme.palette.primary.main, 0.3)}`,
           outlineOffset: 3,
@@ -289,6 +308,7 @@ export default function ModelConnectionWizard({
 }: ModelConnectionWizardProps) {
   const theme = useTheme();
   const { t, tp } = useI18n();
+  const { titleId, stepContentRef } = useSetupStepFocus(open);
   const [step, setStep] = useState<WizardStep>('welcome');
   const [history, setHistory] = useState<WizardStep[]>([]);
   const [experience, setExperience] = useState<Experience>('beginner');
@@ -312,6 +332,17 @@ export default function ModelConnectionWizard({
   const [ollamaChecked, setOllamaChecked] = useState(false);
   const [ollamaPulling, setOllamaPulling] = useState(false);
   const [ollamaProgress, setOllamaProgress] = useState<string[]>([]);
+  const sessionRef = useRef(0);
+  const capabilityRequestRef = useRef(0);
+  const operationRef = useRef(false);
+
+  // A parent may close/reopen the dialog while a request is pending. The
+  // external operation may finish, but its UI result belongs to that session.
+  useEffect(() => {
+    sessionRef.current += 1;
+    operationRef.current = false;
+    return () => { sessionRef.current += 1; };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -333,6 +364,8 @@ export default function ModelConnectionWizard({
     setInstallOutput([]);
     setInstallResult('idle');
     setOllama(null);
+    setOllamaLoading(false);
+    setOllamaPulling(false);
     setOllamaChecked(false);
     setOllamaProgress([]);
   }, [open]);
@@ -355,6 +388,7 @@ export default function ModelConnectionWizard({
   };
 
   const back = () => {
+    if (operationRef.current) return;
     const previous = history[history.length - 1];
     if (!previous) return;
     setHistory((value) => value.slice(0, -1));
@@ -364,6 +398,8 @@ export default function ModelConnectionWizard({
 
   const selectSetup = (nextKind: GuidedConnectionKind) => {
     setKind(nextKind);
+    setConfirmedLogin(false);
+    if (nextKind === 'antigravity-cli' || nextKind === 'codex-subscription') setApiKey('');
     go('setup');
   };
 
@@ -378,17 +414,24 @@ export default function ModelConnectionWizard({
   };
 
   const loadOllama = useCallback(async () => {
+    const session = sessionRef.current;
+    const request = ++capabilityRequestRef.current;
+    const current = () => session === sessionRef.current && request === capabilityRequestRef.current;
     setOllamaLoading(true);
     setError(null);
     try {
       const response = await fetch('/api/local-models/capability', { cache: 'no-store' });
       if (!response.ok) throw new Error(t('models.wizard.inspectFailed'));
-      setOllama(await response.json() as OllamaCapability);
+      const capability = await response.json() as OllamaCapability;
+      if (current()) setOllama(capability);
     } catch (loadError) {
+      if (!current()) return;
       setError(loadError instanceof Error ? loadError.message : t('models.wizard.inspectFailed'));
     } finally {
-      setOllamaChecked(true);
-      setOllamaLoading(false);
+      if (current()) {
+        setOllamaChecked(true);
+        setOllamaLoading(false);
+      }
     }
   }, [t]);
 
@@ -399,7 +442,10 @@ export default function ModelConnectionWizard({
   }, [kind, loadOllama, ollamaChecked, ollamaLoading, open, step]);
 
   const runInstaller = async (tool: InstallTool) => {
-    if (!setupHost?.oneClickInstall) return;
+    if (!setupHost?.oneClickInstall || operationRef.current) return;
+    operationRef.current = true;
+    const session = sessionRef.current;
+    const current = () => session === sessionRef.current;
     setInstallTool(tool);
     setInstallResult('idle');
     setInstallOutput([]);
@@ -417,6 +463,7 @@ export default function ModelConnectionWizard({
       let terminalSuccess = false;
       let terminalError = '';
       await readNdjsonStream(response, (event) => {
+        if (!current()) return;
         if (event.type === 'stdout' || event.type === 'stderr') {
           setInstallOutput((lines) => [...lines, event.data].slice(-8));
         }
@@ -428,44 +475,58 @@ export default function ModelConnectionWizard({
           terminalError = event.error || '';
         }
       });
+      if (!current()) return;
       if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.wingetFailed'));
       setInstallResult('success');
-      if (tool === 'ollama') window.setTimeout(() => void loadOllama(), 1200);
+      if (tool === 'ollama') window.setTimeout(() => { if (current()) void loadOllama(); }, 1200);
     } catch (installError) {
+      if (!current()) return;
       setInstallResult('error');
       setError(installError instanceof Error ? installError.message : t('models.wizard.installFailed'));
     } finally {
-      setInstallTool(null);
+      if (current()) {
+        operationRef.current = false;
+        setInstallTool(null);
+      }
     }
   };
 
-  const finish = async (models: Model[]) => {
+  const finish = async (models: Model[], session = sessionRef.current) => {
+    const current = () => session === sessionRef.current;
+    if (!current()) return;
+    operationRef.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await onCreateModels(models);
+      if (!current()) return;
       if (!result.success) throw new Error(result.error || t('models.wizard.createFailed'));
       setCreated(result.created);
       setExisting(result.existing);
       go('success');
     } catch (saveError) {
+      if (!current()) return;
       setError(saveError instanceof Error ? saveError.message : t('models.wizard.createFailed'));
     } finally {
-      setBusy(false);
+      if (current()) {
+        operationRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   const finishStandardSetup = async () => {
-    if (!kind || kind === 'ollama') return;
-    const requiresKey = kind !== 'codex-subscription';
+    if (!kind || kind === 'ollama' || operationRef.current) return;
+    const supportsLocalLogin = kind === 'codex-subscription' || kind === 'antigravity-cli';
+    const requiresKey = !supportsLocalLogin;
     if (requiresKey && !apiKey.trim()) {
       setError(kind === 'claude-subscription'
         ? t('models.wizard.pasteClaudeToken')
         : t('models.wizard.pasteApiKey'));
       return;
     }
-    if (kind === 'codex-subscription' && !confirmedLogin) {
-      setError(t('models.wizard.confirmCodexLogin'));
+    if (supportsLocalLogin && !apiKey.trim() && !confirmedLogin) {
+      setError(t(kind === 'antigravity-cli' ? 'models.wizard.confirmAntigravityCliLogin' : 'models.wizard.confirmCodexLogin'));
       return;
     }
     if (kind === 'azure') {
@@ -481,6 +542,23 @@ export default function ModelConnectionWizard({
         return;
       }
     }
+    if (kind === 'codex-subscription') {
+      const session = sessionRef.current;
+      operationRef.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        const models = await modelService.fetchProviderModels('', '', undefined, undefined, 'codex');
+        if (session !== sessionRef.current) return;
+        if (!models.length) throw new Error(t('models.wizard.createFailed'));
+        await finish(buildGuidedModels({ kind, codexModels: models }), session);
+      } catch {
+        if (session === sessionRef.current) setError(t('models.wizard.createFailed'));
+      } finally {
+        if (session === sessionRef.current) { operationRef.current = false; setBusy(false); }
+      }
+      return;
+    }
     await finish(buildGuidedModels({
       kind,
       apiKey,
@@ -491,6 +569,9 @@ export default function ModelConnectionWizard({
   };
 
   const connectOllama = async () => {
+    if (operationRef.current) return;
+    const session = sessionRef.current;
+    const current = () => session === sessionRef.current;
     const modelName = ollama?.suggestedModel || 'llama3.2:3b';
     const alreadyInstalled = ollama?.installedModels?.some((name) => name === modelName);
     if (!ollama?.ollamaReachable) {
@@ -499,6 +580,7 @@ export default function ModelConnectionWizard({
     }
 
     if (!alreadyInstalled) {
+      operationRef.current = true;
       setOllamaPulling(true);
       setOllamaProgress([]);
       setError(null);
@@ -512,6 +594,7 @@ export default function ModelConnectionWizard({
         let terminalSuccess = false;
         let terminalError = '';
         await readNdjsonStream(response, (event) => {
+          if (!current()) return;
           if (event.type === 'stdout' || event.type === 'stderr') {
             setOllamaProgress((lines) => [...lines, event.data].slice(-6));
           }
@@ -520,8 +603,11 @@ export default function ModelConnectionWizard({
             terminalError = event.error || '';
           }
         });
+        if (!current()) return;
         if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.modelDownloadFailed', { model: modelName }));
       } catch (pullError) {
+        if (!current()) return;
+        operationRef.current = false;
         setError(pullError instanceof Error ? pullError.message : t('models.wizard.downloadFailed'));
         setOllamaPulling(false);
         return;
@@ -529,11 +615,12 @@ export default function ModelConnectionWizard({
       setOllamaPulling(false);
     }
 
+    if (!current()) return;
     await finish(buildGuidedModels({
       kind: 'ollama',
       ollamaModel: modelName,
       ollamaUrl: ollama?.ollamaUrl,
-    }));
+    }), session);
   };
 
   const verbose = experience === 'beginner';
@@ -542,19 +629,27 @@ export default function ModelConnectionWizard({
   const bundleNames = useMemo(
     () => kind === 'azure'
       ? [`Azure ${azureDeployment.trim() || 'OpenAI deployment'}`]
-      : kind ? guidedBundleNames(kind) : [],
-    [azureDeployment, kind],
+      : kind ? guidedBundleNames(kind, apiKey) : [],
+    [azureDeployment, kind, apiKey],
   );
   const ollamaModel = ollama?.suggestedModel || 'llama3.2:3b';
   const ollamaInstalled = Boolean(ollama?.installedModels?.includes(ollamaModel));
 
-  const installerPanel = (tool: InstallTool, windowsCommand: string, authCommand?: string) => {
-    const installCommand = setupHost?.oneClickInstall ? windowsCommand
+  const installerPanel = (tool: InstallTool | 'antigravity', windowsCommand?: string, authCommand?: string) => {
+    const oneClickInstall = setupHost?.oneClickInstall && tool !== 'antigravity';
+    const installCommand = tool === 'antigravity'
+      ? setupHost?.platform === 'win32'
+        ? 'irm https://antigravity.google/cli/install.ps1 | iex'
+        : setupHost?.platform === 'darwin' || setupHost?.platform === 'linux'
+          ? 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
+          : null
+      : oneClickInstall ? windowsCommand
       : setupHost && setupHost.installMode !== 'container' && tool !== 'ollama'
         ? `npm install -g ${tool === 'claude' ? '@anthropic-ai/claude-code' : '@openai/codex'}`
         : null;
     const documentationUrl = tool === 'claude' ? 'https://code.claude.com/docs/en/setup'
       : tool === 'codex' ? 'https://github.com/openai/codex#installation'
+        : tool === 'antigravity' ? 'https://antigravity.google/docs/cli/install/'
         : `https://ollama.com/download${setupHost?.platform === 'darwin' ? '/mac' : setupHost?.platform === 'linux' ? '/linux' : ''}`;
     return <Stack spacing={1.1}>
       <Alert severity="info">
@@ -562,8 +657,14 @@ export default function ModelConnectionWizard({
           : setupHost ? t('models.wizard.serverSetup', { platform: setupHost.platform === 'win32' ? 'Windows' : setupHost.platform === 'darwin' ? 'macOS' : setupHost.platform === 'linux' ? 'Linux' : setupHost.platform })
             : t('models.wizard.unknownHostSetup')}
       </Alert>
+      {tool === 'antigravity' && authCommand ? (
+        <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
+      ) : null}
+      {tool === 'antigravity' && installCommand ? (
+        <Typography variant="body2" color="text.secondary">{t('models.wizard.antigravityCli.standaloneAlternative')}</Typography>
+      ) : null}
       {installCommand && <CommandRow command={installCommand} copied={copiedCommand === installCommand} onCopy={() => void copyCommand(installCommand)} />}
-      {setupHost?.oneClickInstall && <Button
+      {oneClickInstall && <Button
         variant="outlined"
         startIcon={installTool === tool ? <CircularProgress size={17} /> : <DownloadRoundedIcon />}
         disabled={Boolean(installTool)}
@@ -575,7 +676,7 @@ export default function ModelConnectionWizard({
       <Button href={documentationUrl} target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ alignSelf: 'flex-start' }}>
         {t('models.wizard.installationInstructions')}
       </Button>
-      {authCommand ? (
+      {authCommand && tool !== 'antigravity' ? (
         <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
       ) : null}
       {installResult === 'success' ? <Alert severity="success">{t('models.wizard.installedContinue')}</Alert> : null}
@@ -592,7 +693,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Chip icon={<AutoAwesomeRoundedIcon />} label={t('models.wizard.twoMinuteSetup')} color="primary" variant="outlined" sx={{ mb: 2 }} />
-          <Typography variant="h4">{t('models.wizard.welcomeTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.welcomeTitle')}</Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 680 }}>
             {t('models.wizard.welcomeQuestion')}
           </Typography>
@@ -609,7 +710,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.firstThings')}</Typography>
-          <Typography variant="h4">{t('models.wizard.budgetTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.budgetTitle')}</Typography>
           {verbose ? (
             <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 700 }}>
               {t('models.wizard.budgetVerbose')}
@@ -628,7 +729,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.freeRoute')}</Typography>
-          <Typography variant="h4">{t('models.wizard.locationTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.locationTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose
               ? t('models.wizard.locationVerbose')
@@ -646,13 +747,14 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.copy.freeOnline')}</Typography>
-          <Typography variant="h4">{t('models.wizard.chooseGateway')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.chooseGateway')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.freeGatewayVerbose') : t('models.wizard.freeGatewayBrief')}
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.5 }}>
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterFreeDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-free')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyFreeDescription')} onClick={() => selectSetup('requesty-free')} />
+            <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
           </Box>
         </>
       );
@@ -662,13 +764,14 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.useExisting')}</Typography>
-          <Typography variant="h4">{t('models.wizard.whichService')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.whichService')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.subscriptionVerbose') : t('models.wizard.subscriptionBrief')}
           </Typography>
           <ChoiceGrid>
             <OptionCard icon={SmartToyRoundedIcon} title="Claude" description={t('models.wizard.claudeDescription')} onClick={() => selectSetup('claude-subscription')} />
             <OptionCard icon={TerminalRoundedIcon} title="ChatGPT / Codex" description={t('models.wizard.codexDescription')} badge={t('models.wizard.noKeyPaste')} onClick={() => selectSetup('codex-subscription')} />
+            <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
             <OptionCard icon={AutoAwesomeRoundedIcon} title={t('models.wizard.geminiNative')} description={t('models.wizard.geminiDescription')} onClick={() => selectSetup('gemini-native')} />
           </ChoiceGrid>
         </>
@@ -679,14 +782,16 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.payUsage')}</Typography>
-          <Typography variant="h4">{t('models.wizard.chooseModelGateway')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.chooseModelGateway')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.paidVerbose') : t('models.wizard.paidBrief')}
           </Typography>
           <ChoiceGrid>
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterPaidDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyPaidDescription')} onClick={() => selectSetup('requesty-paid')} />
+            <OptionCard icon={CloudQueueRoundedIcon} title="OrcaRouter" description={t('models.wizard.orcarouter.summary')} onClick={() => selectSetup('orcarouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Azure OpenAI" description={t('models.wizard.azureDescription')} onClick={() => selectSetup('azure')} />
+            <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
           </ChoiceGrid>
         </>
       );
@@ -696,7 +801,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.freeOffline')}</Typography>
-          <Typography variant="h4">{t('models.wizard.ollamaTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.ollamaTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.5 }}>
             {t('models.wizard.ollamaDescription')}
           </Typography>
@@ -747,12 +852,31 @@ export default function ModelConnectionWizard({
     if (step === 'setup' && kind && setup) {
       const isClaude = kind === 'claude-subscription';
       const isCodex = kind === 'codex-subscription';
+      const isAntigravityCli = kind === 'antigravity-cli';
       const isAzure = kind === 'azure';
       return (
         <>
           <Typography variant="overline" color="primary.main">{t(setup.eyebrow)}</Typography>
-          <Typography variant="h4">{t(setup.title)}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t(setup.title)}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2, maxWidth: 720 }}>{t(setup.summary)}</Typography>
+
+          {isAntigravityCli ? (
+            <Box sx={{ mb: 2 }}>
+              <TextField
+                fullWidth
+                type="password"
+                autoComplete="off"
+                label={t('models.wizard.gemini.key')}
+                value={apiKey}
+                onChange={(event) => { setApiKey(event.target.value); setError(null); }}
+                InputProps={{ startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> }}
+                helperText={t('models.wizard.antigravityCli.keyHelp')}
+              />
+              <Button href="https://antigravity.google/docs/plans/" target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ mt: 1 }}>
+                {t('models.wizard.antigravityCli.supportedAccounts')}
+              </Button>
+            </Box>
+          ) : null}
 
           {isClaude ? (
             <Box sx={{ mb: 2 }}>
@@ -768,6 +892,18 @@ export default function ModelConnectionWizard({
                 sx={{ mt: 1 }}
                 control={<Checkbox checked={confirmedLogin} onChange={(event) => setConfirmedLogin(event.target.checked)} />}
                 label={t('models.wizard.codexLoginComplete')}
+              />
+            </Box>
+          ) : null}
+          {isAntigravityCli && !apiKey.trim() ? (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installAntigravityCli')}</Typography>
+              {installerPanel('antigravity', undefined, 'flujo-agy')}
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('models.wizard.antigravityCli.signInHelp')}</Typography>
+              <FormControlLabel
+                sx={{ mt: 1 }}
+                control={<Checkbox checked={confirmedLogin} onChange={(event) => setConfirmedLogin(event.target.checked)} />}
+                label={t('models.wizard.antigravityCliLoginComplete')}
               />
             </Box>
           ) : null}
@@ -808,7 +944,7 @@ export default function ModelConnectionWizard({
             </Stack>
           ) : null}
 
-          {!isCodex ? (
+          {!isCodex && !isAntigravityCli ? (
             <TextField
               fullWidth
               type="password"
@@ -824,7 +960,7 @@ export default function ModelConnectionWizard({
 
           <Alert severity="info" sx={{ mb: 2 }}>{t(setup.note)}</Alert>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>
-          {!isCodex && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
+          {!isCodex && (!isAntigravityCli || apiKey.trim()) && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
           <Stack direction="row" gap={0.8} flexWrap="wrap" sx={{ mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
           </Stack>
@@ -845,10 +981,10 @@ export default function ModelConnectionWizard({
       const allNames = [...created, ...existing].map((model) => model.displayName || model.name);
       return (
         <Box sx={{ textAlign: 'center', py: 2 }}>
-          <Box sx={{ width: 78, height: 78, mx: 'auto', mb: 2, display: 'grid', placeItems: 'center', borderRadius: '50%', color: 'success.main', bgcolor: alpha(theme.palette.success.main, 0.13), animation: `${pop} 520ms cubic-bezier(.2,.8,.2,1) both` }}>
+          <Box data-setup-decoration sx={{ width: 78, height: 78, mx: 'auto', mb: 2, display: 'grid', placeItems: 'center', borderRadius: '50%', color: 'success.main', bgcolor: alpha(theme.palette.success.main, 0.13), animation: `${pop} 520ms cubic-bezier(.2,.8,.2,1) both` }}>
             <CheckCircleRoundedIcon sx={{ fontSize: 47 }} />
           </Box>
-          <Typography variant="h4">{t('models.wizard.successTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.successTitle')}</Typography>
           <Alert severity="info" sx={{ mt: 2, textAlign: 'left' }}>{t('models.wizard.unverifiedSaved')}</Alert>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2 }}>
             {created.length ? tp('models.wizard.created', created.length) : t('models.wizard.alreadyMatched')}
@@ -866,18 +1002,18 @@ export default function ModelConnectionWizard({
   };
 
   return (
-    <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-label={t('models.wizard.aria')}>
+    <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-labelledby={titleId}>
       <DialogContent
         data-tour="ai-setup-wizard"
-        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto' }}
+        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto', '@media (prefers-reduced-motion: reduce)': { '& [data-setup-decoration]': { animation: 'none' } } }}
       >
-        <Box aria-hidden sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
-        <Box aria-hidden sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
+        <Box aria-hidden data-setup-decoration sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
+        <Box aria-hidden data-setup-decoration sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
 
         <Box sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             {history.length && step !== 'success' ? (
-              <IconButton onClick={back} aria-label={t('models.wizard.backAria')}><ArrowBackRoundedIcon /></IconButton>
+              <IconButton onClick={back} disabled={busy || ollamaPulling || Boolean(installTool)} aria-label={t('models.wizard.backAria')}><ArrowBackRoundedIcon /></IconButton>
             ) : <Box sx={{ width: 40 }} />}
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('models.wizard.progressAria')} />
@@ -892,6 +1028,7 @@ export default function ModelConnectionWizard({
           {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
           <Box
             key={step}
+            ref={stepContentRef}
             sx={{
               animation: `${arrive} 260ms ease-out both`,
               '@media (prefers-reduced-motion: reduce)': { animation: 'none' },

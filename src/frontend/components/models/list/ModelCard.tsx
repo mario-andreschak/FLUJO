@@ -31,6 +31,7 @@ import { ModelTestResult } from '@/shared/types/model/response';
 import { getModelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 import ModelTestDialog from './ModelTestDialog';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -93,7 +94,7 @@ export const ModelCard = ({
   const { visualStyle } = useThemeUtils();
   const modern = visualStyle === 'modern';
   const providerProfile = getProviderProfile(model.provider, model.adapter);
-  const providerMark = (providerProfile.label.match(/[a-z0-9]+/gi) ?? [])
+  const providerMark = ((model.fallbackPolicy ? 'Fallback Policy' : providerProfile.label).match(/[a-z0-9]+/gi) ?? [])
     .slice(0, 2)
     .map((part) => part[0])
     .join('')
@@ -200,7 +201,7 @@ export const ModelCard = ({
             </Typography>
           )}
           <Chip
-            label={providerProfile.label}
+            label={model.fallbackPolicy ? `${t('models.policy.badge')} · ${model.fallbackPolicy.modelIds.length}` : providerProfile.label}
             size="small"
             sx={{
               mt: 0.45,
@@ -309,7 +310,7 @@ export const ModelCard = ({
             {model.displayName || model.name}
           </Typography>
           <Chip
-            label={providerProfile.label}
+            label={model.fallbackPolicy ? `${t('models.policy.badge')} · ${model.fallbackPolicy.modelIds.length}` : providerProfile.label}
             size="small"
             sx={{
               flexShrink: 0,
@@ -447,6 +448,7 @@ export const ModelCard = ({
         >
           {body}
         </CardActionArea>
+        <AllowanceBar modelIds={model.fallbackPolicy?.modelIds ?? [model.id]} />
       </Card>
     );
   }
@@ -469,6 +471,7 @@ export const ModelCard = ({
     >
       {favoriteButton}
       {body}
+      <AllowanceBar modelIds={model.fallbackPolicy?.modelIds ?? [model.id]} />
       {modern ? (
         <CardActions
           disableSpacing

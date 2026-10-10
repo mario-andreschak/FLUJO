@@ -115,19 +115,36 @@ describe('setup-first home journey', () => {
     expect(screen.queryByRole('heading', { name: /What would you like AI to help with/i })).not.toBeInTheDocument();
   });
 
-  it('unlocks the simple builder after a model is connected but keeps Talk gated', async () => {
+  it('unlocks the simple builder with saved AI settings while pointing to model testing and keeping Talk gated', async () => {
     mockTryLoadModels.mockResolvedValue([{ id: 'model-1' }]);
     mockLoadFlows.mockResolvedValue([]);
 
     render(<HomePage />);
 
-    await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument());
-    expect(screen.getByRole('link', { name: 'Manage AI setup' })).toHaveAttribute('href', '/models');
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: 'Test model' })).toHaveAttribute('href', '/models');
     expect(screen.getByRole('link', { name: 'Open simple builder' })).toHaveAttribute(
       'href',
       '/flows?create=assistant',
     );
     expect(screen.getByRole('button', { name: 'Create an agent first' })).toBeDisabled();
+  });
+
+  it.each([
+    { state: 'missing', models: [], aiAction: 'Connect AI', aiHref: '/models?add=1' },
+    { state: 'unavailable', models: null, aiAction: 'Open AI setup', aiHref: '/models' },
+  ])('explains $state AI settings before agent creation when the bundled agent already exists', async ({ models, aiAction, aiHref }) => {
+    mockTryLoadModels.mockResolvedValue(models);
+    mockLoadFlows.mockResolvedValue([{ id: 'default-agent-flujo', name: 'FLUJO' }]);
+
+    render(<HomePage />);
+
+    await waitFor(() => expect(screen.getByText('1 created')).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: aiAction })).toHaveAttribute('href', aiHref);
+    expect(screen.getByRole('button', { name: 'Connect AI first' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Finish AI setup first' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Create another' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Create another' })).not.toBeInTheDocument();
   });
 
   it('unlocks Talk after both a model and an agent exist', async () => {
@@ -136,12 +153,26 @@ describe('setup-first home journey', () => {
 
     render(<HomePage />);
 
-    await waitFor(() => expect(screen.getByText('1 ready')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('1 created')).toBeInTheDocument());
     expect(screen.getByRole('link', { name: 'Create another' })).toHaveAttribute(
       'href',
       '/flows?create=assistant',
     );
     expect(screen.getByRole('link', { name: 'Start talking' })).toHaveAttribute('href', '/chat');
+    expect(screen.getByText('Not started')).toBeInTheDocument();
+  });
+
+  it('does not claim successful use or run a model test when only saved setup and a chat record exist', async () => {
+    await renderCompletedDashboard();
+
+    expect(screen.getByText('Saved')).toBeInTheDocument();
+    expect(screen.getByText('1 created')).toBeInTheDocument();
+    expect(screen.getByText('Started')).toBeInTheDocument();
+    expect(screen.queryByText(/^(Connected|Ready|Completed)$/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Test model' })).toHaveAttribute('href', '/models');
+    const requests = (globalThis.fetch as jest.Mock).mock.calls.map(([input]: [RequestInfo | URL]) => String(input));
+    expect(requests).not.toContain('/api/model/test');
+    expect(requests).not.toContain('/api/avatar/work-model');
   });
 
   it('no longer offers the collective hide/show toggle', async () => {

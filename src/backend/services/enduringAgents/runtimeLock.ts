@@ -277,9 +277,10 @@ async function readRecoveryOwner(lockPath: string): Promise<RecoveryOwnerRecord 
 async function listRecoveryOwners(
   lockRoot: string,
   lockPath: string,
+  directoryNames: readonly string[],
 ): Promise<Array<{ path: string; owner: RecoveryOwnerRecord }>> {
   const prefix = `${path.basename(lockPath)}.recovery.`;
-  const names = (await fs.readdir(lockRoot)).filter(
+  const names = directoryNames.filter(
     (name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)),
   );
   const records = await Promise.all(names.map(async (name) => {
@@ -307,15 +308,38 @@ function abandonmentMarkerPath(lockPath: string, ownerId: string): string {
   return markerPath;
 }
 
+function abandonedOwnerIdsFromNames(
+  lockPath: string,
+  directoryNames: readonly string[],
+): Set<string> {
+  const prefix = `${path.basename(lockPath)}.abandoned.`;
+  const ownerIds = directoryNames
+    .filter((name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)))
+    .map((name) => name.slice(prefix.length));
+  return new Set(ownerIds);
+}
+
 async function listAbandonedOwnerIds(
   lockRoot: string,
   lockPath: string,
 ): Promise<Set<string>> {
-  const prefix = `${path.basename(lockPath)}.abandoned.`;
-  const ownerIds = (await fs.readdir(lockRoot))
-    .filter((name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)))
-    .map((name) => name.slice(prefix.length));
-  return new Set(ownerIds);
+  return abandonedOwnerIdsFromNames(lockPath, await fs.readdir(lockRoot));
+}
+
+async function listLockCoordinationState(
+  lockRoot: string,
+  lockPath: string,
+): Promise<{
+  recoveries: Array<{ path: string; owner: RecoveryOwnerRecord }>;
+  abandonedOwnerIds: Set<string>;
+}> {
+  // This listing belongs only to this acquisition phase. Scan again after
+  // installing the canonical owner and on every contention-loop iteration.
+  const directoryNames = await fs.readdir(lockRoot);
+  return {
+    recoveries: await listRecoveryOwners(lockRoot, lockPath, directoryNames),
+    abandonedOwnerIds: abandonedOwnerIdsFromNames(lockPath, directoryNames),
+  };
 }
 
 async function publishOwnerAbandoned(
@@ -659,6 +683,41 @@ export async function _isPersonaRuntimeLockOwnerAliveForTests(
   }, new Set());
 }
 
+/** Process identity shared by durable local jobs, including detached subflows. */
+export interface RuntimeProcessIdentity {
+  pid: number;
+  processInstanceId: string;
+  processBirthMarkerV2?: string;
+}
+
+/** Bind a newly spawned child to an OS birth observation, never to PID alone. */
+export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeProcessIdentity> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid child PID.');
+  const birth = await queryProcessBirthMarker(pid);
+  if (!birth || !birthMarkerVersion(birth)) throw new Error('Child process birth identity is unavailable.');
+  return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
+}
+
+export async function getRuntimeProcessIdentity(): Promise<RuntimeProcessIdentity> {
+  const birth = await getOwnProcessBirthMarkerV2();
+  return {
+    pid: process.pid,
+    processInstanceId: PROCESS_INSTANCE_ID,
+    ...(birth ? { processBirthMarkerV2: birth } : {}),
+  };
+}
+
+/** Uncertain probes and PID reuse without comparable birth metadata stay live. */
+export async function isRuntimeProcessIdentityAlive(identity: RuntimeProcessIdentity): Promise<boolean> {
+  if (identity.pid === process.pid && identity.processInstanceId === PROCESS_INSTANCE_ID) return true;
+  return isOwnerProcessAlive({
+    ...identity,
+    ownerId: 'detached-process-owner',
+    workspace: getCurrentWorkspace(),
+    acquiredAt: 0,
+  }, new Set());
+}
+
 async function unlinkWithRetry(filePath: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
@@ -812,6 +871,24 @@ async function retireOwnedCanonical(
   lockPath: string,
   owner: LockOwnerRecord,
 ): Promise<void> {
+  // Keep a healthy logical owner live until its unlink completes. Other
+  // processes cannot recover this owner while it is live, and acquisition has
+  // already drained predecessor recovery intents before protected work began.
+  // Publishing abandonment first would require another intent to guard this
+  // unlink; that slower protocol is reserved for failed/uncertain retirement.
+  if (ACTIVE_OWNER_IDS.has(owner.ownerId)) {
+    try {
+      const current = await readOwner(lockPath);
+      if (current?.ownerId === owner.ownerId
+          && current.processInstanceId === owner.processInstanceId
+          && current.pid === owner.pid) {
+        await unlinkWithRetry(lockPath);
+        return;
+      }
+    } catch {
+      // Preserve the intent/abandonment protocol and deferred cleanup below.
+    }
+  }
   await withRecoveryIntent(lockRoot, lockPath, owner, async () => {
     let markerPath: string | null = null;
     try {
@@ -892,10 +969,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
 
   try {
     while (true) {
-      const [recoveries, abandonedOwnerIds] = await Promise.all([
-        listRecoveryOwners(lockRoot, lockPath),
-        listAbandonedOwnerIds(lockRoot, lockPath),
-      ]);
+      const { recoveries, abandonedOwnerIds } = await listLockCoordinationState(lockRoot, lockPath);
       const recoveryStates = await Promise.all(recoveries.map(async (recovery) => ({
         ...recovery,
         alive: await isOwnerProcessAlive(recovery.owner, abandonedOwnerIds),
@@ -933,10 +1007,10 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         // installation. Do not enter the critical section until every live
         // recovery syscall has finished, then verify none deleted this lock from
         // a stale view of its predecessor.
-        const [afterInstall, abandonedAfterInstall] = await Promise.all([
-          listRecoveryOwners(lockRoot, lockPath),
-          listAbandonedOwnerIds(lockRoot, lockPath),
-        ]);
+        const {
+          recoveries: afterInstall,
+          abandonedOwnerIds: abandonedAfterInstall,
+        } = await listLockCoordinationState(lockRoot, lockPath);
         const liveAfterInstall = await Promise.all(afterInstall.map(
           ({ owner: recovery }) => isOwnerProcessAlive(recovery, abandonedAfterInstall),
         ));
@@ -1110,15 +1184,62 @@ const WORKSPACE_WRITER_LOCK = /^\.workspace-capture-writer-[0-9a-f-]{36}\.lock$/
 const workspaceWriterAdmissionChains = globalThis.__flujo_workspace_writer_admission_chains
   ??= new Map<string, Promise<void>>();
 
-/** Only one local registration needs to contend for the filesystem gate. */
-function registerWorkspaceWriter(task: () => Promise<void>): Promise<void> {
+interface WorkspaceWriterRegistration {
+  task: (admission: PersonaRuntimeLock) => Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+interface WorkspaceWriterRegistrationBatch { requests: WorkspaceWriterRegistration[] }
+const writerBatchRuntime = globalThis as typeof globalThis & {
+  __flujoWorkspaceWriterRegistrationBatches?: Map<string, WorkspaceWriterRegistrationBatch>;
+};
+const writerBatches = writerBatchRuntime.__flujoWorkspaceWriterRegistrationBatches ??= new Map();
+export const WORKSPACE_WRITER_REGISTRATION_BATCH_SIZE = 8;
+
+/** Coalesce bounded local registrations, never mutation bodies, under one physical admission lease. */
+function registerWorkspaceWriter(task: WorkspaceWriterRegistration['task']): Promise<void> {
   const key = getWorkspaceDbDir();
-  const previous = workspaceWriterAdmissionChains.get(key) ?? Promise.resolve();
-  const pending = previous.catch(() => undefined).then(task);
-  workspaceWriterAdmissionChains.set(key, pending);
-  return pending.finally(() => {
-    if (workspaceWriterAdmissionChains.get(key) === pending) workspaceWriterAdmissionChains.delete(key);
-  });
+  let batch = writerBatches.get(key);
+  const created = !batch;
+  if (!batch) { batch = { requests: [] }; writerBatches.set(key, batch); }
+  const pending = new Promise<void>((resolve, reject) => batch!.requests.push({ task, resolve, reject }));
+  if (created) {
+    const current = batch;
+    const draining = Promise.resolve().then(async () => {
+      while (current.requests.length) {
+        const requests = current.requests.splice(0, WORKSPACE_WRITER_REGISTRATION_BATCH_SIZE);
+        const outcomes = new Map<WorkspaceWriterRegistration, unknown>();
+        let admission: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+        let failure: unknown;
+        try {
+          admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
+          for (const request of requests) {
+            try {
+              await admission.lock.assertOwned();
+              await request.task(admission.lock);
+            } catch (error) { outcomes.set(request, error); }
+          }
+        } catch (error) { failure = error; }
+        finally {
+          try { await admission?.release(); }
+          catch (error) { failure = error; }
+        }
+        // No mutation starts before the physical capture-admission lease is released.
+        for (const request of requests) {
+          if (failure !== undefined) request.reject(failure);
+          else if (outcomes.has(request)) request.reject(outcomes.get(request));
+          else request.resolve();
+        }
+      }
+      // Detach synchronously before resolved callers can enqueue the next burst.
+      if (writerBatches.get(key) === current) writerBatches.delete(key);
+    }).finally(() => {
+      if (writerBatches.get(key) === current) writerBatches.delete(key);
+      if (workspaceWriterAdmissionChains.get(key) === draining) workspaceWriterAdmissionChains.delete(key);
+    });
+    workspaceWriterAdmissionChains.set(key, draining);
+  }
+  return pending;
 }
 
 /**
@@ -1136,13 +1257,7 @@ export async function withWorkspaceProcessMutation<T>(task: () => Promise<T>): P
     let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
     try {
       await registerWorkspaceWriter(async () => {
-        const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
-        try {
-          await admission.lock.assertOwned();
-          writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
-        } finally {
-          await admission.release();
-        }
+        writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
       });
       await writer!.lock.assertOwned();
       return await task();

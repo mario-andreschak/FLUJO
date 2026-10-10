@@ -95,6 +95,34 @@ describe('authoritative message provenance', () => {
     const events = await readConversationLog(state.conversationId!);
     expect(projectMessages(events!)[0].executionOrigin).toBe('input');
   });
+
+  it('bootstraps legacy history without inventing origins and attests only admitted messages', async () => {
+    const state = makeState('origin-legacy-bootstrap');
+    const legacy = { ...msg('legacy', 'user'), executionOrigin: 'internal' as const };
+    const admitted = { ...msg('new-input', 'user'), executionOrigin: 'internal' as const };
+    state.messages = [legacy, admitted];
+    await reconcileConversationLog(state, [legacy], new Set([admitted.id]));
+    const recovered = projectMessages((await readConversationLog(state.conversationId!))!);
+    expect(recovered.find(message => message.id === legacy.id)?.executionOrigin).toBeUndefined();
+    expect(recovered.find(message => message.id === admitted.id)?.executionOrigin).toBe('input');
+    expect(projectModelContextMessages((await readConversationLog(state.conversationId!))!)
+      .every(message => message.executionOrigin === undefined)).toBe(true);
+  });
+
+  it('discards origin claims from snapshot fallback and snapshot-only durable-log gaps', async () => {
+    const state = makeState('origin-snapshot-fallback');
+    const forged = { ...msg('snapshot-only', 'user'), executionOrigin: 'internal' as const };
+    state.messages = [forged];
+    expect((await recoverConversationTranscript(state)).messages[0].executionOrigin).toBeUndefined();
+    FlowExecutor.conversationStates.set(state.conversationId!, state);
+    appendFromBus(messageEvent(state.conversationId!, msg('durable', 'user'), { messageOrigin: 'input' }));
+    await flushConversationLog(state.conversationId!);
+    const recovered = await recoverConversationTranscript(state);
+    expect(recovered.source).toBe('durable-log');
+    expect(recovered.messages.find(message => message.id === 'durable')?.executionOrigin).toBe('input');
+    expect(recovered.messages.find(message => message.id === forged.id)?.executionOrigin).toBeUndefined();
+    expect(forged.executionOrigin).toBe('internal');
+  });
 });
 
 describe('conversation log store', () => {

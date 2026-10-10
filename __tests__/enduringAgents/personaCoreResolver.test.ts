@@ -18,6 +18,10 @@ import {
   PersonaCoreResolutionError,
   resolvePersonaCoreRevision,
 } from '@/backend/services/enduringAgents/personaCoreResolver';
+import {
+  PersonaCorePreparationConflictError,
+  reconcileDisabledPersonaCore,
+} from '@/backend/services/enduringAgents/personaCorePreparation';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   activateBehaviorBindingRevision,
@@ -211,6 +215,84 @@ async function installOverride(
 }
 
 describe('Persona Core provenance resolution', () => {
+  it('reconciles a reviewed Core only while the Persona is disabled', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const { flowRef } = await requireAuthoredFlow(setup.bundle.persona);
+      const input = { personaId: setup.bundle.persona.id, expectedCoreFlowRef: flowRef,
+        expectedActiveRevisionId: setup.binding.activeRevisionId };
+      await expect(reconcileDisabledPersonaCore(input))
+        .rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+      const current = await getPersona(setup.bundle.persona.id);
+      if (!current) throw new Error('Expected Persona.');
+      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, current.id,
+        PersonaSchema.parse({ ...current, lifecycleState: 'disabled', updatedAt: Math.max(Date.now(), current.updatedAt + 1) }));
+      const prepared = await reconcileDisabledPersonaCore(input);
+      expect(prepared.personaId).toBe(current.id);
+      expect(prepared.revisionId).toBe((await getBehaviorBinding(setup.binding.id))?.activeRevisionId);
+      await expect(reconcileDisabledPersonaCore({ ...input, expectedActiveRevisionId: 'stale-revision' }))
+        .rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+    });
+  });
+
+  it('binds only the two opt-in Goal abilities with a stale-Flow CAS guard', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const { flowRef, flow } = await requireAuthoredFlow(setup.bundle.persona);
+      const current = await getPersona(setup.bundle.persona.id);
+      if (!current || flow.updatedAt === undefined) throw new Error('Expected saved Persona and Core.');
+      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, current.id,
+        PersonaSchema.parse({ ...current, lifecycleState: 'disabled',
+          updatedAt: Math.max(Date.now(), current.updatedAt + 1) }));
+      const input = {
+        personaId: current.id,
+        expectedCoreFlowRef: flowRef,
+        expectedActiveRevisionId: setup.binding.activeRevisionId,
+        enableGoalAbilities: {
+          expectedFlowUpdatedAt: flow.updatedAt,
+          processNodeId: processNode(flow).id,
+        },
+      };
+      await expect(reconcileDisabledPersonaCore({
+        ...input,
+        enableGoalAbilities: { ...input.enableGoalAbilities, expectedFlowUpdatedAt: flow.updatedAt - 1 },
+      })).rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+      const prepared = await reconcileDisabledPersonaCore(input);
+      const revision = await getBehaviorRevision(prepared.revisionId);
+      expect(revision).not.toBeNull();
+      const abilities = processNode(revision!.flowSnapshot).data.properties?.personaTools;
+      expect(abilities).toEqual(expect.arrayContaining([
+        'work_item_goal_create', 'work_item_runtime_read',
+      ]));
+      expect(prepared.authoredFlowUpdatedAt).toBeGreaterThan(flow.updatedAt);
+      await expect(reconcileDisabledPersonaCore(input))
+        .rejects.toBeInstanceOf(PersonaCorePreparationConflictError);
+    });
+  });
+
+  it('publishes a new pinned closure after a child edit without changing the parent and preserves the previous round', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const original = await requireAuthoredFlow(setup.bundle.persona);
+      const worker = await saveSharedClone(setup.baseRevision.flowSnapshot, 'isolated_worker');
+      const core = clone(original.flow);
+      core.nodes.push({ id: 'worker-subflow', type: 'subflow', position: { x: 280, y: 280 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: worker.id, inputMode: 'isolated', promptTemplate: 'Verify the deliverable.' } } });
+      expect((await flowService.saveFlow(core)).success).toBe(true);
+      const first = await resolvePersonaCoreRevision(setup.bundle.persona.id);
+      expect(first.flowSnapshot.executionDependencies!.flows[0].flowId).toBe(worker.id);
+      const updatedWorker = clone(worker);
+      processNode(updatedWorker).data.properties!.promptTemplate = 'Updated worker verification contract.';
+      expect((await flowService.saveFlow(updatedWorker)).success).toBe(true);
+      const next = await resolvePersonaCoreRevision(setup.bundle.persona.id);
+      expect(next.id).not.toBe(first.id);
+      expect(next.contentHash).not.toBe(first.contentHash);
+      expect(next.flowSnapshot.nodes).toEqual(first.flowSnapshot.nodes);
+      const recovered = await getBehaviorRevision(first.id);
+      expect(recovered).toEqual(first);
+      expect(processNode(recovered!.flowSnapshot.executionDependencies!.flows[0].flowSnapshot).data.properties!.promptTemplate).not.toBe('Updated worker verification contract.');
+      expect((await resolvePersonaCoreRevision(setup.bundle.persona.id)).id).toBe(next.id);
+    });
+  });
   it.each(['persona_copy', 'shared', 'legacy'] as const)(
     'preserves an accepted improvement for unchanged %s authored Core content',
     async (mode) => {

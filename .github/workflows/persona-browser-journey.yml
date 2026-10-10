@@ -30,20 +30,24 @@ jobs:
         run: |
           test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
           [[ "$PERSONA_JOURNEY_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Verify the selected trusted checkout
         env:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
-          test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
           git merge-base --is-ancestor "$PERSONA_JOURNEY_COMMIT" "$WORKFLOW_SHA"
-      - uses: actions/setup-node@v4
+          git checkout --detach "$PERSONA_JOURNEY_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22'
-          cache: npm
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
       - run: npx playwright install --with-deps chromium
       - name: Verify report rejection and source guards
@@ -52,11 +56,14 @@ jobs:
       - name: Verify clean source before building
         run: node --input-type=module -e "import { assertExactPersonaAcceptanceSource } from './scripts/persona-acceptance-source.mjs'; assertExactPersonaAcceptanceSource(process.env.PERSONA_JOURNEY_COMMIT);"
       - run: npm run build
-      - name: Retain and normalize generated Next type references
+      - name: Retain generated Next type references
         run: |
           mkdir -p persona-browser-artifacts
-          git diff -- next-env.d.ts > persona-browser-artifacts/next-env-build.patch
-          git restore -- next-env.d.ts
+          cp next-env.d.ts persona-browser-artifacts/next-env.d.ts
+          if git ls-files --error-unmatch next-env.d.ts >/dev/null 2>&1; then
+            git diff -- next-env.d.ts > persona-browser-artifacts/next-env-build.patch
+            git restore -- next-env.d.ts
+          fi
       - run: npm run test:persona-browser-environment
       - name: Record clean source and build identity before the journey
         run: node scripts/persona-browser-acceptance/check-source.mjs --phase before --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID"
@@ -80,7 +87,7 @@ jobs:
               fi
             done | sort -z | xargs -0 -r sha256sum > persona-browser-artifacts/SHA256SUMS
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: persona-browser-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -94,7 +101,7 @@ jobs:
           retention-days: 90
       - name: Download the published evidence
         if: success()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: persona-browser-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: published-persona-browser

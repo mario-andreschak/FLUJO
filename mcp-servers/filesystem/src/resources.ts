@@ -16,7 +16,8 @@
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import type { Resource as MCPResource, ReadResourceResult as MCPReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
-import { createLogger, isInside, loadEffectiveRoots } from '@flujo-ai/mcp-shared';
+import { createLogger, loadEffectiveRoots } from '@flujo-ai/mcp-shared';
+import { confineFilesystemPath, FilesystemRootViolation } from './pathConfinement.js';
 
 const MCP_APPS_PROTOCOL_VERSION = '2026-01-26';
 const FILESYSTEM_SERVER_NAME = 'filesystem';
@@ -128,17 +129,18 @@ export async function readTouchedFileResource(uri: string): Promise<MCPServiceRe
   } catch (err) {
     resLog.warn('readTouchedFileResource: could not load roots', err);
   }
-  if (roots.length === 0 || !roots.some((root) => isInside(root, entry.filePath))) {
-    return { success: false, error: `Path "${entry.filePath}" is outside the configured filesystem roots.`, statusCode: 403 };
-  }
   try {
-    let text = await fs.readFile(entry.filePath, 'utf8');
+    const filePath = await confineFilesystemPath(entry.filePath, roots);
+    let text = await fs.readFile(filePath, 'utf8');
     if (text.length > MAX_RESOURCE_CHARS) text = text.slice(0, MAX_RESOURCE_CHARS) + '\n…[truncated]';
     return {
       success: true,
       data: { contents: [{ uri, mimeType: 'text/plain', text } as MCPReadResourceResult['contents'][number]] },
     };
   } catch (err) {
+    if (err instanceof FilesystemRootViolation) {
+      return { success: false, error: err.message, statusCode: 403 };
+    }
     return { success: false, error: `Could not read tracked file: ${err instanceof Error ? err.message : String(err)}`, statusCode: 500 };
   }
 }

@@ -2,6 +2,8 @@ import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { OpenRouterAgentAdapter } from '@/backend/services/model/adapters/openrouterAgentAdapter';
 import { __resetReasoningStore } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
+import { getCompletionAdapter } from '@/backend/services/model/adapters';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({
   verbose: jest.fn(), debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(),
@@ -131,9 +133,11 @@ it('carries encrypted reasoning before its original call on the next flow turn',
 it.each(['error', 'cancelled'])('propagates failures and finalizes archived requests as %s', async outcome => {
   const data = input();
   const controller = new AbortController();
-  if (outcome === 'cancelled') controller.abort();
   data.signal = controller.signal;
-  data.onSdkRequest = jest.fn(async () => 'dispatch');
+  data.onSdkRequest = jest.fn(async () => {
+    if (outcome === 'cancelled') controller.abort(new Error('transport failed'));
+    return 'dispatch';
+  });
   data.onSdkRequestResult = jest.fn(async () => undefined);
   failure = new Error('transport failed');
   await expect(new OpenRouterAgentAdapter().createCompletion(data)).rejects.toThrow('transport failed');
@@ -152,6 +156,24 @@ it('stops a dispatch when request admission loses execution authority', async ()
   const lost = new FlowExecutionAuthorityError('Lease expired');
   const data = { ...input(), onSdkRequest: async () => { throw lost; } };
   await expect(new OpenRouterAgentAdapter().createCompletion(data)).rejects.toBe(lost);
+});
+
+it('refuses archive memory pressure before the provider dispatch', async () => {
+  const refused = new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+  await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
+    onSdkRequest: async () => { throw refused; },
+  })).rejects.toBe(refused);
+});
+
+it('rejects restricted assessments and pre-aborted requests before constructing the SDK', async () => {
+  const data = { ...input(), readOnlyAssessment: true };
+  await expect(new OpenRouterAgentAdapter().createCompletion(data)).rejects.toThrow('Read-only assessment');
+  expect(() => getCompletionAdapter(model).createCompletion(data)).toThrow('read-only assessment');
+  const controller = new AbortController();
+  controller.abort(new Error('already stopped'));
+  await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(), signal: controller.signal }))
+    .rejects.toThrow('already stopped');
+  expect(sdk.OpenRouter).not.toHaveBeenCalled();
 });
 
 it('tolerates ordinary archive errors but propagates authority lost during finalization', async () => {

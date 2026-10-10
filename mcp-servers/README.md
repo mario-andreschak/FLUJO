@@ -2,6 +2,11 @@
 
 This workspace contains the stdio MCP processes managed by FLUJO:
 
+All four public packages require Node.js `^22.17.0 || ^24.2.0`, matching the
+app's [runtime compatibility policy](../docs/operations/windows-native-runtime-profile.md).
+Use a current patched 22.x or 24.x release. The binary checks its runtime before
+dependency initialization; standalone builds embed the same preflight files.
+
 | Package | Executable | Purpose |
 | --- | --- | --- |
 | `@mario.andreschak/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through the localhost control API. |
@@ -37,6 +42,16 @@ node mcp-servers/browser/dist/index.js
 `mcp-flujo` advertises the draft `io.modelcontextprotocol/skills` extension and implements the frozen revision `SEP-2640@a3e147ca2710f68214247aecc729731ee1ae8d03`. It aggregates only downstream servers with `enableMcpSkills: true`, follows bounded pagination, and rewrites entries to server-qualified `skill+flujo://` URIs so equal source URIs on two servers cannot collide. Resource reads return only content that passes FLUJO's declared size and SHA-256 verification. Discovery is not approval, and the standalone process holds no mutable approval state. See `docs/features/mcp-skills.md`.
 
 ## Filesystem server
+
+Filesystem tool calls and tracked-file resource reads check both the logical
+configured roots and their resolved filesystem destinations. A symlink or
+junction into an unapproved directory is rejected, including when a new file's
+parent is missing. `FLUJO_FS_ROOTS` remains an independent ceiling over client
+roots. Links into another explicitly allowed root remain usable, and move/delete
+retain their behavior on the link itself. These checks run before each operation;
+they do not provide atomic isolation from concurrent host directory/link
+replacement. Directory listings report links as `other` without following their
+targets to obtain a size.
 
 The filesystem `search` tool keeps one small cross-platform interface for name
 and literal content matching. Directory traversal uses Node `Dirent` metadata to

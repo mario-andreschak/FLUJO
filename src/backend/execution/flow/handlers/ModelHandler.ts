@@ -1,4 +1,8 @@
+import { reserveArchiveSnapshot, estimateArchivePayload,
+  ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
+import { createHash } from 'node:crypto';
+import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -12,6 +16,17 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
+import { assertNativeBrokerAuthority, createNativeToolPort, nativeDigest, nativeToolInventoryDigest,
+  type NativeBrokerAuthority } from './nativeToolBroker';
+import { prepareNativeInvocation, submitNativeInvocation, finishNativeInvocation, holdNativeInvocation,
+  NativeInvocationHeldError, type NativeInvocationReceipt } from './nativeToolJournal';
+import { readNativeOriginLineage } from './nativeOriginLineage';
+import { assertNativeInvocationSessionHook, createNativeInvocationSession,
+  type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
+import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
+import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
+import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -48,8 +63,8 @@ import {
   COMPACTION_PROJECTION_VERSION,
   type CompactionProjectionIdentity,
 } from '../compaction/types';
-import { normalizeMaxTokens } from '@/shared/types/model';
-import { normalizeModelTemperature } from '@/shared/types/model/provider';
+import { normalizeMaxTokens, type Model } from '@/shared/types/model';
+import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
   refitCodexMessagesForInputLimit,
@@ -116,6 +131,7 @@ import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import {
   archiveModelDispatch,
+  readNativeModelTurnSnapshot,
   updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
@@ -529,7 +545,7 @@ export class ModelHandler {
     conversationId: string | undefined,
     nodeId: string | undefined,
     projectionView: CompactionProjectionIdentity['view'],
-    model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
+    model: { id: string; adapter?: ModelAdapter; provider?: ModelProvider; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
@@ -546,7 +562,7 @@ export class ModelHandler {
         const message = source[i];
         const promptTokens = message.contextUsage !== undefined
           ? message.contextUsage?.promptTokens
-          : model.adapter === 'codex-cli' || model.adapter === 'claude-cli'
+          : isSelfOrchestratingAdapter(resolveModelAdapter(model.provider, model.adapter))
             ? undefined
             : message.usage?.promptTokens;
         if (typeof promptTokens === 'number' && promptTokens > 0) {
@@ -1037,6 +1053,11 @@ export class ModelHandler {
       };
     }
 
+    if (error instanceof ModelTurnArchiveMemoryError) {
+      return { success: false, error: createModelError(error.code, error.message, modelId,
+        undefined, { status: error.status }) };
+    }
+
     // Error diagnostics are deliberately metadata-only. Provider bodies,
     // messages, request URLs, headers, and stacks may contain credentials or
     // execution content and must never be passed to the logger.
@@ -1129,6 +1150,7 @@ export class ModelHandler {
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
+      executionExtensionContext: input.executionExtensionContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -1137,7 +1159,8 @@ export class ModelHandler {
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
-    let modelAdapter: string | undefined;
+    let modelIsFallbackPolicy = false;
+    let modelAdapter: ModelAdapter | undefined;
     let modelContextWindow: number | undefined;
     let modelCompactionThreshold: number | undefined;
     const nodeDisplayName = nodeName;
@@ -1148,12 +1171,33 @@ export class ModelHandler {
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
-        modelAdapter = model.adapter;
+        modelIsFallbackPolicy = Boolean(model.fallbackPolicy);
+        modelAdapter = resolveModelAdapter(model.provider, model.adapter);
         modelContextWindow = model.contextWindow;
         modelCompactionThreshold = model.compactionThreshold;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!input.nativeOriginalHost && input.personaAttribution) {
+      input = { ...input, nativeOriginalHost: await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
+        conversationId, runId, nodeId, modelId, personaAttribution: input.personaAttribution }) };
+    }
+    if (input.nativeOriginalHost) {
+      assertNativeOriginalProcessHost(input.nativeOriginalHost.process);
+      input = { ...input, nativeBrokerAuthority: input.nativeOriginalHost.broker,
+        nativeInvocationSessionHook: input.nativeOriginalHost.session };
+    }
+    if (input.nativeBrokerAuthority) {
+      assertNativeBrokerAuthority(input.nativeBrokerAuthority);
+      if (!conversationId || !runId || !nodeId || input.executionExtensionContext
+        || modelIsFallbackPolicy || (modelAdapter !== 'codex-cli' && modelAdapter !== 'claude-cli')) {
+        throw new Error('Native broker requires an owned native model run and cannot use a private extension or fallback route.');
+      }
+    }
+    if (input.nativeInvocationSessionHook) {
+      assertNativeInvocationSessionHook(input.nativeInvocationSessionHook);
+      if (!input.nativeBrokerAuthority) throw new Error('Native session publication requires broker authority.');
     }
 
     // Native session reuse is safe only for FULL-HISTORY nodes (a scoped
@@ -1161,6 +1205,7 @@ export class ModelHandler {
     // watermark). Codex enables it by default; Claude subscription keeps its
     // existing experimental setting. Ineligible adapters always re-flatten.
     const sessionResume =
+      !input.nativeBrokerAuthority &&
       !wireMessages &&
       (modelAdapter === 'codex-cli' ||
         (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
@@ -1313,7 +1358,7 @@ export class ModelHandler {
     // then acknowledge acceptance or return it to the inbox on rejection.
     const steeringWorkspace = getCurrentWorkspace();
     const steering: ModelSteering | undefined = conversationId &&
-      (modelAdapter === 'claude-cli' || modelAdapter === 'codex-cli')
+      isSelfOrchestratingAdapter(modelAdapter)
       ? {
         take: () => runWithWorkspace(steeringWorkspace, async () => {
           await assertFlowExecutionCurrent(durableContext);
@@ -1569,7 +1614,7 @@ export class ModelHandler {
     // and handoff filtering. The result exists only on the provider wire; the
     // canonical `messages` array remains the base for returned/persisted output.
     const projectedMessages = stripHandoffPlumbing(wireMessages ?? messages);
-    const compaction = await ModelHandler.maybeCompactWire(
+    const compaction = input.executionExtensionContext ? undefined : await ModelHandler.maybeCompactWire(
       projectedMessages,
       conversationId,
       nodeId,
@@ -1601,8 +1646,11 @@ export class ModelHandler {
 
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
+      nativeBrokerAuthority: input.nativeBrokerAuthority,
+      nativeInvocationSessionHook: input.nativeInvocationSessionHook,
+      nativeOriginalProcessHost: input.nativeOriginalHost?.process,
       toolNameMap,
-      maxTurns: effectiveMaxTurns,
+      maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
       temperatureOverride: input.temperatureOverride,
       requestToolApproval,
@@ -1627,6 +1675,7 @@ export class ModelHandler {
       wireMessageIds: effectiveMessages.map(message => message.id),
       nodeName,
       beforeToolDispatch: input.beforeToolDispatch,
+      executionExtensionContext: input.executionExtensionContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
       beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
       durableContext,
@@ -1918,6 +1967,10 @@ export class ModelHandler {
       }) => void;
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
+      executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+      nativeBrokerAuthority?: NativeBrokerAuthority;
+      nativeInvocationSessionHook?: NativeInvocationSessionHook;
+      nativeOriginalProcessHost?: NativeOriginalProcessHost;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -1955,10 +2008,25 @@ export class ModelHandler {
     // refit below can never multiply the number of waits.
     let attemptProducedOutput = false;
     let automaticRetriesUsed = 0;
+    let singlePhysicalAttempt = false;
+    let archiveSnapshotReservation: ArchiveMemoryReservation | undefined;
 
     try {
+      if (opts?.executionExtensionContext) {
+        await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+      }
       // Get the model
       const model = await modelService.getModel(modelId);
+      await assertFlowExecutionCurrent(opts?.durableContext ?? {});
+      // Native adapters require a trusted, verified restriction profile. Claude
+      // and Antigravity remain excluded from authenticated private execution.
+      if (opts?.executionExtensionContext) {
+        const restrictedAdapter = resolveModelAdapter(model?.provider, model?.adapter);
+        if (restrictedAdapter === 'claude-cli' || restrictedAdapter === 'antigravity-cli' || (restrictedAdapter === 'codex-cli'
+          && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
+          throw new ExecutionExtensionError('execution_model_adapter_forbidden');
+        }
+      }
       if (!model) {
         return {
           success: false,
@@ -1969,6 +2037,19 @@ export class ModelHandler {
           )
         };
       }
+      if (opts?.nativeBrokerAuthority) {
+        assertNativeBrokerAuthority(opts.nativeBrokerAuthority);
+        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext
+          || model.fallbackPolicy || (model.adapter !== 'codex-cli' && model.adapter !== 'claude-cli')) {
+          throw new Error('Native broker requires a fully owned native model attempt.');
+        }
+      }
+      if (opts?.nativeInvocationSessionHook) {
+        assertNativeInvocationSessionHook(opts.nativeInvocationSessionHook);
+        if (!opts.nativeBrokerAuthority) throw new Error('Native session publication requires broker authority.');
+      }
+
+      singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(opts?.executionExtensionContext, model);
 
       // Extract model settings. Malformed persisted values are omitted so NaN
       // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
@@ -1980,12 +2061,11 @@ export class ModelHandler {
         model.name,
       ) ?? (configuredTemperature === undefined || configuredTemperature === '' ? 0.0 : undefined);
 
-      // Resolve and decrypt the API key. Codex may run keyless: an empty key
-      // means "use the machine's ChatGPT plan login from `codex login`" (the
-      // adapter then omits the apiKey and the CLI falls back to its own auth).
+      // Resolve and decrypt the API key. Local-auth adapters accept an empty
+      // key to use the host CLI's supported login; each adapter owns that auth.
       const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+        resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,
@@ -2018,10 +2098,13 @@ export class ModelHandler {
         );
         return media === message.media ? message : { ...message, media };
       }));
-      let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
-        toApiMessages(messagesWithMaterializedMedia),
-        model.inputModalities,
-      );
+      const projectedMessages = toApiMessages(messagesWithMaterializedMedia);
+      // Antigravity CLI rejects unsupported attachments explicitly in its preflight.
+      // Filtering them here would turn an image request into text before that
+      // check and allow a response from a model that never received the image.
+      let apiMessages: OpenAI.ChatCompletionMessageParam[] = resolveModelAdapter(model.provider, model.adapter) === 'antigravity-cli'
+        ? projectedMessages
+        : filterUnsupportedMediaInputs(projectedMessages, model.inputModalities);
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
       const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
       let apiSourceIds: Array<string | undefined> = (opts?.wireMessageIds?.length === apiMessages.length
@@ -2052,6 +2135,7 @@ export class ModelHandler {
       // failed estimates, or non-positive savings remain on the text route.
       const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
       const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
+      if (opts?.executionExtensionContext) visualConfig.enabled = false;
       const visual = await compactMessagesVisually({
         messages: apiMessages,
         model,
@@ -2085,7 +2169,7 @@ export class ModelHandler {
           undefined,
           ...apiSourceIds.slice(candidate.endIndex),
         ];
-        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+        if (!opts?.executionExtensionContext) effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -2097,7 +2181,7 @@ export class ModelHandler {
       // runs for every adapter; self-orchestrating adapters flatten this safer
       // generic wire afterward and still benefit from the bounded content.
       const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
-      if (couldCompact(apiMessages, { keepRecentMessages })) {
+      if (!opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
         const beforeLosslessRefit = apiMessages;
         const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
@@ -2234,6 +2318,15 @@ export class ModelHandler {
       if (inputBudget !== undefined) {
         let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
         if (estimatedInputTokens > inputBudget) {
+          // A constrained private run cannot introduce resource tools or persist
+          // model content while recovering from an oversized provider request.
+          if (opts?.executionExtensionContext) {
+            return {
+              success: false,
+              error: createModelError('context_budget_exceeded',
+                "The private execution request exceeds the model's context budget.", modelId),
+            };
+          }
           let budgetMarkers = opts?.runResourceMarkers;
           if (opts?.conversationId) {
             budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
@@ -2423,7 +2516,8 @@ export class ModelHandler {
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
         ? normaliseOllamaRoot(model.baseUrl)
         : null;
-      const opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let routingModel = model;
       let providerAttemptOrdinal = 0;
       // One LOGICAL provider call; every retry below reuses this invocation id
       // and gets its own attempt id, so retries never look like separate calls.
@@ -2433,6 +2527,9 @@ export class ModelHandler {
       // completion. Track streamed transcript/steering messages so each later
       // dispatch archive captures the canonical conversation as it existed at
       // that exact request boundary, not the call's initial static array.
+      if (opts?.archiveModelTurns) {
+        archiveSnapshotReservation = reserveArchiveSnapshot(opts.canonicalMessages ?? messages);
+      }
       const archiveCanonicalMessages = opts?.archiveModelTurns
         ? structuredClone(opts.canonicalMessages ?? messages)
         : undefined;
@@ -2471,15 +2568,15 @@ export class ModelHandler {
         try {
           const attemptOrdinal = ++providerAttemptOrdinal;
           const attemptUsage = observation.usage ?? usageFromProviderResult(observation.result)
-            ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined);
+            ?? (routingModel.contextWindow ? { contextWindow: routingModel.contextWindow } : undefined);
           recordStatisticsEvent(createStatisticsEvent({
             type: 'model.attempt',
             runId: opts.runId,
             node: opts.nodeId ? { id: opts.nodeId } : undefined,
-            model: { id: modelId, name: model.displayName || model.name },
+            model: { id: routingModel.id, name: routingModel.displayName || routingModel.name },
             provider: {
-              id: model.provider || model.adapter || 'unknown',
-              name: model.adapter || model.provider,
+              id: routingModel.provider || routingModel.adapter || 'unknown',
+              name: routingModel.adapter || routingModel.provider,
             },
             credentialId: opaqueCredentialId,
             attempt: attemptOrdinal,
@@ -2545,6 +2642,13 @@ export class ModelHandler {
 
         const attemptStartedAt = Date.now();
         let providerAttemptObserved = false;
+        let nativeReceipt: NativeInvocationReceipt | undefined;
+        let nativeSession: ReturnType<typeof createNativeInvocationSession> | undefined;
+        let nativeTerminal = false;
+        let nativeSdkRequestStarted = false;
+        let nativeLiveObserved = false;
+        let nativeSdkOutcome: 'completed' | 'error' | 'cancelled' | undefined;
+        if (opts?.nativeBrokerAuthority) attemptProducedOutput = true;
         let attemptOutcome: 'completed' | 'error' | 'cancelled' = 'error';
         let attemptError: unknown;
         let attemptUsage: OpenAiUsageLike | undefined;
@@ -2559,6 +2663,7 @@ export class ModelHandler {
           attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           if (archiveCanonicalMessages) {
+            archiveSnapshotReservation?.grow(estimateArchivePayload(message) * 2);
             upsertMessageById(archiveCanonicalMessages, structuredClone(message));
           }
           opts?.onTranscriptMessage?.(message);
@@ -2631,9 +2736,64 @@ export class ModelHandler {
                     commitFlowDurableMutation(opts?.durableContext ?? {}, task),
                 },
               );
+              let nativeInventory: NativeInvocationSessionPayload['inventory'] & { digest: string } | undefined;
+              const nativeToolPort = opts?.nativeBrokerAuthority
+                ? await (async () => {
+                    await opts.nativeBrokerAuthority!.assertCurrent();
+                    const nativeTools = structuredClone(attemptTools ?? []);
+                    const nativeBindings = structuredClone(opts.toolNameMap ?? {});
+                    const nativeExecutors = Object.freeze({ ...localToolExecutors });
+                    const hasHandoff = nativeTools.some(tool => tool.type === 'function'
+                      && (tool.function.name === 'handoff' || tool.function.name.startsWith('handoff_to_')));
+                    const terminationProtocol = hasHandoff && opts.nativeOriginalProcessHost
+                      ? model.adapter === 'claude-cli' ? NATIVE_HANDOFF_PROTOCOL
+                        : model.adapter === 'codex-cli' ? CODEX_NATIVE_HANDOFF_PROTOCOL : undefined
+                      : undefined;
+                    if (terminationProtocol) assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                    const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
+                    nativeInventory = { digest: inventoryDigest, tools: nativeTools,
+                      ...(terminationProtocol ? { terminationProtocol } : {}),
+                      bindings: nativeBindings, syntheticNames: Object.keys(nativeExecutors).sort() };
+                    nativeReceipt = await prepareNativeInvocation({
+                      conversationId: opts.conversationId!, runId: opts.runId!, nodeId: opts.nodeId!,
+                      modelId, leaseEpoch: opts.nativeBrokerAuthority!.leaseEpoch, inventoryDigest,
+                      attemptOrdinal: sdkDispatchOrdinal + 1,
+                      inputDigest: nativeDigest({ modelId, messages: hydratedMessages, tools: nativeTools,
+                        temperature: attemptTemperature, maxTokens: opts.maxTokens }),
+                    });
+                    return createNativeToolPort({
+                      receipt: nativeReceipt, tools: nativeTools, toolNameMap: nativeBindings,
+                      localToolExecutors: nativeExecutors, service: mcpService, requestToolApproval: opts.requestToolApproval,
+                      beforeToolDispatch: opts.beforeToolDispatch,
+                      afterToolDispatch: () => assertFlowExecutionCurrent(opts.durableContext ?? {}),
+                      authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
+                      authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
+                      terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
+                    });
+                  })()
+                : undefined;
+              const markNativeSdkFinished = () => {
+                if (!nativeSession || nativeSession.session.phase() === 'sdk-finished') return;
+                // The original stream has ended. A delayed archive/host outcome
+                // acknowledgement must not leave a cancellable live handle.
+                nativeToolPort?.cancel();
+                nativeSession.emit('sdk-finished');
+              };
               const input = {
               model,
               apiKey: decryptedApiKey,
+              beforeModelDispatch: async () => {
+                if (opts?.executionExtensionContext) await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+                await opts?.beforeModelDispatch?.();
+              },
+              temperatureOverride: opts?.temperatureOverride !== undefined
+                ? normalizeModelTemperature(opts.temperatureOverride, model.provider, model.adapter, model.name)
+                : undefined,
+              onRoutingModel: async (member: Model) => {
+                routingModel = member;
+                const key = await modelService.resolveAndDecryptApiKey(member.ApiKey);
+                opaqueCredentialId = await credentialFingerprint(key ?? '').catch(() => undefined);
+              },
               onProviderAttempt: (observation: {
                 attempt: number;
                 durationMs: number;
@@ -2644,90 +2804,210 @@ export class ModelHandler {
                 providerAttemptObserved = true;
                 recordProviderAttempt(observation);
               },
-              onSdkRequest: opts?.archiveModelTurns && opts.conversationId && opts.nodeId
+              onSdkRequest: (nativeReceipt || (opts?.archiveModelTurns && opts.conversationId && opts.nodeId))
                 ? async (snapshot: SdkRequestSnapshot): Promise<string | undefined> => {
+                    if (nativeReceipt && nativeSdkRequestStarted) {
+                      throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                    }
                     try {
-                      const entry = await archiveModelDispatch({
-                        durableContext: opts.durableContext,
-                        conversationId: opts.conversationId!,
-                        runId: opts.runId,
-                        nodeId: opts.nodeId!,
-                        nodeName: opts.nodeName,
-                        modelId,
-                        modelName: model.displayName || model.name,
-                        adapter: snapshot.adapter,
-                        operation: snapshot.operation,
+                      const archiveInput = {
+                        ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
+                        durableContext: opts?.durableContext,
+                        ...(!nativeReceipt && !opts?.durableContext?.executionAuthority
+                          && !opts?.durableContext?.executionExtensionContext && !opts?.durableContext?.personaAttribution
+                          ? { writeAdmission: { wait: true, signal: abortController.signal } } : {}),
+                        conversationId: opts!.conversationId!, runId: opts?.runId,
+                        nodeId: opts!.nodeId!, nodeName: opts?.nodeName,
+                        modelId: routingModel.id, modelName: routingModel.displayName || routingModel.name,
+                        adapter: snapshot.adapter, operation: snapshot.operation,
                         attempt: ++sdkDispatchOrdinal,
-                        canonicalMessages: archiveCanonicalMessages
-                          ? structuredClone(archiveCanonicalMessages)
-                          : opts.canonicalMessages ?? messages,
-                        genericWire: snapshot.wireMessages !== undefined
-                          ? structuredClone(snapshot.wireMessages)
-                          : hydratedMessages,
-                        sdkRequest: snapshot.request,
-                        modelInput: modelInputForArchive,
+                        canonicalMessages: archiveCanonicalMessages ?? opts?.canonicalMessages ?? messages,
+                        genericWire: snapshot.wireMessages ?? hydratedMessages,
+                        sdkRequest: snapshot.request, modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,
-                      });
-                      executionEventBus.emit(opts.conversationId!, {
+                      };
+                      const entry = await archiveModelDispatch(archiveInput, () => ({
+                        ...archiveInput,
+                        canonicalMessages: archiveCanonicalMessages
+                          ? structuredClone(archiveCanonicalMessages) : archiveInput.canonicalMessages,
+                        genericWire: snapshot.wireMessages !== undefined
+                          ? structuredClone(snapshot.wireMessages) : archiveInput.genericWire,
+                      }));
+                      executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch',
                         turn: entry,
                       });
+                      if (nativeReceipt) {
+                        nativeReceipt = await submitNativeInvocation(nativeReceipt);
+                        await opts!.nativeBrokerAuthority!.assertCurrent();
+                        abortController.signal.throwIfAborted();
+                        if (opts?.nativeInvocationSessionHook) {
+                          const archived = await readNativeModelTurnSnapshot(nativeReceipt.owner.conversationId,
+                            entry.id, opts.nativeInvocationSessionHook.root.workspace, abortController.signal);
+                          if (archived) assertNativeArchiveFormat(archived, entry.archiveVersion);
+                          if (!archived || archived.entry.outcome !== 'running' || archived.entry.id !== nativeReceipt.invocationId
+                            || archived.entry.conversationId !== nativeReceipt.owner.conversationId
+                            || archived.entry.runId !== nativeReceipt.owner.runId
+                            || archived.entry.node.nodeId !== nativeReceipt.owner.nodeId
+                            || archived.entry.modelId !== nativeReceipt.owner.modelId
+                            || archived.entry.attempt !== nativeReceipt.owner.attemptOrdinal
+                            || archived.entry.adapter !== snapshot.adapter
+                            || archived.entry.operation !== snapshot.operation
+                            || !nativeInventory || nativeInventory.digest !== nativeReceipt.owner.inventoryDigest) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          const lineage = await readNativeOriginLineage({
+                            receipt: nativeReceipt, authority: opts.nativeBrokerAuthority!,
+                            root: opts.nativeInvocationSessionHook.root, signal: abortController.signal,
+                          });
+                          const payloadRef = await saveNativeSessionPayload({
+                            invocationId: nativeReceipt.invocationId,
+                            archive: { sdkRequest: archived.sdkRequest, genericWire: archived.genericWire,
+                              media: archived.media },
+                            inventory: { tools: nativeInventory.tools, bindings: nativeInventory.bindings,
+                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}),
+                              syntheticNames: nativeInventory.syntheticNames },
+                          });
+                          const savedPayload = await readNativeSessionPayload(payloadRef);
+                          if (savedPayload.invocationId !== nativeReceipt.invocationId
+                            || nativeDigest(savedPayload.archive.sdkRequest) !== nativeDigest(archived.sdkRequest)
+                            || nativeDigest(savedPayload.archive.genericWire) !== nativeDigest(archived.genericWire)
+                            || nativeDigest(savedPayload.archive.media) !== nativeDigest(archived.media)
+                            || nativeDigest(savedPayload.inventory.tools) !== nativeDigest(nativeInventory.tools)
+                            || nativeDigest(savedPayload.inventory.bindings) !== nativeDigest(nativeInventory.bindings)
+                            || nativeDigest(savedPayload.inventory.syntheticNames) !== nativeDigest(nativeInventory.syntheticNames)) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          nativeSession = createNativeInvocationSession({
+                            receipt: nativeReceipt, lineage,
+                            archive: {
+                              dispatchId: entry.id, adapter: archived.entry.adapter,
+                                archiveVersion: archived.version,
+                              operation: archived.entry.operation,
+                              sanitizedSdkRequestDigest: nativeDigest(archived.sdkRequest),
+                              sanitizedGenericWireDigest: nativeDigest(archived.genericWire),
+                              mediaCount: archived.media.length,
+                            },
+                              inventory: { digest: nativeInventory.digest, toolCount: nativeInventory.tools.length,
+                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}) },
+                            payloadRef,
+                          }, abortController.signal, () => {
+                            abortController.abort();
+                            nativeToolPort?.cancel();
+                          });
+                          await saveNativeSessionOrigin(nativeSession.session.descriptor);
+                          const savedOrigin = await readSavedNativeOrigin({ invocationId: nativeReceipt.invocationId,
+                            authority: opts.nativeBrokerAuthority!, root: opts.nativeInvocationSessionHook.root,
+                            signal: abortController.signal });
+                          if (nativeDigest(savedOrigin) !== nativeDigest(nativeSession.session.descriptor)) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          await opts.nativeInvocationSessionHook.publish(nativeSession.session);
+                          abortController.signal.throwIfAborted();
+                          const publishedLineage = await readNativeOriginLineage({
+                            receipt: nativeReceipt, authority: opts.nativeBrokerAuthority!,
+                            root: opts.nativeInvocationSessionHook.root, signal: abortController.signal,
+                          });
+                          if (publishedLineage.digest !== lineage.digest) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
+                          nativeSession.emit('issue-uncertain');
+                          // A synchronous subscriber can cancel this very session.
+                          abortController.signal.throwIfAborted();
+                          await opts.nativeBrokerAuthority!.assertCurrent();
+                          await opts.nativeInvocationSessionHook.root.assertCurrent();
+                          await opts.nativeBrokerAuthority!.assertCurrent();
+                          abortController.signal.throwIfAborted();
+                        }
+                        nativeSdkRequestStarted = true;
+                      }
                       return entry.id;
                     } catch (error) {
+                      if (error instanceof ModelTurnArchiveMemoryError) throw error;
+                      if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
                       return undefined;
                     }
                   }
                 : undefined,
-              onSdkRequestResult: opts?.archiveModelTurns && opts.conversationId
+              onSdkRequestResult: (nativeReceipt || (opts?.archiveModelTurns && opts.conversationId))
                 ? async ({ dispatchId, outcome }: {
                     dispatchId: string;
                     outcome: 'completed' | 'error' | 'cancelled';
                   }): Promise<void> => {
                     try {
-                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome, opts.durableContext);
-                      executionEventBus.emit(opts.conversationId!, {
+                      if (nativeSession) markNativeSdkFinished();
+                      await updateModelDispatchOutcome(opts!.conversationId!, dispatchId, outcome, opts?.durableContext);
+                      if (nativeSession) {
+                        await opts!.nativeInvocationSessionHook!.acknowledgeSdkOutcome(nativeSession.session, outcome);
+                        abortController.signal.throwIfAborted();
+                        await opts!.nativeBrokerAuthority!.assertCurrent();
+                        abortController.signal.throwIfAborted();
+                        nativeSession.emit('sdk-outcome', outcome);
+                      }
+                      if (nativeReceipt) nativeSdkOutcome = outcome;
+                      executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch-result',
                         dispatchId,
                         outcome,
                       });
                     } catch (error) {
+                      if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }
                   }
                 : undefined,
+              onNativeSdkLive: opts?.nativeInvocationSessionHook
+                ? async (): Promise<void> => {
+                    if (!nativeSession || !nativeReceipt) throw new Error('Native original session was not published.');
+                    if (nativeLiveObserved) return;
+                    if (nativeSession.session.phase() === 'sdk-finished') {
+                      throw new Error('Native original stream already finished.');
+                    }
+                    await opts.nativeInvocationSessionHook!.acknowledgeLive(nativeSession.session);
+                    abortController.signal.throwIfAborted();
+                    await opts.nativeBrokerAuthority!.assertCurrent();
+                    abortController.signal.throwIfAborted();
+                    nativeLiveObserved = true;
+                    nativeSession.emit('confirmed-live');
+                  }
+                : undefined,
+              onNativeSdkFinished: opts?.nativeInvocationSessionHook ? markNativeSdkFinished : undefined,
               messages: hydratedMessages,
-              tools: attemptTools,
+              tools: nativeInventory?.tools ?? attemptTools,
               temperature: attemptTemperature,
               // Effective output-token cap: node-level override → per-model default
               // (resolved in callModel, #189), falling back to the per-model value
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
-              toolNameMap: opts?.toolNameMap,
-              localToolExecutors,
+              toolNameMap: nativeToolPort ? undefined : opts?.toolNameMap,
+              localToolExecutors: nativeToolPort ? undefined : localToolExecutors,
+              nativeToolPort,
+              nativeOriginalProcessHost: opts?.nativeOriginalProcessHost,
               shouldEndAgenticTurn: opts?.shouldEndAgenticTurn,
               maxTurns: opts?.maxTurns,
-              requestToolApproval: opts?.requestToolApproval,
+              requestToolApproval: nativeToolPort ? undefined : opts?.requestToolApproval,
               onTranscriptMessage,
-              consumeSteeringMessages: opts?.consumeSteeringMessages,
-              steering: opts?.steering,
+              consumeSteeringMessages: nativeToolPort ? undefined : opts?.consumeSteeringMessages,
+              steering: nativeToolPort ? undefined : opts?.steering,
               onModelDelta,
-              onToolProgress,
+              onToolProgress: nativeToolPort ? undefined : onToolProgress,
               signal: abortController.signal,
-              beforeToolDispatch: opts?.beforeToolDispatch,
-              authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
-              afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
-              commitDurableMutation: <T>(task: () => Promise<T>) =>
+              beforeToolDispatch: nativeToolPort ? undefined : opts?.beforeToolDispatch,
+              executionExtensionContext: opts?.executionExtensionContext,
+              authorizePersonaCoreMcp: nativeToolPort ? undefined : opts?.authorizePersonaCoreMcp,
+              afterToolDispatch: nativeToolPort ? undefined : () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
+              commitDurableMutation: nativeToolPort ? undefined : <T>(task: () => Promise<T>) =>
                 commitFlowDurableMutation(opts?.durableContext ?? {}, task),
               conversationId: opts?.conversationId,
               runId: opts?.runId,
               nodeId: opts?.nodeId,
-              codexSession: opts?.codexSession,
-              onCodexSessionChange: opts?.onCodexSessionChange,
+              codexSession: nativeToolPort ? undefined : opts?.codexSession,
+              onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
-              sessionResume: opts?.sessionResume,
+              sessionResume: nativeToolPort ? false : opts?.sessionResume,
               // Derived from the tool-block hash, or from the conversation for a
               // no-tool history-first wire, so requests sharing the reusable
               // prefix route to one prompt-cache shard (see derivePromptCacheKey).
@@ -2742,10 +3022,21 @@ export class ModelHandler {
               // compaction, media hydration) is complete.  Check the current
               // lease/generation at the final dispatch boundary for EVERY
               // attempt, including bounded retries and summary calls.
-              await opts?.beforeModelDispatch?.();
-              return opts?.onModelDelta && adapter.createStreamCompletion
+              if (opts?.executionExtensionContext) {
+                await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+              }
+              if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
+              const nativeResult = await (opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
-                : adapter.createCompletion(input);
+                : adapter.createCompletion(input));
+              if (nativeReceipt) {
+                if (!nativeSdkRequestStarted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (nativeSdkOutcome !== 'completed') throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (!nativeResult.nativeSdkTerminal) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                await opts!.nativeBrokerAuthority!.assertCurrent();
+              }
+              return nativeResult;
             };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
@@ -2770,7 +3061,9 @@ export class ModelHandler {
               ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await issueCompletion());
             }
           } finally {
-            stopCancelWatch();
+            // Native terminalization remains part of the cancellable original
+            // invocation. Keep Stop polling through its durable release write.
+            if (!opts?.nativeBrokerAuthority) stopCancelWatch();
           }
 
           // Prompt-cache effectiveness for this call, attributed to a prefix-drift
@@ -2910,6 +3203,24 @@ export class ModelHandler {
             }
           };
 
+          if (nativeReceipt) {
+            await opts!.nativeBrokerAuthority!.assertCurrent();
+            if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+            if (nativeSession) {
+              await opts!.nativeInvocationSessionHook!.acknowledgeTerminalReady(nativeSession.session);
+              abortController.signal.throwIfAborted();
+              await opts!.nativeBrokerAuthority!.assertCurrent();
+              abortController.signal.throwIfAborted();
+            }
+            await finishNativeInvocation(nativeReceipt, 'completed', {
+              assertCurrent: opts!.nativeBrokerAuthority!.assertCurrent,
+              signal: abortController.signal,
+            });
+            nativeTerminal = true;
+            nativeSession?.settle({ state: 'terminal', outcome: 'completed' });
+            await opts?.nativeOriginalProcessHost?.releaseAfterTerminal();
+          }
+
           attemptOutcome = 'completed';
 
           return result;
@@ -2926,6 +3237,10 @@ export class ModelHandler {
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
+          if (nativeReceipt && !nativeTerminal) {
+            await holdNativeInvocation(nativeReceipt).catch(() => undefined);
+            nativeSession?.settle({ state: 'held' });
+          }
           // Request/response adapters report each transport retry themselves.
           // Other adapters have one authoritative outer invocation here.
           if (!providerAttemptObserved) {
@@ -2979,10 +3294,16 @@ export class ModelHandler {
           attemptProducedOutput = false;
           const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
           if (attemptResult.success) return attemptResult;
+          if (singlePhysicalAttempt) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
+          if (opts?.nativeBrokerAuthority) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
-          if (model.adapter === 'codex-cli') return attemptResult;
+          // The policy has already applied its trigger and replay boundaries.
+          // An outer rate-limit replay must not restart that decision (including
+          // a disabled trigger or steering/approval activity observed inside it).
+          if (model.fallbackPolicy) return attemptResult;
+          if (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter))) return attemptResult;
           if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
             log.warn('Automatic session-limit retries exhausted; returning the provider error', {
               modelId,
@@ -3049,7 +3370,7 @@ export class ModelHandler {
       // make one final attempt with an explicit user nudge so models that became
       // stuck at an assistant boundary can recover. If that is empty too, return
       // the original normalized error shape.
-      if (!result.success && isEmptyStoppedCompletionError(result.error)) {
+      if (!singlePhysicalAttempt && !opts?.nativeBrokerAuthority && !result.success && isEmptyStoppedCompletionError(result.error)) {
         for (let retry = 1; retry <= EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE; retry++) {
           if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
           const retryTemperature = retry === EMPTY_STOP_TEMPERATURE_RETRY
@@ -3102,6 +3423,8 @@ export class ModelHandler {
       // insufficient, apply the same structurally-safe emergency refit used by
       // proactive budgeting. This path is adapter-neutral.
       if (
+        !opts?.executionExtensionContext &&
+        !opts?.nativeBrokerAuthority &&
         !result.success &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
@@ -3225,9 +3548,13 @@ export class ModelHandler {
       return result;
     } catch (error) {
       // Setup (model fetch / key decrypt / compaction) threw — attempts shape
-      // their own errors and never throw out. stopCancelWatch is idempotent.
-      stopCancelWatch();
+      // their own errors and never throw out.
       return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
+    } finally {
+      // A native attempt keeps Stop polling through terminal persistence. Every
+      // outer return path, including a held invocation, must then release it.
+      stopCancelWatch();
+      archiveSnapshotReservation?.release();
     }
   }
 
@@ -3240,6 +3567,7 @@ export class ModelHandler {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
+      executionExtensionContext: input.executionExtensionContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -3335,6 +3663,10 @@ export class ModelHandler {
       const executeOneToolCall = async (callIndex: number): Promise<void> => {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
+        if (input.executionExtensionContext) {
+          await assertExecutionModelTool(input.executionExtensionContext, name,
+            toolNameMap && Object.hasOwn(toolNameMap, name) ? toolNameMap[name] : undefined);
+        }
         const decodedForUi = decodeToolName(name, toolNameMap);
         let invocationArgsForUi: Record<string, unknown> | undefined;
         try {
@@ -3856,8 +4188,7 @@ export class ModelHandler {
               total: progress.total,
               message: progress.message,
             });
-            result = conversationId
-              ? await mcpService.callTool(
+            result = await mcpService.callTool(
                   serverName,
                   toolName,
                   args,
@@ -3867,18 +4198,10 @@ export class ModelHandler {
                   callSignal,
                   'model',
                   runOwnerScope,
-                  { conversationId },
-                )
-              : await mcpService.callTool(
-                  serverName,
-                  toolName,
-                  args,
-                  timeout,
-                  onProgress,
-                  decoded.nodeId,
-                  callSignal,
-                  'model',
-                  runOwnerScope,
+                  ...(conversationId || input.executionExtensionContext
+                    ? [conversationId ? { conversationId } : undefined] as const
+                    : [] as const),
+                  ...(input.executionExtensionContext ? [input.executionExtensionContext] as const : [] as const),
                 );
             // The MCP abort is cooperative.  A result may arrive after the
             // Persona lease/meeting generation was replaced; reject it before
@@ -3887,6 +4210,17 @@ export class ModelHandler {
           } finally {
             if (cancelScope) releaseToolCall(cancelScope, id);
           }
+
+          // A completed MCP request can still return a protocol-level tool
+          // error. Classify the original payload before any capture rewrites
+          // it, and use this same outcome for content binding and result status.
+          // Received payloads still need capture/media/context protections even
+          // when the tool reports an error; those depend on transport success.
+          const toolSucceeded = result.success && !Boolean(
+            result.data
+            && typeof result.data === 'object'
+            && (result.data as CallToolResult).isError === true,
+          );
 
           // Tier 3 data flow: auto-capture binary/large tool results as
           // run-scoped resources. The capture may rewrite the result (binary
@@ -3964,10 +4298,10 @@ export class ModelHandler {
             }
           }
 
-          // Format the result
-          let resultContent = result.success
-            ? JSON.stringify(effectiveData)
-            : `Error: ${result.error}`;
+          // All received payloads retain the established context protections.
+          // Transport failure diagnostics stay outside this content pipeline;
+          // only a genuine tool success can receive the full-content binding.
+          let receivedResultContent = result.success ? JSON.stringify(effectiveData) : '';
 
           // Keep an exact transcript-level copy of medium-large results for the
           // browser's expansion-time loader. Results over the context boundary
@@ -3976,17 +4310,17 @@ export class ModelHandler {
             result.success
             && conversationId
             && runResourceSettings?.autoCaptureEnabled
-            && resultContent.length >= runResourceSettings.textThresholdChars
+            && receivedResultContent.length >= runResourceSettings.textThresholdChars
           ) {
-            const resultBytes = Buffer.byteLength(resultContent, 'utf8');
+            const resultBytes = Buffer.byteLength(receivedResultContent, 'utf8');
             const maxBytes = runResourceSettings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
             const maxLines = runResourceSettings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
             const overBytes = maxBytes > 0 && resultBytes > maxBytes;
             let overLines = false;
             if (maxLines > 0) {
               let lines = 1;
-              for (let index = 0; index < resultContent.length && lines <= maxLines; index++) {
-                if (resultContent.charCodeAt(index) === 10) lines++;
+              for (let index = 0; index < receivedResultContent.length && lines <= maxLines; index++) {
+                if (receivedResultContent.charCodeAt(index) === 10) lines++;
               }
               overLines = lines > maxLines;
             }
@@ -3997,7 +4331,7 @@ export class ModelHandler {
                     conversationId,
                     mimeType: 'application/json',
                     kind: 'text',
-                    data: { text: resultContent },
+                    data: { text: receivedResultContent },
                     producedBy: {
                       source: 'tool-result',
                       payloadRole: 'tool-message',
@@ -4043,12 +4377,12 @@ export class ModelHandler {
                   server: serverName,
                   toolName,
                   nodeId: node?.nodeId,
-                  content: resultContent,
+                  content: receivedResultContent,
                   settings: runResourceSettings,
                 }),
               );
               if (bounded.spilled) {
-                resultContent = bounded.content;
+                receivedResultContent = bounded.content;
                 if (bounded.uri) {
                   await commitFlowDurableMutation(durableContext, async () => {
                     emit?.({
@@ -4072,15 +4406,24 @@ export class ModelHandler {
             }
           }
 
+          // Both healthy and protocol-error messages use the final protected
+          // payload. Transport failures retain the existing Error diagnostic.
+          const resultContent = result.success ? receivedResultContent : `Error: ${result.error}`;
           // The full result reaches the conversation as the tool message below;
-          // the event carries a preview so the log stays light.
+          // the event carries a preview so the log stays light. Only successful
+          // results carry a binding; error text still reaches the conversation.
           await commitFlowDurableMutation(durableContext, async () => {
             emit?.({
               type: 'tool:result',
               toolCallId: id,
               name,
               result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              isError: !result.success
+              ...(toolSucceeded ? { resultContentBinding: {
+                serialization: 'utf8-string-v1' as const,
+                sha256: createHash('sha256').update(receivedResultContent, 'utf8').digest('hex'),
+                bytes: Buffer.byteLength(receivedResultContent, 'utf8'),
+              } } : {}),
+              isError: !toolSucceeded
             });
           });
 
@@ -4117,7 +4460,7 @@ export class ModelHandler {
                 ? {
                     ui: {
                       ...uiLink,
-                      ...(!result.success ? { isError: true } : {}),
+                      ...(!toolSucceeded ? { isError: true } : {}),
                       ...(cancelledReason ? { cancelledReason } : {}),
                     },
                   }
@@ -4130,14 +4473,7 @@ export class ModelHandler {
             args,
             id,
             result: resultContent,
-            exitCode: (
-              !result.success
-              || Boolean(
-                result.data
-                && typeof result.data === 'object'
-                && (result.data as CallToolResult).isError === true,
-              )
-            ) ? 1 : 0,
+            exitCode: toolSucceeded ? 0 : 1,
           });
         } catch (error) {
           if (error === executionAuthorityFailure || isFlowExecutionAuthorityError(error)) throw error;

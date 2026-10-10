@@ -3,29 +3,6 @@
 name: Validate Windows installer
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/installer.yml'
-      - 'README.md'
-      - 'installer/**'
-      - 'scripts/install.ps1'
-      - 'scripts/install.sh'
-      - 'scripts/installer-functions.ps1'
-      - 'scripts/uninstall.ps1'
-      - 'scripts/update.ps1'
-      - 'tests/installer.Tests.ps1'
-      - 'tests/installer-unix.test.sh'
-      - 'tests/installer-repository.test.mjs'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'bin/flujo.mjs'
-      - 'scripts/launch-next.mjs'
-      - 'scripts/smoke-mcp-artifacts.mjs'
-      - 'scripts/validate-mcp-release.mjs'
-      - '__tests__/mcp/**'
-      - 'mcp-servers/**'
-      - 'src/app/mcp-proxy/**'
-      - 'src/backend/services/mcp/**'
   push:
     branches: [main]
     tags: ['v*']
@@ -39,23 +16,35 @@ jobs:
     name: MCP artifact validation (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          node-version: 22
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
           cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Install production build dependencies
+        run: npm ci --include=dev
 
       - name: Build production artifacts
-        run: |
-          npm ci --include=dev
-          npm run build
+        run: npm run build
+
+      # Separate native commands so a later success cannot mask an earlier
+      # nonzero exit code in PowerShell.
+      - name: Verify browser installer helpers
+        run: node --test mcp-servers/browser/scripts/install-browser.test.mjs
 
       - name: Exercise MCP process boundaries
-        run: |
-          node --test mcp-servers/browser/scripts/install-browser.test.mjs
-          npm run test:mcp-process-boundary
-          npm run validate:mcp-release
+        run: npm run test:mcp-process-boundary
+
+      - name: Validate MCP release artifacts
+        run: npm run validate:mcp-release
+
+      - name: Verify the packaged Antigravity CLI
+        run: node --test scripts/antigravity-cli-artifact.test.mjs
 
       # A clean consumer install is intentionally expensive on hosted Windows.
       # Keep it as a release/manual gate instead of paying that cost on every
@@ -69,7 +58,9 @@ jobs:
     name: Installer decisions (Pester)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install pinned Pester
         shell: powershell
@@ -86,16 +77,19 @@ jobs:
     name: Compile flujo-setup.exe
     needs: [powershell-tests, artifact-smoke, unix-installer-tests]
     runs-on: windows-latest
-    permissions:
-      contents: write
-      actions: read
+    outputs:
+      artifact_id: ${{ steps.installer-artifact.outputs.artifact-id }}
+      sha256: ${{ steps.installer-digest.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          node-version: 22
+          persist-credentials: false
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - name: Install pinned Inno Setup
         shell: powershell
         run: |
@@ -139,38 +133,124 @@ jobs:
             throw "Installer artifact is empty: $artifact"
           }
 
+      - name: Bind release installer bytes to the exact source tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/installer-release.mjs prepare
+
+      - name: Retain the original executable digest
+        id: installer-digest
+        run: node scripts/installer-release.mjs digest
+
       - name: Upload validation artifact
-        uses: actions/upload-artifact@v4
+        id: installer-artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: flujo-setup
-          path: installer/Output/flujo-setup.exe
+          path: |
+            installer/Output/flujo-setup.exe
+            installer/Output/installer-release-evidence.json
+            installer/Output/installer-SHA256SUMS
           if-no-files-found: error
           retention-days: 14
 
-      - name: Require exact-commit main verification before release publication
-        if: startsWith(github.ref, 'refs/tags/v')
+  installer-attest:
+    if: ${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: installer-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      INSTALLER_RELEASE_DIR: installer/Output
+      EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
+          path: ${{ env.INSTALLER_RELEASE_DIR }}
+          merge-multiple: true
+      - name: Recheck exact main verification before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-release-verification.mjs installer
+      - name: Verify original installer bytes and source inventory
+        run: node scripts/installer-release.mjs validate
+      - name: Attest original executable and source evidence
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: ${{ env.INSTALLER_RELEASE_DIR }}/installer-SHA256SUMS
+
+  installer-publish:
+    if: ${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [installer-build, installer-attest]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    env:
+      INSTALLER_RELEASE_DIR: installer/Output
+      EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
+          path: ${{ env.INSTALLER_RELEASE_DIR }}
+          merge-multiple: true
+      - name: Verify official signatures for the original installer and evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/installer-release.mjs verify-signatures
+      - name: Recheck exact main verification before attaching release files
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/require-release-verification.mjs installer
 
       - name: Attach installer to version release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: installer/Output/flujo-setup.exe
+          files: |
+            ${{ env.INSTALLER_RELEASE_DIR }}/flujo-setup.exe
+            ${{ env.INSTALLER_RELEASE_DIR }}/installer-release-evidence.json
+            ${{ env.INSTALLER_RELEASE_DIR }}/installer-SHA256SUMS
+          fail_on_unmatched_files: true
           generate_release_notes: true
 
   unix-installer-tests:
     name: Unix installer validation (Ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          node-version: 22
-          cache: npm
+          persist-credentials: false
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - name: Run Unix installer Node.js version tests
         run: |
           chmod +x scripts/install.sh
@@ -178,15 +258,12 @@ jobs:
 
       - name: Verify package.json engine contract
         run: |
-          node -e "
-            const pkg = require('./package.json');
-            const engines = pkg.engines?.node;
-            if (!engines) throw new Error('engines.node not found in package.json');
-            const match = engines.match(/^>=(\d+)\.(\d+)\.(\d+)$/);
-            if (!match) throw new Error('engines.node must be simple >=X.Y.Z form, got: ' + engines);
-            const [, major, minor, patch] = match;
-            if (major !== '22' || minor !== '0' || patch !== '0') {
-              throw new Error('Expected engines.node >=22.0.0, got: ' + engines);
+          node --input-type=module -e "
+            import assert from 'node:assert/strict';
+            import { readFileSync } from 'node:fs';
+            import { SUPPORTED_NODE_RANGE } from './bin/node-runtime.mjs';
+            for (const directory of ['', 'mcp-servers/bash/', 'mcp-servers/browser/', 'mcp-servers/filesystem/', 'mcp-servers/flujo/', 'mcp-servers/shared/']) {
+              assert.equal(JSON.parse(readFileSync(directory + 'package.json', 'utf8')).engines.node, SUPPORTED_NODE_RANGE, directory);
             }
-            console.log('package.json engines.node contract verified:', engines);
+            console.log('All six engine declarations match the canonical runtime policy.');
           "

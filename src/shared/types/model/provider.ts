@@ -5,6 +5,7 @@ export type ModelProvider =
   | 'openai'
   | 'azure'
   | 'openrouter'
+  | 'orcarouter'
   | 'requesty'
   | 'anthropic'
   | 'gemini'
@@ -13,7 +14,8 @@ export type ModelProvider =
   | 'ollama'
   | 'litellm'
   | 'claude-subscription'
-  | 'codex';
+  | 'codex'
+  | 'antigravity-cli';
 
 /** Stable Azure OpenAI data-plane API version used for new connections. */
 export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
@@ -41,6 +43,8 @@ export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
  *                   Claude Pro/Max subscription (OAuth token in the API Key field).
  * - 'codex-cli'  -> CodexAdapter, drives the `codex` CLI through the Codex SDK
  *                   against a ChatGPT plan (`codex login`) or an OpenAI API key.
+ * - 'antigravity-cli' -> AntigravityCliAdapter, drives the official Antigravity CLI
+ *                   with its local account login or a Gemini API key.
  */
 export type ModelAdapter =
   | 'openai'
@@ -50,11 +54,17 @@ export type ModelAdapter =
   | 'gemini'
   | 'anthropic'
   | 'claude-cli'
-  | 'codex-cli';
+  | 'codex-cli'
+  | 'antigravity-cli';
+
+/** CLI adapters that can use a host login when no API key was configured. */
+export function supportsLocalModelAuth(adapter?: string): boolean {
+  return adapter === 'codex-cli' || adapter === 'antigravity-cli';
+}
 
 /** Gateways use Responses, including connections saved before that became their default. */
 export function resolveModelAdapter(provider?: ModelProvider, adapter?: ModelAdapter): ModelAdapter {
-  if (provider === 'litellm' && !adapter) return 'openai-responses';
+  if (provider === 'antigravity-cli' && !adapter) return 'antigravity-cli';
   if ((provider === 'requesty' || provider === 'openrouter') && (!adapter || adapter === 'openai')) {
     return 'openai-responses';
   }
@@ -200,7 +210,7 @@ export function getModelConfigurationCapabilities(
   adapter?: ModelAdapter,
   modelName = ''
 ): ModelConfigurationCapabilities {
-  const resolvedAdapter = adapter || 'openai';
+  const resolvedAdapter = resolveModelAdapter(provider, adapter);
   const resolvedProvider = provider || 'openai';
   const name = modelName.trim();
 
@@ -214,13 +224,16 @@ export function getModelConfigurationCapabilities(
     };
   }
 
+  if (resolvedAdapter === 'antigravity-cli') {
+    // FLUJO does not map generation controls onto the native CLI contract.
+    // Keep stale SDK settings out of requests until a mapping is verified.
+    return { maxOutputTokens: false };
+  }
+
   if (resolvedAdapter === 'codex-cli') {
-    const effortLevels: ModelReasoningEffort[] =
-      /^(?:gpt-6-astra|gpt-5\.6-(?:sol|terra))$/i.test(name)
-        ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-        : /^gpt-5\.6-/i.test(name)
-          ? ['low', 'medium', 'high', 'xhigh', 'max']
-          : ['low', 'medium', 'high', 'xhigh'];
+    // The picker narrows this vocabulary using model/list. The CLI validates
+    // availability; new model names must not lose valid efforts at save time.
+    const effortLevels: ModelReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
     return {
       effortLevels,
       // Current mini/spark/review catalog entries do not advertise Fast mode.
@@ -281,13 +294,13 @@ export function getModelConfigurationCapabilities(
 
 /**
  * Adapters that run their OWN agentic tool loop inside a single
- * `createCompletion` call (Claude subscription / Codex), instead of the
+ * `createCompletion` call (Claude subscription / Codex / Antigravity CLI), instead of the
  * request/response contract where FLUJO drives the loop. These adapters flatten
  * the wire themselves, manage their own truncation markers, and return a
  * `transcript` — so ModelHandler skips its wire-side compaction/refit for them.
  */
 export function isSelfOrchestratingAdapter(adapter?: string): boolean {
-  return adapter === 'claude-cli' || adapter === 'codex-cli';
+  return adapter === 'claude-cli' || supportsLocalModelAuth(adapter);
 }
 
 /**
@@ -314,6 +327,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1'
+  },
+  orcarouter: {
+    label: 'OrcaRouter',
+    baseUrl: 'https://api.orcarouter.ai/v1'
   },
   requesty: {
     label: 'Requesty',
@@ -349,6 +366,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
   },
   codex: {
     label: 'Codex (OpenAI)',
+    baseUrl: ''
+  },
+  'antigravity-cli': {
+    label: 'Antigravity CLI (Google)',
     baseUrl: ''
   }
 };
@@ -387,6 +408,73 @@ export const GEMINI_NATIVE_GUIDED_MODELS = [
   'gemini-3.8-flash',
   'gemini-2.5-pro',
 ] as const;
+
+/** FLUJO sentinel: omit --model and let the CLI select its configured default. */
+export const ANTIGRAVITY_CLI_DEFAULT_MODEL = 'default';
+
+/** Account model slugs verified by `agy models` on the packaged 1.2.13 CLI. */
+export const ANTIGRAVITY_CLI_MODELS = [
+  ANTIGRAVITY_CLI_DEFAULT_MODEL,
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-low',
+  'gemini-3.7-flash-high',
+  'gemini-3.7-flash-medium',
+  'gemini-3.7-flash-low',
+  'gemini-3.6-flash-high',
+  'gemini-3.6-flash-medium',
+  'gemini-3.6-flash-low',
+  'gemini-3.1-pro-high',
+  'gemini-3.1-pro-low',
+  'claude-sonnet-4-6',
+  'claude-opus-4-6-thinking',
+  'gpt-oss-120b-medium',
+] as const;
+
+/** The CLI's verified API-key catalog; actual access depends on the saved key. */
+export const ANTIGRAVITY_CLI_API_KEY_MODELS = [
+  ANTIGRAVITY_CLI_DEFAULT_MODEL,
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-low',
+  'gemini-3.7-flash-high',
+  'gemini-3.7-flash-medium',
+  'gemini-3.7-flash-low',
+  'gemini-3.6-flash-high',
+  'gemini-3.6-flash-medium',
+  'gemini-3.6-flash-low',
+  'gemini-3.1-pro-high',
+  'gemini-3.1-pro-low',
+] as const;
+
+/** A practical starter bundle rather than every account model. */
+export const ANTIGRAVITY_CLI_GUIDED_MODELS = [
+  ANTIGRAVITY_CLI_DEFAULT_MODEL,
+  'gemini-3.8-flash-medium',
+  'gemini-3.1-pro-high',
+] as const;
+
+const ANTIGRAVITY_CLI_MODEL_LABELS: Record<string, string> = {
+  default: 'Antigravity CLI Default',
+  'gemini-3.8-flash-high': 'Gemini 3.8 Flash (High)',
+  'gemini-3.8-flash-medium': 'Gemini 3.8 Flash (Medium)',
+  'gemini-3.8-flash-low': 'Gemini 3.8 Flash (Low)',
+  'gemini-3.7-flash-high': 'Gemini 3.7 Flash (High)',
+  'gemini-3.7-flash-medium': 'Gemini 3.7 Flash (Medium)',
+  'gemini-3.7-flash-low': 'Gemini 3.7 Flash (Low)',
+  'gemini-3.6-flash-high': 'Gemini 3.6 Flash (High)',
+  'gemini-3.6-flash-medium': 'Gemini 3.6 Flash (Medium)',
+  'gemini-3.6-flash-low': 'Gemini 3.6 Flash (Low)',
+  'gemini-3.1-pro-high': 'Gemini 3.1 Pro (High)',
+  'gemini-3.1-pro-low': 'Gemini 3.1 Pro (Low)',
+  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+  'claude-opus-4-6-thinking': 'Claude Opus 4.6 (Thinking)',
+  'gpt-oss-120b-medium': 'GPT-OSS 120B (Medium)',
+};
+
+export function getAntigravityCliModelLabel(name: string): string {
+  return ANTIGRAVITY_CLI_MODEL_LABELS[name] ?? name;
+}
 
 /**
  * A selectable entry in the model modal's "Provider" dropdown.
@@ -487,6 +575,16 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'OpenRouter Agent SDK',
     baseUrl: 'https://openrouter.ai/api/v1',
     showBaseUrl: true,
+  },
+  {
+    id: 'orcarouter',
+    label: 'OrcaRouter',
+    provider: 'orcarouter',
+    adapter: 'openai',
+    sdkLabel: 'OpenAI SDK',
+    baseUrl: 'https://api.orcarouter.ai/v1',
+    showBaseUrl: true,
+    defaultModels: ['anthropic/claude-sonnet-4'],
   },
   {
     id: 'requesty',
@@ -607,17 +705,20 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'Codex SDK',
     baseUrl: '',
     showBaseUrl: false,
-    // Hints only — the field stays free-text. Keep this aligned with the
-    // user-facing catalog bundled by the supported Codex CLI.
-    defaultModels: [
-      'gpt-6-astra',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
-    ],
+    supportsModelDiscovery: true,
+    // No static catalogue: preserve manually entered/saved IDs during outages.
+    defaultModels: [],
+  },
+  {
+    id: 'antigravity-cli',
+    label: 'Antigravity CLI (Google)',
+    provider: 'antigravity-cli',
+    adapter: 'antigravity-cli',
+    sdkLabel: 'Antigravity CLI',
+    baseUrl: '',
+    showBaseUrl: false,
+    supportsModelDiscovery: false,
+    defaultModels: [...ANTIGRAVITY_CLI_MODELS],
   },
   {
     id: 'openai',

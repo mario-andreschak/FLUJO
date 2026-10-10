@@ -101,7 +101,7 @@ export class PersonaRecoveryFileReader {
       || this.bytes + stats.size > (this.options.totalBytes ?? PERSONA_RECOVERY_ZIP_LIMITS.totalBytes)) {
       throw new PersonaRecoveryError('Persona recovery capture exceeds the byte limit.');
     }
-    const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     try {
       const opened = await handle.stat();
       if (!opened.isFile() || !same(stats, opened)) throw new PersonaRecoveryError('Recovery file changed before it could be read.');

@@ -63,4 +63,36 @@ describe('ModelTurnInspector request detail', () => {
     expect(screen.getByTestId('request-parameter-value')).toHaveTextContent('[AbortSignal]');
     expect(screen.getByTestId('request-code-canvas')).not.toHaveTextContent('thread-1');
   });
+
+  it('pages complete request text and resets the text page when selecting another parameter', () => {
+    const snapshot = codexSnapshot();
+    const input = 'FIRST-' + 'x'.repeat(128 * 1024) + '-COMPLETE-END';
+    (snapshot.sdkRequest as Record<string, unknown>).input = input;
+    render(<ModelTurnInspector snapshot={snapshot} conversationId="conversation-1" tab="request" onTabChange={() => undefined} />);
+    expect(screen.getByTestId('request-parameter-value').textContent?.length).toBe(64 * 1024);
+    fireEvent.click(screen.getByRole('button', { name: 'Next text page' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next text page' }));
+    expect(screen.getByTestId('request-parameter-value')).toHaveTextContent('COMPLETE-END');
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect options' }));
+    expect(screen.getByTestId('request-parameter-value')).toHaveTextContent('[AbortSignal]');
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect input' }));
+    expect(screen.getByTestId('request-parameter-value').textContent).toBe(input.slice(0, 64 * 1024));
+    expect((snapshot.sdkRequest as Record<string, unknown>).input).toBe(input);
+  });
+
+  it('pages every canonical message without discarding history or changing outcome display', () => {
+    const snapshot = codexSnapshot();
+    snapshot.canonicalMessages = Array.from({ length: 33 }, (_, index) => ({
+      id: `message-${index}`, role: 'user' as const, timestamp: index, content: `complete-history-${index}`,
+    }));
+    const { container, rerender } = render(<ModelTurnInspector snapshot={snapshot} conversationId="conversation-1" tab="canonical" onTabChange={() => undefined} />);
+    expect(container.querySelectorAll('pre')).toHaveLength(16);
+    fireEvent.click(screen.getByRole('button', { name: 'Next messages' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next messages' }));
+    expect(container.querySelectorAll('pre')).toHaveLength(1);
+    expect(container.querySelector('pre')).toHaveTextContent('complete-history-32');
+    expect(snapshot.canonicalMessages).toHaveLength(33);
+    rerender(<ModelTurnInspector snapshot={{ ...snapshot, entry: { ...snapshot.entry, outcome: 'error' } }} conversationId="conversation-1" tab="canonical" onTabChange={() => undefined} />);
+    expect(screen.getByText('error')).toBeInTheDocument();
+  });
 });

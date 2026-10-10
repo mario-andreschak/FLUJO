@@ -62,6 +62,26 @@ beforeEach(() => {
 });
 
 describe('model- routing on /v1/chat/completions', () => {
+  it('routes a policy alias directly and returns its selected-model receipt', async () => {
+    const completion = { ...completionFixture(), model: 'actual-provider-model', flujo_routing: {
+      policyId: 'p', selectedModelId: 'backup', attempts: [{ modelId: 'backup', outcome: 'completed' }],
+    } };
+    generateChatCompletion.mockResolvedValue({ success: true, completion });
+    const res = await processChatCompletion({ model: 'policy/prod', messages: [{ role: 'user', content: 'Hi' }] } as any, false, false, false);
+    expect(generateChatCompletion).toHaveBeenCalledWith(expect.objectContaining({ modelIdentifier: 'policy/prod' }));
+    expect(runFlowMock).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toEqual(completion);
+  });
+
+  it('includes policy routing metadata in emulated SSE', async () => {
+    generateChatCompletion.mockResolvedValue({ success: true, completion: {
+      ...completionFixture(), model: 'provider-backup', flujo_routing: { policyId: 'p', selectedModelId: 'b', attempts: [] },
+    } });
+    const res = await processChatCompletion({ model: 'policy/prod', messages: [], stream: true } as any, false, false, false);
+    const stream = await readAll(res);
+    expect(stream).toContain('"model":"provider-backup"');
+    expect(stream).toContain('"selectedModelId":"b"');
+  });
   it('routes a non-streaming model- request to ModelService and returns the completion', async () => {
     generateChatCompletion.mockResolvedValue({ success: true, completion: completionFixture() });
 

@@ -1,5 +1,5 @@
 import path from 'path';
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import {
@@ -12,12 +12,13 @@ import { deriveLastErrorFromLastResponse } from './normalizeError';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import { commitExecutionExtensionMutation, isExecutionProtectedState } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
 // Sidebar titles for automation conversations are now derived from their output
 // instead of their trigger prompt. Rebuild older sidecars so existing automation
 // rows stop exposing the appended run-info block too.
-const SUMMARY_VERSION = 9;
+const SUMMARY_VERSION = 10;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -42,6 +43,8 @@ export interface ConversationSummary {
   source?: SharedState['source'] | null;
   /** Internal list-filter marker; never identifies the Persona or grants authority. */
   personaOwned?: true;
+  /** Protected projections are excluded from ordinary administrative listings. */
+  executionExtensionOwned?: true;
   /** Non-identifying marker for a read-only anonymized Persona archive. */
   personaArchived?: true;
   /** Trusted-local Persona attribution projection (drafts expose only personaId). */
@@ -136,6 +139,7 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.subflowLane?.sessionIdentity ? { sessionIdentity: state.subflowLane.sessionIdentity } : {}),
     ...(state.recovery ? { recovery: state.recovery } : {}),
     ...(state.source !== undefined ? { source: state.source } : {}),
+    ...(isExecutionProtectedState(state) ? { executionExtensionOwned: true as const } : {}),
     ...(isPersonaOwnedConversationState(state)
       ? { personaOwned: true as const }
       : {}),
@@ -167,6 +171,7 @@ async function writeSummary(
   stats?: { mtimeMs: number; size: number },
 ): Promise<void> {
   assertSafeCollectionId(id);
+  if (isExecutionProtectedState(state) && !state.executionExtensionContext) return;
   if (state.personaAttribution && !state.executionAuthority) {
     throw new Error(
       'Persona-attributed conversation summaries require current execution authority.',
@@ -183,7 +188,9 @@ async function writeSummary(
     await runInWriteChain(`conversation-summaries/${id}`, () =>
       writeFileAtomic(summaryPath(id), JSON.stringify(indexed, null, 2)));
   };
-  if (state.executionAuthority?.commitWhileCurrent) {
+  if (state.executionExtensionContext) {
+    await commitExecutionExtensionMutation(state.executionExtensionContext, write);
+  } else if (state.executionAuthority?.commitWhileCurrent) {
     await state.executionAuthority.commitWhileCurrent(write);
   } else {
     await state.executionAuthority?.assertCurrent();
@@ -300,20 +307,28 @@ export async function listConversationSummaries(): Promise<ConversationSummary[]
       try {
         assertSafeCollectionId(fallbackId);
         const filePath = path.join(conversationsDir(), file);
-        const stats = await fs.stat(filePath);
-        const cached = indexed.get(fallbackId);
-        if (
-          cached &&
-          cached.snapshotMtimeMs === stats.mtimeMs &&
-          cached.snapshotSize === stats.size
-        ) {
-          results[index] = withoutIndexFields(cached);
-          continue;
-        }
+        // Atomic snapshot replacement can happen while a list is rebuilding.
+        // Read and index the same opened file, never a later pathname occupant.
+        const snapshot = await fs.open(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+        try {
+          const stats = await snapshot.stat();
+          if (!stats.isFile()) throw new Error('Invalid conversation snapshot.');
+          const cached = indexed.get(fallbackId);
+          if (
+            cached &&
+            cached.snapshotMtimeMs === stats.mtimeMs &&
+            cached.snapshotSize === stats.size
+          ) {
+            results[index] = withoutIndexFields(cached);
+            continue;
+          }
 
-        const state = JSON.parse(await fs.readFile(filePath, 'utf8')) as SharedState;
-        results[index] = summarizeConversation(state, fallbackId);
-        await writeSummary(fallbackId, state, stats);
+          const state = JSON.parse(await snapshot.readFile('utf8')) as SharedState;
+          results[index] = summarizeConversation(state, fallbackId);
+          await writeSummary(fallbackId, state, stats);
+        } finally {
+          await snapshot.close();
+        }
       } catch (error) {
         log.warn(`Skipping unreadable conversation snapshot ${file}.`, error);
       }

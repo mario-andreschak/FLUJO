@@ -69,7 +69,7 @@ export function coercePresetEditorValue(value: string, schema: Record<string, un
     try { return JSON.parse(value); } catch { return value; }
   }
   // References must stay strings until execution-time resolution.
-  if (/\$\{global:[^}]+\}/.test(value) || /@(conversation|flows?|node|model|app|time|date|folder|file)(?:\[|\.|\b)/.test(value)) {
+  if (/\$\{global:[^}]+\}/.test(value) || /@(?:current\.)?(conversation|flows?|node|model|app|time|date|folder|file)(?:\[|\.|\b)/.test(value)) {
     return value;
   }
   if (schema?.type === 'boolean') return trimmed === 'true';

@@ -9,10 +9,15 @@
  */
 import { createLogger } from '@/utils/logger';
 import { ensureWorkspaceLayoutReady } from '@/backend/services/workspace/migration';
+import { assertOwnerStartup } from '@/backend/services/security/ownerStartup';
 
 const log = createLogger('instrumentation');
 
 export async function initializeNodeRuntime(): Promise<void> {
+  assertOwnerStartup();
+  // Refuse startup when a configured integration was not included in this build.
+  const { executionExtensionAdapter } = await import('@/backend/execution/extensions');
+  executionExtensionAdapter();
   log.info('Server startup: preparing workspace layout');
 
   // Start the barrier immediately, but do not make Next's instrumentation hook

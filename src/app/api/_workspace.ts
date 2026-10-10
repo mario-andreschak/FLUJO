@@ -7,7 +7,20 @@ import {
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
-import { assertWorkerRequestReady } from '@/backend/services/workspace/workerMode';
+import { assertWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { authorizeExecutionTransport, withExecutionExtensionRoute, executionExtensionAdapter, hasExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertOwnerRequest, isOwnerProtocolException, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
+import { bindOwnerStream } from '@/backend/services/security/ownerStream';
+import {
+  resolveBundledFlujoWorkloadRequest,
+  withBundledFlujoWorkloadAuthorization,
+  assertBundledFlujoWorkloadCurrent,
+  bindBundledFlujoWorkloadStream,
+  BundledFlujoWorkloadError,
+} from '@/backend/services/security/bundledFlujoWorkload';
+import { isRequestHostAllowed, isLocalRequest } from '@/utils/http/localRequest';
+import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 
 const log = createLogger('app/api/_workspace');
 
@@ -165,6 +178,17 @@ export async function withWorkspace<T>(
 export function withWorkspaceRoute<
   H extends (request: never, ...rest: never[]) => Promise<Response> | Response,
 >(handler: H): H {
+  const invoke = async (...args: unknown[]): Promise<Response> => {
+    try {
+      return await (handler as unknown as (...a: unknown[]) => Promise<Response>)(...args);
+    } catch (error) {
+      if (!(error instanceof ConversationLogReadPressureError)) throw error;
+      return Response.json({ error: error.message, code: error.code }, {
+        status: error.status,
+        headers: { 'Retry-After': '5', 'Cache-Control': 'private, no-store' },
+      });
+    }
+  };
   return (async (request: Request | undefined, ...rest: unknown[]) => {
     // A number of route unit tests (and a few internal callers) invoke handlers
     // such as GET()/PUT() with no argument. Normalize before workspace parsing
@@ -176,9 +200,65 @@ export function withWorkspaceRoute<
     // `{ json: async () => body }`) for the handler itself. Only workspace
     // parsing needs the normalized Fetch Request.
     const handlerRequest = request ?? normalizedRequest;
-    return withWorkspace((request ?? normalizedRequest) as Request, () =>
-      Promise.resolve(
-        (handler as unknown as (...a: unknown[]) => Promise<Response>)(handlerRequest, ...rest),
+    // Handler admission repeats transport auth before even selecting storage.
+    // Adapters still authenticate in withRoute; no caller-supplied identity is
+    // substituted for their opaque execution authority.
+    const transportRequest = (request ?? normalizedRequest) as Request;
+    const workload = await resolveBundledFlujoWorkloadRequest(normalizedRequest);
+    if (workload.kind === 'denied') return workload.response;
+    if (workload.kind === 'authorized') {
+      // Workload credentials do not replace an execution adapter's authority.
+      if (executionExtensionAdapter() || hasExecutionExtensionContext()) {
+        return new Response(JSON.stringify({ error: 'Forbidden.' }), { status: 403 });
+      }
+      if (!isRequestHostAllowed(transportRequest.headers.get('host'))
+          || !isLocalRequest(transportRequest.headers.get('host'), transportRequest.headers.get('origin'))) {
+        return new Response(JSON.stringify({ error: 'Forbidden.' }), { status: 403 });
+      }
+      try {
+        return await withBundledFlujoWorkloadAuthorization(workload.authorization, transportRequest, async () => {
+          const selected = await withWorkspace(transportRequest, async workspace => {
+            if (workspace !== workload.authorization.workspace) {
+              return new Response(JSON.stringify({ error: 'Forbidden.' }), { status: 403 });
+            }
+            await assertBundledFlujoWorkloadCurrent(workload.authorization, transportRequest);
+            return invoke(handlerRequest, ...rest);
+          });
+          await assertBundledFlujoWorkloadCurrent(workload.authorization, transportRequest);
+          return selected instanceof Response
+            ? bindBundledFlujoWorkloadStream(selected, workload.authorization, transportRequest.signal)
+            : selected;
+        });
+      } catch (error) {
+        if (error instanceof BundledFlujoWorkloadError) return error.response;
+        throw error;
+      }
+    }
+    const extensionResponse = authorizeExecutionTransport(transportRequest);
+    if (extensionResponse) return extensionResponse;
+    let ownerAuthorization: OwnerRequestAuthorization | undefined;
+    if (extensionResponse === undefined) {
+      const denied = isWorkerMode()
+        ? assertSnapshotBearer(transportRequest)
+        : assertOwnerRequest(transportRequest);
+      if (denied) return denied;
+      if (!isWorkerMode() && process.env.FLUJO_OWNER_AUTH_FILE !== undefined
+          && !isOwnerProtocolException(transportRequest)) {
+        const resolved = resolveOwnerRequest(transportRequest);
+        if (!resolved.ok) return resolved.response;
+        ownerAuthorization = resolved.authorization;
+      }
+    }
+    return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
+      const selected = await withWorkspace(admittedRequest, () => Promise.resolve(
+        invoke(
+          admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
+          ...rest,
+        ),
       ));
+      return ownerAuthorization && selected instanceof Response
+        ? bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
+        : selected;
+    });
   }) as unknown as H;
 }

@@ -14,7 +14,8 @@
  * REAL connection module (no mocks) so it actually exercises that comparison.
  */
 import { createNewClient, createTransport, shouldRecreateClient } from '@/backend/services/mcp/connection';
-import type { MCPServerConfig } from '@/shared/types/mcp';
+import type { MCPServerConfig, MCPStreamableConfig } from '@/shared/types/mcp';
+import { createBetaTransport, createNewBetaClient } from '@/backend/services/mcp/betaClient';
 
 /** Build a live-ish client whose transport was created from `config`, as connectServer does. */
 function clientFor(config: MCPServerConfig) {
@@ -43,6 +44,14 @@ const sse = (auth: string): MCPServerConfig => ({
 } as unknown as MCPServerConfig);
 
 describe('shouldRecreateClient — HTTP auth-material change detection (issue #47)', () => {
+  it.each([false, true])('rebuilds the OAuth transport when only the trusted issuer changes (beta=%s)', beta => {
+    const config = { ...streamable('TOKEN_OLD'), oauthClientId: 'synthetic-client',
+      oauthIssuer: 'https://trusted.example.test' } as MCPStreamableConfig;
+    const client = beta ? createNewBetaClient(config) : createNewClient(config);
+    (client as unknown as { _transport: unknown })._transport = beta ? createBetaTransport(config) : createTransport(config);
+    expect(shouldRecreateClient(client, config, beta).needsNewClient).toBe(false);
+    expect(shouldRecreateClient(client, { ...config, oauthIssuer: 'https://changed.example.test' }, beta).needsNewClient).toBe(true);
+  });
   it('does NOT rebuild a streamable client when the config is byte-identical', () => {
     const config = streamable('TOKEN_OLD');
     const client = clientFor(config);

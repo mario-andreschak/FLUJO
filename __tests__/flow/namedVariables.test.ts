@@ -11,7 +11,7 @@
  */
 
 jest.mock('@/backend/utils/PromptRenderer', () => ({
-  promptRenderer: { renderPrompt: jest.fn() },
+  promptRenderer: { renderPrompt: jest.fn(), resolveChatMessageReferences: jest.fn(async (value: string) => value) },
 }));
 jest.mock('@/backend/services/flow/index', () => ({
   flowService: { getFlow: jest.fn(async () => ({ id: 'flow-1', name: 'f', nodes: [], edges: [] })) },
@@ -62,6 +62,18 @@ beforeEach(() => {
 });
 
 describe('ProcessNode.prep — ${var:NAME} resolution', () => {
+  it('substitutes current chat/flow/node/model commands on the model wire for ordinary chat and Slack IDs', async () => {
+    renderPromptMock.mockResolvedValue('SYS');
+    const content = 'chat=@current.conversation.id flow=@current.flow.id node=@current.node.id model=@current.model.id';
+    for (const conversationId of ['chat-1', 'slack-team-thread-1']) {
+      const state = makeState({ conversationId, messages: [{ id: 'user-current', role: 'user', content, timestamp: 1 }] });
+      const prep = await new ProcessNode().prep(state, procParams({}));
+      expect((prep.wireMessages ?? prep.messages).find(message => message.role === 'user')?.content)
+        .toBe(`chat=${conversationId} flow=flow-1 node=proc model=m`);
+      expect(state.messages[0].content).toBe(content);
+    }
+  });
+
   it('resolves vars in the rendered system prompt (currentPrompt)', async () => {
     renderPromptMock.mockResolvedValue('Follow the plan: ${var:plan}');
     const node = new ProcessNode();

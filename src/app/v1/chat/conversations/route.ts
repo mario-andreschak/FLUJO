@@ -1,8 +1,10 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { exposeExecutionConversationInList, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server'; // Import NextRequest
 import { promises as fs } from 'fs';
 import path from 'path';
+import { readPlainFile } from '@/utils/readPlainFile';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
@@ -14,6 +16,7 @@ import {
 } from '@/utils/storage/backend';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { ConversationLogReadPressureError, CONVERSATION_LOG_READ_CONCURRENCY } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
@@ -57,14 +60,13 @@ type ConversationListItem = FrontendConversationListItem;
 // polls this endpoint every few seconds, and conversation files carry the FULL
 // message history — re-reading and JSON.parsing every file on every poll is
 // O(total bytes on disk). The summary only needs six small fields, so cache it
-// per file and invalidate on mtime/size change (every write is an atomic
-// replace, so a content change always moves the mtime). Conversation ids/file
+// per file and invalidate on the admitted file identity and exact nanosecond
+// timestamps, including equal-size/equal-mtime replacements. Conversation ids/file
 // names are only unique within a workspace; a process-wide filename-only cache
 // can otherwise return one workspace's title/status/flow metadata in another.
 type CachedConversationListItem = ConversationListItem & { personaOwned?: true };
 const listSummaryCache = new Map<string, {
-  mtimeMs: number;
-  size: number;
+  snapshotIdentity: string;
   item: CachedConversationListItem;
 }>();
 
@@ -264,17 +266,23 @@ async function GET_handler(request: NextRequest) {
     const files = await fs.readdir(conversationsDir);
     log.debug(`Found ${files.length} items in directory`, { requestId });
 
-    const jsonFiles = files.filter(file => file.endsWith('.json'));
+    const jsonFiles: string[] = [];
+    for (const file of files.filter(file => file.endsWith('.json'))) {
+      if (await exposeExecutionConversationInList(file.slice(0, -5))) jsonFiles.push(file);
+    }
     log.debug(`Found ${jsonFiles.length} JSON files`, { requestId });
 
     // The dashboard only needs to know whether saved chats exist. Avoid reading
     // and projecting every conversation file for that lightweight status check.
     if (presenceOnly) {
-      if (personaControlAllowed) return NextResponse.json({ count: jsonFiles.length });
       const summaries = await listConversationSummaries();
+      if (personaControlAllowed) {
+        const protectedIds = new Set(summaries.filter(summary => summary.executionExtensionOwned).map(summary => summary.id));
+        return NextResponse.json({ count: jsonFiles.filter(file => !protectedIds.has(file.slice(0, -5))).length });
+      }
       const count = summaries.filter((summary) => (
-        !summary.personaOwned
-        && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
+        !summary.executionExtensionOwned && jsonFiles.includes(summary.id + '.json')
+        && !summary.personaOwned && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
       )).length;
       return NextResponse.json({ count });
     }
@@ -290,6 +298,7 @@ async function GET_handler(request: NextRequest) {
         ? new Map((await flowService.loadFlows()).map((flow) => [flow.id, flow.name]))
         : new Map<string, string>();
       let visible = summaries
+        .filter((summary) => !summary.executionExtensionOwned && jsonFiles.includes(summary.id + '.json'))
         .filter((summary) => personaControlAllowed || (
           !summary.personaOwned
           && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
@@ -350,6 +359,7 @@ async function GET_handler(request: NextRequest) {
           ...(pinned ? { pinnedItems: visible.filter((item) => pinned.has(item.id)) } : {}),
         });
       } catch (error) {
+        if (error instanceof ConversationLogReadPressureError) throw error;
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });
         }
@@ -362,27 +372,34 @@ async function GET_handler(request: NextRequest) {
       const conversationIdFromFile = file.replace('.json', ''); // Extract ID from filename
 
       try {
-        // Summary from disk, via the mtime/size cache (see listSummaryCache).
-        const stats = await fs.stat(filePath);
+        // Bind both a cache entry and a body read to this inspected file identity.
+        const stats = await fs.lstat(filePath, { bigint: true });
+        const snapshotIdentity = [
+          stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs,
+          stats.mode, stats.uid, stats.gid, stats.nlink,
+        ].join(':');
         const summaryCacheKey = listSummaryCacheKey(file);
         const cached = listSummaryCache.get(summaryCacheKey);
         let base: CachedConversationListItem;
         // Content search always needs the parsed body, so it bypasses the
         // summary-only cache-hit fast path (it still repopulates the cache).
         let parsedState: SharedState | undefined;
-        const cacheHit = !!cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size;
+        const cacheHit = !!cached && cached.snapshotIdentity === snapshotIdentity;
         if (cacheHit && !contentSearch) {
           base = cached!.item;
         } else {
           // Skip pathologically large files under content search — they can't be
           // scanned cheaply and would blow the per-request cost budget.
-          if (contentSearch && stats.size > MAX_CONTENT_SCAN_BYTES) {
+          if (contentSearch && stats.size > BigInt(MAX_CONTENT_SCAN_BYTES)) {
             return null;
           }
-          const fileContent = contentSearch
-            ? await fs.readFile(filePath, { encoding: 'utf-8', signal: request.signal })
-            : await fs.readFile(filePath, 'utf-8');
+          const fileContent = (await readPlainFile(filePath, {
+            expected: stats,
+            maxBytes: contentSearch ? MAX_CONTENT_SCAN_BYTES : undefined,
+            signal: request.signal,
+          })).toString('utf-8');
           const state = JSON.parse(fileContent) as SharedState;
+          if (isExecutionProtectedState(state)) return null;
           parsedState = state;
           if (!personaControlAllowed && isPersonaOwnedConversationState(state)) return null;
           // On the first sidebar load after a process restart, convert a running
@@ -442,7 +459,7 @@ async function GET_handler(request: NextRequest) {
               ? { behaviorRevisionId: state.personaAttribution.behaviorRevisionId }
               : {}),
           };
-          listSummaryCache.set(summaryCacheKey, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
+          listSummaryCache.set(summaryCacheKey, { snapshotIdentity, item: base });
         }
 
         // Content search (issue #182): exclude conversations whose message
@@ -570,6 +587,7 @@ async function GET_handler(request: NextRequest) {
           ...(pinned ? { pinnedItems: visibleConversations.filter((item) => pinned.has(item.id)) } : {}),
         });
       } catch (error) {
+        if (error instanceof ConversationLogReadPressureError) throw error;
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });
         }
@@ -579,6 +597,7 @@ async function GET_handler(request: NextRequest) {
     return NextResponse.json(validConversations);
 
   } catch (error: unknown) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     const duration = Date.now() - startTime;
     log.error('Error listing conversations', {
       requestId,
@@ -840,6 +859,7 @@ async function POST_handler(req: NextRequest) {
     return NextResponse.json(responseItem, { status: 201 }); // 201 Created
 
     } catch (error: unknown) {
+      if (error instanceof ConversationLogReadPressureError) throw error;
       const duration = Date.now() - startTime;
       log.error('Error creating conversation', {
         requestId,
@@ -859,7 +879,8 @@ async function POST_handler(req: NextRequest) {
 // tombstone first, cancel/evict in-memory state, then remove the state file,
 // conversation log, run-resources, and quick-chat compiled-flow cache. Bad
 // ids are counted as errors (not fatal) so one malformed id can't abort the
-// whole batch. Returns { deleted, errors }.
+// whole batch. Read pressure adds retryableIds and a Retry-After header to
+// the partial { deleted, errors } result; it never deletes the refused item.
 async function DELETE_handler(req: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
@@ -879,7 +900,8 @@ async function DELETE_handler(req: NextRequest) {
 
   const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
   let deleted = 0, errors = 0;
-  await Promise.all((body.ids as unknown[]).map(async (rawId) => {
+  const retryableIds: string[] = [];
+  const removeOne = async (rawId: unknown) => {
     if (typeof rawId !== 'string' || !SAFE_ID.test(rawId)) { errors++; return; }
     const id = rawId;
     // Preserve tombstone-first cancellation for an already-running legacy
@@ -925,13 +947,22 @@ async function DELETE_handler(req: NextRequest) {
       // Delete failed — clear the tombstone so the surviving conversation is
       // still persistable/loggable.
       unmarkConversationDeleted(id);
+      if (err instanceof ConversationLogReadPressureError) retryableIds.push(id);
       log.error('Failed to delete conversation in bulk', { requestId, id, err });
       errors++;
     }
+  };
+  const ids = body.ids as unknown[];
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(ids.length, CONVERSATION_LOG_READ_CONCURRENCY) }, async () => {
+    while (nextIndex < ids.length) await removeOne(ids[nextIndex++]);
   }));
 
   log.info('Bulk DELETE complete', { requestId, deleted, errors });
-  return NextResponse.json({ deleted, errors }, { status: 200 });
+  return NextResponse.json({ deleted, errors, ...(retryableIds.length ? { retryableIds, retryAfterSeconds: 5 } : {}) }, {
+    status: 200,
+    ...(retryableIds.length ? { headers: { 'Retry-After': '5', 'Cache-Control': 'private, no-store' } } : {}),
+  });
 }
 
 

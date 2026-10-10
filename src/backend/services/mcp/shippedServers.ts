@@ -121,7 +121,6 @@ export function shippedServerEnv(
     'FLUJO_BASE_URL',
     'FLUJO_EXTRA_CA_CERTS',
     'NODE_EXTRA_CA_CERTS',
-    'NODE_OPTIONS',
     'NODE_TLS_REJECT_UNAUTHORIZED',
     'SSL_CERT_FILE',
   ]);

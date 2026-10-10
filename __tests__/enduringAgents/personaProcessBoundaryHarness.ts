@@ -8,6 +8,7 @@ export interface PersonaProcessEnvironment {
   sandboxRoot: string;
   dataDir: string;
   rootsDir: string;
+  transpileCacheDir: string;
   workspaceId: string;
 }
 
@@ -21,6 +22,9 @@ export interface PersonaLeaseFence {
 }
 
 export type PersonaProcessCommand =
+  | { type: 'launchDetachedTask'; childConversationId: string }
+  | { type: 'getDetachedTask'; taskId: string }
+  | { type: 'reconcileDetachedTasks' }
   | {
       type: 'createPersona';
       name: string;
@@ -52,7 +56,7 @@ export type PersonaProcessCommand =
   | { type: 'inspect'; personaId: string }
   | { type: 'appendEvent'; personaId: string; event: Record<string, unknown> }
   | { type: 'readEvents'; personaId: string }
-  | { type: 'captureGateEnter'; token: string; mode: 'writer' | 'snapshot' | 'flow'; timeoutMs?: number }
+  | { type: 'captureGateEnter'; token: string; mode: 'writer' | 'snapshot' | 'flow' | 'snapshot-store'; timeoutMs?: number }
   | { type: 'readFlow'; flowId: string }
   | { type: 'saveFlow'; flow: import('@/shared/types/flow').Flow }
   | { type: 'previewDeletion'; personaId: string }
@@ -169,14 +173,18 @@ export async function createPersonaProcessEnvironment(
   const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), `flujo-persona-${label}-`));
   const dataDir = path.join(sandboxRoot, 'data');
   const rootsDir = path.join(sandboxRoot, 'roots');
+  const transpileCacheDir = path.join(sandboxRoot, 'transpile-cache');
+  await fs.chmod(sandboxRoot, 0o700);
   await Promise.all([
     fs.mkdir(dataDir, { recursive: true }),
     fs.mkdir(rootsDir, { recursive: true }),
+    fs.mkdir(transpileCacheDir, { mode: 0o700 }),
   ]);
   return {
     sandboxRoot,
     dataDir,
     rootsDir,
+    transpileCacheDir,
     workspaceId: `persona-process-${process.pid}-${Date.now()}`,
   };
 }
@@ -206,6 +214,7 @@ export async function startPersonaProcess(
       FLUJO_DATA_DIR: environment.dataDir,
       FLUJO_FS_ROOTS: environment.rootsDir,
       FLUJO_BASH_ROOTS: environment.rootsDir,
+      FLUJO_PERSONA_TRANSPILE_CACHE_DIR: environment.transpileCacheDir,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

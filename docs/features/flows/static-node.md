@@ -47,12 +47,16 @@ type StaticEntry =
       result: string;
       executionMode?: 'mock' | 'real';
       serverName?: string;
+      captureVariable?: string;
+      resultFormat?: 'text' | 'json';
+      onError?: 'continue' | 'fail';
     };
 
 interface StaticNodeProperties {
   name?: string;
   entries?: StaticEntry[];
   injectOnce?: boolean;
+  outputTemplate?: string;
 }
 ```
 
@@ -69,12 +73,51 @@ interface StaticNodeProperties {
 | `result` | string | Yes for a mock | Authored mock result. Ignored/replaced with the actual result for real calls. | Mocks only |
 | `executionMode` | `mock\|real` | No | Whether to inject the authored result or execute MCP at runtime. Missing defaults to `mock`. | No |
 | `serverName` | string | Yes for a real call | MCP server used for selection, graph wiring, and execution. Optional metadata for a mock. | No |
+| `captureVariable` | string | No | Save this entry's bounded result snapshot in a run variable. Names start with a letter or `_`, followed by letters, digits, `_` or `-`. | No |
+| `resultFormat` | `text\|json` | No | Capture text blocks (default) or structured MCP JSON. Affects captures only. | No |
+| `onError` | `continue\|fail` | No | Real-call policy; default `continue` preserves context injection. `fail` stops on service failure or MCP `isError: true`. | No |
+| `outputTemplate` | string | No | Node-level output resolved after the entries, exported as an assistant response. | Yes |
 
 A `message` entry creates one conversation message. Text documents are appended to its text and binary/image/audio/video attachments become message media. A `toolCall` entry creates two messages: an assistant message with a tool call, followed immediately by its matching tool-result message.
 
 `executionMode: 'mock'` injects the authored `result`. It is also the default when `executionMode` is absent, preserving old Static nodes. `executionMode: 'real'` requires `serverName`, a connected MCP node for that server, and the selected tool in that node's `enabledTools`; the runtime executes the tool and injects its actual result. A tool error is injected as `Error: …`, while missing/incorrect graph wiring fails the node explicitly.
 
 ## Common patterns
+
+### Deterministic output and failure policy
+
+For a model-free health check, connect Start → Static → Finish and configure the Static step as follows:
+
+```json
+{
+  "key": "probe",
+  "type": "static",
+  "outputTemplate": "${var:health}",
+  "entries": [{
+    "kind": "toolCall",
+    "executionMode": "real",
+    "serverName": "bash",
+    "toolName": "run",
+    "argumentsJson": "{\"command\":\"printf healthy\"}",
+    "result": "",
+    "captureVariable": "health",
+    "resultFormat": "text",
+    "onError": "fail"
+  }]
+}
+```
+
+Capture distinct variables for several calls; `outputTemplate` selects the desired result even if another tool ran last. Captures are available immediately to later entries and nodes through `${var:NAME}`. The explicit template sets `lastResponse` and adds an assistant output message, so Finish, API output, terminal events, and scheduled history use that response. A later responding stage can replace it normally. Without a template, context-injection defaults remain unchanged. A separate empty Static step can select previously captured variables. On an `injectOnce` revisit, entries stay skipped and the optional output template is re-resolved from the run variables.
+
+For output templates, authored resource/dynamic references resolve first and run variables are inserted last. Reference-like text inside a captured result is always literal data; it cannot trigger a resource read, global-variable lookup, or dynamic-reference expansion.
+
+`text` joins MCP text blocks and textual embedded resources with newlines. Media is explicitly marked as omitted; structured-only results direct the author to JSON capture. `json` preserves the protocol envelope, including `structuredContent` and `isError`, but replaces inline image/audio/video data and resource blobs with omission markers. Mock text capture is the authored result; JSON capture parses valid authored JSON, or stores ordinary text as a JSON string. The original tool message stays unchanged.
+
+Captures and resolved output templates are capped at 65,536 characters. Text includes a truncation marker; oversized JSON becomes a parseable `{ "truncated": true, "originalChars": ..., "preview": ... }` envelope. Scheduler history then applies its existing 4,096-character output limit, so a truncated history preview may no longer be parseable JSON. History retains the selected result with `saveConversations: false` without persisting an ephemeral transcript. Variables and successful outputs remain plaintext; tools should avoid returning private secrets.
+
+`onError: 'fail'` is valid only for real calls. Service/transport failure, timeout, or MCP `isError: true` stops remaining entries, skips the success edge, and does not export the success template. The API preserves bounded structured failure metadata (`type`, `code`, tool `name`, server `param`, optional HTTP `status`). Scheduled history retains the message and this classification even for ephemeral runs. Error messages use existing error redaction rules and a 2,048-character cap. Static has no authored error branch; unsupported policy values and `fail` on a mock are validation errors.
+
+The engine never infers failure from arbitrary `exitCode`, application JSON, stderr, or stdout. Bash explicitly maps nonzero process exits to MCP `isError`; other servers must report their protocol error flag. `continue` retains paired error context for a downstream model to inspect or recover. User cancellation always stops the run and reaches in-flight MCP calls regardless of this policy.
 
 ### System-prompt scaffolding
 
@@ -143,6 +186,26 @@ Text fields (`content`, `argumentsJson`, and `result`) resolve run variables bef
 - Resource contents resolve after variables, and resolution is not recursive.
 
 Keep the final substituted `argumentsJson` valid JSON. The modal validates the authored value, while execution parses the resolved value.
+
+### Dynamic references and fixed tool parameters
+
+Static messages, mock results, and JSON argument values also resolve dynamic
+references such as `@current.conversation.id`, `@current.flow.id`, and `@current.node.id` from the current
+execution. JSON values resolve after parsing, preserving nested objects and quoted
+names. Conversation IDs retain their original form, including Slack thread IDs.
+
+For real MCP calls, server parameter presets apply first and connected MCP node
+presets override them per parameter. These presets override the authored call's
+arguments, matching Process-node dispatch. Fixed values resolve immediately before
+the MCP call and are excluded from the assistant tool-call message added to model
+history. Tool results can still disclose values returned by the server.
+
+An enabled preset whose value is an empty string is still a fixed parameter. Disable
+the preset to allow the model or authored call to supply that parameter. A trusted
+customer binding must come from server-controlled configuration; `@conversation.id`
+provides correlation and does not authenticate the customer. See the
+[complete command reference](../dynamic-references.md) for current context,
+entity pickers, aliases, and available fields.
 
 ## Re-entry semantics
 

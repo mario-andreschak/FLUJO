@@ -13,6 +13,9 @@
 import { StaticNode } from '@/backend/execution/flow/nodes/StaticNode';
 import type { SharedState, StaticNodeParams } from '@/backend/execution/flow/types';
 import { mcpService } from '@/backend/services/mcp';
+import { MAX_STATIC_CAPTURE_CHARS, MAX_STATIC_ERROR_CHARS } from '@/utils/shared/staticToolResult';
+import { resolveRunResourceRefs } from '@/backend/execution/flow/resolveRunResourceRefs';
+import { resolveGlobalVars, resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
@@ -23,7 +26,17 @@ jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
 }));
 
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { callTool: jest.fn(), setNodeRoots: jest.fn() },
+  mcpService: { callTool: jest.fn(), setNodeRoots: jest.fn(), loadServerConfigs: jest.fn(async () => []) },
+}));
+
+jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn(async () => null) } }));
+jest.mock('@/backend/services/model', () => ({ modelService: { getModel: jest.fn(async () => null) } }));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: jest.fn(async () => ({ title: 'A "quoted" title' })),
+}));
+jest.mock('@/backend/utils/resolveGlobalVars', () => ({
+  resolveGlobalVars: jest.fn(async (value: unknown) => value),
+  resolveNonSecretGlobalVars: jest.fn(async (value: unknown) => value),
 }));
 
 function makeState(overrides: Partial<SharedState> = {}): SharedState {
@@ -58,6 +71,19 @@ async function run(node: StaticNode, state: SharedState, p: StaticNodeParams): P
 }
 
 describe('StaticNode', () => {
+  it.each(['__proto__', 'constructor', 'toString'])('retains inject-once markers for a data-key node id %s', async nodeId => {
+    const node = nodeWithSuccessor();
+    const state = makeState({ logicalRunId: 'data-key-run', staticInjected: { stale: 'earlier-run' } });
+    const p = { ...params({ entries: [{ kind: 'message', role: 'user', content: 'once' }], injectOnce: true }), id: nodeId };
+    await run(node, state, p);
+    expect(Object.getPrototypeOf(state.staticInjected)).toBe(Object.prototype);
+    expect(Object.hasOwn(state.staticInjected!, nodeId)).toBe(true);
+    expect(state.staticInjected![nodeId]).toBe('data-key-run');
+    expect(Object.hasOwn(state.staticInjected!, 'stale')).toBe(false);
+    state.staticInjected = JSON.parse(JSON.stringify(state.staticInjected));
+    await run(node, state, p);
+    expect(state.messages).toHaveLength(1);
+  });
   it('appends authored messages in order, resolving run variables', async () => {
     const node = nodeWithSuccessor();
     const p = params({
@@ -144,6 +170,64 @@ describe('StaticNode', () => {
       [(state.messages[0] as any).tool_calls[0].id]: { serverName: 'files', toolName: 'read_file' },
     });
     expect(state.messages[1].content).toBe(JSON.stringify({ content: [{ type: 'text', text: 'live result' }] }));
+  });
+
+  it('resolves @ references in authored messages and nested tool JSON without breaking quoting', async () => {
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, params({ entries: [
+      { kind: 'message', role: 'user', content: 'Current chat: @conversation.id' },
+      { kind: 'toolCall', toolName: 'lookup', argumentsJson: '{"nested":{"id":"@conversation.id","title":"@conversation.name"}}', result: '@conversation.id' },
+    ] }));
+    expect(state.messages[0].content).toBe('Current chat: conv-1');
+    expect(JSON.parse((state.messages[1] as any).tool_calls[0].function.arguments)).toEqual({
+      nested: { id: 'conv-1', title: 'A "quoted" title' },
+    });
+    expect(state.messages[2].content).toBe('conv-1');
+  });
+
+  it('applies server and node presets at dispatch and keeps fixed values out of model history', async () => {
+    (mcpService.callTool as jest.Mock).mockClear().mockResolvedValue({ success: true, data: { ok: true } });
+    (mcpService.loadServerConfigs as jest.Mock).mockResolvedValueOnce([{
+      name: 'bank', toolParameterPresets: { lookup: { customer_id: 'server-default', tenant: 'private-tenant' } },
+    }]);
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, params({
+      entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'bank', toolName: 'lookup',
+        argumentsJson: '{"customer_id":"forged-customer","query":"recent","chat":"@conversation.id"}', result: '' }],
+      mcpNodes: [{ id: 'mcp-bank', properties: { boundServer: 'bank', enabledTools: ['lookup'],
+        toolParameterPresets: { lookup: { customer_id: 'fixed-customer', conversation_id: '@conversation.id', node_id: '@node.id' } } } }],
+    }));
+    expect(mcpService.callTool).toHaveBeenCalledWith('bank', 'lookup', {
+      customer_id: 'fixed-customer', tenant: 'private-tenant', conversation_id: 'conv-1',
+      node_id: 'stat', query: 'recent', chat: 'conv-1',
+    }, expect.any(Number), undefined, 'mcp-bank');
+    expect(JSON.stringify(state.messages)).not.toContain('fixed-customer');
+    expect(JSON.stringify(state.messages)).not.toContain('private-tenant');
+  });
+
+  it('keeps current-conversation presets separate for overlapping executions of the same node', async () => {
+    (mcpService.callTool as jest.Mock).mockClear().mockResolvedValue({ success: true, data: { ok: true } });
+    const p = params({
+      entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'bank', toolName: 'lookup', argumentsJson: '{}', result: '' }],
+      mcpNodes: [{ id: 'mcp-bank', properties: { boundServer: 'bank', enabledTools: ['lookup'],
+        toolParameterPresets: { lookup: { conversation_id: '@conversation.id' } } } }],
+    });
+    await Promise.all(['chat-a', 'slack-team-thread-b'].map(conversationId =>
+      run(nodeWithSuccessor(), makeState({ conversationId }), p)));
+    expect((mcpService.callTool as jest.Mock).mock.calls.map(call => call[2].conversation_id).sort())
+      .toEqual(['chat-a', 'slack-team-thread-b']);
+    expect(p.properties?.mcpNodes?.[0].properties?.toolParameterPresets?.lookup)
+      .toEqual({ conversation_id: '@conversation.id' });
+  });
+
+  it('does not dispatch without server presets when configuration loading fails', async () => {
+    (mcpService.callTool as jest.Mock).mockClear();
+    (mcpService.loadServerConfigs as jest.Mock).mockResolvedValueOnce({ success: false, error: 'storage unavailable' });
+    await expect(run(nodeWithSuccessor(), makeState(), params({
+      entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'bank', toolName: 'lookup', argumentsJson: '{}', result: '' }],
+      mcpNodes: [{ id: 'mcp-bank', properties: { boundServer: 'bank', enabledTools: ['lookup'] } }],
+    }))).rejects.toThrow('could not load MCP parameter presets');
+    expect(mcpService.callTool).not.toHaveBeenCalled();
   });
 
   it('executes the internal maintenance gateway without an authored MCP binding', async () => {
@@ -410,5 +494,159 @@ describe('StaticNode', () => {
     await run(node, state, p);
 
     expect(state.staticInjected).toEqual({ stat: 'run-2' });
+  });
+});
+
+describe('Static deterministic output and failure policy (#537/#538)', () => {
+  const realEntry = (overrides: Record<string, unknown> = {}) => ({
+    kind: 'toolCall', executionMode: 'real', serverName: 'bash', toolName: 'run',
+    argumentsJson: '{}', result: '', ...overrides,
+  });
+  const realParams = (entries: unknown[], overrides: Record<string, unknown> = {}) => params({
+    entries,
+    mcpNodes: [{ id: 'mcp-bash', properties: { boundServer: 'bash', enabledTools: ['run'], toolTimeout: 10 } }],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    (mcpService.callTool as jest.Mock).mockReset();
+    (mcpService.loadServerConfigs as jest.Mock).mockReset().mockResolvedValue([]);
+  });
+
+  it('selects one result among several and exposes it as an assistant output', async () => {
+    (mcpService.callTool as jest.Mock)
+      .mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'selected' }] } })
+      .mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'other' }] } });
+    const state = makeState({ ephemeral: true });
+    const action = await run(nodeWithSuccessor(), state, realParams([
+      realEntry({ captureVariable: 'health' }), realEntry({ captureVariable: 'later' }),
+    ], { outputTemplate: 'Probe: ${var:health}' }));
+    expect(action).toBe('next');
+    expect(state.variables).toEqual({ health: 'selected', later: 'other' });
+    expect(state.lastResponse).toBe('Probe: selected');
+    expect(state.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Probe: selected' });
+  });
+
+  it('exports captured reference-like text literally without resolving secret/resource/dynamic references in tool data', async () => {
+    const payload = '${global:SECRET} ${res:private} @conversation.id ${var:other}';
+    (mcpService.callTool as jest.Mock).mockResolvedValue({ success: true, data: { content: [{ type: 'text', text: payload }] } });
+    (resolveRunResourceRefs as jest.Mock).mockClear();
+    (resolveGlobalVars as jest.Mock).mockClear();
+    (resolveNonSecretGlobalVars as jest.Mock).mockClear();
+    const state = makeState({ variables: { other: 'must not substitute' } });
+    await run(nodeWithSuccessor(), state, realParams([realEntry({ captureVariable: 'health' })], { outputTemplate: '${var:health}' }));
+    expect(state.lastResponse).toBe(payload);
+    expect(state.messages.at(-1)?.content).toBe(payload);
+    for (const resolver of [resolveRunResourceRefs, resolveGlobalVars, resolveNonSecretGlobalVars]) {
+      expect((resolver as jest.Mock).mock.calls.some(args => typeof args[0] === 'string' && args[0].includes('${global:SECRET}'))).toBe(false);
+    }
+  });
+
+  it('captures parseable structured MCP output while omitting inline binary media', async () => {
+    const data = { structuredContent: { healthy: true }, content: [
+      { type: 'image', mimeType: 'image/png', data: 'private-base64' },
+      { type: 'resource', resource: { uri: 'resource:a', mimeType: 'application/pdf', blob: 'private-blob' } },
+    ] };
+    (mcpService.callTool as jest.Mock).mockResolvedValue({ success: true, data });
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, realParams([realEntry({ captureVariable: 'payload', resultFormat: 'json' })]));
+    expect(JSON.parse(state.variables!.payload).structuredContent).toEqual({ healthy: true });
+    expect(state.variables!.payload).not.toMatch(/private-base64|private-blob/);
+    expect(state.messages[1].content).toBe(JSON.stringify(data));
+    expect(state.lastResponse).toBeUndefined();
+  });
+
+  it('defines media/structured-only text captures and mock JSON captures explicitly', async () => {
+    (mcpService.callTool as jest.Mock).mockResolvedValue({ success: true, data: {
+      content: [{ type: 'audio', mimeType: 'audio/wav', data: 'YQ==' }],
+    } });
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, realParams([
+      realEntry({ captureVariable: 'media' }),
+      { kind: 'toolCall', toolName: 'fixture', argumentsJson: '{}', result: '{"ok":true}', captureVariable: 'mock', resultFormat: 'json' },
+    ]));
+    expect(state.variables!.media).toContain('MCP audio content omitted');
+    expect(JSON.parse(state.variables!.mock)).toEqual({ ok: true });
+  });
+
+  it.each(['text', 'json'])('bounds oversized %s captures without obscuring truncation', async (resultFormat) => {
+    (mcpService.callTool as jest.Mock).mockResolvedValue({ success: true, data: {
+      content: [{ type: 'text', text: 'x'.repeat(MAX_STATIC_CAPTURE_CHARS * 2) }],
+    } });
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, realParams([realEntry({ captureVariable: 'large', resultFormat })]));
+    expect(state.variables!.large.length).toBeLessThanOrEqual(MAX_STATIC_CAPTURE_CHARS);
+    if (resultFormat === 'json') expect(JSON.parse(state.variables!.large).truncated).toBe(true);
+    else expect(state.variables!.large).toContain('[Static output truncated]');
+  });
+
+  it.each([
+    [{ exitCode: 0 }, 'next'],
+    [{ exitCode: 2 }, 'next'],
+    [{ content: [{ type: 'text', text: 'stderr says failed' }], status: 'failed' }, 'next'],
+    [{ isError: true, content: [{ type: 'text', text: '{"exitCode":2}' }] }, 'ERROR'],
+  ])('uses only the protocol error flag for delivered results %#', async (data, expectedAction) => {
+    (mcpService.callTool as jest.Mock).mockResolvedValue({ success: true, data });
+    const state = makeState();
+    expect(await run(nodeWithSuccessor(), state, realParams([realEntry({ onError: 'fail' })]))).toBe(expectedAction);
+    if (expectedAction === 'ERROR') {
+      expect(state.lastResponse).toMatchObject({ success: false, errorDetails: { type: 'mcp_tool_error', code: 'static_mcp_tool_error' } });
+    }
+  });
+
+  it.each([
+    [{ success: false, error: 'offline' }, 'static_mcp_service_error'],
+    [{ success: false, error: 'request expired', errorType: 'timeout', statusCode: 408 }, 'static_mcp_timeout'],
+    [{ success: false, error: 'cancelled', errorType: 'cancelled' }, 'static_tool_cancelled'],
+  ])('keeps service failure classification in a bounded structured reason %#', async (result, code) => {
+    (mcpService.callTool as jest.Mock).mockResolvedValue(result);
+    const state = makeState();
+    expect(await run(nodeWithSuccessor(), state, realParams([realEntry({ onError: 'fail' })]))).toBe('ERROR');
+    expect(state.lastResponse).toMatchObject({ success: false, errorDetails: { type: 'mcp_service_error', code, name: 'run', param: 'bash' } });
+  });
+
+  it('stops after the first failure, retains paired context, bounds and redacts the reason', async () => {
+    (mcpService.callTool as jest.Mock).mockRejectedValue(new Error('Bearer verysecrettoken ' + 'x'.repeat(10_000)));
+    const state = makeState();
+    expect(await run(nodeWithSuccessor(), state, realParams([
+      realEntry({ onError: 'fail' }), realEntry(), { kind: 'message', role: 'user', content: 'unreachable' },
+    ], { outputTemplate: 'must not succeed' }))).toBe('ERROR');
+    expect(mcpService.callTool).toHaveBeenCalledTimes(1);
+    expect(state.messages).toHaveLength(2);
+    const failure = state.lastResponse as { error: string };
+    expect(failure.error.length).toBeLessThanOrEqual(MAX_STATIC_ERROR_CHARS);
+    expect(failure.error).not.toContain('verysecrettoken');
+  });
+
+  it.each([
+    { success: true, data: { isError: true, content: [{ type: 'text', text: 'failed' }] } },
+    { success: false, error: 'offline' },
+  ])('preserves legacy continuation for errors %#', async (result) => {
+    (mcpService.callTool as jest.Mock).mockResolvedValue(result);
+    const state = makeState();
+    expect(await run(nodeWithSuccessor(), state, realParams([realEntry(), realEntry({ onError: 'continue' })]))).toBe('next');
+    expect(state.messages).toHaveLength(4);
+    expect(state.lastResponse).toBeUndefined();
+  });
+
+  it('forwards cancellation to an in-flight MCP call and never executes the next entry', async () => {
+    const controller = new AbortController();
+    (mcpService.callTool as jest.Mock).mockImplementation(async (...args: unknown[]) => {
+      const signal = args[6] as AbortSignal;
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      return { success: false, errorType: 'cancelled', error: 'cancelled' };
+    });
+    const state = makeState({ abortSignal: controller.signal });
+    expect(await run(nodeWithSuccessor(), state, realParams([realEntry(), realEntry()]))).toBe('ERROR');
+    expect(mcpService.callTool).toHaveBeenCalledTimes(1);
+    expect(state.lastResponse).toMatchObject({ errorDetails: { code: 'static_tool_cancelled' } });
+  });
+
+  it('does not dispatch an already-cancelled call', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(await run(nodeWithSuccessor(), makeState({ abortSignal: controller.signal }), realParams([realEntry()]))).toBe('ERROR');
+    expect(mcpService.callTool).not.toHaveBeenCalled();
   });
 });

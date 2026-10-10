@@ -55,9 +55,15 @@ describe('testModelConnection (litellm)', () => {
     };
     sdkCreate.mockResolvedValue(response);
     axiosPost.mockResolvedValue({ status: 200, data: response, headers: {} });
-    const result = await testModelConnection({ ...litellmParams, adapter: undefined });
+    const result = await testModelConnection({ ...litellmParams, adapter: 'openai-responses' });
     expect(result.adapterRoute).toMatchObject({ adapterId: 'openai-responses', endpoint: '/responses' });
     expect(axiosPost).toHaveBeenCalledWith('http://localhost:4000/v1/responses', expect.objectContaining({ store: false }), expect.any(Object));
+  });
+  it('keeps legacy saved LiteLLM connections without an adapter on Chat Completions', async () => {
+    sdkCreate.mockResolvedValue(okCompletion);
+    axiosPost.mockResolvedValue(okAxios);
+    const result = await testModelConnection({ ...litellmParams, adapter: undefined });
+    expect(result.adapterRoute).toMatchObject({ adapterId: 'openai', endpoint: '/chat/completions' });
   });
   it('reports success when both SDK and axios reach the LiteLLM proxy', async () => {
     sdkCreate.mockResolvedValue(okCompletion);

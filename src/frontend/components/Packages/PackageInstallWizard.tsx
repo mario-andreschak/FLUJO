@@ -61,7 +61,7 @@ import type {
   InstallStepStatus,
   PackageDeclarationInfo,
   PackageServerInfo,
-} from '@/backend/services/packages/installPackage';
+} from '@/shared/types/package/install';
 import {
   buildRenamePreview,
   validateRenameMap,

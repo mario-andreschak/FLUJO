@@ -1,0 +1,260 @@
+name: Publish npm release
+run-name: ${{ inputs.diagnose_oidc && format('Diagnose npm OIDC at {0}', inputs.expected_sha) || format('Release FLUJO {0} at {1}', inputs.version, inputs.expected_sha) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact version commit already pushed to main
+        type: string
+        required: true
+      version:
+        description: Synchronized package version (x.y.z)
+        type: string
+        required: true
+      diagnose_oidc:
+        description: Check all five trusted publisher exchanges without publishing
+        type: boolean
+        default: false
+
+concurrency:
+  group: official-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_SHA: ${{ inputs.expected_sha }}
+  RELEASE_VERSION: ${{ inputs.version }}
+
+jobs:
+  diagnose-oidc:
+    if: inputs.diagnose_oidc
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - run: node scripts/npm-release.mjs check
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - name: Report npm and CI identity
+        run: |
+          node --version
+          npm --version
+          command -v npm
+      - name: Check trusted publisher exchanges without registry writes
+        run: node scripts/npm-oidc-diagnostic.mjs
+
+  prepare:
+    if: ${{ !inputs.diagnose_oidc }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - run: node scripts/npm-release.mjs check
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - run: npm ci --include=dev
+      - name: Prepare real Linux MCP isolation image for release verification
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          docker_path="$(command -v docker)"
+          daemon='unix:///var/run/docker.sock'
+          test "$("$docker_path" --host "$daemon" info --format '{{.OSType}}/{{.CgroupVersion}}')" = 'linux/2'
+          # Both registries must provide the same pinned upstream manifest.
+          digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
+          image_ref=''
+          for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do
+            for attempt in 1 2; do
+              if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
+                image_ref="$registry@$digest"
+                break 2
+              fi
+              sleep "$attempt"
+            done
+          done
+          test -n "$image_ref"
+          image="$("$docker_path" --host "$daemon" image inspect "$image_ref" --format '{{.Id}}')"
+          [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf '%s\n' "FLUJO_TEST_ISOLATION_DOCKER=$docker_path" "FLUJO_TEST_ISOLATION_DAEMON=$daemon" "FLUJO_TEST_ISOLATION_IMAGE=$image" >> "$GITHUB_ENV"
+      # This verification builds and packs the exact version commit and smoke
+      # tests those same tarballs. It overlaps the existing main-push CI run.
+      - run: node scripts/npm-release.mjs prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+          FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: artifact
+        with:
+          name: npm-release-${{ inputs.version }}-${{ inputs.expected_sha }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          if-no-files-found: error
+          retention-days: 30
+
+  verify-main:
+    if: ${{ !inputs.diagnose_oidc }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 125
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - run: node scripts/npm-release.mjs check
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Require successful exact-commit main-push verification
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  attest:
+    if: ${{ !inputs.diagnose_oidc }}
+    needs: [prepare, verify-main]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          merge-multiple: true
+      - name: Recheck source verification before signing the tested bytes
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Validate complete byte inventory and source-lock identity
+        run: node scripts/npm-release.mjs verify-evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+      - name: Attest tested tarballs and metadata checksums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: ${{ runner.temp }}/flujo-npm-release/SHA256SUMS
+      - name: Attest the declared source-lock SBOM for the tarballs
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/flujo-npm-release/*.tgz
+          sbom-path: ${{ runner.temp }}/flujo-npm-release/source-lock.sbom.cdx.json
+
+  publish:
+    if: ${{ !inputs.diagnose_oidc }}
+    needs: [prepare, verify-main, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          merge-multiple: true
+      # No npm secret. npm exchanges this job's workflow-specific OIDC identity.
+      # Rerun failed jobs to preserve the successful prepare job's tarballs.
+      - name: Recheck exact main CI when resuming a failed publication
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: node scripts/npm-release.mjs publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+
+  finalize:
+    if: ${{ !inputs.diagnose_oidc }}
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    permissions:
+      contents: write
+      actions: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          merge-multiple: true
+      - name: Recheck exact main CI before tagging
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Confirm all npm bytes, tag, then dispatch and await image and installer
+        run: node scripts/npm-release.mjs finalize
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release

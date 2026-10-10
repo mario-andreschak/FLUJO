@@ -1,16 +1,19 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { archiveModelDispatch } from '@/backend/execution/flow/modelTurnArchive';
+import { archiveModelDispatch, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { capturePersonaRecovery } from '@/backend/services/enduringAgents/personaRecoveryCapture';
 import { PERSONA_RECOVERY_MANIFEST, inspectPersonaRecoveryFiles, validatePersonaRecoveryArchive } from '@/backend/services/enduringAgents/personaRecoveryArchive';
 import { decodePersonaRecoveryZip } from '@/backend/services/enduringAgents/personaRecoveryZip';
+import { flowService } from '@/backend/services/flow';
+import { snapshotBehaviorFlowDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS as c } from '@/backend/services/enduringAgents/collections';
 import { claimNextPersonaActivity, completePersonaActivity, enqueuePersonaMailboxItem } from '@/backend/services/enduringAgents/activityRuntime';
-import { getPersonaActivity, listMemoryItems, savePersonaActivity } from '@/backend/services/enduringAgents/store';
+import { createRoleVersion, getPersonaActivity, listMemoryItems, savePersonaActivity } from '@/backend/services/enduringAgents/store';
+import { RoleVersionSchema } from '@/shared/types/enduringAgent';
 import { saveCollectionItem } from '@/utils/storage/backend';
 import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
-import { createPersonaFromRole } from './fixtures/personaFactory';
+import { buildTestRoleVersion, createPersonaFromRole } from './fixtures/personaFactory';
 
 jest.setTimeout(60_000);
 let sequence = 0;
@@ -32,15 +35,44 @@ async function fixture() {
   const home = path.join(root, 'userdata', 'personas', persona.id);
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(path.join(home, 'notes.txt'), 'Private home file');
-  await archiveModelDispatch({
+  const entry = await archiveModelDispatch({
     conversationId: 'conversation_recovery', nodeId: 'model_node', modelId: 'model-test', modelName: 'Test model',
     adapter: 'test', operation: 'create', attempt: 1, canonicalMessages: [], genericWire: [],
     sdkRequest: { image: `data:image/png;base64,${Buffer.from('model-image').toString('base64')}` },
   });
+  await updateModelDispatchOutcome('conversation_recovery', entry.id, 'completed');
   return { persona, root, home, flowId };
 }
 
 describe('Persona recovery capture and complete manifest preflight', () => {
+  it('captures closed Role templates after their original mutable worker has been deleted', async () => fresh(async () => {
+    await fixture();
+    const base = buildTestRoleVersion().coreFlowTemplate!;
+    const worker = { ...structuredClone(base), id: 'closed-role-worker', name: 'Closed Role worker' };
+    worker.nodes.find(node => node.type === 'process')!.data.properties!.boundModel = 'model-test';
+    expect((await flowService.saveFlow(worker)).success).toBe(true);
+    const coordinator = { ...structuredClone(worker), id: 'closed-role-coordinator', name: 'Closed Role coordinator' };
+    coordinator.nodes.push({ id: 'delegate', type: 'subflow', position: { x: 240, y: 360 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: worker.id } } });
+    const pinned = await snapshotBehaviorFlowDependencies(coordinator);
+    const roleVersion = await createRoleVersion(RoleVersionSchema.parse({ ...buildTestRoleVersion(),
+      id: 'rolever_closed_worker', version: 80, coreFlowTemplate: pinned,
+      behaviorSlots: [{ key: 'primary', name: 'Coordinator', requiredCapabilities: [], flowTemplate: pinned }],
+    }));
+    await createPersonaFromRole({ id: 'persona_closed_role', name: 'Closed Role supervisor', roleVersionId: roleVersion.id });
+    expect((await flowService.deleteFlow(worker.id)).success).toBe(true);
+    const files = decodePersonaRecoveryZip((await capturePersonaRecovery()).bytes);
+    const recovered = validatePersonaRecoveryArchive(files);
+    const restoredRole = recovered.graph.records.find(record => record.collection === c.roleVersions && record.id === roleVersion.id)!.parsed;
+    expect(restoredRole.coreFlowTemplate).toEqual(pinned);
+    expect(files.some(file => file.path === `flows/${worker.id}.json`)).toBe(false);
+    expect(recovered.manifest.requiredModelIds).toContain('model-test');
+    const payload = files.filter(file => file.path !== PERSONA_RECOVERY_MANIFEST);
+    const roleFile = payload.find(file => file.path.endsWith(`/${roleVersion.id}.json`))!;
+    const tampered = JSON.parse(roleFile.bytes.toString());
+    tampered.coreFlowTemplate.executionDependencies.flows[0].contentHash = '0'.repeat(64);
+    expect(() => inspectPersonaRecoveryFiles(payload.map(file => file === roleFile
+      ? { ...file, bytes: Buffer.from(JSON.stringify(tampered)) } : file), getCurrentWorkspace())).toThrow('is corrupt');
+  }));
   it('captures actual Persona records and private artifacts, excluding unrelated chats and connection files', async () => fresh(async () => {
     const { persona } = await fixture();
     const sourceWorkspace = getCurrentWorkspace();
@@ -126,6 +158,38 @@ describe('Persona recovery capture and complete manifest preflight', () => {
     }
     expect(() => inspectPersonaRecoveryFiles(payload.map((file) => file === model
       ? { ...file, bytes: Buffer.from('invalid gzip') } : file), getCurrentWorkspace())).toThrow('model archive is invalid');
+  }));
+
+  it('binds bounded v2 outcomes to immutable snapshots and retains v1 recovery compatibility', async () => fresh(async () => {
+    await fixture();
+    const files = decodePersonaRecoveryZip((await capturePersonaRecovery()).bytes);
+    expect(() => validatePersonaRecoveryArchive(files)).not.toThrow();
+    const payload = files.filter(file => file.path !== PERSONA_RECOVERY_MANIFEST);
+    const model = payload.find(file => file.path.endsWith('.v2.json.gz'))!;
+    const outcome = payload.find(file => file.path.endsWith('.outcome.json'))!;
+    const record = JSON.parse(outcome.bytes.toString());
+    expect(record.outcome).toBe('completed');
+    for (const invalid of [
+      { ...record, conversationId: 'foreign' }, { ...record, dispatchId: 'foreign' },
+      { ...record, outcome: 'running' }, { ...record, version: 2 },
+    ]) {
+      expect(() => inspectPersonaRecoveryFiles(payload.map(file => file === outcome
+        ? { ...file, bytes: Buffer.from(JSON.stringify(invalid)) } : file), getCurrentWorkspace())).toThrow();
+    }
+    expect(() => inspectPersonaRecoveryFiles(payload.filter(file => file !== model), getCurrentWorkspace()))
+      .toThrow('missing model-turns');
+    expect(() => inspectPersonaRecoveryFiles(payload.map(file => file === outcome
+      ? { ...file, bytes: Buffer.alloc(1025, 32) } : file), getCurrentWorkspace())).toThrow('limits');
+    // No terminal record means the dispatch is still interrupted/running. Never
+    // manufacture completion from the enclosing conversation's terminal status.
+    expect(() => inspectPersonaRecoveryFiles(payload.filter(file => file !== outcome), getCurrentWorkspace())).not.toThrow();
+    const snapshot = JSON.parse(gunzipSync(model.bytes).toString());
+    snapshot.version = 1;
+    snapshot.entry.archiveVersion = 1;
+    snapshot.entry.outcome = 'completed';
+    const legacy = { path: model.path.replace('.v2.json.gz', '.json.gz'), bytes: gzipSync(JSON.stringify(snapshot)) };
+    expect(() => inspectPersonaRecoveryFiles(payload.filter(file => file !== outcome && file !== model).concat(legacy), getCurrentWorkspace())).not.toThrow();
+    expect(() => inspectPersonaRecoveryFiles(payload.concat(legacy), getCurrentWorkspace())).toThrow('Duplicate recovery model dispatch');
   }));
 
   it('byte-preserves supported historical log ordering and reports anomalies without accepting malformed sequences', async () => fresh(async () => {

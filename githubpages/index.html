@@ -766,7 +766,7 @@ footer {
   <h1>FLUJO</h1>
   <div class="hero-badges">
     <span class="chip"><span class="dot" style="background:#38bdf8"></span>MIT License</span>
-    <span class="chip"><span class="dot" style="background:#34d399"></span><span id="app-version">v3.46.0</span></span>
+    <span class="chip"><span class="dot" style="background:#34d399"></span><span id="app-version">v3.46.3</span></span>
     <span class="chip"><span class="dot" style="background:#818cf8"></span>Local-first</span>
     <span class="chip"><span class="dot" style="background:#f472b6"></span>Open Source</span>
   </div>
@@ -1068,8 +1068,26 @@ footer {
   var lightbox = document.getElementById("lightbox");
   var lightboxImg = document.getElementById("lightboxImg");
   var lightboxCaption = document.getElementById("lightboxCaption");
+  function screenshotSource(src) {
+    // DOM attributes select a bundled screenshot; they never supply a URL.
+    switch (src) {
+      case "img/home.png": return "img/home.png";
+      case "img/flow-builder.png": return "img/flow-builder.png";
+      case "img/mcp-marketplace.png": return "img/mcp-marketplace.png";
+      case "img/chat-debugger.png": return "img/chat-debugger.png";
+      case "img/planned-executions.png": return "img/planned-executions.png";
+      case "img/models.png": return "img/models.png";
+      case "img/mcp-tool-tester.png": return "img/mcp-tool-tester.png";
+      case "img/chat-handoff.png": return "img/chat-handoff.png";
+      case "img/settings.png": return "img/settings.png";
+      case "img/docs.png": return "img/docs.png";
+      default: return null;
+    }
+  }
   function openLightbox(src, caption) {
-    lightboxImg.src = src;
+    var screenshot = screenshotSource(src);
+    if (!screenshot) return;
+    lightboxImg.src = screenshot;
     lightboxImg.alt = caption || "";
     lightboxCaption.textContent = caption || "";
     lightbox.classList.add("open");

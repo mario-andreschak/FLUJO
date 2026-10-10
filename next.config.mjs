@@ -2,6 +2,7 @@
 // on end-user machines without TypeScript installed, and a next.config.ts would
 // make Next try to npm-install typescript there at runtime (which fails).
 import path from 'path';
+import { statSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9,6 +10,10 @@ const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Workload capabilities bind the exact loopback origin and Host. NextURL
+  // normalizes numeric loopback hosts to localhost unless Proxy sees the
+  // original URL; preserve it so the existing strict guards can verify it.
+  skipProxyUrlNormalize: true,
   /* config options here */
   // Production installs check application code; CI's root config still checks
   // the test suite. Next otherwise checks tests before hiding their diagnostics.
@@ -35,6 +40,9 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
+  // Both SDKs locate their native executables relative to import.meta.url.
+  // Keep Node's installed-package lookup when the built app moves machines.
+  serverExternalPackages: ['@openai/codex-sdk', '@anthropic-ai/claude-agent-sdk'],
   // Runtime workspace data can contain Windows junctions such as the legacy
   // Content.IE5 cache link. It is never a deployable application dependency,
   // so keep it out of Next's output traces.
@@ -76,6 +84,7 @@ const nextConfig = {
     ];
   },
   transpilePackages: [
+    '@flujo-ai/avatar-sdk',
     '@mui/material',
     '@mui/icons-material',
     '@mui/system',
@@ -83,9 +92,27 @@ const nextConfig = {
     '@emotion/react',
     '@emotion/styled',
     'mcp-stdio-oauth',
+    '@modelcontextprotocol/ext-tasks',
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {
+    // Trusted build-time composition, not a runtime plugin loader. Ordinary
+    // builds keep the empty adapter and retain their existing behavior.
+    const adapterModule = process.env.FLUJO_EXECUTION_ADAPTER_MODULE;
+    if (adapterModule) {
+      if (!path.isAbsolute(adapterModule) || !statSync(adapterModule).isFile()) {
+        throw new Error('FLUJO_EXECUTION_ADAPTER_MODULE must name an existing absolute server module.');
+      }
+      config.resolve ??= {};
+      // Next's tsconfig paths plugin rewrites @/* before Webpack's alias hook.
+      // Match the rewritten source as well, including explicit .ts imports.
+      const defaultAdapterModule = path.join(__dirname, 'src/backend/execution/extensions/configuredAdapter');
+      config.resolve.alias = { ...config.resolve.alias,
+        '@/backend/execution/extensions/configuredAdapter$': adapterModule,
+        [`${defaultAdapterModule}$`]: adapterModule,
+        [`${defaultAdapterModule}.ts$`]: adapterModule,
+      };
+    }
     // Failed/partial production compiles can leave multi-gigabyte filesystem
     // caches (the workspace route fan-out once produced a 2.8 GB server cache).
     // Loading that cache alone can exhaust Node's normal heap on the next build.

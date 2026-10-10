@@ -7,6 +7,7 @@ import {
 export type FlowAuthoringMode = 'guided' | 'advanced';
 
 const ADVANCED_PROCESS_PROPERTIES = new Set([
+  'terminalRouting',
   'maxTurns',
   'excludeModelPrompt',
   'excludeStartNodePrompt',

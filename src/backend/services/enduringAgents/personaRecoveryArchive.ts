@@ -3,13 +3,14 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { z } from 'zod';
 import type { Flow } from '@/shared/types/flow';
+import { parseModelTurnOutcomeRecord } from '@/shared/types/modelTurn';
 import {
   EnduringAgentIdSchema, FlowSnapshotSchema, PersonaAttributionSchema, PersonaInstructionContextSchema,
 } from '@/shared/types/enduringAgent';
 import { assertValidWorkspaceName } from '@/utils/workspace';
 import { PERSONA_SHARDED_COLLECTIONS } from '@/utils/storage/backend';
 import { ENDURING_AGENT_COLLECTIONS as c } from './collections';
-import { canonicalJson } from './behaviorRevisions';
+import { canonicalJson, verifyBehaviorDependencies } from './behaviorRevisions';
 import { validatePersonaRecoveryGraph, type PersonaRecoveryRecordInput } from './personaRecoveryGraph';
 import { PERSONA_RECOVERY_RECORD_SPECS } from './personaRecoveryRecords';
 import { PersonaRuntimeEventManifestSchema, PersonaRuntimeEventSchema } from './runtimeEvents';
@@ -30,9 +31,9 @@ const sharded = new Set<string>(PERSONA_SHARDED_COLLECTIONS);
 const countsSchema = z.record(z.string(), z.number().int().nonnegative());
 const CountSchema = z.number().int().nonnegative();
 const ModelArchiveSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   entry: z.object({
-    archiveVersion: z.literal(1), id: EnduringAgentIdSchema, conversationId: EnduringAgentIdSchema,
+    archiveVersion: z.union([z.literal(1), z.literal(2)]), id: EnduringAgentIdSchema, conversationId: EnduringAgentIdSchema,
     runId: z.string().optional(), node: z.object({ nodeId: z.string().min(1), nodeName: z.string().optional() }).strict(),
     modelId: z.string().min(1).max(256), modelName: z.string(), adapter: z.string().min(1), operation: z.string().min(1),
     timestamp: CountSchema, outcome: z.enum(['running', 'completed', 'error', 'cancelled']), attempt: z.number().int().positive(),
@@ -170,13 +171,17 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
     const nodeIds = new Set(flow.nodes.map((node) => node.id));
     if (nodeIds.size !== flow.nodes.length) throw new PersonaRecoveryError('Recovery Flow has duplicate node identities.');
     if (flow.personaOwnership && !ownerExists(id(flow.personaOwnership.personaId))) throw new PersonaRecoveryError('Recovery Flow belongs to an unknown Persona.');
+    if (flow.executionDependencies) {
+      verifyBehaviorDependencies(flow);
+      for (const dependency of flow.executionDependencies.flows) checkFlow(dependency.flowSnapshot, false);
+    }
     for (const node of flow.nodes) {
       const props = node.data.properties ?? {};
       if (typeof props.boundModel === 'string' && props.boundModel) modelIds.add(props.boundModel);
       if (typeof props.model === 'string' && props.model) modelIds.add(props.model);
       if (typeof props.modelId === 'string' && props.modelId) modelIds.add(props.modelId);
       if (typeof props.boundServer === 'string' && props.boundServer) appNames.add(props.boundServer);
-      if (checkDependencies) {
+      if (checkDependencies && !flow.executionDependencies) {
         const dependencies = [props.subflowId, ...(Array.isArray(props.parallelSubflowIds) ? props.parallelSubflowIds : [])];
         for (const ref of dependencies) if (typeof ref === 'string' && ref && !flows.has(ref)) throw new PersonaRecoveryError(`Recovery archive is missing callable Flow ${ref}.`);
       }
@@ -304,8 +309,23 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
         if (!third || !/^[a-f0-9]{64}$/.test(third) || digest(bytes) !== third) throw new PersonaRecoveryError('Recovery model media digest mismatch.');
         continue;
       }
-      if (third || !second.endsWith('.json.gz')) throw new PersonaRecoveryError('Invalid recovery model-turn path.');
-      const dispatchId = id(second.slice(0, -8));
+      if (third) throw new PersonaRecoveryError('Invalid recovery model-turn path.');
+      if (second.endsWith('.outcome.json')) {
+        const dispatchId = id(second.slice(0, -13));
+        try {
+          parseModelTurnOutcomeRecord(parsePersonaRecoveryJson(bytes, name), first, dispatchId);
+        } catch {
+          throw new PersonaRecoveryError('Invalid recovery model-turn outcome record.');
+        }
+        requirePath(`model-turns/${first}/${dispatchId}.v2.json.gz`);
+        continue;
+      }
+      if (!second.endsWith('.json.gz')) throw new PersonaRecoveryError('Invalid recovery model-turn path.');
+      const version = second.endsWith('.v2.json.gz') ? 2 : 1;
+      const dispatchId = id(second.slice(0, version === 2 ? -11 : -8));
+      if (version === 1 && byPath.has(`model-turns/${first}/${dispatchId}.v2.json.gz`)) {
+        throw new PersonaRecoveryError('Duplicate recovery model dispatch.');
+      }
       let expanded: Buffer;
       try { expanded = gunzipSync(bytes, { maxOutputLength: PERSONA_RECOVERY_ZIP_LIMITS.fileBytes }); }
       catch { throw new PersonaRecoveryError('Recovery model archive is invalid or exceeds its expanded byte limit.'); }
@@ -313,7 +333,8 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
       if (expandedModelBytes + totalBytes > PERSONA_RECOVERY_ZIP_LIMITS.totalBytes) throw new PersonaRecoveryError('Recovery model archives exceed expanded byte limits.');
       const value = ModelArchiveSchema.parse(parsePersonaRecoveryJson(expanded, name));
       const { entry } = value;
-      if (entry.id !== dispatchId || entry.conversationId !== first || entry.mediaCount !== value.media.length
+      if (value.version !== version || entry.archiveVersion !== version || (version === 2 && entry.outcome !== 'running')
+        || entry.id !== dispatchId || entry.conversationId !== first || entry.mediaCount !== value.media.length
         || entry.canonicalMessageCount !== value.canonicalMessages.length || entry.wireMessageCount !== value.genericWire.length
         || new Set(value.media.map((media) => media.id)).size !== value.media.length) {
         throw new PersonaRecoveryError('Invalid recovery model-turn snapshot.');

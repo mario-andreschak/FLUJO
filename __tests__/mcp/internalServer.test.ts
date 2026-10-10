@@ -15,6 +15,7 @@ jest.mock('@/utils/logger', () => {
 });
 
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { mcpService } from '@/backend/services/mcp';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import {
@@ -27,6 +28,11 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
+import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { approveBundledHostConsent, previewBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
+import { saveConfig } from '@/backend/services/mcp/config';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
@@ -133,17 +139,21 @@ describe('persisted shipped server configs', () => {
 describe('normal stdio delivery', () => {
   it.each([undefined, '1'])('never logs configured or resolved env values in worker mode %s', (workerMode) => {
     const priorMode = process.env.FLUJO_WORKER_MODE;
+    let approved: ReturnType<typeof installTrustedHostProfile> | undefined;
     try {
+      approved = installTrustedHostProfile({ name: 'secret-env-test', nodeSource: '// Fixed owned logging fixture; not executed.',
+        environmentNames: ['TOKEN', 'LEGACY_TOKEN'] });
       if (workerMode === undefined) delete process.env.FLUJO_WORKER_MODE;
       else process.env.FLUJO_WORKER_MODE = workerMode;
-      const config = {
-        name: 'secret-env-test', transport: 'stdio', command: 'node', args: ['server.js'],
-        rootPath: '.', disabled: false, _installCommand: '', _buildCommand: '',
+      const config: MCPStdioConfig = {
+        ...approved.config,
         env: {
+          ...approved.config.env,
           TOKEN: { value: 'synthetic-wrapped-secret', metadata: { isSecret: true } },
           LEGACY_TOKEN: 'synthetic-legacy-secret',
         },
-      } as MCPStdioConfig;
+      };
+      approved.approve(config);
       const launch = resolveStdioLaunch(config);
       expect(launch.env.TOKEN).toBe('synthetic-wrapped-secret');
       expect(launch.env.LEGACY_TOKEN).toBe('synthetic-legacy-secret');
@@ -152,8 +162,10 @@ describe('normal stdio delivery', () => {
       expect(logs).not.toContain('synthetic-wrapped-secret');
       expect(logs).not.toContain('synthetic-legacy-secret');
     } finally {
-      if (priorMode === undefined) delete process.env.FLUJO_WORKER_MODE;
-      else process.env.FLUJO_WORKER_MODE = priorMode;
+      try { approved?.restore(); } finally {
+        if (priorMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+        else process.env.FLUJO_WORKER_MODE = priorMode;
+      }
     }
   });
 
@@ -172,6 +184,49 @@ describe('normal stdio delivery', () => {
       .toBe(path.posix.join('/home/tester', '.cache', 'ms-playwright'));
   });
 
+  describe('genuinely approved shipped delivery', () => {
+    let profile: ReturnType<typeof installTrustedHostProfile> | undefined;
+    let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
+    const approved = new Map<string, MCPStdioConfig>();
+    beforeAll(async () => {
+      const preparationStarted = performance.now();
+      const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'workspace-enter' | 'workspace-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready') => {
+        console.info(JSON.stringify({ shippedFixture: 'internal-server', stage, elapsedMs: performance.now() - preparationStarted }));
+      };
+      phase('private-profile-enter');
+      profile = installTrustedHostProfile({ nodeSource: '// Owned setup profile; never executed.' });
+      owner = installBundledFixtureOwner();
+      phase('private-profile-ready');
+      phase('workspace-enter');
+      await ensureWorkspaceDirs();
+      phase('workspace-ready');
+      phase('provisioning-enter');
+      await ensureShippedWorkspacePackages(getWorkspaceDataDir());
+      phase('provisioning-ready');
+      storage = new Map();
+      loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) => storage.has(key) ? copy(storage.get(key)) : fallback);
+      saveItemMock.mockImplementation(async (key: StorageKey, value: unknown) => { storage.set(key, copy(value)); });
+      phase('config-enter');
+      await saveConfig(new Map(SHIPPED_MCP_SERVERS.map(descriptor => [descriptor.defaultName,
+        { ...createShippedServerConfig(descriptor), disabled: false }])));
+      phase('config-ready');
+      for (const descriptor of SHIPPED_MCP_SERVERS) {
+        phase('preview-enter');
+        const preview = await previewBundledHostConsent(descriptor.defaultName, { runtimeHome: 'host' });
+        phase('preview-ready');
+        phase('grant-enter');
+        const result = await approveBundledHostConsent(owner.request(descriptor.defaultName), descriptor.defaultName, {
+          runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
+        });
+        phase('grant-ready');
+        approved.set(descriptor.defaultName, result.config);
+      }
+    }, 120_000);
+    beforeEach(() => {
+      storage.set(StorageKey.MCP_SERVERS, Object.fromEntries([...approved].map(([name, config]) => [name, persisted(config)])));
+    });
+    afterAll(() => { try { owner?.restore(); } finally { profile?.restore(); } });
+
   it('persists direct package entrypoints and ordinary working directories', () => {
     for (const descriptor of SHIPPED_MCP_SERVERS) {
       const config = createShippedServerConfig(descriptor);
@@ -179,7 +234,7 @@ describe('normal stdio delivery', () => {
       expect(config.args).toEqual(['./dist/index.js']);
       expect(config.cwd).toBe(path.join('mcp-servers', descriptor.packageDirectory));
       expect(config.rootPath).toBe(config.cwd);
-      const launch = resolveStdioLaunch(config);
+      const launch = resolveStdioLaunch(approved.get(descriptor.defaultName)!);
       expect(path.resolve(launch.cwd, launch.args[0])).toBe(
         path.join(getWorkspaceDataDir(), 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
       );
@@ -193,9 +248,11 @@ describe('normal stdio delivery', () => {
   it('uses the same launch resolver as an arbitrary stdio server', () => {
     const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'flujo')!;
     const config = createShippedServerConfig(descriptor);
-    const launch = resolveStdioLaunch(config);
+    const admitted = approved.get(descriptor.defaultName)!;
+    const launch = resolveStdioLaunch(admitted);
     expect(launch.cwd).toBe(path.join(getWorkspaceDataDir(), config.rootPath));
-    expect(launch.args).toEqual(config.args);
+    expect(launch.args).toEqual(admitted.args);
+    expect(launch.command).toBe(process.execPath);
   });
 
   it('adds the worker HTTP bearer only to the live bundled FLUJO launch', () => {
@@ -204,8 +261,8 @@ describe('normal stdio delivery', () => {
     try {
       process.env.FLUJO_WORKER_MODE = '1';
       process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-worker-token';
-      const flujo = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'flujo')!);
-      const filesystem = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'filesystem')!);
+      const flujo = approved.get('flujo')!;
+      const filesystem = approved.get('filesystem')!;
       expect(flujo.env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
       expect(resolveStdioLaunch(flujo).env).toMatchObject({
         FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'synthetic-worker-token',
@@ -218,6 +275,7 @@ describe('normal stdio delivery', () => {
       if (token === undefined) delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
       else process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = token;
     }
+  });
   });
 
   it('forwards only documented environment controls by default', () => {

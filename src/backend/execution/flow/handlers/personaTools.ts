@@ -50,6 +50,36 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
       required: ['title'],
     },
   },
+  work_item_goal_create: {
+    name: 'work_item_goal_create',
+    description: 'Register an independent ongoing Goal for this Persona. Requires a stable caller key; retries return the saved Goal receipt. Registration does not prove a Goal run was admitted or completed. Explicitly enable this ability in the Persona Flow.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        idempotency_key: { type: 'string', minLength: 1, maxLength: 512 },
+        title: { type: 'string', minLength: 1, maxLength: 500 },
+        success_criteria: { type: 'string', minLength: 1, maxLength: 20000 },
+        completion_policy: { type: 'string', enum: ['until_stopped', 'success_criteria'] },
+        description: { type: 'string' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+        next_action: { type: 'string' },
+        continuation_interval_ms: { type: 'integer', minimum: 10000 },
+        max_consecutive_failures: { type: 'integer', minimum: 1, maximum: 10 },
+        max_rounds_per_day: { type: 'integer', minimum: 1, maximum: 10000 },
+        max_rounds: { type: 'integer', minimum: 1 },
+      },
+      required: ['idempotency_key', 'title', 'success_criteria'],
+    },
+  },
+  work_item_runtime_read: {
+    name: 'work_item_runtime_read',
+    description: 'Read verified execution status for one Goal owned by this Persona. Returns saved round, dispatch, mailbox, Activity and current lease IDs only when their lineage joins; incomplete evidence is unverified. Explicitly enable this ability in the Persona Flow.',
+    inputSchema: {
+      type: 'object',
+      properties: { goal_id: { type: 'string', minLength: 1, maxLength: 256 } },
+      required: ['goal_id'],
+    },
+  },
   work_item_update: {
     name: 'work_item_update',
     description: 'Update a durable Persona WorkItem, including status, priority, dependencies, deadline, and next action.',
@@ -252,6 +282,36 @@ export async function executePersonaTool(
           sourceRefs: activitySource,
         }, options);
         return { success: true, data: { created: true, item } };
+      }
+      case 'work_item_goal_create': {
+        const { createPersonaGoalWorkItem } = await import('@/backend/services/enduringAgents');
+        await trusted.executionAuthority.assertCurrent();
+        const result = await createPersonaGoalWorkItem({
+          personaId: trusted.personaId,
+          idempotencyKey: z.string().trim().min(1).max(512).parse(args.idempotency_key),
+          title: z.string().trim().min(1).max(500).parse(args.title),
+          goal: {
+            successCriteria: z.string().trim().min(1).max(20_000).parse(args.success_criteria),
+            ...(args.completion_policy !== undefined ? { completionPolicy: args.completion_policy as never } : {}),
+            ...(args.continuation_interval_ms !== undefined ? { continuationIntervalMs: args.continuation_interval_ms as number } : {}),
+            ...(args.max_consecutive_failures !== undefined ? { maxConsecutiveFailures: args.max_consecutive_failures as number } : {}),
+            ...(args.max_rounds_per_day !== undefined ? { maxRoundsPerDay: args.max_rounds_per_day as number } : {}),
+            ...(args.max_rounds !== undefined ? { maxRounds: args.max_rounds as number } : {}),
+          },
+          ...(stringArg(args, 'description') ? { description: stringArg(args, 'description') } : {}),
+          ...(stringArg(args, 'priority') ? { priority: args.priority as never } : {}),
+          ...(stringArg(args, 'next_action') ? { nextAction: stringArg(args, 'next_action') } : {}),
+          sourceRefs: activitySource,
+        }, options);
+        return { success: true, data: result };
+      }
+      case 'work_item_runtime_read': {
+        const { readPersonaGoalRuntime } = await import('@/backend/services/enduringAgents/goalRuntimeRead');
+        const goalId = z.string().trim().min(1).max(256).parse(args.goal_id);
+        await trusted.executionAuthority.assertCurrent();
+        const data = await readPersonaGoalRuntime(trusted.personaId, goalId);
+        await trusted.executionAuthority.assertCurrent();
+        return { success: true, data };
       }
       case 'work_item_update': {
         const { updatePersonaWorkItem } = await import(
