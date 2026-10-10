@@ -208,7 +208,7 @@ try {
         await expect(input).toHaveText('Replacement');
         await expect(referenceButton).toHaveCount(0);
         await page.keyboard.press('Control+z');
-        await expect(input).toHaveText(before);
+        await expect.poll(()=>input.innerText()).toBe(before);
         await expect(referenceButton).toBeVisible();
       }
       const keys = await page.evaluate(() => window.promptEditorKeys);
