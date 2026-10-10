@@ -211,6 +211,7 @@ export default function HomePage() {
     }
   };
 
+  // Saved records establish configuration, not successful model or agent use.
   const aiReady = workspaceStatus.models !== null && workspaceStatus.models > 0;
   const aiCheckUnavailable = !workspaceStatus.loading && workspaceStatus.models === null;
   const assistantReady = workspaceStatus.assistants > 0;
@@ -220,19 +221,19 @@ export default function HomePage() {
       id: 'ai',
       number: 1,
       title: t('home.connectAi.title'),
-      description: t('home.connectAi.description'),
+      description: aiReady ? t('home.connectAi.savedDescription') : t('home.connectAi.description'),
       icon: MemoryRounded,
       complete: aiReady,
       available: true,
       status: workspaceStatus.loading
         ? t('home.checking')
         : aiReady
-          ? t('home.connected')
+          ? t('home.saved')
           : aiCheckUnavailable
             ? t('home.openToCheck')
             : t('home.required'),
       href: aiReady || aiCheckUnavailable ? '/models' : '/models?add=1',
-      action: aiReady ? t('home.connectAi.manage') : aiCheckUnavailable ? t('home.connectAi.open') : t('home.connectAi.action'),
+      action: aiReady ? t('home.connectAi.test') : aiCheckUnavailable ? t('home.connectAi.open') : t('home.connectAi.action'),
     },
     {
       id: 'assistant',
@@ -242,7 +243,7 @@ export default function HomePage() {
       icon: AutoAwesomeRounded,
       complete: assistantReady,
       available: aiReady,
-      status: assistantReady ? tp('home.readyCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
+      status: assistantReady ? tp('home.createdCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
       href: aiReady ? '/flows?create=assistant' : undefined,
       action: assistantReady ? t('home.agent.another') : aiReady ? t('home.agent.openBuilder') : t('home.agent.connectFirst'),
     },
@@ -257,11 +258,11 @@ export default function HomePage() {
       status: workspaceStatus.conversationsLoading
         ? t('home.checking')
         : talkReady
-        ? t('home.completed')
+        ? t('home.started')
         : !aiReady
           ? t('home.afterAi')
           : assistantReady
-            ? t('home.ready')
+            ? t('home.notStarted')
             : t('home.afterAgent'),
       href: aiReady && assistantReady ? '/chat' : undefined,
       action: !aiReady ? t('home.talk.finishAi') : assistantReady ? t('home.talk.start') : t('home.talk.createFirst'),
