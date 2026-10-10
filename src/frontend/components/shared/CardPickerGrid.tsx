@@ -190,12 +190,24 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
     });
   };
 
+  // A single-selection picker is one Tab stop, including when search or a
+  // collapsed section hides the selected item. Multi-selection keeps each
+  // checkbox in the Tab order.
+  // Controlled callers pre-filter; the uncontrolled search uses searchText.
+  const uncontrolledTerm = !isSearchControlled ? effectiveTerm.trim().toLowerCase() : '';
+  const matches = (item: CardPickerItem) =>
+    !uncontrolledTerm || (item.searchText ?? '').toLowerCase().includes(uncontrolledTerm);
+  const availableItems = (groups
+    ? groups.filter((group) => !effectiveCollapsed.has(group.key)).flatMap((group) => group.items)
+    : items ?? []).filter((item) => matches(item) && item.onSelect && !item.disabled);
+  const tabStopKey = (availableItems.find((item) => item.selected) ?? availableItems[0])?.key;
+
   const focusRelativeItem = (current: HTMLElement, direction: -1 | 1 | 'first' | 'last') => {
     const candidates = Array.from(
       gridRootRef.current?.querySelectorAll<HTMLElement>(
         '[data-card-picker-selectable="true"]:not([aria-disabled="true"])',
       ) ?? [],
-    );
+    ).filter((candidate) => !candidate.closest('[data-card-picker-collapsed="true"]'));
     if (candidates.length === 0) return;
     const currentIndex = candidates.indexOf(current);
     const nextIndex = direction === 'first'
@@ -203,52 +215,71 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
       : direction === 'last'
         ? candidates.length - 1
         : (Math.max(0, currentIndex) + direction + candidates.length) % candidates.length;
-    candidates[nextIndex]?.focus();
+    const next = candidates[nextIndex];
+    next?.focus();
+    // Radio arrows both focus and select; checkbox arrows only move focus.
+    if (selectionMode === 'single' && next?.getAttribute('aria-checked') !== 'true') next?.click();
   };
 
   const renderCells = (cells: CardPickerItem[]) => (
     <Grid container spacing={2} alignItems="stretch">
       {cells.map((item) => (
         <Grid item xs={cols.xs} sm={cols.sm} md={cols.md} lg={cols.lg} key={item.key} sx={{ display: 'flex' }}>
-          <Box
-            data-card-picker-item="true"
-            data-card-picker-selectable={Boolean(item.onSelect)}
-            role={selectionMode === 'multiple' ? 'checkbox' : selectionMode === 'single' ? 'radio' : item.onSelect ? 'button' : undefined}
-            aria-checked={selectionMode ? Boolean(item.selected) : undefined}
-            aria-pressed={!selectionMode && item.onSelect ? Boolean(item.selected) : undefined}
-            aria-disabled={item.disabled || undefined}
-            aria-label={item.label}
-            tabIndex={item.onSelect && !item.disabled ? 0 : undefined}
-            onClick={item.onSelect && !item.disabled ? () => item.onSelect?.(item.key) : undefined}
-            onKeyDown={item.onSelect && !item.disabled ? (event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
+          <Box sx={{ width: '100%', minWidth: 0 }}>
+            <Box
+              data-card-picker-item="true"
+              data-card-picker-selectable={Boolean(item.onSelect)}
+              role={selectionMode === 'multiple' ? 'checkbox' : selectionMode === 'single' ? 'radio' : item.onSelect ? 'button' : undefined}
+              aria-checked={selectionMode ? Boolean(item.selected) : undefined}
+              aria-pressed={!selectionMode && item.onSelect ? Boolean(item.selected) : undefined}
+              aria-disabled={item.disabled || undefined}
+              aria-label={item.label}
+              tabIndex={item.onSelect ? (item.disabled || (selectionMode === 'single' && item.key !== tabStopKey) ? -1 : 0) : undefined}
+              onClick={item.onSelect && !item.disabled ? (event) => {
+                const control = (event.target as Element).closest(
+                  'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="button"]:not([tabindex="-1"])',
+                );
+                if (control && control !== event.currentTarget) return;
+                // Managed domain cards may contain passive action regions.
+                // Keep subsequent Space/arrows on the selection owner.
+                event.currentTarget.focus();
                 item.onSelect?.(item.key);
-                return;
-              }
-              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-                event.preventDefault();
-                focusRelativeItem(event.currentTarget, 1);
-              } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-                event.preventDefault();
-                focusRelativeItem(event.currentTarget, -1);
-              } else if (event.key === 'Home') {
-                event.preventDefault();
-                focusRelativeItem(event.currentTarget, 'first');
-              } else if (event.key === 'End') {
-                event.preventDefault();
-                focusRelativeItem(event.currentTarget, 'last');
-              }
-            } : undefined}
-            sx={{
-              width: '100%',
-              minWidth: 0,
-              outlineOffset: 3,
-              opacity: item.disabled ? 0.58 : 1,
-              cursor: item.onSelect && !item.disabled ? 'pointer' : undefined,
-            }}
-          >
-            {item.content}
+              } : undefined}
+              onKeyDown={item.onSelect && !item.disabled ? (event) => {
+                // Card content may include its own controls. Their editing and
+                // activation keys must not select the surrounding card.
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  item.onSelect?.(item.key);
+                  return;
+                }
+                if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  focusRelativeItem(event.currentTarget, 1);
+                } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  focusRelativeItem(event.currentTarget, -1);
+                } else if (event.key === 'Home') {
+                  event.preventDefault();
+                  focusRelativeItem(event.currentTarget, 'first');
+                } else if (event.key === 'End') {
+                  event.preventDefault();
+                  focusRelativeItem(event.currentTarget, 'last');
+                }
+              } : undefined}
+              sx={{
+                width: '100%',
+                minWidth: 0,
+                outlineOffset: 3,
+                opacity: item.disabled ? 0.58 : 1,
+                cursor: item.onSelect && !item.disabled ? 'pointer' : undefined,
+              }}
+            >
+              {item.content}
+            </Box>
+            {/* Repair is a separate control: radio/checkbox descendants are
+                presentational to assistive technology. */}
             {item.missing && (
               <Alert
                 severity="warning"
@@ -262,11 +293,11 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
                       item.onRepair?.();
                     }}
                   >
-                    {item.repairLabel ?? 'Repair'}
+                    {item.repairLabel ?? t('cardPicker.repair')}
                   </Button>
                 ) : undefined}
               >
-                {item.missingLabel ?? 'This referenced item is no longer available.'}
+                {item.missingLabel ?? t('cardPicker.missing')}
               </Alert>
             )}
           </Box>
@@ -307,7 +338,6 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
       ref={gridRootRef}
       role={selectionMode === 'single' ? 'radiogroup' : selectionMode === 'multiple' ? 'group' : undefined}
       aria-label={ariaLabel}
-      aria-multiselectable={selectionMode === 'multiple' ? true : undefined}
     >
       {searchBox}
       {body}
@@ -344,12 +374,6 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
     );
   }
 
-  // Uncontrolled search filters by each item's `searchText`. Controlled callers
-  // pre-filter, so no client-side filtering happens for them here.
-  const uncontrolledTerm = !isSearchControlled ? effectiveTerm.trim().toLowerCase() : '';
-  const matches = (item: CardPickerItem) =>
-    !uncontrolledTerm || (item.searchText ?? '').toLowerCase().includes(uncontrolledTerm);
-
   const empty = (
     <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
       {resolvedEmptyMessage}
@@ -367,15 +391,16 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
     return withSearch(
       <>
         {visibleGroups.map((group) => (
-          <CollapsibleCardSection
-            key={group.key}
-            label={group.label}
-            count={group.items.length}
-            expanded={!effectiveCollapsed.has(group.key)}
-            onToggle={() => handleToggleGroup(group.key)}
-          >
-            {renderCells(group.items)}
-          </CollapsibleCardSection>
+          <Box key={group.key} data-card-picker-collapsed={effectiveCollapsed.has(group.key)}>
+            <CollapsibleCardSection
+              label={group.label}
+              count={group.items.length}
+              expanded={!effectiveCollapsed.has(group.key)}
+              onToggle={() => handleToggleGroup(group.key)}
+            >
+              {renderCells(group.items)}
+            </CollapsibleCardSection>
+          </Box>
         ))}
       </>,
     );
