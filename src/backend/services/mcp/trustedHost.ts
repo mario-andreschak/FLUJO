@@ -3,11 +3,27 @@ import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/std
 import { DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpPolicyDigest, verifyTrustedHostMcp } from '../security/trustedHostMcp';
+import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, trustedHostMcpPolicySchema, sameTrustedHostConsent, verifyTrustedHostMcp } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
+import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
+const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_MODE'];
 const managedHosts = new WeakMap<object, ManagedTrustedHost>();
+
+function workerRuntimeCredentials(config: MCPStdioConfig): Record<string, string> {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  if (process.env.FLUJO_WORKER_MODE !== '1' || policy.bundledInstallation?.packageDirectory !== 'flujo') return {};
+  const environment = trustedHostEnvironment(config);
+  const configured = new URL(environment.get('FLUJO_BASE_URL') || 'http://127.0.0.1:4200');
+  const audience = new URL(process.env.FLUJO_BASE_URL || 'http://127.0.0.1:4200');
+  if (!['http:', 'https:'].includes(configured.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(configured.hostname)
+      || configured.username || configured.password || configured.href !== audience.href
+      || environment.get('FLUJO_WORKSPACE') !== getCurrentWorkspace()
+      || !policy.environmentNames.includes('FLUJO_WORKER_MODE') || !policy.environmentNames.includes('FLUJO_SNAPSHOT_CONTROL_TOKEN')
+      || !process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN?.trim()) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+  return { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN };
+}
 
 interface HostTransport {
   start(): Promise<void>;
@@ -34,7 +50,7 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
     'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH']) environment.set(name, '');
   for (const [name, value] of trustedHostEnvironment(config)) {
     const key = name.toUpperCase();
-    if (names.has(key) || BROKER_NAMES.includes(key)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    if (names.has(key) || RESERVED_RUNTIME_NAMES.includes(key)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     names.add(key);
     if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (process.platform === 'win32') {
@@ -43,6 +59,12 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
     environment.set(name, value);
   }
   if (process.platform === 'win32' && !names.has('SYSTEMROOT')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+  const fixtureToken = resolveGoalEnduranceFixtureToken(config);
+  if (fixtureToken) {
+    if (!authority.policy.environmentNames.includes(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    environment.set(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, fixtureToken);
+  }
+  for (const [name, value] of Object.entries(workerRuntimeCredentials(config))) environment.set(name, value);
   return { command: config.command, args: [...(config.args ?? [])], cwd: config.cwd!, env: mcpStringDataRecord(environment) };
 }
 
@@ -77,27 +99,33 @@ async function currentConfig(serverName: string): Promise<MCPStdioConfig> {
 export function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void): void {
   const captured = structuredClone(config);
   const initial = trustedHostMcpApproval(captured);
+  const fixtureToken = resolveGoalEnduranceFixtureToken(captured);
+  const workerCredentials = workerRuntimeCredentials(captured);
   const cancellation = new AbortController();
   let retired = false;
   const start = transport.start.bind(transport);
   const close = transport.close.bind(transport);
   const checkLive = () => {
     if (retired || getCurrentWorkspace() !== initial.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (resolveGoalEnduranceFixtureToken(captured) !== fixtureToken) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (JSON.stringify(workerRuntimeCredentials(captured)) !== JSON.stringify(workerCredentials)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   };
   const managed: ManagedTrustedHost = Object.freeze({
     workspace: initial.workspace, serverName: config.name, generation: randomUUID(),
     retire: () => { if (!retired) { retired = true; cancellation.abort(); onRetire?.(); } },
     assertCurrent: async (current: MCPStdioConfig) => {
       checkLive();
-      if (current.name !== captured.name || current.disabled || trustedHostMcpPolicyDigest(current) !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (current.name !== captured.name || current.disabled || !sameTrustedHostConsent(current, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       const authority = await verifyTrustedHostMcp(current, cancellation.signal);
       // Fingerprinting yields. A snapshot from before that await cannot admit
       // a server that was removed, disabled or retargeted while checking bytes.
       const latest = await currentConfig(captured.name);
-      const fresh = trustedHostMcpApproval(latest);
+      const fresh = await trustedHostMcpApprovalAsync(latest, cancellation.signal);
+      const final = await currentConfig(captured.name);
       checkLive();
       if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
-          || fresh.ownerId !== initial.ownerId || fresh.digest !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+          || fresh.ownerId !== initial.ownerId || fresh.digest !== initial.digest
+          || !sameTrustedHostConsent(final, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     },
   });
   managedHosts.set(transport, managed);
@@ -114,9 +142,11 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
       // Runtime consent performs no package preparation or installer execution.
       await managed.assertCurrent(await currentConfig(captured.name));
       const fresh = await currentConfig(captured.name);
-      const authority = trustedHostMcpApproval(fresh);
+      const authority = await trustedHostMcpApprovalAsync(fresh, cancellation.signal);
+      const final = await currentConfig(captured.name);
       checkLive();
-      if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (authority.ownerId !== initial.ownerId || authority.digest !== initial.digest
+          || !sameTrustedHostConsent(final, captured)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       await start();
       // A revocation while the SDK awaited process startup closes this generation.
       await managed.assertCurrent(await currentConfig(captured.name));

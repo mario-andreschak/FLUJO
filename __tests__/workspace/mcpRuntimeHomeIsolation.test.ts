@@ -13,6 +13,13 @@ import {
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 
+// Test legacy path/env transformations after authorization without spawning.
+// Consent and approved fixed-entry launches have their own integration suites.
+jest.mock('@/backend/services/mcp/isolation', () => ({
+  ...jest.requireActual('@/backend/services/mcp/isolation'),
+  assertHostMcpLaunchAllowed: jest.fn(),
+}));
+
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
 const priorPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;

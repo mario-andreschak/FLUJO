@@ -23,6 +23,11 @@ import { steeringSource, watchSteering } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { CODEX_HANDOFF_PROTOCOL } from '@/backend/execution/flow/handlers/nativeHandoffProtocol';
+import { assertNativeCodexQualification } from './codexNativeQualification';
+import { createOwnedCodexThread } from './codexOwnedThread';
+import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import { paceToolCallArguments } from './toolArgumentPacing';
 import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
@@ -215,18 +220,25 @@ export class CodexAdapter implements CompletionAdapter {
       onNativeSdkLive,
       onNativeSdkFinished,
       nativeToolPort,
+      nativeOriginalProcessHost,
     } = input;
+    if(nativeOriginalProcessHost) {
+      assertNativeOriginalProcessHost(nativeOriginalProcessHost);
+      assertNativeOriginalExecutionContext(nativeOriginalProcessHost, executionExtensionContext);
+      if(!nativeToolPort || apiKey || nativeOriginalProcessHost.terminationProtocol!==CODEX_HANDOFF_PROTOCOL)throw new Error('Native Codex Original requires its keyless owned broker and process protocol.');
+      assertNativeCodexQualification(nativeOriginalProcessHost.codexProfile);
+    }
     if (nativeToolPort) {
       assertNativeToolPort(nativeToolPort);
       if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Codex broker requires a durable SDK dispatch receipt.');
-      if (executionExtensionContext || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
+      if (executionExtensionContext && !nativeOriginalProcessHost || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
         || input.steering || input.consumeSteeringMessages || codexSession || onCodexSessionChange) {
         throw new Error('Native Codex broker cannot use host tool facilities or session resume.');
       }
     }
     let privateCodexPath: string | undefined;
     let privateCodexProfile: RestrictedCodexProfile | undefined;
-    if (executionExtensionContext) {
+    if (executionExtensionContext && !nativeOriginalProcessHost) {
       await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
       if (localToolExecutors !== undefined) {
         throw new ExecutionExtensionError('execution_local_tools_forbidden');
@@ -244,11 +256,14 @@ export class CodexAdapter implements CompletionAdapter {
         await assertExecutionModelTool(executionExtensionContext, tool.function.name,
           toolNameMap?.[tool.function.name]);
       }
+    } else if(nativeOriginalProcessHost) {
+      privateCodexProfile=nativeOriginalProcessHost.codexProfile;
+      privateCodexPath=await assertRestrictedCodexProfile(privateCodexProfile!,model.name);
     }
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
     // the CommonJS Jest transform for every module referencing the adapter
     // factory (same reason the Agent SDK is imported lazily).
-    const { Codex } = await import('@openai/codex-sdk');
+    const Codex = nativeOriginalProcessHost ? undefined : (await import('@openai/codex-sdk')).Codex;
 
     const fullInput = normalizeMessageInput(messages, runResourceMarkers);
     const { systemPrompt } = fullInput;
@@ -646,6 +661,14 @@ export class CodexAdapter implements CompletionAdapter {
       .filter((t): t is BridgeTool => t !== null);
     const recordedNativeCalls = new Set<string>();
     const recordedNativeResults = new Set<string>();
+    let nativeHandoffStopRequested=false;
+    let nativeHandoffTerminated=false;
+    const requestNativeHandoffStop=async()=>{
+      if(nativeOriginalProcessHost && nativeToolPort && !nativeHandoffStopRequested) {
+        await nativeOriginalProcessHost.requestHandoffTermination(nativeToolPort.invocationId);
+        nativeHandoffStopRequested=true;
+      }
+    };
     const effectiveBridgeTools: BridgeTool[] = nativeToolPort
       ? nativeToolPort.advertised.map(advertised => ({
           name: advertised.name,
@@ -673,6 +696,7 @@ export class CodexAdapter implements CompletionAdapter {
                 recordToolResult({ id: requestIdentity, resultContent: dispatched.transcriptText });
                 recordedNativeResults.add(requestIdentity);
               }
+              if(dispatched.kind==='handoff' && endSpawning)await requestNativeHandoffStop();
               return dispatched.result;
             } catch (error) {
               nativeToolPort.cancel();
@@ -801,26 +825,27 @@ export class CodexAdapter implements CompletionAdapter {
     let contextUsage: CompletionResult['contextUsage'] = null;
     let privateRuntimeCleanup: (() => Promise<void>) | undefined;
     let modelCatalogCleanup: (() => Promise<void>) | undefined;
+    let ownedThread:ReturnType<typeof createOwnedCodexThread>|undefined;
 
     try {
       if (effectiveBridgeTools.length > 0) {
         bridge = await startCodexToolBridge(effectiveBridgeTools, CODEX_FLUJO_INSTRUCTIONS, Boolean(nativeToolPort));
       }
 
-      const ordinaryModelCatalog = executionExtensionContext
+      const ordinaryModelCatalog = executionExtensionContext || nativeOriginalProcessHost
         ? undefined
         : await prepareCodexModelCatalogSnapshot(abortController.signal);
       modelCatalogCleanup = ordinaryModelCatalog?.cleanup;
-      const restrictedRuntime = executionExtensionContext
+      const restrictedRuntime = executionExtensionContext || nativeOriginalProcessHost
         ? await prepareRestrictedCodexRuntimeEnvironment(privateCodexProfile!)
         : undefined;
       const runtime = restrictedRuntime ?? await prepareCodexRuntimeEnvironment(!apiKey);
       privateRuntimeCleanup = restrictedRuntime?.cleanup;
       runtimeHome = runtime.home;
-      const modelCatalogPath = executionExtensionContext
+      const modelCatalogPath = executionExtensionContext || nativeOriginalProcessHost
         ? restrictedRuntime?.modelCatalogPath
         : ordinaryModelCatalog?.path;
-      if (executionExtensionContext && !modelCatalogPath) {
+      if ((executionExtensionContext || nativeOriginalProcessHost) && !modelCatalogPath) {
         throw new ExecutionExtensionError('execution_model_catalog_required');
       }
       if (resumeThreadId) {
@@ -856,7 +881,7 @@ export class CodexAdapter implements CompletionAdapter {
           : {}),
       };
       if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
-      const codex = new Codex({
+      const codex = nativeOriginalProcessHost ? undefined : new (Codex!)({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
         ...(privateCodexPath ? { codexPathOverride: privateCodexPath } : {}),
         ...(restrictedRuntime ? { configOverrides: restrictedRuntime.configOverrides } : {}),
@@ -876,9 +901,14 @@ export class CodexAdapter implements CompletionAdapter {
         approvalPolicy: 'never',
         ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
       } as const;
-      const thread = resumeThreadId
-        ? codex.resumeThread(resumeThreadId, threadOptions)
-        : codex.startThread(threadOptions);
+      const thread = nativeOriginalProcessHost
+        ? (ownedThread=createOwnedCodexThread({executable:privateCodexPath!,env:runtime.env as NodeJS.ProcessEnv,
+            cwd:runtime.workingDirectory,owner:nativeOriginalProcessHost,model:model.name,effort:model.reasoningEffort,
+            config,configOverrides:restrictedRuntime?.configOverrides,signal:abortController.signal,
+            register:process=>nativeOriginalProcessHost.register(process),
+            beforePrompt:async threadId=>{bridge?.bindNativeThread(threadId);await nativeOriginalProcessHost.beforeFirstPrompt();},
+            observeUsage:result=>nativeOriginalProcessHost.observeSdkUsage(result)}))
+        : resumeThreadId ? codex!.resumeThread(resumeThreadId, threadOptions) : codex!.startThread(threadOptions);
 
       log.debug('createCompletion via Codex SDK', {
         model: model.name,
@@ -940,7 +970,7 @@ export class CodexAdapter implements CompletionAdapter {
           try {
             dispatchId = await onSdkRequest?.({
               adapter: 'codex-cli',
-              operation: 'thread.runStreamed',
+              operation: nativeOriginalProcessHost ? 'app-server.turn/start' : 'thread.runStreamed',
               request: {
                 input: nextTurnInput,
                 options: { signal: '[AbortSignal]' },
@@ -966,6 +996,7 @@ export class CodexAdapter implements CompletionAdapter {
             await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
           }
           if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
+          if(nativeOriginalProcessHost)await nativeOriginalProcessHost.assertTurnBudget(input.maxTurns && input.maxTurns>0?input.maxTurns:DEFAULT_AGENTIC_MAX_TURNS);
           const { events } = await thread.runStreamed(nextTurnInput, {
             signal: turnAbortController.signal,
           });
@@ -1010,6 +1041,7 @@ export class CodexAdapter implements CompletionAdapter {
             // end when the model produces a message without another call — or at
             // the runaway cap.
             if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
+              await requestNativeHandoffStop();
               abortController.abort();
               break;
             }
@@ -1062,6 +1094,7 @@ export class CodexAdapter implements CompletionAdapter {
                 // A message AFTER spawning means the model stopped queueing
                 // workers: end the run without accumulating post-handoff narration.
                 if (handoffCalls.length > 0) {
+                  await requestNativeHandoffStop();
                   abortController.abort();
                   break;
                 }
@@ -1110,11 +1143,19 @@ export class CodexAdapter implements CompletionAdapter {
           // model requiring a newer CLI) instead of replacing it with stderr.
           attemptFailure ??= err instanceof Error ? err : new Error(String(err));
         } finally {
+          if(nativeOriginalProcessHost) {
+            if(handoffCalls.length && !signal?.aborted)await requestNativeHandoffStop();
+            await ownedThread?.close();await nativeOriginalProcessHost.waitForExit();
+            if(handoffCalls.length && nativeToolPort && !signal?.aborted) {
+              if(!nativeToolPort.confirmHandoffTermination)throw new Error('Native Codex handoff terminal confirmation is unavailable.');
+              await nativeToolPort.confirmHandoffTermination(handoffCalls.map(call=>call.id!));nativeHandoffTerminated=true;
+            }
+          }
           if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
           await watcher.stop();
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {
-            const outcome = nativeToolPort && (attemptFailure || abortController.signal.aborted)
+            const outcome = nativeHandoffTerminated ? 'completed' : nativeToolPort && (attemptFailure || abortController.signal.aborted)
               ? (signal?.aborted || abortController.signal.aborted ? 'cancelled' : 'error')
               : endedByCaller || handoffCalls.length > 0
               ? 'completed'
@@ -1208,6 +1249,7 @@ export class CodexAdapter implements CompletionAdapter {
       if (handoffCalls.length === 0 && !endedByCaller) throw err;
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
+      await ownedThread?.close();
       await bridge?.close().catch(() => undefined);
       try {
         if (runtimeHome && capturedThreadId) {
@@ -1331,7 +1373,7 @@ export class CodexAdapter implements CompletionAdapter {
     };
 
     return { completion, transcript, contextUsage,
-      ...(nativeToolPort ? { nativeSdkTerminal: completedTurn && !abortController.signal.aborted
-        && !signal?.aborted && !failure } : {}) };
+      ...(nativeToolPort ? { nativeSdkTerminal: (nativeHandoffTerminated
+        || (completedTurn && !abortController.signal.aborted && !failure)) && !signal?.aborted } : {}) };
   }
 }

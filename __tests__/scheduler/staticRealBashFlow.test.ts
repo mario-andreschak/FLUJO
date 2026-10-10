@@ -1,12 +1,15 @@
 import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
 let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
-afterEach(async () => { await privateFixture?.restore(); });
 /** Real FlowSpec/engine/scheduler -> production MCP service -> built Bash stdio
- * server -> harmless OS process. Only app storage/flow/model lookup are fixtures.
+ * server -> harmless OS process. Storage, lookups and private owner/encryption
+ * material are disposable fixtures.
  * This fixture completes the real nonzero-process reproduction requested in #538. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
+import type { MCPStdioConfig } from '@/shared/types/mcp';
 import type { Flow } from '@/shared/types/flow';
 import type { RunRecord } from '@/shared/types/plannedExecution';
 
@@ -49,11 +52,8 @@ const quote = (value: string) => process.platform === 'win32'
   ? "'" + value.replace(/'/g, "''") + "'" : "'" + value.replace(/'/g, "'\\''") + "'";
 const command = (code: number) => (process.platform === 'win32' ? '& ' : '')
   + quote(process.execPath) + ' ' + quote(program) + ' ' + code;
-const bashConfig = {
-  name: 'bash', transport: 'stdio', command: process.execPath, args: [binary],
-  cwd: scratch, rootPath: scratch, disabled: false, source: { type: 'local' },
-  env: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch },
-};
+let bashConfig: MCPStdioConfig;
+let bashProfile: ReturnType<typeof installTrustedHostProfile> | undefined;
 
 function flow(code: number, policy?: 'continue' | 'fail', output = true): Flow {
   const compiled = compileFlowSpec({ name: 'Real Bash Static probe', nodes: [
@@ -80,17 +80,24 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   let toolCall: jest.SpyInstance;
   let expectedErrors: jest.SpyInstance;
 
-  beforeAll(async () => {
+  beforeAll(() => {
     expect(fs.existsSync(binary)).toBe(true); // CI builds MCP packages before Jest.
-    store.set('mcp_servers', { bash: bashConfig });
-    const connected = await mcpService.connectServer('bash');
-    expect(connected).toMatchObject({ success: true });
-  }, 60_000);
+  });
 
   beforeEach(async () => {
     store.clear();
     privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
+    // The real Bash child must pass the production owner-consent gate. This
+    // disposable grant authorizes only our explicit test program/environment;
+    // it carries no user account credentials and never disables admission.
+    bashProfile = installTrustedHostProfile({ name: 'bash', roots: [scratch],
+      nodeSource: `void import(${JSON.stringify(pathToFileURL(binary).href)});`,
+      environment: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch,
+        HOME: scratch, USERPROFILE: scratch, PATH: process.env.PATH ?? process.env.Path ?? '/usr/bin:/bin' } });
+    bashConfig = bashProfile.config;
     store.set('mcp_servers', { bash: bashConfig });
+    const connected = await mcpService.connectServer('bash');
+    expect(connected).toMatchObject({ success: true });
     FlowExecutor.clearFlowCache();
     FlowExecutor.conversationStates.clear();
     scheduler = new SchedulerService();
@@ -99,25 +106,27 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     // Observe the production method without replacing delivery or protocol data.
     toolCall = jest.spyOn(mcpService, 'callTool');
     expectedErrors = jest.spyOn(console, 'error').mockImplementation(() => {});
-  });
+  }, 60_000);
 
   afterEach(async () => {
-    toolCall.mockRestore();
-    expectedErrors.mockRestore();
-    unsubscribe();
-    await scheduler.setPaused(true);
-    FlowExecutor.conversationStates.clear();
-  });
-  afterAll(async () => {
     try {
+      toolCall?.mockRestore();
+      expectedErrors?.mockRestore();
+      unsubscribe?.();
+      await scheduler?.setPaused(true);
+      FlowExecutor.conversationStates.clear();
       expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true });
       expect(mcpService.getClient('bash')).toBeUndefined();
     } finally {
-      const resolved = path.resolve(scratch);
-      expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
-      expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
-      fs.rmSync(resolved, { recursive: true, force: true });
+      bashProfile?.restore(); bashProfile = undefined;
+      await privateFixture?.restore();
     }
+  });
+  afterAll(() => {
+    const resolved = path.resolve(scratch);
+    expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
+    expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
+    fs.rmSync(resolved, { recursive: true, force: true });
   });
 
   function executedRunIndex() {

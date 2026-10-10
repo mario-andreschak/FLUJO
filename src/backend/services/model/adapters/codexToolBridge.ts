@@ -27,6 +27,8 @@ export interface CodexToolBridge {
   /** Streamable-HTTP MCP endpoint URL for the codex subprocess. */
   url: string;
   close(): Promise<void>;
+  /** Bind an owned app-server thread before its first model prompt. */
+  bindNativeThread(threadId: string): void;
 }
 
 /**
@@ -155,6 +157,11 @@ export async function startCodexToolBridge(
 
   return {
     url,
+    bindNativeThread(threadId) {
+      if(!requireStableToolIds || !threadId || threadId.length>256 || /[\x00-\x1f]/.test(threadId)
+        || boundNativeThreadId && boundNativeThreadId!==threadId)throw new Error('Native Codex bridge thread binding is unavailable or changed.');
+      boundNativeThreadId=threadId;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         // Sever keep-alive connections too, or close() waits for the (dead)

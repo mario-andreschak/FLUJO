@@ -14,6 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkHealth } from './healthcheck.mjs';
 import { createPrivateSmokeProfile } from './smoke-cloud-worker-profile.mjs';
+import { approveSmokeServer, createSmokeOperator } from './smoke-bundled-operator.mjs';
 
 // Recovery equipment is loaded only by the explicit opt-in profile.
 if (!process.argv.includes('--worker-recovery')) {
@@ -38,6 +39,7 @@ let child;
 let childClosed;
 let childLog = '';
 let providerCalls = 0;
+let operator;
 
 const modelServer = http.createServer(async (request, response) => {
   try {
@@ -113,13 +115,14 @@ function safeEnvironment() {
 
 async function startWorker(port, archivePath, archiveHash, harness) {
   childLog = '';
+  const callsAtLaunch = providerCalls;
   const sandboxPort = await unusedPort();
   const args = production
     ? [path.join(application, 'scripts', 'launch-next.mjs'), 'start', '-p', String(port), '-H', '127.0.0.1']
     : [harness];
   child = spawn(process.execPath, args, {
     cwd: runtimeApplication, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...safeEnvironment(), FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archivePath,
+    env: { ...safeEnvironment(), ...operator.env, FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archivePath,
       FLUJO_WORKER_SNAPSHOT_SHA256: archiveHash, FLUJO_WORKER_SNAPSHOT_KEY: key.toString('base64'),
       FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken, FLUJO_DATA_DIR: path.join(root, 'data'),
       FLUJO_APP_ROOT: runtimeApplication,
@@ -132,6 +135,8 @@ async function startWorker(port, archivePath, archiveHash, harness) {
   for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { childLog = (childLog + data.toString()).slice(-80_000); });
   const started = Date.now();
   let lastState;
+  let consentPrepared = false;
+  let consentInProgress = false;
   while (Date.now() - started < 240_000) {
     if (child.exitCode !== null) throw new Error(`Worker exited during startup (${child.exitCode}).`);
     try {
@@ -139,10 +144,28 @@ async function startWorker(port, archivePath, archiveHash, harness) {
       if (result.status === 404) throw new Error('Worker status route unavailable in the smoke application.');
       const state = await result.json();
       lastState = state;
+      if (state.state === 'error' && !consentPrepared && state.workspace === workspace
+          && state.error === 'Worker MCP dependency preparation failed. Check the worker server status.') {
+        assert.deepEqual(state.servers, [{ name: 'filesystem', status: 'failed', error: 'MCP dependency could not be prepared.' }]);
+        assert.equal(providerCalls, callsAtLaunch, 'Unapproved bootstrap must not execute a flow.');
+        // An explicit disposable owner approves the current installed package;
+        // imported snapshot/config/control authority never grants host consent.
+        consentPrepared = true;
+        consentInProgress = true;
+        const baseUrl = `http://127.0.0.1:${port}`;
+        await approveSmokeServer(baseUrl, 'filesystem', operator.token, 90_000, { workspace, expiresAt: operator.expiresAt });
+        const retry = await fetch(`${baseUrl}/api/init?workspace=${workspace}`, {
+          headers: { authorization: `Bearer ${controlToken}` }, signal: AbortSignal.timeout(90_000),
+        });
+        if (!retry.ok || (await retry.json()).success !== true) throw new Error('Worker consent provisioning failed to reinitialize.');
+        consentInProgress = false;
+        continue;
+      }
       if (state.state === 'error') throw new Error(`Worker reported bootstrap failure: ${state.error}`);
       if (result.ok && state.state === 'ready') return state;
     } catch (error) {
-      if (/bootstrap failure|status route unavailable/.test(String(error.message))) throw error;
+      if (consentInProgress) throw error;
+      if (/bootstrap failure|status route unavailable|consent|Unapproved|MCP dependency/.test(String(error.message))) throw error;
     }
     await delay(500);
   }
@@ -150,6 +173,7 @@ async function startWorker(port, archivePath, archiveHash, harness) {
 }
 
 try {
+  operator = await createSmokeOperator();
   for (const name of ['home', 'temp']) await fs.mkdir(path.join(root, name));
   // Next's programmatic custom server ignores conf.distDir in dev startup.
   // A private app overlay keeps its cache/lock/config writes away from any
@@ -291,6 +315,7 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   process.exitCode = 1;
 } finally {
   await stopChild();
+  await operator?.restore();
   modelServer.closeAllConnections();
   await new Promise(resolve => modelServer.close(resolve));
   const expectedPrefix = path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-');

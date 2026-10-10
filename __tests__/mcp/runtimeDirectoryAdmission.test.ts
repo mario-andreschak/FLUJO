@@ -6,6 +6,14 @@ import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 
+// These directory tests exercise the legacy resolver after authorization and
+// never start its transport. Real consent/approved launch is covered separately
+// by trustedHostMcpTransport and trustedHostRuntimeHome; keep that gate real there.
+jest.mock('@/backend/services/mcp/isolation', () => ({
+  ...jest.requireActual('@/backend/services/mcp/isolation'),
+  assertHostMcpLaunchAllowed: jest.fn(),
+}));
+
 const denied = { name: 'RuntimeDirectoryAdmissionError', code: 'UNSAFE_MCP_RUNTIME_DIRECTORY',
   message: 'Isolated MCP runtime directory is unavailable or unsafe.' };
 const legacyServerKey = 'af968e26b3d5d8edb6420d34'; // Existing SHA256(server name) directory identity.

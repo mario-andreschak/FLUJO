@@ -1,17 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+
+// Cold Windows PowerShell startup on hosted runners can exceed five seconds.
+// Keep inspection finite without treating startup latency as ACL evidence.
+const INSPECTION_TIMEOUT_MS = 30_000;
 
 // Static program, no profiles/modules or input-selected commands. The filename
 // travels as JSON on stdin and is only passed to native filesystem ACL APIs.
 const inspect = String.raw`
 $ErrorActionPreference = 'Stop'
 $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$target = [IO.FileInfo]::new([string]$request.filename)
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $allowed = @($identity.User.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 $records = [Collections.Generic.List[string]]::new()
+$filenames = if ($null -ne $request.filenames) { @($request.filenames) } else { @($request.filename) }
+foreach ($filename in $filenames) {
+$target = [IO.FileInfo]::new([string]$filename)
 $current = $target
 $file = $true
 while ($null -ne $current) {
@@ -32,27 +38,79 @@ while ($null -ne $current) {
   if ($file) { $current = $current.Directory } else { $current = $current.Parent }
   $file = $false
 }
+}
 [pscustomobject]@{schemaVersion=1; records=$records.ToArray()} | ConvertTo-Json -Compress
 `;
 
 /** DACL evidence supplements stable file identity; 0600 is not a Windows ACL. */
-export function windowsPrivateAuthorityStamp(filename: string): string {
+export function windowsPrivateAuthorityStamp(filename: string | readonly string[]): string {
   if (process.platform !== 'win32') throw new Error('Windows authority inspection unavailable');
+  const filenames = typeof filename === 'string' ? [filename] : filename;
+  if (filenames.length < 1 || filenames.length > 2 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   if (!fs.statSync(executable).isFile()) throw new Error('Windows authority inspection unavailable');
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
-    input: JSON.stringify({ filename: path.resolve(filename) }), encoding: 'utf8',
-    windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
+    input: JSON.stringify(typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filenames.map(item => path.resolve(item)) }), encoding: 'utf8',
+    windowsHide: true, timeout: INSPECTION_TIMEOUT_MS, maxBuffer: 64 * 1024,
     env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
   });
   if (result.error || result.status !== 0 || result.signal) throw new Error('Windows authority inspection refused');
+  return authorityEvidence(result.stdout);
+}
+
+function authorityEvidence(stdout: string): string {
   let value: unknown;
-  try { value = JSON.parse(result.stdout); } catch { throw new Error('Windows authority inspection refused'); }
+  try { value = JSON.parse(stdout); } catch { throw new Error('Windows authority inspection refused'); }
   const evidence = value as { schemaVersion?: unknown; records?: unknown };
   if (!evidence || evidence.schemaVersion !== 1 || !Array.isArray(evidence.records)
       || evidence.records.length < 2 || evidence.records.length > 128
       || evidence.records.some(item => typeof item !== 'string' || item.length > 8192)) throw new Error('Windows authority inspection refused');
   return createHash('sha256').update(JSON.stringify(evidence.records)).digest('hex');
+}
+
+/** Every call obtains fresh native ACL evidence; cancellation waits for exit. */
+export async function windowsPrivateAuthorityStampAsync(filename: string | readonly string[], signal?: AbortSignal): Promise<string> {
+  if (process.platform !== 'win32' || signal?.aborted) throw new Error('Windows authority inspection unavailable');
+  const filenames = typeof filename === 'string' ? [filename] : filename;
+  if (filenames.length < 1 || filenames.length > 2 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
+  const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  if (!(await fs.promises.stat(executable)).isFile()) throw new Error('Windows authority inspection unavailable');
+  if (signal?.aborted) throw new Error('Windows authority inspection cancelled');
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
+      windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+      env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
+    });
+    let failure: Error | undefined;
+    let bytes = 0;
+    const output: Buffer[] = [];
+    const stop = (reason: 'cancelled' | 'deadline exceeded' | 'output bound exceeded') => {
+      failure ??= new Error(`Windows authority inspection ${reason}`); child.kill();
+    };
+    const abort = () => stop('cancelled');
+    const timer = setTimeout(() => stop('deadline exceeded'), INSPECTION_TIMEOUT_MS);
+    signal?.addEventListener('abort', abort, { once: true });
+    child.on('error', error => { failure = error; abort(); });
+    child.stdin.on('error', error => { failure = error; abort(); });
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 64 * 1024) { stop('output bound exceeded'); return; }
+      if (stream === child.stdout) output.push(chunk);
+    });
+    child.on('close', (code, exitSignal) => {
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      try {
+        if (failure || code !== 0 || exitSignal || signal?.aborted) throw failure ?? new Error('Windows authority inspection refused');
+        resolve(authorityEvidence(Buffer.concat(output).toString('utf8')));
+      } catch (error) { reject(error); }
+      finally { for (const chunk of output) chunk.fill(0); }
+    });
+    const request = typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filename.map(item => path.resolve(item)) };
+    child.stdin.end(JSON.stringify(request));
+    if (signal?.aborted) abort();
+  });
 }

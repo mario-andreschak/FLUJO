@@ -55,6 +55,17 @@ function savedConfig(): MCPServerConfig & { headers: Record<string, MCPHeaderVal
 }
 
 describe('saved MCP custom header destination', () => {
+  it.each(['streamable', 'sse'] as const)('creates a %s server without inherited stdio launch fields', async transport => {
+    mockLoadServerConfigs.mockResolvedValue([]);
+    await service.updateServerConfig('new-private', {name:'new-private',transport,
+      serverUrl:'http://127.0.0.1:12345/mcp',disabled:true,
+      headers:{Authorization:secret('SYNTHETIC_PRIVATE_HEADER')}});
+    const saved=savedConfig();
+    expect(saved.transport).toBe(transport);
+    for(const key of ['command','args'])expect(saved).not.toHaveProperty(key);
+    expect(saved.headers.Authorization).toEqual(secret('encrypted:SYNTHETIC_PRIVATE_HEADER'));
+    expect(mockEncryptApiKey).toHaveBeenCalledWith('SYNTHETIC_PRIVATE_HEADER');
+  });
   it.each([MASKED_API_KEY, MASKED_STRING])('preserves a masked secret for an ordinary edit: %s', async (mask) => {
     await service.updateServerConfig('saved', { headers: { Authorization: secret(mask) }, disabled: true });
     expect(savedConfig().headers.Authorization).toEqual(secret('encrypted:SYNTHETIC_SAVED_HEADER'));

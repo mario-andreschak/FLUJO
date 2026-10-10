@@ -10,6 +10,8 @@ const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Keep the native SDK resolver relative to the installed package.
+  serverExternalPackages: ['@openai/codex-sdk'],
   /* config options here */
   // Production installs check application code; CI's root config still checks
   // the test suite. Next otherwise checks tests before hiding their diagnostics.

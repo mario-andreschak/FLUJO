@@ -235,6 +235,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       // how many calls are accepted. runFlow captures all matching calls and
       // SubflowNode.prep turns them into an ordered job queue.
       const acceptsCallerSpawn = target.type === 'subflow';
+      const installedCapacity = acceptsCallerSpawn && sharedState.executionExtensionContext
+        ? await (await import('@/backend/execution/extensions')).executionExtensionSubflowCapacity(sharedState.executionExtensionContext, target.id)
+        : undefined;
+      if (installedCapacity === 0) continue;
       const acceptsCallerPrompt =
         (target.type === 'subflow' || target.type === 'process') &&
         targetProps?.inputMode === 'isolated' &&
@@ -282,7 +286,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         };
         if (taskIsMandatory) requiredParams.push('task');
         descExtras.push(
-          'QUEUED SUB-AGENT: You may call this tool MULTIPLE TIMES in the SAME response — each call queues one child run with its own "task". The Subflow runs up to its configured maximum simultaneously, keeps pulling queued jobs until all are finished, and merges results in call order. To split work, make one call per self-contained task.'
+          installedCapacity === 1
+            ? 'SINGLE CHILD: This installed worker has one child conversation. Call this tool exactly ONCE with one complete task. Repeated calls exceed its capacity and are refused.'
+            : 'QUEUED SUB-AGENT: You may call this tool MULTIPLE TIMES in the SAME response — each call queues one child run with its own "task". The Subflow runs up to its configured maximum simultaneously, keeps pulling queued jobs until all are finished, and merges results in call order. To split work, make one call per self-contained task.'
         );
       } else if (acceptsCallerPrompt) {
         paramProps.prompt = {
@@ -621,7 +627,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       availableTools = availableTools.filter(tool =>
         tool.server === server || handoffTools.some(handoff => handoff.name === tool.name));
       sharedState.toolNameMap = {};
-      authorizeExecutionExtensionHandoffs(sharedState.executionExtensionContext, handoffTools.map(tool => tool.name));
+      const permitted=await authorizeExecutionExtensionHandoffs(sharedState.executionExtensionContext, handoffTools.map(tool => tool.name));
+      if(permitted)availableTools=availableTools.filter(tool=>tool.server===server||permitted.includes(tool.name));
     }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {

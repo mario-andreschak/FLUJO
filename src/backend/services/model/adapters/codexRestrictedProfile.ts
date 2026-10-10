@@ -45,6 +45,7 @@ export const RESTRICTED_CODEX_CONFIG = Object.freeze({
     plugins: false,
     browser_use: false,
     browser_use_external: false,
+    browser_use_full_cdp_access: false,
     computer_use: false,
     code_mode: false,
     code_mode_host: false,
@@ -84,7 +85,7 @@ function baseEnvironment(): Record<string, string> {
 }
 
 /** Match the SDK's native-package resolver, then invoke only the checked path. */
-function bundledExecutable(): string {
+export function bundledCodexExecutable(): string {
   const triples: Record<string, string> = {
     'linux:x64': 'x86_64-unknown-linux-musl', 'linux:arm64': 'aarch64-unknown-linux-musl',
     'darwin:x64': 'x86_64-apple-darwin', 'darwin:arm64': 'aarch64-apple-darwin',
@@ -192,7 +193,7 @@ export async function assertRestrictedCodexProfile(
   if (profile.verifiedCliPath !== undefined && !path.isAbsolute(profile.verifiedCliPath)) {
     throw new Error('Restricted Codex binary path must be absolute.');
   }
-  const requestedPath = profile.verifiedCliPath ?? bundledExecutable();
+  const requestedPath = profile.verifiedCliPath ?? bundledCodexExecutable();
   const before = await executableIdentity(requestedPath);
   const key = JSON.stringify([requestedPath, before.executable, profile.verifiedCliSha256,
     profile.verifiedCliVersion, before.identity]);

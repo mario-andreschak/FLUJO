@@ -89,13 +89,16 @@ describe('Codex tool bridge', () => {
       expect(response.ok).toBe(true);
     };
     try {
+      bridge.bindNativeThread('thread-1');
+      expect(()=>bridge.bindNativeThread('thread-2')).toThrow();
+      await post(0, { threadId: 'thread-2', callId: 'untrusted-first-call' });
       await post(1, { threadId: 'thread-1', callId: 'model-call-1' });
       await post(2, { threadId: 'thread-1', callId: 'model-call-1' });
       await post(1, { threadId: 'thread-1', callId: 'model-call-2' });
       await post(4, { threadId: 'thread-2', callId: 'model-call-1' });
       await post(3);
       expect(identities).toEqual([
-        'model-call-1', 'model-call-1', 'model-call-2', undefined, undefined,
+        undefined, 'model-call-1', 'model-call-1', 'model-call-2', undefined, undefined,
       ]);
     } finally {
       await bridge.close();

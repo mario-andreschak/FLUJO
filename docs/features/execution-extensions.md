@@ -21,3 +21,58 @@ Concurrent calls may share an in-flight executable digest and version check only
 Failed native MCP events emit the error-level diagnostic `Codex native MCP tool call failed` with fixed code `codex_native_mcp_tool_failed`, a fixed category (`timeout`, `authentication`, `authorization`, `rate_limit`, `network`, `validation`, or `unknown`), available run/node identifiers, and an exact offered bridge tool label or `unknown`. Native error text, URLs, item identifiers, arguments and results are excluded. Categories recognize error-message patterns and do not establish the underlying cause. These diagnostics add no tool transcript, invocation count or retry. Startup warnings that the SDK exposes only through successful-process stderr remain outside this event diagnostic.
 
 Authentication refresh from an isolated child is currently discarded when its home is cleaned up. Sustained or concurrent real-model runs require separate validation of subscription token refresh and capacity. Mock provider load tests establish admission and isolation behavior, not paid-model throughput.
+
+## Private Original lifecycle reader
+
+`nativeOriginalSourceReader` returns a reader only for a branded, in-process
+`NativeOriginalProcessHost`. The reader rereads the saved origin and private
+payload through the captured Source authority. Publication also checks the
+exact session, current root lineage and admission stage. It cannot authenticate
+a Controller Worker or mint a new root from request metadata.
+
+Live acknowledgement retains one opaque handle bound to the accepted Original,
+its registered actual child, the facade owner and the host generation. A fresh
+positive OS birth observation is required; copied handles, changed owners and
+other generations are refused. Process-global weak registries preserve this
+provenance across Next server graphs without recovering it after a restart.
+
+Process teardown removes live proof. Terminal reconciliation separately requires
+actual exit and pipe close, the matching private host reservation, and the saved
+completed invocation with its hold absent and effects resolved. SDK completion
+or a process phase alone cannot release an unknown Original.
+
+This is an internal Source capability, not a Worker transport or fleet eligibility
+switch. Host minting requires genuine Persona dispatch or an admitted trusted
+Worker execution context. A fleet
+integration still needs independently authenticated Worker ownership, a scoped
+tool gateway and qualification of its actual deployed image and provider route.
+
+## Worker root Originals
+
+A trusted server adapter can opt into `nativeWorkerRoot`. It must authenticate
+the executing Worker and reread its enrolled target, current goal/root run,
+budget and OFF gates. Its existing `commit` operation must fence those records
+throughout a Source mutation. Request DTOs, Flow properties and caller callbacks
+cannot select this reader; it is resolved only through the current opaque
+execution context and registered server adapter.
+
+The returned admission binds Worker/goal/fleet IDs, the root conversation and
+logical run, workspace, target digest, immutable graph/model digests and lease
+epoch. Source checks its own live conversation, root depth, exact context,
+process node/model and graph before minting the host. Each current-authority
+check rereads the same admission and model/graph. Revocation or a different
+target, epoch or model cannot authorize the accepted Original. A native adapter
+that opts in but supplies no current root cannot fall back to an ordinary private
+Codex call. Adapters without this optional method retain their existing path.
+
+`callModel` acquires this host automatically for an admitted Codex Worker root.
+The native broker and Codex adapter accept a private execution context only
+when it is the exact context captured by that branded host. Persona hosts cannot
+borrow a Worker context. Worker reservations use a distinct V2 `worker-host-ledger`
+beneath the private origin directory; existing Persona V1 paths and locks remain
+unchanged. Qualification, saved dispatch, actual born process registration,
+exit/close and terminal reconciliation use the same Original lifecycle.
+
+This contract does not implement the adapter's Controller authentication or
+Worker transport. Root admission cannot relabel a child conversation; child
+Original lineage and the deployed gateway/image still require integration.

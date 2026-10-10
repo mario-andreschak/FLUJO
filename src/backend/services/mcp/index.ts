@@ -2125,7 +2125,9 @@ export class MCPService {
         await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
         const config = await this.getServerConfig(serverName);
         if (!config) throw new ExecutionExtensionError('execution_server_policy_mismatch');
-        assertExecutionServerConfig(config);
+        // Compare the actual connection headers, never encrypted storage bytes.
+        // Keep the resolved copy private and leave the saved config unchanged.
+        assertExecutionServerConfig(await resolveConfigHeaders(config));
       }
     } catch (error) {
       return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_authorization_unavailable',
@@ -2990,26 +2992,30 @@ export class MCPService {
     }
 
     if (!config && updates.name) {
-      // New server being added - default to stdio transport
+      // New HTTP servers must not inherit the stdio launch surface.
       log.info(
         `updateServerConfig: Creating new server config for ${updates.name}`,
       );
-      config = {
+      const remote = updates.transport === 'streamable' || updates.transport === 'sse';
+      const created: MCPServerConfig = {
         name: updates.name,
-        transport: "stdio",
-        command: "",
-        args: [],
+        ...(remote ? {
+          transport: updates.transport as 'streamable' | 'sse',
+          serverUrl: (updates as Partial<MCPStreamableConfig | MCPSSEConfig>).serverUrl ?? '',
+        } : { transport: 'stdio' as const, command: '', args: [], _buildCommand: '', _installCommand: '' }),
         env: {},
         disabled: false,
-        _buildCommand: "",
-        _installCommand: "",
+        _buildCommand: '',
+        _installCommand: '',
         rootPath: "",
       };
-      configs.push(config);
+      configs.push(created);
+      config = created;
     } else if (!config) {
       log.warn(`updateServerConfig: Server ${serverName} not found`);
       return { success: false, error: `Server ${serverName} not found` };
     }
+    if (!config) return { success: false, error: `Server ${serverName} not found` };
 
     // Partial edits also inherit old headers when the field is omitted. Neither that
     // inheritance nor a masked-header restore may move saved secrets to a new endpoint.

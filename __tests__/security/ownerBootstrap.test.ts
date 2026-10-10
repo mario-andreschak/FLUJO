@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { issueOwnerCredential, type OwnerPolicy } from '@/backend/services/security/ownerCredentials';
 import { isOwnerBootstrapAvailable, pairFirstOwner } from '@/backend/services/security/ownerBootstrap';
-import { assertOwnerRequest } from '@/backend/services/security/ownerAccess';
+import { assertOwnerRequest, resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
 import { assertOwnerStartup } from '@/backend/services/security/ownerStartup';
 import { readOwnerPolicy } from '@/backend/services/security/ownerPolicy';
 import { resolveOwnerSession } from '@/backend/services/security/ownerSession';
@@ -50,6 +50,8 @@ test('confirmed pairing commits one owner, returns a new token once and mints a 
   const paired = await POST(request()); expect(paired.status).toBe(201);
   const body = await paired.json(); expect(body.authenticated).toBe(true); expect(body.ownerToken).not.toBe(token);
   const policy = readOwnerPolicy(policyFile); expect(policy.ownerId).toBe('owner');
+  expect(policy.credentials[0].scopes).toEqual(['control:admin', 'secrets:read', 'mcp:access']);
+  expect(readOwnerPolicy(bootstrapFile).credentials[0].scopes).toEqual(['control:admin', 'secrets:read']);
   expect(JSON.stringify(policy)).not.toContain(body.ownerToken); expect(JSON.stringify(policy)).not.toContain(token);
   const cookie = paired.headers.get('set-cookie')!; expect(cookie).toContain('HttpOnly'); expect(cookie).toContain('SameSite=Strict');
   const browser = new Request('http://localhost:4200/api/models', { headers: { host: 'localhost:4200',
@@ -59,6 +61,24 @@ test('confirmed pairing commits one owner, returns a new token once and mints a 
   expect(fs.lstatSync(policyFile).nlink).toBe(1);
   if (process.platform !== 'win32') expect(fs.statSync(policyFile).mode & 0o777).toBe(0o600);
   expect(paired.headers.get('cache-control')).toBe('no-store');
+});
+
+test('paired owner can review MCP consent only with its genuine unrevoked bearer', async () => {
+  const paired = await POST(request()); expect(paired.status).toBe(201);
+  const { ownerToken } = await paired.json();
+  const scopes = ['control:admin', 'secrets:read', 'mcp:access'] as const;
+  const consent = (bearer?: string, cookie?: string) => new Request('http://localhost:4200/api/mcp/host-consent', {
+    headers: { host: 'localhost:4200', origin: 'http://localhost:4200',
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), ...(cookie ? { cookie } : {}) },
+  });
+  expect(resolveOwnerRequest(consent(ownerToken), scopes, { requireBearer: true }).ok).toBe(true);
+  expect(resolveOwnerRequest(consent(token), scopes, { requireBearer: true }).ok).toBe(false);
+  const cookie = paired.headers.get('set-cookie')!.split(';')[0];
+  expect(resolveOwnerRequest(consent(undefined, cookie), scopes, { requireBearer: true }).ok).toBe(false);
+  const policy = readOwnerPolicy(policyFile);
+  policy.credentials[0].revokedAt = Date.now();
+  fs.writeFileSync(policyFile, JSON.stringify(policy));
+  expect(resolveOwnerRequest(consent(ownerToken), scopes, { requireBearer: true }).ok).toBe(false);
 });
 test.each([{ token: 'invalid' }, { origin: 'http://attacker.test' }, { host: 'attacker.test' },
   { body: { confirmOwnerEnrollment: false } }, { body: { confirmOwnerEnrollment: true, ownerId: 'forged' } }])

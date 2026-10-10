@@ -18,6 +18,11 @@ The ordinary/isolated test baseline continues to require completed assertions,
 fresh reports and approved skip/quarantine accounting. A Jest exit is tolerated
 only until that mandatory baseline check evaluates its actual report.
 
+Installed MCP consent coverage runs in the dedicated serial integration stage:
+its genuine package and dependency inspection must finish within the existing
+setup deadline without competing with the main suite's parallel workers. The
+same assertions remain mandatory and the ordinary stage's minimum is retained.
+
 Release publication still requires the authoritative `verify.yml` workflow,
 exact main-push SHA and successful latest run. It additionally checks every
 required job in that run's current attempt, checks run identity again, and

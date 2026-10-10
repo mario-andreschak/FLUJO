@@ -2,6 +2,7 @@
 # the image. Excluding .git also (harmlessly) reinforces the container update
 # mode: even without FLUJO_CONTAINER, there'd be no git clone to self-update.
 node_modules
+scripts/compiled-security
 .next
 .git
 .github

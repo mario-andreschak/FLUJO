@@ -25,6 +25,18 @@ import { EventEmitter } from "events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+// These fake-client comparison/teardown tests begin after host authorization;
+// they never start the configured child. Consent stays real in its own suites.
+jest.mock("@/backend/services/mcp/isolation", () => ({
+  ...jest.requireActual("@/backend/services/mcp/isolation"),
+  assertHostMcpLaunchAllowed: jest.fn(),
+}));
+jest.mock("@/backend/services/mcp/trustedHost", () => ({
+  ...jest.requireActual("@/backend/services/mcp/trustedHost"),
+  // No managed approval generation is created for these unstarted fake clients.
+  attachTrustedHost: jest.fn(),
+}));
+
 jest.mock("@/utils/process/killProcessTree", () => {
   const actual = jest.requireActual("@/utils/process/killProcessTree");
   return {

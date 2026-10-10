@@ -14,7 +14,7 @@ const log = createLogger('backend/services/model/adapters/codexModelCatalog');
 // older bundled CLI cannot deserialize. Keep this in lockstep with the
 // @openai/codex-sdk version in package.json and only reuse catalogs produced by
 // the same CLI compatibility line.
-const CODEX_CATALOG_COMPATIBILITY_LINE = '0.153.';
+const CODEX_CATALOG_COMPATIBILITY_LINE = '0.157.';
 // Match the existing verified private-profile catalog budget. Never allocate an
 // unbounded operator-controlled cache while preparing a model invocation.
 const MAX_CATALOG_BYTES = 16 * 1024 * 1024;

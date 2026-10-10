@@ -3,7 +3,9 @@
     "Execution baseline reviewed on 2026-09-16 from complete remediation main results, passing focused corrections, and the passing isolated stage. Historical reference: verify run 34763333121 at commit 26cd39856fd8a5580c77025ee0ec95732572045d.",
     "Only assertions with passed/failed status and suites with completed assertions count. Pending/todo tests require an exact, reasoned intentionalSkips entry; a quarantine never excuses a suite failing to execute.",
     "Reviewed Windows main scope is 763 suites and 6874 tests; portable minima subtract one suite and five Windows-only tests, which have explicit Unix intentionalSkips below. Isolated executed 9 suites and 101 tests. Browser capture, snapshot Git integration and memory lifecycle run in the isolated stage. All nine quarantines are retired; see docs/audits/quarantine-status.md for evidence.",
-    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression."
+    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression.",
+    "2026-10-08: Genuine installed MCP consent moved to the serial integration stage after its unchanged finite hook passed locally. The complete serial stage passed 10 suites/124 assertions. Its portable minimum increases by the transferred one suite/18 assertions; the ordinary-stage minimum is retained. No skip or quarantine is added.",
+    "2026-10-08: Three account-backed native Codex checks have an explicit private qualification command and a separate stage requiring all three to execute with no skips. A complete local account-backed stage passed; an earlier provider denial-response refusal is retained. Ordinary CI has no authorized profile and does not perform these calls. Its execution minima remain unchanged."
   ],
   "stages": {
     "ci": {
@@ -11,6 +13,21 @@
       "minSuites": 762,
       "minTests": 6869,
       "intentionalSkips": [
+        {
+          "suite": "__tests__/model/codexAppServerProcess.live.test.ts",
+          "name": "qualifies the Source-owned public app-server with exact Luna/medium and original turn interruption",
+          "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains actual process/interruption receipts. Ordinary CI has no account."
+        },
+        {
+          "suite": "__tests__/model/codexNativeQualification.live.test.ts",
+          "name": "qualifies exact Luna/medium through the restrictive Source catalogue and thread-bound MCP bridge",
+          "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains actual provider/MCP receipts. Ordinary CI has no account."
+        },
+        {
+          "suite": "__tests__/flow/nativeOriginalHost.live.test.ts",
+          "name": "completes actual Luna/medium under a genuine Persona lease and saved Original without SDK or provider mocks",
+          "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains the genuine saved Original receipt. Ordinary CI has no account."
+        },
         {
           "suite": "__tests__/enduringAgents/goalEnduranceAcceptance.test.ts",
           "name": "Persona goal endurance across OS process epochs continues the same ordinary ongoing goal through graceful and forced restarts",
@@ -88,10 +105,16 @@
         }
       ]
     },
+    "live-codex": {
+      "description": "npm run qualify:live-codex — three serial account-backed Source qualifications; private inputs and receipts, no Worker or swarm qualification.",
+      "minSuites": 3,
+      "minTests": 3,
+      "intentionalSkips": []
+    },
     "isolated": {
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
-      "minSuites": 9,
-      "minTests": 101,
+      "minSuites": 10,
+      "minTests": 119,
       "intentionalSkips": []
     }
   },

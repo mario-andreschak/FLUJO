@@ -71,6 +71,9 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/enduringAgents/soak/personaSoak.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
+  // Genuine installed-package consent fingerprints the full dependency graph;
+  // keep its finite setup deadline independent of parallel suite contention.
+  '__tests__/mcp/internalServer.test.ts',
   '__tests__/mcp/browserCaptureRecording.test.ts',
   '__tests__/packages/workspaceMcpTransfer.test.ts',
   '__tests__/snapshot/ShadowRepoService.test.ts',

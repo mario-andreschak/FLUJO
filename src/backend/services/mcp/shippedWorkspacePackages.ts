@@ -4,6 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import * as nodeModule from 'node:module';
 import { SHIPPED_MCP_SERVERS, shippedMcpAppRoot } from './shippedServers';
+import { inspectBundledMcpDependencyGraph } from '../security/bundledMcpDependencyGraph';
+import { consentDiagnosticStage } from '../security/bundledConsentDiagnostic';
 
 // Application packages are templates. Copy only distributed code/build inputs,
 // never a developer's node_modules, Git checkout, profile, or runtime userdata.
@@ -68,7 +70,7 @@ async function readPackageAsset(file: string, expected: BigIntStats): Promise<Bu
   }
 }
 
-async function packageDigests(root: string): Promise<{ assetSha256: string; runtimeSha256: string }> {
+async function packageDigests(root: string, distributedOnly = false): Promise<{ assetSha256: string; runtimeSha256: string }> {
   const hash = createHash('sha256');
   const runtimeHash = createHash('sha256');
   const update = (entry: string, runtime: boolean) => {
@@ -78,6 +80,7 @@ async function packageDigests(root: string): Promise<{ assetSha256: string; runt
   const walk = async (directory: string, prefix: string, parentRuntime: boolean) => {
     for (const name of (await fs.readdir(directory)).sort()) {
       if (!prefix && ['node_modules', '.git', TEMPLATE_MARKER].includes(name)) continue;
+      if (!prefix && distributedOnly && !PACKAGE_ASSETS.includes(name)) continue;
       const runtime = prefix ? parentRuntime : ['package.json', 'dist', 'scripts'].includes(name);
       const relative = prefix ? `${prefix}/${name}` : name;
       const file = path.join(directory, name);
@@ -148,6 +151,57 @@ async function dependencyLayout(appRoot: string, name: string) {
   }
   const roots = [...new Set(packages.map(item => item.root))];
   return { packages, sharedRoot: roots.length === 1 ? await fs.realpath(roots[0]) : undefined };
+}
+
+/** Inspection only. Returned data is not consent or permission to execute. */
+export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, packageDirectory: string, appRoot = shippedMcpAppRoot()) {
+  return consentDiagnosticStage('ASSETS', async () => {
+  if (!SHIPPED_MCP_SERVERS.some(item => item.packageDirectory === packageDirectory)) throw new Error('Unknown shipped package.');
+  const installation = await fs.realpath(appRoot);
+  await realDirectory(installation);
+  const source = path.join(installation, 'mcp-servers', packageDirectory);
+  const destination = path.join(path.resolve(workspaceRoot), 'mcp-servers', packageDirectory);
+  await validatePackage(source, packageDirectory);
+  await validatePackage(destination, packageDirectory);
+  // Compare the same distributed assets clonePackage copies. Installation
+  // userdata is excluded from that copy; snapshot edit detection stays broader.
+  const [installed, copied] = await Promise.all([packageDigests(source, true), packageDigests(destination, true)]);
+  if (installed.assetSha256 !== copied.assetSha256) throw new Error('Copied package differs from the installed revision.');
+  const layout = await consentDiagnosticStage('DEP_LAYOUT', () => dependencyLayout(installation, packageDirectory));
+  const { runtimeDependencies, dependencyNamespaceRoot } = await consentDiagnosticStage('DEP_LAYOUT', async () => {
+  const runtimeManifest = JSON.parse(await fs.readFile(path.join(source, 'package.json'), 'utf8'));
+  const runtimeNames = new Set(Object.keys({ ...runtimeManifest.dependencies, ...runtimeManifest.optionalDependencies }));
+  const runtimeDependencies = layout.packages.filter(item => runtimeNames.has(item.name));
+  let dependencyNamespaceRoot = installation;
+  if (path.basename(path.dirname(installation)) === 'node_modules') {
+    const application = JSON.parse(await fs.readFile(path.join(installation, 'package.json'), 'utf8'));
+    if (application.name !== 'flujo-ai') throw new Error('Unrecognized flattened application installation.');
+    dependencyNamespaceRoot = await fs.realpath(path.dirname(installation));
+  }
+  return { runtimeDependencies, dependencyNamespaceRoot };
+  });
+  const dependencyGraph = await consentDiagnosticStage('DEP_GRAPH', () => inspectBundledMcpDependencyGraph(dependencyNamespaceRoot, runtimeDependencies.map(item => item.directory)));
+  const links = await consentDiagnosticStage('DEP_LINKS', async () => {
+  const target = path.join(destination, 'node_modules');
+  const links: Array<{ link: string; target: string }> = [];
+  if (layout.sharedRoot) {
+    if (!(await fs.lstat(target)).isSymbolicLink() || await fs.realpath(target) !== layout.sharedRoot) throw new Error('Copied dependency target differs from the installation.');
+    links.push({ link: target, target: layout.sharedRoot });
+  } else {
+    await realDirectory(target);
+    for (const dependency of layout.packages) {
+      const link = path.join(target, dependency.name);
+      if (!(await fs.lstat(link)).isSymbolicLink() || await fs.realpath(link) !== dependency.directory) throw new Error('Copied dependency target differs from the installation.');
+      links.push({ link, target: dependency.directory });
+    }
+  }
+  return links;
+  });
+  // Neither a workspace marker nor a source/name flag proves this comparison.
+  return { installation, packageDirectory, sourceRoot: destination, assetDigest: copied.assetSha256,
+    runtimeDigest: copied.runtimeSha256, dependencyLinks: links,
+    dependencies: runtimeDependencies.map(item => ({ name: item.name, directory: item.directory })), dependencyNamespaceRoot, dependencyGraph };
+  });
 }
 
 async function ensureDependencies(root: string, appRoot: string, name: string): Promise<void> {

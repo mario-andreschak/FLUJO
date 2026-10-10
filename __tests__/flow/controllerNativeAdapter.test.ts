@@ -1,0 +1,218 @@
+import { randomBytes } from 'node:crypto';
+import { nativeDigest as hash } from '@/backend/execution/flow/handlers/nativeDigest';
+import { createControllerNativeSourceAdapter, type ControllerNativeTransport } from '@/backend/execution/extensions/controllerNativeAdapter';
+import { registerExecutionExtension, assertExecutionExtensionCurrent, applyExecutionRunInput,
+  bindExecutionExtensionRun, executionExtensionNativeWorkerRoot, commitExecutionExtensionMutation,
+  validateExecutionLoadedState,
+  prepareExecutionSubflowInput,runWithExecutionInput,executionExtensionNativeWorkerDescendant,
+  withExecutionParentConversationRead, assertExecutionStateAccess,
+  executionExtensionSubflowCapacity,
+  type ExecutionExtensionContext, type ExecutionExtensionAdapter } from '@/backend/execution/extensions';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import type { SharedState } from '@/backend/execution/flow/types';
+import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
+
+const flow={id:'owned-flow',nodes:[],edges:[]};
+const plan={flowId:flow.id,flowDigest:hash(flow),modelId:'owned-luna',modelDigest:'b'.repeat(64)};
+const claim={runId:'controller-run',rootConversationId:'owned-conversation',goalId:'owned-goal',workspace:'owned-workspace'};
+// Source capability tests use deterministic transport/gateway callbacks. They
+// are not authenticated fleet, account-backed SDK or live Worker evidence.
+
+const requester={origin:'http://127.0.0.1:12345',authorization:`Bearer ${'A'.repeat(43)}`};
+function equipment(withRequester=false,withChild=false) {
+  const installedFlow=withChild?{...flow,nodes:[{id:'owned-subflow',data:{type:'subflow',properties:{subflowId:'owned-child'}}}]}:flow;
+  const rootPlan={...plan,flowDigest:hash(installedFlow)};
+  const childFlow={id:'owned-child',nodes:[],edges:[]};
+  let children=withChild?[{parentNodeId:'owned-subflow',flowId:childFlow.id,flowDigest:hash(childFlow),modelId:plan.modelId,modelDigest:plan.modelDigest}]:[];
+  const remote=Object.freeze({});const abort=new AbortController();let logical:string|undefined;
+  let currentPlan={...rootPlan},held=false,calls=0;
+  const read=async(context:object)=>{expect(context).toBe(remote);abort.signal.throwIfAborted();};
+  const transport:ControllerNativeTransport={bindingId:randomBytes(32).toString('hex'),
+    async admit(auth,received){expect(auth).toBe('Bearer synthetic-worker-only');expect(received).toEqual(claim);return remote;},
+    async readPlan(context){await read(context);return {...currentPlan};},
+    async readChildren(context){await read(context);return children.map(value=>({...value}));},
+    async assertRun(context,expected){await read(context);if(expected?.conversationId&&expected.conversationId!==claim.rootConversationId)throw new Error('wrong conversation');
+      if(expected?.runId&&expected.runId!==logical)throw new Error('wrong logical run');},
+    async bindRun(context,conversation,run){await read(context);expect(conversation).toBe(claim.rootConversationId);logical=run;},
+    async readRoot(context,expected){await read(context);expect(expected.runId).toBe(logical);calls++;
+      return {version:1,workerId:'synthetic-controller-worker',goalId:claim.goalId,fleetRunId:claim.runId,
+        rootConversationId:claim.rootConversationId,logicalRunId:logical!,workspace:claim.workspace,targetDigest:'c'.repeat(64),
+        flowDigest:rootPlan.flowDigest,leaseEpoch:'owned-epoch',modelId:plan.modelId,modelDigest:plan.modelDigest};},
+    async commit(context,task){await read(context);held=true;try{return await task();}finally{held=false;}},
+    async observe(context){await read(context);return {signal:abort.signal,async close(){abort.abort(new Error('closed'));}};},
+  };
+  const gateway={isProtectedServer:(server:string)=>server==='fleet',assertServerConfig:()=>{},protectedServer:()=> 'fleet',
+    authorizeHandoffs:()=>{},assertModelTool:async()=>{},assertDispatch:async()=>{},normalizeArguments:(_ctx:object,_tool:string,args:Record<string,unknown>)=>args,
+    requestMeta:async()=>({}),validateResult:(_ctx:object,_tool:string,result:unknown)=>result};
+  const composed=createControllerNativeSourceAdapter(transport,gateway,withRequester?requester:undefined);
+  const restore=registerExecutionExtension(composed.adapter);
+  return {composed,transport,gateway,abort,restore,installedFlow,childFlow,children,held:()=>held,calls:()=>calls,
+    drift(){currentPlan={...currentPlan,modelDigest:'d'.repeat(64)};},
+    driftChild(){children=children.map(value=>({...value,flowDigest:'e'.repeat(64)}));}};
+}
+
+test('one installed attached child gets its own opaque scope and logical identity under the actual parent lane',async()=>{
+  const e=equipment(false,true);let child:ExecutionExtensionContext|undefined;
+  const lane={invocationId:'owned-invocation',laneId:'owned-lane',parentNodeId:'owned-subflow',conversationId:'owned-child-conversation',laneIndex:0,laneCount:1};
+  const input:FlowRunInput={source:'subflow',prompt:'Offline child scope only',flowId:e.childFlow.id,conversationId:lane.conversationId,
+    mode:'conversation',depth:1,parentRunId:claim.rootConversationId,lane};
+  try {
+    await expect(e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async parent=>{
+      await bindExecutionExtensionRun(parent,claim.rootConversationId,'parent-logical');
+      expect(await executionExtensionSubflowCapacity(parent,'owned-subflow')).toBe(1);
+      expect(await executionExtensionSubflowCapacity(parent,'uninstalled-subflow')).toBe(0);
+      FlowExecutor.conversationStates.set(claim.rootConversationId,{conversationId:claim.rootConversationId,logicalRunId:'parent-logical',
+        executionExtensionContext:parent,flowSnapshot:e.installedFlow,runDepth:0,isCancelled:false,
+        subflowInvocations:{'owned-invocation':{version:1,parentConversationId:claim.rootConversationId,parentRunId:claim.rootConversationId,
+          parentNodeId:lane.parentNodeId,status:'running',lanes:[{id:lane.laneId,conversationId:lane.conversationId,subflowId:e.childFlow.id,status:'running'}]}}} as unknown as SharedState);
+      await expect(prepareExecutionSubflowInput({...input,flowId:'foreign-child'})).rejects.toThrow();
+      const delegated=await prepareExecutionSubflowInput(input);child=delegated!.executionExtensionContext!;
+      expect(child).not.toBe(parent);expect(applyExecutionRunInput(delegated!)).toEqual(delegated);
+      await bindExecutionExtensionRun(child,lane.conversationId,'child-logical');
+      expect(await executionExtensionSubflowCapacity(parent,'owned-subflow')).toBe(0);
+      expect(await executionExtensionSubflowCapacity(child,'owned-subflow')).toBe(0);
+      await runWithExecutionInput(delegated!, async () => {
+        const protectedState = { executionExtensionOwned: true };
+        await expect(assertExecutionStateAccess(protectedState, claim.rootConversationId)).rejects.toThrow();
+        await withExecutionParentConversationRead(claim.rootConversationId,
+          () => assertExecutionStateAccess(protectedState, claim.rootConversationId));
+        await expect(withExecutionParentConversationRead('unrelated-conversation',
+          () => assertExecutionStateAccess(protectedState, 'unrelated-conversation'))).rejects.toThrow();
+        await expect(assertExecutionStateAccess(protectedState, claim.rootConversationId)).rejects.toThrow();
+      });
+      const descriptor=await executionExtensionNativeWorkerDescendant(child,{conversationId:lane.conversationId,runId:'child-logical',
+        workspace:claim.workspace,...e.children[0]});
+      expect(descriptor.root.rootConversationId).toBe(claim.rootConversationId);expect(descriptor.parentNodeId).toBe(lane.parentNodeId);
+      await expect(executionExtensionNativeWorkerRoot(child,{conversationId:lane.conversationId,runId:'child-logical',workspace:claim.workspace,...e.children[0]})).rejects.toThrow();
+      await commitExecutionExtensionMutation(parent,()=>runWithExecutionInput(delegated!,()=>commitExecutionExtensionMutation(child!,async()=>expect(e.held()).toBe(true))));
+      await expect(prepareExecutionSubflowInput({...input,conversationId:'another-child'})).rejects.toThrow();
+      e.driftChild();await expect(assertExecutionExtensionCurrent(child)).rejects.toThrow();
+    })).rejects.toThrow();
+    await expect(assertExecutionExtensionCurrent(child)).rejects.toThrow();
+  }finally{FlowExecutor.conversationStates.delete(claim.rootConversationId);e.restore();await e.composed.close();}
+});
+
+test('trusted transport mints a Source context that pins actual plan and refuses copied or retired capabilities',async()=>{
+  const e=equipment();let retained:ExecutionExtensionContext|undefined;
+  try {
+    await e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      retained=context;
+      const input=applyExecutionRunInput({source:'internal',prompt:'Source adapter contract only; no SDK/provider.'});
+      expect(input).toMatchObject({flowId:plan.flowId,conversationId:claim.rootConversationId,executionExtensionContext:context});
+      await assertExecutionExtensionCurrent(context);
+      await expect(assertExecutionExtensionCurrent({...context} as ExecutionExtensionContext)).rejects.toThrow();
+      await bindExecutionExtensionRun(context,claim.rootConversationId,'source-logical-run');
+      const root=await executionExtensionNativeWorkerRoot(context,{conversationId:claim.rootConversationId,runId:'source-logical-run',
+        workspace:claim.workspace,...plan});
+      expect(root).toMatchObject({goalId:claim.goalId,fleetRunId:claim.runId,modelId:plan.modelId});
+      expect(e.calls()).toBe(1);
+      await commitExecutionExtensionMutation(context,async()=>{expect(e.held()).toBe(true);});
+      expect(e.held()).toBe(false);
+    });
+    await expect(assertExecutionExtensionCurrent(retained)).rejects.toThrow();
+    await expect(e.composed.adapter.assertDispatch(undefined,'fleet','model')).rejects.toThrow();
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('loaded plan uses the native receipt digest across object key order and rejects content drift',async()=>{
+  const e=equipment();
+  try {
+    await e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      await validateExecutionLoadedState(context,{conversationId:claim.rootConversationId,flowId:plan.flowId,
+        flowSnapshot:{edges:[],nodes:[],id:flow.id}});
+      await expect(validateExecutionLoadedState(context,{conversationId:claim.rootConversationId,flowId:plan.flowId,
+        flowSnapshot:{edges:[],nodes:[{id:'foreign-node'}],id:flow.id}})).rejects.toThrow();
+    });
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('independent plan drift blocks Source writes before effects and root admission',async()=>{
+  const e=equipment();let effects=0;
+  try {
+    await expect(e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      e.drift();
+      await expect(commitExecutionExtensionMutation(context,async()=>{effects++;})).rejects.toThrow();
+      await expect(executionExtensionNativeWorkerRoot(context,{conversationId:claim.rootConversationId,runId:'source-logical-run',workspace:claim.workspace,...plan})).rejects.toThrow();
+      expect(effects).toBe(0);expect(e.calls()).toBe(0);
+    })).rejects.toThrow();
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('Next server graphs reuse the same adapter registry for one private transport binding',async()=>{
+  const e=equipment();
+  try{expect(createControllerNativeSourceAdapter({...e.transport},e.gateway)).toBe(e.composed);}
+  finally{e.restore();await e.composed.close();}
+});
+
+test('composition requires a trusted private client and all gateway guards',()=>{
+  expect(()=>createControllerNativeSourceAdapter({} as ControllerNativeTransport,{} as ExecutionExtensionAdapter)).toThrow();
+});
+
+function request(body:unknown,headers:Record<string,string>={},signal?:AbortSignal) {
+  return new Request(requester.origin+'/v1/chat/completions',{method:'POST',signal,
+    headers:{authorization:requester.authorization,host:'127.0.0.1:12345','content-type':'application/json',...headers},body:JSON.stringify(body)});
+}
+const payload=()=>({prompt:'Offline requester contract only.',claim:{...claim},workerAuthorization:'Bearer synthetic-worker-only'});
+
+test('Next internal localhost URL retains exact wire Host and private requester authority',async()=>{
+  const e=equipment(true);
+  const headers={authorization:requester.authorization,host:'127.0.0.1:12345','content-type':'application/json'};
+  const incoming=(origin:string,host=headers.host)=>new Request(origin+'/v1/chat/completions',{
+    method:'POST',headers:{...headers,host},body:JSON.stringify(payload())});
+  try {
+    for(const refused of [incoming('http://localhost:12346'),incoming('http://foreign:12345'),
+      incoming('http://localhost:12345','localhost:12345')]) {
+      expect(e.composed.adapter.authorizeTransport!(refused)?.status).toBe(403);
+    }
+    const normalized=incoming('http://localhost:12345');
+    expect(e.composed.adapter.authorizeTransport!(normalized)).toBeNull();
+    expect((await e.composed.adapter.withRoute!(normalized,async()=>Response.json({ok:true}))).status).toBe(200);
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('private requester authenticates before deriving a non-streaming root from actual admission',async()=>{
+  const e=equipment(true);let retained:ExecutionExtensionContext|undefined;
+  try {
+    const incoming=request(payload());
+    expect(e.composed.adapter.authorizeTransport!(incoming)).toBeNull();
+    const response=await e.composed.adapter.withRoute!(incoming,async admitted=>{
+      expect(admitted.headers.has('authorization')).toBe(false);
+      expect(admitted.headers.get('x-flujo-workspace')).toBe(claim.workspace);
+      expect(await admitted.json()).toEqual({model:`flow-${plan.flowId}`,stream:false,
+        messages:[{role:'user',content:'Offline requester contract only.'}],metadata:{flujo:'true',requireApproval:'false',conversationId:claim.rootConversationId}});
+      const input=applyExecutionRunInput({source:'chat',prompt:'test'});retained=input.executionExtensionContext;
+      expect(input.source).toBe('internal');await assertExecutionExtensionCurrent(retained);
+      return Response.json({ok:true});
+    });
+    expect(response.status).toBe(200);
+    await expect(assertExecutionExtensionCurrent(retained)).rejects.toThrow();
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('requester refuses browser origins, caller routing, streaming and oversized inputs before dispatch',async()=>{
+  const e=equipment(true);let dispatched=0;
+  try {
+    const invalidHeaders:Record<string,string>[]=[{origin:requester.origin},{authorization:'Bearer wrong'},{host:'foreign.example'}];
+    for(const headers of invalidHeaders) {
+      const incoming=request(payload(),headers);expect(e.composed.adapter.authorizeTransport!(incoming)?.status).toBe(403);
+      const response=await e.composed.adapter.withRoute!(incoming,async()=>{dispatched++;return new Response();});expect(response.status).toBe(403);
+    }
+    for(const body of [{...payload(),stream:true},{...payload(),model:'model-unowned'},{...payload(),prompt:'x'.repeat(17*1024)}]) {
+      await expect(e.composed.adapter.withRoute!(request(body),async()=>{dispatched++;return new Response();})).rejects.toThrow();
+    }
+    expect(dispatched).toBe(0);
+    expect(()=>createControllerNativeSourceAdapter(e.transport,e.gateway,{...requester,authorization:`Bearer ${'B'.repeat(43)}`})).toThrow();
+  }finally{e.restore();await e.composed.close();}
+});
+
+test('request cancellation revokes the Source capability while its awaited handler remains active',async()=>{
+  const e=equipment(true),cancel=new AbortController();
+  try {
+    await expect(e.composed.adapter.withRoute!(request(payload(),{},cancel.signal),async()=>{
+      const input=applyExecutionRunInput({source:'internal',prompt:'test'});await assertExecutionExtensionCurrent(input.executionExtensionContext);
+      cancel.abort(new Error('Synthetic requester disconnected'));
+      await expect(assertExecutionExtensionCurrent(input.executionExtensionContext)).rejects.toThrow();
+      return Response.json({cancelled:true});
+    })).rejects.toThrow();
+  }finally{e.restore();await e.composed.close();}
+});

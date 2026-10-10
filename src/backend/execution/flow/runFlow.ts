@@ -1,4 +1,4 @@
-import { applyExecutionRunInput, validateExecutionExtensionRun, validateExecutionLoadedState,
+import { applyExecutionRunInput, prepareExecutionSubflowInput, runWithExecutionInput, validateExecutionExtensionRun, validateExecutionLoadedState,
   installExecutionExtensionContext, assertExecutionStateAccess, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -505,6 +505,8 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  const delegated=await prepareExecutionSubflowInput(input);
+  if(delegated)return runWithExecutionInput(delegated,()=>runFlow(delegated));
   input = applyExecutionRunInput(input);
   await validateExecutionExtensionRun(input);
   const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);

@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { nativeDigest } from './nativeDigest';
+export { nativeDigest } from './nativeDigest';
 import type OpenAI from 'openai';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { DecodedTool, ToolIdentityService } from './toolNamespace';
@@ -13,8 +14,9 @@ import { splitToolResultMedia } from '@/backend/services/runResources/toolResult
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { combineAbortSignals } from '../combineAbortSignals';
-import { NATIVE_HANDOFF_PROTOCOL, type NativeHandoffProtocol } from './nativeHandoffProtocol';
-import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { isNativeHandoffProtocol, type NativeHandoffProtocol } from './nativeHandoffProtocol';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import type { ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 const ports = new WeakSet<object>();
 const authorities = new WeakSet<object>();
@@ -46,14 +48,6 @@ export function assertNativeToolPort(value: unknown): asserts value is NativeToo
   }
 }
 
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`;
-}
-export const nativeDigest = (value: unknown): string => createHash('sha256').update(canonical(value)).digest('hex');
 const isHandoff = (name: string) => name === 'handoff' || name.startsWith('handoff_to_');
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -69,7 +63,7 @@ export function nativeToolInventoryDigest(
   localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>,
   terminationProtocol?: NativeHandoffProtocol,
 ): string {
-  if (terminationProtocol !== undefined && terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) {
+  if (terminationProtocol !== undefined && !isNativeHandoffProtocol(terminationProtocol)) {
     throw new Error('Unknown native termination protocol.');
   }
   const names = new Set<string>();
@@ -83,7 +77,7 @@ export function nativeToolInventoryDigest(
     }
     const synthetic = Boolean(localToolExecutors?.[name]);
     const handoff = isHandoff(name);
-    if (handoff && terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) {
+    if (handoff && !isNativeHandoffProtocol(terminationProtocol)) {
       throw new Error('Native handoff requires a confirmed SDK termination protocol and is not admitted.');
     }
     if (Number(Boolean(decoded)) + Number(synthetic) + Number(handoff) !== 1) {
@@ -114,14 +108,18 @@ export interface NativeBrokerInput {
   signal: AbortSignal;
   terminationProtocol?: NativeHandoffProtocol;
   originalProcessHost?: NativeOriginalProcessHost;
+  executionExtensionContext?: ExecutionExtensionContext;
 }
 
 /** Freeze exactly the tools on this provider attempt; retain executors only here. */
 export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
   assertNativeBrokerAuthority(input.authority);
+  const executionContext = input.executionExtensionContext;
+  if (executionContext) assertNativeOriginalExecutionContext(input.originalProcessHost, executionContext);
   if (input.terminationProtocol !== undefined) {
-    if (input.terminationProtocol !== NATIVE_HANDOFF_PROTOCOL) throw new Error('Unknown native termination protocol.');
+    if (!isNativeHandoffProtocol(input.terminationProtocol)) throw new Error('Unknown native termination protocol.');
     assertNativeOriginalProcessHost(input.originalProcessHost);
+    if(input.originalProcessHost.terminationProtocol!==input.terminationProtocol)throw new Error('Native termination protocol differs from its Original host.');
   }
   const advertised = structuredClone(input.tools.filter(tool => tool.type === 'function').map(tool => ({
     name: tool.function.name,
@@ -219,7 +217,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
         result = { content: [{ type: 'text', text: 'tool denied' }], isError: true };
       } else if (kind === 'handoff') {
         assertNativeOriginalProcessHost(input.originalProcessHost);
-        if (input.terminationProtocol !== NATIVE_HANDOFF_PROTOCOL || pendingHandoffs.size >= 32) {
+        if (!isNativeHandoffProtocol(input.terminationProtocol) || pendingHandoffs.size >= 32) {
           throw new Error('Native handoff termination capability is unavailable.');
         }
         await assertCurrent();
@@ -259,6 +257,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
             undefined, decoded.nodeId, combined, 'model',
             ownerScopeForRun({ runId: input.receipt.owner.runId, conversationId: input.receipt.owner.conversationId }),
             { conversationId: input.receipt.owner.conversationId },
+            executionContext,
           );
           await input.authority.assertCurrent();
           await input.afterToolDispatch?.();

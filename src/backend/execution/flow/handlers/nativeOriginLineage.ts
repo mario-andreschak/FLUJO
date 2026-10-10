@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { SharedState } from '../types';
 import { MAX_SUBFLOW_DEPTH } from '../constants';
 import { assertFlowExecutionCurrent } from '../executionAuthority';
+import { withExecutionParentConversationRead } from '../../extensions';
 import { getDetachedTaskLaunchOwner } from '@/backend/services/subflowTasks/ownership';
 import type { SubflowTaskRecord } from '@/shared/types/subflowTasks';
 import { assertSafeCollectionId, loadItem as loadItemBackend } from '@/utils/storage/backend';
@@ -97,6 +98,10 @@ type StateSnapshot = Pick<SharedState,
   'recovery' | 'createdAt'>;
 
 async function readState(id: string): Promise<StateSnapshot> {
+  return withExecutionParentConversationRead(id, () => readStateWithinScope(id));
+}
+
+async function readStateWithinScope(id: string): Promise<StateSnapshot> {
   const safeId = requireId(id);
   const { loadConversationStateReadOnly } = await import('../loadConversationState');
   const live = await loadConversationStateReadOnly(safeId);

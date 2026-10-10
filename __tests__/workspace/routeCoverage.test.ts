@@ -5,6 +5,7 @@ const APP_ROOT = path.join(process.cwd(), 'src', 'app');
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'] as const;
 const INSTALLATION_WIDE = new Set([
   '/api/cloud/instance',
+  '/api/mcp/servers/[name]/host-consent',
   '/api/network-exposure',
   '/api/runtime-environment',
   '/api/telemetry/daily-active',
@@ -53,6 +54,17 @@ describe('workspace route coverage', () => {
       if (source.includes(MARKER)) {
         marked.push(pathname);
         expect(INSTALLATION_WIDE.has(pathname)).toBe(true);
+        if (pathname === '/api/mcp/servers/[name]/host-consent') {
+          // This operator-only exception is reachable before Worker readiness.
+          // Require owner admission before workspace selection/storage access.
+          expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
+          const wrapper = source.slice(source.indexOf('function operatorWorkspace('));
+          expect(wrapper).toContain('authorizeExecutionTransport(request)');
+          expect(wrapper).toContain('resolveOwnerRequest(request, scopes, { requireBearer: true })');
+          expect(wrapper.indexOf('resolveOwnerRequest(request, scopes')).toBeLessThan(wrapper.indexOf('resolveWorkspace(request)'));
+          expect(wrapper.indexOf('resolveWorkspace(request)')).toBeLessThan(wrapper.indexOf('ensureWorkspaceDirs(workspace)'));
+          for (const method of methods) expect(wrapper).toContain(`export const ${method} = operatorWorkspace(`);
+        }
         continue;
       }
 

@@ -41,6 +41,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+scripts/compiled-security/
 .avatar-preview-data/
 jspm_packages/
 

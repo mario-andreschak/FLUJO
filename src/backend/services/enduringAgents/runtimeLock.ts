@@ -698,6 +698,15 @@ export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeP
   return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
 }
 
+/** Positive admission evidence, distinct from conservatively retaining an
+ * uncertain lock owner. Missing, stale or incomparable OS observations fail. */
+export async function probeRuntimeProcessIdentity(identity: RuntimeProcessIdentity): Promise<boolean> {
+  if(!Number.isSafeInteger(identity.pid)||identity.pid<=0||!identity.processInstanceId
+    ||!identity.processBirthMarkerV2||!birthMarkerVersion(identity.processBirthMarkerV2))return false;
+  const observed=await queryProcessBirthMarker(identity.pid);
+  return observed===identity.processBirthMarkerV2;
+}
+
 export async function getRuntimeProcessIdentity(): Promise<RuntimeProcessIdentity> {
   const birth = await getOwnProcessBirthMarkerV2();
   return {
