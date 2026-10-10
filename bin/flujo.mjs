@@ -33,6 +33,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Package root is the parent of bin/ — where package.json and the built .next live.
 const packageRoot = path.resolve(__dirname, '..');
 
+// Validate explicit options before loading settings or touching user storage.
+const argv = process.argv.slice(2);
+const noOpen = argv.includes('--no-open');
+function invalidPort() {
+  console.error('[FLUJO] Invalid port. Use an integer from 1 to 65535.');
+  process.exit(1);
+}
+for (let index = 0; index < argv.length; index += 1) {
+  const argument = argv[index];
+  if (argument === '--no-open') continue;
+  let requestedPort;
+  if (argument === '--port' || argument === '-p') requestedPort = argv[++index];
+  else if (argument.startsWith('--port=')) requestedPort = argument.slice('--port='.length);
+  else {
+    console.error('[FLUJO] Unknown option. Use flujo --port 4200 or flujo --no-open.');
+    process.exit(1);
+  }
+  try { launcherPort(requestedPort); }
+  catch { invalidPort(); }
+}
+
 // The package installation is read-only. Load the standard Next.js dotenv
 // stack from the stable writable bootstrap directory before reading port/data
 // settings, so launcher-level variables work exactly like server-level ones.
@@ -41,9 +62,6 @@ fs.mkdirSync(bootstrapRoot, { recursive: true });
 loadBootstrapEnvironment(bootstrapRoot, false, nextEnv.loadEnvConfig);
 
 // --- args -----------------------------------------------------------------
-const argv = process.argv.slice(2);
-const noOpen = argv.includes('--no-open');
-
 function readPort() {
   const idx = argv.findIndex((a) => a === '--port' || a === '-p');
   if (idx !== -1 && argv[idx + 1]) {
@@ -57,10 +75,7 @@ function readPort() {
 }
 let port;
 try { port = launcherPort(readPort()); }
-catch {
-  console.error('[FLUJO] Invalid port. Use an integer from 1 to 65535.');
-  process.exit(1);
-}
+catch { invalidPort(); }
 
 // --- data dir --------------------------------------------------------------
 // Default writable data location for a packaged install. A git checkout keeps
