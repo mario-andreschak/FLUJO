@@ -342,9 +342,9 @@ export function createRootsListHandler(config: MCPServerConfig,
       loadMcpRootsRestriction(),
       loadWorkspaceRoots(),
     ]);
-    // Choosing workspace folders is itself an explicit scope. Preserve the
-    // legacy unrestricted-host behavior only while no workspace scope exists.
-    const roots = restricted || workspaceRoots.length > 0
+    // Workspace folders describe the project context. They become an access
+    // boundary only when the user explicitly enables roots confinement.
+    const roots = restricted
       ? await resolveServerRoots(current, workspaceRoots)
       : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
