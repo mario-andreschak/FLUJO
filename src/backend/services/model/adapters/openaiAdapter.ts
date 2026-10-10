@@ -28,7 +28,7 @@ const log = createLogger('backend/services/model/adapters/openaiAdapter');
  * parameter for any endpoint that turns out to reject it anyway, so a wrong guess
  * here costs one retried request, not a broken provider.
  */
-const PROMPT_CACHE_KEY_PROVIDERS = new Set(['openai', 'openrouter']);
+const PROMPT_CACHE_KEY_PROVIDERS = new Set(['openai', 'openrouter', 'litellm']);
 
 /**
  * Endpoints (provider + baseURL) that rejected `prompt_cache_key`. Populated at
@@ -186,7 +186,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     const cacheControlsKey = `${endpoint}|${model.name}`;
     const sendCacheControls =
       promptCacheMode === 'explicit' &&
-      model.provider === 'openai' &&
+      (model.provider === 'openai' || model.provider === 'litellm') &&
       !rejectedPromptCacheControls.has(cacheControlsKey);
 
     log.debug('createCompletion via OpenAI-compatible API', {
@@ -319,7 +319,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     const cacheControlsKey = `${endpoint}|${model.name}`;
     const sendCacheControls =
       promptCacheMode === 'explicit' &&
-      model.provider === 'openai' &&
+      (model.provider === 'openai' || model.provider === 'litellm') &&
       !rejectedPromptCacheControls.has(cacheControlsKey);
     const liveMessageId = `stream_${uuidv4()}`;
 

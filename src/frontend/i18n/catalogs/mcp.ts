@@ -94,6 +94,15 @@ export const mcpMessageRows = {
     "Carregando ferramentas…",
     "正在加载工具…",
   ],
+  "mcp.tools.refresh": [
+    "Refresh tools",
+    "Actualizar herramientas",
+    "Tools aktualisieren",
+    "Actualiser les outils",
+    "Aggiorna strumenti",
+    "Atualizar ferramentas",
+    "刷新工具",
+  ],
   "mcp.tools.warning": [
     "Warning: {error}",
     "Advertencia: {error}",

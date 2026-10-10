@@ -18,9 +18,11 @@ export interface PreparedOpenAiPromptCacheWire {
 }
 
 function isOfficialOpenAiChatCompletion(
-  model: Pick<Model, 'provider' | 'adapter'>,
+  model: Pick<Model, 'provider' | 'adapter' | 'name'>,
 ): boolean {
-  return model.provider === 'openai' && (!model.adapter || model.adapter === 'openai');
+  const compatible = !model.adapter || model.adapter === 'openai' || model.adapter === 'openai-responses';
+  return compatible && (model.provider === 'openai' ||
+    (model.provider === 'litellm' && /(?:^|\/)gpt-\d+/i.test(model.name)));
 }
 
 /**

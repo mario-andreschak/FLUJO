@@ -1553,7 +1553,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // is emitted. Ephemeral runs are refused inside. Advisory on failure: the
   // legacy SharedState persistence below still covers the conversation.
   try {
-    await reconcileConversationLog(sharedState, messagesBeforeTurn);
+    await reconcileConversationLog(sharedState, messagesBeforeTurn,
+      new Set((data.messages ?? []).map(message => message.id).filter((id): id is string => !!id)));
     // Issue #256: heal any assistant tool_calls turn left unanswered by a
     // crash/restart mid-tool before the run loop builds a provider request.
     // Persist each synthetic result via the log-only path so the projection is
@@ -1701,7 +1702,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     });
   };
 
-  const emitNewMessages = () => {
+  const emitNewMessages = (messageOrigin: 'input' | 'internal' = 'internal') => {
     for (const msg of sharedState.messages) {
       // Strengthen the id invariant at the emission boundary: a message
       // without an id could never be tracked (or deduped by any consumer).
@@ -1716,6 +1717,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       emit({
         type: 'message',
         message: msg,
+        messageOrigin,
         node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
       });
       accumulateUsage(msg);
@@ -1919,13 +1921,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         sharedState.messages.push(...newlyFolded);
         sharedState.lastUserMessageAt = newlyFolded[newlyFolded.length - 1].timestamp ?? Date.now();
         FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-        emitNewMessages();
+        emitNewMessages('input');
         // Per-step durability is the append-only log, exactly as for tool
         // results (the log refuses ephemeral runs, which have no transcript).
         if (!sharedState.ephemeral) {
           await appendRawForState(
             sharedState,
-            newlyFolded.map(message => ({ type: 'message', message })),
+            newlyFolded.map(message => ({ type: 'message', message, messageOrigin: 'input' })),
           );
         }
         foldedDurably = true;
@@ -2674,7 +2676,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                     try {
                       await appendRawForState(
                         sharedState,
-                        [...cappedToolResults, summaryInstruction].map((m) => ({ type: 'message', message: m })),
+                        [...cappedToolResults, summaryInstruction].map((m) => ({ type: 'message', message: m, messageOrigin: 'internal' })),
                       );
                     } catch (err) {
                       log.warn(`Failed to append graceful-cap messages to log for ${effectiveConvId}`, err);

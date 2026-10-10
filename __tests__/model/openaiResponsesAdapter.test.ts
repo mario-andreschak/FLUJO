@@ -41,6 +41,7 @@ import {
   fromResponse,
   __resetReasoningStore,
   __resetParamNegotiation,
+  withResponsesCacheBreakpoints,
 } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import type { Model } from '@/shared/types/model';
 
@@ -100,6 +101,20 @@ beforeEach(() => {
 });
 
 describe('toResponsesInput', () => {
+  it('marks Responses history without marking late instructions or changing encrypted reasoning', () => {
+    const reasoning = { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque', summary: [] };
+    const input = [
+      { role: 'user', content: 'task' }, reasoning,
+      { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'result' },
+      { role: 'system', content: 'late instruction' },
+    ];
+    const marked = withResponsesCacheBreakpoints(input as never);
+    expect(marked[1]).toBe(reasoning);
+    expect(marked[4]).toBe(input[4]);
+    expect(marked[0]).toMatchObject({ content: [{ prompt_cache_breakpoint: { mode: 'explicit' } }] });
+    expect(marked[3]).toMatchObject({ output: [{ prompt_cache_breakpoint: { mode: 'explicit' } }] });
+  });
   it('translates a full tool-using conversation', () => {
     const input = toResponsesInput([
       { role: 'system', content: 'You are helpful.' },

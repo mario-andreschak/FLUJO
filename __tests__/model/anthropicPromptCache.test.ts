@@ -192,6 +192,24 @@ describe('AnthropicAdapter prompt-cache breakpoints on the wire', () => {
     ]);
   });
 
+  test('OpenRouter Messages uses bearer authentication and medium effort on both paths', async () => {
+    const model: Model = {
+      ...MODEL, provider: 'openrouter', adapter: 'anthropic',
+      name: 'anthropic/claude-opus-5.5', baseUrl: 'https://openrouter.ai/api', reasoningEffort: 'medium',
+    };
+    const input = { model, apiKey: 'gateway-key', messages: MSGS, tools: TOOLS, temperature: 0 };
+    await new AnthropicAdapter().createCompletion(input);
+    await new AnthropicAdapter().createStreamCompletion(input);
+
+    expect(Anthropic).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: null, authToken: 'gateway-key', baseURL: 'https://openrouter.ai/api',
+    }));
+    for (const body of [anthropicCreate.mock.calls[0][0], anthropicStream.mock.calls[0][0]]) {
+      expect(body.output_config).toEqual({ effort: 'medium' });
+      expect(body).not.toHaveProperty('temperature');
+    }
+  });
+
   test('the streaming path gets the same breakpoints', async () => {
     await new AnthropicAdapter().createStreamCompletion({
       model: MODEL, apiKey: 'k', messages: MSGS, tools: TOOLS, temperature: 0,

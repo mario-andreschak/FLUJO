@@ -83,6 +83,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 
 import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import {
   enqueueSteeringMessage,
   peekSteeringMessages,
@@ -133,7 +134,9 @@ describe('mid-run steering', () => {
       return finalStep('done')(s);
     });
 
-    const result = await runFlow({ flowId: FLOW_ID, prompt: 'do the thing', conversationId: convId, mode: 'conversation' });
+    const events: any[] = [];
+    const result = await runFlow({ flowId: FLOW_ID, prompt: 'do the thing', conversationId: convId,
+      mode: 'conversation', emit: event => events.push(event) });
 
     expect(result.status).toBe('completed');
     // The correction was already in context when the step ran — the whole point.
@@ -141,6 +144,9 @@ describe('mid-run steering', () => {
     expect(peekSteeringMessages(convId)).toHaveLength(0);
     // ...and it was recorded in the append-only log, not just held in memory.
     expect(loggedMessages.map((m) => m.id)).toContain('s1');
+    expect(events.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
+    const rawMessages = (appendRawForState as jest.Mock).mock.calls.flatMap(call => call[1]);
+    expect(rawMessages.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
   });
 
   it('delivers a message that arrives MID-run on the very next step', async () => {

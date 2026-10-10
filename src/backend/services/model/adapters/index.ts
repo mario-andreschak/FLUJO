@@ -3,6 +3,7 @@ import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
 import { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
+import { OpenRouterAgentAdapter } from './openrouterAgentAdapter';
 import { AzureOpenAiAdapter } from './azureOpenAiAdapter';
 import { AnthropicAdapter } from './anthropicAdapter';
 import { GeminiAdapter } from './geminiAdapter';
@@ -14,6 +15,7 @@ import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
 export { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
+export { OpenRouterAgentAdapter } from './openrouterAgentAdapter';
 export { AzureOpenAiAdapter } from './azureOpenAiAdapter';
 export { AnthropicAdapter } from './anthropicAdapter';
 export { GeminiAdapter } from './geminiAdapter';
@@ -42,6 +44,8 @@ export function getCompletionAdapter(model: Model): CompletionAdapter {
       return new AzureOpenAiAdapter();
     case 'openai-responses':
       return new OpenAiResponsesAdapter();
+    case 'openrouter-agent':
+      return new OpenRouterAgentAdapter();
     case 'anthropic':
       return new AnthropicAdapter();
     case 'gemini':
@@ -86,6 +90,8 @@ export function describeCompletionAdapter(model: Model): ResolvedAdapterInfo {
       };
     case 'openai-responses':
       return { adapterId: 'openai-responses', endpoint: '/responses', reason: mediaRoute.reason };
+    case 'openrouter-agent':
+      return { adapterId: 'openrouter-agent', endpoint: '/responses (Agent SDK)', reason: mediaRoute.reason };
     case 'anthropic':
       return { adapterId: 'anthropic', endpoint: 'native SDK', reason: mediaRoute.reason };
     case 'gemini':

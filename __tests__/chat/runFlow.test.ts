@@ -602,6 +602,7 @@ describe('message emission (live view feed)', () => {
         sharedState.messages = [
           { role: 'system', content: 'NODE SYSTEM PROMPT', id: 'sys-1', timestamp: 2 },
           ...sharedState.messages,
+          { role: 'user', content: '[System update] Updated context', id: 'internal-context', timestamp: 2 },
           { role: 'assistant', content: 'answer', id: 'assistant-1', timestamp: 3, processNodeId: P },
         ];
         sharedState.lastResponse = 'answer';
@@ -618,9 +619,10 @@ describe('message emission (live view feed)', () => {
 
     expect(result.status).toBe('completed');
     const messageEvents = events.filter(e => e.type === 'message');
+    expect(messageEvents.find(e => e.message.id === 'internal-context').messageOrigin).toBe('internal');
     // The user message was present at run start (the client already shows it):
     // it must NOT come back as a live event under any id.
-    expect(messageEvents.filter(e => e.message.role === 'user')).toHaveLength(0);
+    expect(messageEvents.filter(e => e.message.id === 'user-1')).toHaveLength(0);
     // The node's system prompt is model plumbing, never streamed.
     expect(messageEvents.filter(e => e.message.role === 'system')).toHaveLength(0);
     // The genuinely new assistant answer is emitted exactly once.

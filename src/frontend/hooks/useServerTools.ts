@@ -28,6 +28,7 @@ export function useServerTools(serverName: string | null) {
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const toolsServerNameRef = useRef<string | null>(null);
   const selectedServerRef = useRef(serverName);
   const requestGenerationRef = useRef(0);
   const mountedRef = useRef(false);
@@ -66,6 +67,7 @@ export function useServerTools(serverName: string | null) {
     if (selectedServerRef.current !== requestedServer) return;
 
     if (!requestedServer) {
+      toolsServerNameRef.current = null;
       setTools([]);
       setToolsServerName(null);
       setError(null);
@@ -103,8 +105,6 @@ export function useServerTools(serverName: string | null) {
 
     log.debug(`Loading tools for server: ${requestedServer}`);
     setIsLoading(true);
-    setTools([]);
-    setToolsServerName(null);
     setError(null);
 
     try {
@@ -118,14 +118,18 @@ export function useServerTools(serverName: string | null) {
       if (result.error) {
         log.warn(`Error loading tools for ${requestedServer}:`, result.error);
         setError(result.error);
-        setTools([]);
-        setToolsServerName(null);
+        if (toolsServerNameRef.current !== requestedServer) {
+          toolsServerNameRef.current = null;
+          setTools([]);
+          setToolsServerName(null);
+        }
       } else {
         const toolsArray: ServerTool[] = (result.tools || []).map((tool: MCPToolResponse) => ({
           ...tool,
           description: tool.description || '',
         }));
         log.debug(`Loaded ${toolsArray.length} tools for ${requestedServer}`);
+        toolsServerNameRef.current = requestedServer;
         setTools(toolsArray);
         setToolsServerName(requestedServer);
         lastRefreshRef.current = {
@@ -143,8 +147,11 @@ export function useServerTools(serverName: string | null) {
 
       log.warn(`Failed to load tools for server ${requestedServer}:`, loadError);
       setError(`Failed to load tools: ${loadError instanceof Error ? loadError.message : 'Unknown error'}`);
-      setTools([]);
-      setToolsServerName(null);
+      if (toolsServerNameRef.current !== requestedServer) {
+        toolsServerNameRef.current = null;
+        setTools([]);
+        setToolsServerName(null);
+      }
     } finally {
       if (ownsRequest()) setIsLoading(false);
     }
@@ -245,21 +252,24 @@ export function useServerTools(serverName: string | null) {
 
     setRetryCount(0);
     setIsRetrying(false);
+    toolsServerNameRef.current = null;
+    setTools([]);
+    setToolsServerName(null);
 
     if (serverName) {
       void loadTools();
     } else {
       log.debug('Clearing tools as no server is selected');
       requestGenerationRef.current += 1;
-      setTools([]);
-      setToolsServerName(null);
       setError(null);
       setIsLoading(false);
     }
   }, [serverName, loadTools]);
 
+  const ownedTools = toolsServerName === serverName ? tools : [];
+
   return {
-    tools,
+    tools: ownedTools,
     toolsServerName,
     isLoading: isLoading || isRetrying,
     error,

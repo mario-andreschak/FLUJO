@@ -420,6 +420,8 @@ export interface MessageEvent extends ExecutionEventBase {
   type: 'message';
   node?: NodeRef;
   message: FlujoChatMessage;
+  /** Set by the execution/admission boundary, never copied from message input. */
+  messageOrigin?: 'input' | 'internal';
 }
 /**
  * A message was removed from the conversation (the chat client sends the full,

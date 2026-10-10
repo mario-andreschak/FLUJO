@@ -464,7 +464,9 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
   const loaded = await mcpService.loadServerConfigs();
   if (!Array.isArray(loaded)) throw new Error('Could not load restored MCP server configurations.');
   const byName = new Map(loaded.map(config => [config.name, config]));
-  if (byName.size !== plan.servers.length || plan.servers.some(entry => !byName.has(entry.name))) {
+  // The snapshot's servers must still exist, but the worker can gain additional
+  // servers after its first restore. Those are started from their current config.
+  if (plan.servers.some(entry => !byName.has(entry.name))) {
     throw new Error('The MCP transfer plan does not match the restored server configurations.');
   }
   const results: WorkspaceMcpReinstallResult['servers'] = [];

@@ -172,6 +172,25 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
       source: 'durable-log',
     });
     expect(mockRecoverConversationTranscript).toHaveBeenCalledWith(stored['conversations/conv-fast']);
+    expect(body.messageProvenanceVersion).toBe(1);
+  });
+
+  it('reports terminal output tied to the completed run and leaves legacy snapshots without provenance', async () => {
+    seedConversation('conv-output', 'completed');
+    const state = stored['conversations/conv-output'];
+    state.lastResponse = 'The final answer.';
+    state.recovery = { version: 1, runId: 'run-output', attemptId: 'attempt', attempt: 1,
+      classification: 'completed', startedAt: 1, updatedAt: 2, terminalAt: 2 };
+    const read = async () => (await GET(new NextRequest('http://localhost/v1/chat/conversations/conv-output', {
+      headers: { host: 'localhost', origin: 'http://localhost' },
+    }), {
+      params: Promise.resolve({ conversationId: 'conv-output' }),
+    })).json();
+    const body = await read();
+    expect(body.messageProvenanceVersion).toBeUndefined();
+    expect(body.terminalResponse).toEqual({ version: 1, runId: 'run-output', content: 'The final answer.' });
+    state.status = 'running';
+    expect((await read()).terminalResponse).toBeUndefined();
   });
 
   it('does not report a never-run conversation as completed when its flow changes', async () => {

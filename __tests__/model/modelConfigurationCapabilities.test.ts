@@ -1,4 +1,4 @@
-import { getModelConfigurationCapabilities } from '@/shared/types/model/provider';
+import { getModelConfigurationCapabilities, validateModelConfiguration } from '@/shared/types/model/provider';
 
 describe('provider-aware model configuration capabilities (#329)', () => {
   it('exposes effort and priority for Codex while hiding sampling/output caps', () => {
@@ -60,5 +60,21 @@ describe('provider-aware model configuration capabilities (#329)', () => {
     expect(
       getModelConfigurationCapabilities('openrouter', 'openai', 'vendor/model').creativity
     ).toEqual({ min: 0, max: 2, step: 0.1 });
+  });
+
+  it('accepts medium effort for native and OpenRouter Opus 5.5 Messages models', () => {
+    for (const name of ['claude-opus-5-5', 'anthropic/claude-opus-5.5', 'anthropic/claude-opus-4.8']) {
+      const model = { provider: 'openrouter' as const, adapter: 'anthropic' as const, name, reasoningEffort: 'medium' };
+      expect(validateModelConfiguration(model)).toBeUndefined();
+      expect(getModelConfigurationCapabilities(model.provider, model.adapter, name).creativity).toBeUndefined();
+    }
+  });
+
+  it('maps the Agent SDK effort controls to its supported request values', () => {
+    const model = { provider: 'openrouter' as const, adapter: 'openrouter-agent' as const,
+      name: 'anthropic/claude-opus-5.5', reasoningEffort: 'medium' };
+    expect(validateModelConfiguration(model)).toBeUndefined();
+    expect(validateModelConfiguration({ ...model, reasoningEffort: 'ultra' })).toBeDefined();
+    expect(getModelConfigurationCapabilities(model.provider, model.adapter, model.name).creativity).toBeUndefined();
   });
 });

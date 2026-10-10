@@ -126,7 +126,8 @@
     "undici": "^7.29.0",
     "uuid": "^14.0.1",
     "yaml": "^1.10.3",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@openrouter/agent": "^0.11.0"
   },
   "overrides": {
     "zod": "$zod",

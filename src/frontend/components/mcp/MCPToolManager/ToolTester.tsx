@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Box, 
   Paper, 
@@ -85,9 +85,16 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const [activeProgressToken, setActiveProgressToken] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
   const [showRawResult, setShowRawResult] = useState(false); // State for toggling raw/rendered view
+  const appliedPrefillRef = useRef<ToolTesterPrefill | null>(null);
 
   useEffect(() => {
-    if (!prefill || !toolsArray.some((tool) => tool.name === prefill.toolName)) return;
+    if (!prefill) {
+      appliedPrefillRef.current = null;
+      return;
+    }
+    if (appliedPrefillRef.current === prefill) return;
+    if (!toolsArray.some((tool) => tool.name === prefill.toolName)) return;
+    appliedPrefillRef.current = prefill;
     setSelectedTool(prefill.toolName);
     setParams({ ...prefill.arguments });
     setResult(null);
