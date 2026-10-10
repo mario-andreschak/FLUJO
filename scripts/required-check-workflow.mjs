@@ -22,6 +22,15 @@ export const CRITICAL_TEST_FILES = Object.freeze([
   '__tests__/security/ownerAccess.test.ts',
   '__tests__/security/isolatedMcp.test.ts',
   '__tests__/mcp/isolatedMcpTransport.test.ts',
+  '__tests__/mcp/securityReviewSource.test.ts',
+  '__tests__/mcp/securityReviewReport.test.ts',
+  '__tests__/mcp/securityReviewRoute.test.ts',
+  '__tests__/mcp/securityReviewLifecycle.test.ts',
+  '__tests__/mcp/securityReviewRunner.test.ts',
+  '__tests__/mcp/modelRiskEvidence.test.ts',
+  '__tests__/mcp/modelRiskAssessment.test.ts',
+  '__tests__/mcp/modelRiskAssessmentRoute.test.ts',
+  '__tests__/model/readOnlyAssessmentAdapter.test.ts',
 ]);
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
 export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
@@ -29,6 +38,8 @@ export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
   '__tests__/frontend/components/CardPickerGrid.test.tsx',
   '__tests__/frontend/components/PersonaCreationWizard.test.tsx',
   '__tests__/frontend/components/RoleVersionCardLocalization.test.tsx',
+  '__tests__/frontend/components/McpSecurityReviewPanel.test.tsx',
+  '__tests__/frontend/components/McpModelRiskAssessmentPanel.test.tsx',
 ]);
 export const CRITICAL_FRONTEND_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects jsdom --runInBand --runTestsByPath ' + CRITICAL_FRONTEND_TEST_FILES.join(' ');
 export function assertRequiredCheckWorkflow(workflow) {
