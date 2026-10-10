@@ -187,6 +187,29 @@ try {
       });
       await expect.poll(()=>input.innerText()).toBe(before);
       await expect.poll(()=>input.evaluate(element => document.activeElement === element)).toBe(true);
+      const syntheticSelectAll = await input.evaluate(element => {
+        const selection = window.getSelection();
+        const before = { anchor: selection?.anchorOffset, focus: selection?.focusOffset,
+          selected: selection?.toString() };
+        const event = new KeyboardEvent('keydown', { key: 'a', code: 'KeyA',
+          ctrlKey: true, bubbles: true, cancelable: true });
+        const unhandled = element.dispatchEvent(event);
+        return { before, after: { anchor: selection?.anchorOffset, focus: selection?.focusOffset,
+          selected: selection?.toString() }, unhandled, trusted: event.isTrusted };
+      });
+      if (!syntheticSelectAll.unhandled || syntheticSelectAll.trusted
+        || JSON.stringify(syntheticSelectAll.before) !== JSON.stringify(syntheticSelectAll.after)) {
+        throw new Error('Synthetic Select All acquired selection authority');
+      }
+      for (const modifier of ['Control', 'Meta']) {
+        await page.keyboard.press(modifier + '+a');
+        await page.keyboard.type('Replacement');
+        await expect(input).toHaveText('Replacement');
+        await expect(referenceButton).toHaveCount(0);
+        await page.keyboard.press('Control+z');
+        await expect(input).toHaveText(before);
+        await expect(referenceButton).toBeVisible();
+      }
       const keys = await page.evaluate(() => window.promptEditorKeys);
       const rapidPairs = keys.flatMap((key, index) => key.key === 'ArrowLeft'
         && keys[index - 1]?.key === 'a' ? [{ elapsedMs: key.time - keys[index - 1].time,
@@ -197,7 +220,8 @@ try {
       if(sizes.scroll>sizes.viewport+1) throw new Error('Page overflow: '+JSON.stringify(sizes));
       receipt.observations.push({locale,size,rapidPairs,realPaste:true,rapidTyping:true,
         rightCollapse:true,shiftSelectionReplacement:true,focusRetained:true,
-        undoRetainsPriorText:true,redo:true,referencePaste:true,syntheticPasteRejected:true,sizes});
+        undoRetainsPriorText:true,redo:true,referencePaste:true,syntheticPasteRejected:true,
+        controlAndMetaSelectAll:true,syntheticSelectAllRejected:true,sizes});
       await page.screenshot({path:path.join(evidence,locale+'-'+size+'-editor.png'),fullPage:true,animations:'disabled'});
       await context.close();
     }

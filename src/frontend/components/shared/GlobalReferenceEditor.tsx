@@ -735,18 +735,33 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     // previous caret. Leave composition and selections outside this editor alone.
     if (!disabled && event.nativeEvent.isTrusted && !event.nativeEvent.isComposing
       && !ReactEditor.isComposing(editor)
-      && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)
       && event.currentTarget.ownerDocument.activeElement === event.currentTarget) {
-      const selection = event.currentTarget.ownerDocument.getSelection();
-      if (selection?.anchorNode && selection.focusNode
-        && ReactEditor.hasEditableTarget(editor, selection.anchorNode)
-        && ReactEditor.hasTarget(editor, selection.focusNode)) {
-        const range = ReactEditor.toSlateRange(editor, selection, {
-          exactMatch: false,
-          suppressThrow: true,
-        });
-        if (range && (!editor.selection || !Range.equals(editor.selection, range))) {
-          Transforms.select(editor, range);
+      if (event.key.toLowerCase() === 'a' && event.ctrlKey !== event.metaKey
+        && !event.altKey && !event.shiftKey) {
+        // A pending render can replace native Select All before selectionchange
+        // reaches Slate. Keep the model and DOM together within this key event.
+        const range = Editor.range(editor, []);
+        const domRange = ReactEditor.toDOMRange(editor, range);
+        event.preventDefault();
+        Transforms.select(editor, range);
+        const selection = event.currentTarget.ownerDocument.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(domRange);
+        onKeyDown?.(event);
+        return;
+      }
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+        const selection = event.currentTarget.ownerDocument.getSelection();
+        if (selection?.anchorNode && selection.focusNode
+          && ReactEditor.hasEditableTarget(editor, selection.anchorNode)
+          && ReactEditor.hasTarget(editor, selection.focusNode)) {
+          const range = ReactEditor.toSlateRange(editor, selection, {
+            exactMatch: false,
+            suppressThrow: true,
+          });
+          if (range && (!editor.selection || !Range.equals(editor.selection, range))) {
+            Transforms.select(editor, range);
+          }
         }
       }
     }
