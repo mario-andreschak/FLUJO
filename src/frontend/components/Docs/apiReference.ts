@@ -446,6 +446,24 @@ export const API_GROUPS: ApiGroup[] = [
       },
       {
         method: 'POST',
+        path: '/api/mcp/model-risk-assessment',
+        summary: 'Explicit advisory risk assessment of public GitHub evidence using a selected saved text model. No installation, model tools or execution consent.',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'repositoryUrl', type: 'string', required: true, description: 'Public https://github.com/owner/repository URL; captures HEAD once.' },
+          { name: 'modelId', type: 'string', required: true, description: 'Saved request-response text connection ID in this workspace.' },
+          { name: 'includeSource', type: 'boolean', required: true, description: 'Explicit opt-in to send bounded README/entry excerpts; false sends public signals only.' },
+        ],
+        response: '{ success: true, review: { status, reason?, model?, source?, assessment?: { score, rationale, flags } } }. A score is advisory and never grants trust.',
+        notes: [
+          'The action runs only after model selection and an explicit assessment click. Public evidence goes to that provider; fees and privacy terms apply. See docs/guides/mcp-model-risk-assessment.md.',
+          'GitHub issue ratios exclude pull requests; missing signals remain unknown. Optional samples cover at most six files and 48 KiB, with pinned Git blob verification and visible truncation.',
+          'Restricted adapter mode permits one physical tool-free request, no retries or redirects. CLI agents, fallback policies and non-text or mixed media models are unsupported.',
+          'Source/model deadlines are 30/45 seconds with a 90-second overall deadline and 2,048 output tokens. One global slot remains occupied until cancelled work settles. Reports are not persisted.',
+        ],
+      },
+      {
+        method: 'POST',
         path: '/api/mcp/test-connection',
         summary: 'Run a real MCP handshake against an unsaved config (tests custom CAs and headers) without registering it.',
         paramsLabel: 'Body',

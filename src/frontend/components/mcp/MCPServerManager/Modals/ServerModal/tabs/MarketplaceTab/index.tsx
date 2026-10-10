@@ -19,6 +19,7 @@ import {
 import { InstallOptionList } from '../../components/InstallOptionPicker';
 import useRegistryInstall from '../../hooks/useRegistryInstall';
 import McpSecurityReviewPanel from '@/frontend/components/mcp/McpSecurityReviewPanel';
+import McpModelRiskAssessmentPanel from '@/frontend/components/mcp/McpModelRiskAssessmentPanel';
 import {
   DEFAULT_MARKETPLACE_FILTERS,
   filterMarketplaceResults,
@@ -617,6 +618,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
               </Typography>
 
               <McpSecurityReviewPanel key={selectedServer.name} repositoryUrl={selectedServer.repository?.url ?? ''} />
+              <McpModelRiskAssessmentPanel key={`model-risk:${selectedServer.name}`} repositoryUrl={selectedServer.repository?.url ?? ''} />
 
               {/* Persistent security warning + explicit trust confirmation */}
               <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1 }}>
