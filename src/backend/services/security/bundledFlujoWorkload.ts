@@ -457,7 +457,8 @@ async function evidence(request: Request) {
   const recordBefore = fs.lstatSync(filename, { bigint: true });
   const markerBefore = fs.lstatSync(markerFilename, { bigint: true });
   const files = [filename, markerFilename, ownerFile, ledger];
-  const [recordValue, markerValue, ownerValue, approvalValue] = await traceAsync('private-set-initial', () => readPrivateApprovalSetAsync(files, request.signal));
+  const [recordValue, markerValue, ownerValue, approvalValue] = await traceAsync('private-set-initial', () =>
+    readPrivateApprovalSetAsync(files, request.signal, ['record', 'marker', 'owner', 'ledger']));
   phase = 'private-binding';
   const record = recordSchema.parse(recordValue), marker = markerSchema.parse(markerValue);
   const initialOwner = ownerPolicySchema.parse(ownerValue), initialApprovals = trustedHostApprovalsSchema.parse(approvalValue);

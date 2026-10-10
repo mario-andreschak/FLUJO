@@ -235,22 +235,62 @@ export async function readPrivateApprovalPairAsync(first: string | undefined, se
   return [values[0], values[1]];
 }
 
+export type PrivateApprovalFileRole = 'record' | 'marker' | 'owner' | 'ledger';
+type PrivateApprovalReadPhase = 'input' | 'identity-before' | 'native-before' | 'contents' | 'native-after' | 'identity-after' | 'signal-after';
+
+/** Never serialize exceptions, paths, native evidence or approval contents. */
+function tracePrivateApprovalSetRefusal(phase: PrivateApprovalReadPhase, memberIndex: number | undefined,
+  roles: readonly PrivateApprovalFileRole[] | undefined, error: unknown, signal: AbortSignal | undefined, started: number | undefined): void {
+  try {
+    if (started === undefined) return;
+    const roleDescriptor = memberIndex !== undefined && roles ? Object.getOwnPropertyDescriptor(roles, String(memberIndex)) : undefined;
+    const suppliedRole: unknown = roleDescriptor && 'value' in roleDescriptor ? roleDescriptor.value : undefined;
+    const role = memberIndex === undefined ? 'set'
+      : suppliedRole === 'record' || suppliedRole === 'marker' || suppliedRole === 'owner' || suppliedRole === 'ledger' ? suppliedRole : 'member';
+    // Read only own data properties; a diagnostic must not invoke error accessors.
+    const descriptors = error && typeof error === 'object' ? Object.getOwnPropertyDescriptors(error) : {};
+    const code: unknown = descriptors.code && 'value' in descriptors.code ? descriptors.code.value : undefined;
+    const errno: unknown = descriptors.errno && 'value' in descriptors.errno ? descriptors.errno.value : undefined;
+    const errorKind = typeof code === 'string' && ['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'HOST_POLICY_INVALID',
+      'ENOENT', 'EACCES', 'EPERM', 'EIO', 'EBUSY', 'EMFILE', 'ENFILE', 'ENOTDIR', 'ELOOP', 'EINVAL'].includes(code) ? code : 'unknown';
+    console.info('[private-approval-set-reader]', 'refused', { phase, role, errorKind,
+      ...(typeof errno === 'number' && Number.isInteger(errno) && Math.abs(errno) <= 65535 ? { errno } : {}),
+      cancelled: signal?.aborted === true, elapsedMs: Math.max(0, Date.now() - started) });
+  } catch { /* Preserve the original failure, including when the logger throws. */ }
+}
+
 /** One bounded fresh native witness set; never stored or reused by a request. */
-export async function readPrivateApprovalSetAsync(input: readonly string[], signal?: AbortSignal): Promise<unknown[]> {
-  if (!input.length || input.length > 4 || new Set(input).size !== input.length
-      || input.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename) || filename.length > 2048 || filename.includes('\0'))
-      || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const filenames = [...input];
-  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
-  const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
-  const values = filenames.map(filename => readPrivateApprovalContents(filename));
-  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  for (const [index, filename] of filenames.entries()) {
-    assertLinkFree(filename);
-    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+export async function readPrivateApprovalSetAsync(input: readonly string[], signal?: AbortSignal,
+  roles?: readonly PrivateApprovalFileRole[]): Promise<unknown[]> {
+  const started = process.env.FLUJO_MCP_WORKLOAD_TRACE === '1' ? Date.now() : undefined;
+  let phase: PrivateApprovalReadPhase = 'input';
+  let memberIndex: number | undefined;
+  try {
+    if (!input.length || input.length > 4 || new Set(input).size !== input.length
+        || input.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename) || filename.length > 2048 || filename.includes('\0'))
+        || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    const filenames = [...input];
+    phase = 'identity-before';
+    const identities = filenames.map((filename, index) => { memberIndex = index; return fs.lstatSync(filename, { bigint: true }); });
+    phase = 'native-before'; memberIndex = undefined;
+    const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
+    phase = 'contents';
+    const values = filenames.map((filename, index) => { memberIndex = index; return readPrivateApprovalContents(filename); });
+    phase = 'native-after'; memberIndex = undefined;
+    if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    phase = 'identity-after';
+    for (const [index, filename] of filenames.entries()) {
+      memberIndex = index;
+      assertLinkFree(filename);
+      if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    }
+    phase = 'signal-after'; memberIndex = undefined;
+    if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    return values;
+  } catch (error) {
+    tracePrivateApprovalSetRefusal(phase, memberIndex, roles, error, signal, started);
+    throw error;
   }
-  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  return values;
 }
 
 /** Final synchronous witness set after every yielding verification phase. */
