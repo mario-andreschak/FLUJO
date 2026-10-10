@@ -50,6 +50,7 @@ export const CRITICAL_TEST_FILES = Object.freeze([
 ]);
 export const CRITICAL_TEST_COMMAND = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath ' + CRITICAL_TEST_FILES.join(' ');
 export const CRITICAL_FRONTEND_TEST_FILES = Object.freeze([
+  '__tests__/frontend/components/DayViewMiniMonth.test.tsx',
   '__tests__/frontend/components/ChatHistory.test.tsx',
   '__tests__/frontend/components/PersonaGoalCard.test.tsx',
   '__tests__/frontend/components/PersonaGoalValidation.test.tsx',
