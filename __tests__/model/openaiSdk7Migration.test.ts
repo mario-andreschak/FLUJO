@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { Agent } from 'undici';
+import OpenAI, { type ClientOptions } from 'openai';
 import { parseRequestParameters } from '@/app/v1/chat/completions/requestParser';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import {
@@ -8,7 +9,79 @@ import {
   UnsupportedOpenAIToolTypeError,
 } from '@/shared/types/openai';
 
+function streamedClient(payload: string, options: {
+  leaveOpen?: boolean;
+  onCancel?: (signal: AbortSignal | null | undefined) => void;
+  logger?: ClientOptions['logger'];
+} = {}) {
+  const bytes = new TextEncoder().encode(payload);
+  return new OpenAI({
+    apiKey: 'fixture-only',
+    maxRetries: 0,
+    logger: options.logger,
+    logLevel: 'error',
+    fetch: async (_url, init) => {
+      let sent = false;
+      return new Response(new ReadableStream({
+        pull(controller) {
+          if (!sent) {
+            sent = true;
+            controller.enqueue(bytes);
+          } else if (!options.leaveOpen) {
+            controller.close();
+          }
+        },
+        cancel() {
+          options.onCancel?.(init?.signal);
+        },
+      }, { highWaterMark: 0 }), {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    },
+  });
+}
+
 describe('OpenAI SDK 7 compatibility boundary', () => {
+  it('preserves a final Responses reply without a trailing event separator', async () => {
+    const reply = { type: 'response.completed', response: { id: 'final-reply', output: [] } };
+    const client = streamedClient(`event: response.completed\ndata: ${JSON.stringify(reply)}`);
+    const stream = await client.responses.create({ model: 'fixture', input: 'hello', stream: true });
+    const events = [];
+    for await (const event of stream) events.push(event);
+    expect(events).toEqual([reply]);
+  });
+
+  it('keeps malformed provider payloads out of error diagnostics', async () => {
+    const marker = 'private-conversation-fixture';
+    const errorLog = jest.fn();
+    const client = streamedClient(`data: {"private":"${marker}",INVALID}\n\n`, {
+      logger: { error: errorLog, warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+    });
+    const stream = await client.chat.completions.create({ model: 'fixture', messages: [], stream: true });
+    await expect((async () => {
+      for await (const event of stream) void event;
+    })()).rejects.toThrow('Error reading response: malformed server-sent event JSON.');
+    expect(errorLog).toHaveBeenCalled();
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(marker);
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain('INVALID');
+  });
+
+  it('aborts the provider request before cancelling a stopped reply body', async () => {
+    const onCancel = jest.fn((signal: AbortSignal | null | undefined) => signal?.aborted);
+    const client = streamedClient('data: {"choices":[{"index":0,"delta":{"content":"first"}}]}\n\n', {
+      leaveOpen: true,
+      onCancel,
+    });
+    const stream = await client.chat.completions.create({ model: 'fixture', messages: [], stream: true });
+    for await (const event of stream) {
+      expect(event.choices[0].delta.content).toBe('first');
+      break;
+    }
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onCancel.mock.results[0].value).toBe(true);
+    expect(stream.controller.signal.aborted).toBe(true);
+  });
+
   it('keeps the hardened Undici transport and client options', () => {
     const client = createOpenAIClient({
       apiKey: 'test-key',

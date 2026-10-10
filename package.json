@@ -134,7 +134,7 @@
     "mcp-stdio-oauth": "^0.1.0",
     "next": "16.4.0",
     "node-fetch": "^3.3.2",
-    "openai": "7.3.0",
+    "openai": "7.32.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
