@@ -100,6 +100,45 @@ describe('portable workspace capture', () => {
     }
   });
 
+  it.each([false, true])('preserves captured ZIP dates and plaintext digests across later writes (encrypted: %s)', async (encrypted) => {
+    await put('userdata/member.txt', 'captured generation');
+    if (encrypted) process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const dates = Object.fromEntries(Object.entries(captured.zip.files).map(([name, file], index) => {
+      file.date = new Date(Date.UTC(2025, 0, 1, 0, 0, index * 2));
+      return [name, file.date.getTime()];
+    }));
+    jest.useFakeTimers({
+      now: new Date('2025-02-01T00:00:00Z'),
+      doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate', 'clearImmediate', 'setTimeout', 'clearTimeout',
+        'setInterval', 'clearInterval', 'hrtime', 'performance'],
+    });
+    const archives: Awaited<ReturnType<typeof writeWorkspaceSnapshotArchive>>[] = [];
+    try {
+      const first = await writeWorkspaceSnapshotArchive(captured);
+      archives.push(first);
+      const generatedFirst = await captured.zip.generateAsync({ type: 'nodebuffer' });
+      jest.setSystemTime(new Date('2025-03-01T00:00:00Z'));
+      const second = await writeWorkspaceSnapshotArchive(captured);
+      archives.push(second);
+      expect(second.plaintextSha256).toBe(first.plaintextSha256);
+      expect(await captured.zip.generateAsync({ type: 'nodebuffer' })).toEqual(generatedFirst);
+      if (encrypted) expect(second.sha256).not.toBe(first.sha256);
+      else expect(second.sha256).toBe(first.sha256);
+      for (const archive of archives) {
+        const wire = await fs.readFile(archive.archivePath);
+        const restored = await JSZip.loadAsync(encrypted ? decryptArchive(wire) : wire);
+        expect(Object.fromEntries(Object.entries(restored.files).map(([name, file]) => [name, file.date.getTime()])))
+          .toEqual(dates);
+        expect(await restored.file('userdata/member.txt')!.async('string')).toBe('captured generation');
+        expect(JSON.parse(await restored.file('snapshot-manifest.json')!.async('string'))).toEqual(captured.manifest);
+      }
+    } finally {
+      jest.useRealTimers();
+      for (const archive of archives) await fs.rm(archive.stagingDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects SQLite state disguised as workspace metadata', async () => {
     await put('.workspace.json', Buffer.from('SQLite format 3\0extra'));
     await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'UNSAFE_ENTRY' });

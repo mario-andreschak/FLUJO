@@ -499,11 +499,12 @@ function zipForCapturedSnapshot(captured: CapturedWorkspaceSnapshot): JSZip {
   const zip = new JSZip();
   for (const [name, file] of Object.entries(captured.zip.files)) {
     const member = stored.members.get(name);
-    if (file.dir) zip.folder(name);
+    const options = { date: file.date, unixPermissions: file.unixPermissions ?? undefined };
+    if (file.dir) zip.file(name, null, { ...options, dir: true });
     else if (member && member.file === file) zip.file(name,
       Readable.from(stored.store.range(member.position, member.size), { objectMode: false, highWaterMark: 64 * 1024 }),
-      { unixPermissions: file.unixPermissions ?? undefined });
-    else zip.file(name, file.async('nodebuffer'), { unixPermissions: file.unixPermissions ?? undefined });
+      options);
+    else zip.file(name, file.async('nodebuffer'), options);
   }
   return zip;
 }
