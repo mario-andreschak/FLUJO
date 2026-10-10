@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Alert, Box, Button, Checkbox, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
@@ -89,7 +89,7 @@ type PanelState = {
 };
 
 /** A separate optional advisory action; this component cannot install or grant execution consent. */
-export default function McpModelRiskAssessmentPanel({ repositoryUrl }: { repositoryUrl: string }) {
+export default function McpModelRiskAssessmentPanel({ repositoryUrl, active = true }: { repositoryUrl: string; active?: boolean }) {
   const { t } = useI18n();
   const headingId = useId();
   const target = repositoryTarget(repositoryUrl);
@@ -97,20 +97,31 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl }: { reposit
   currentUrl.current = repositoryUrl;
   const modelsRequest = useRef<AbortController | null>(null);
   const reviewRequest = useRef<AbortController | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [state, setState] = useState<PanelState | null>(null);
-  const abort = () => {
+  const abort = useCallback(() => {
     modelsRequest.current?.abort(); modelsRequest.current = null;
     reviewRequest.current?.abort(); reviewRequest.current = null;
-  };
+  }, []);
   useEffect(() => {
     setState(null);
     const unsubscribe = onWorkspaceChanged(() => { abort(); setState(null); });
     return () => { unsubscribe(); abort(); };
-  }, [repositoryUrl]);
+  }, [abort, repositoryUrl]);
+  useEffect(() => {
+    if (active) return;
+    abort();
+    setState(previous => previous && (previous.loading || previous.pending) ? {
+      ...previous, loading: false, pending: false,
+      loadError: previous.loading || previous.loadError,
+      review: previous.pending ? { status: 'cancelled' } : previous.review,
+    } : previous);
+  }, [abort, active]);
   const visible = state?.url === repositoryUrl && state.workspace === getSelectedWorkspace() ? state : null;
 
   async function open() {
-    if (!target || modelsRequest.current) return;
+    if (!activeRef.current || !target || modelsRequest.current) return;
     abort();
     const url = repositoryUrl;
     const workspace = getSelectedWorkspace();
@@ -118,7 +129,7 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl }: { reposit
     modelsRequest.current = controller;
     const initial = { url, workspace, models: [], modelId: '', includeSource: false };
     setState({ ...initial, loading: true });
-    const isCurrent = () => modelsRequest.current === controller && !controller.signal.aborted
+    const isCurrent = () => activeRef.current && modelsRequest.current === controller && !controller.signal.aborted
       && currentUrl.current === url && getSelectedWorkspace() === workspace;
     try {
       const response = await fetch(withWorkspaceUrl('/api/model', workspace), { signal: controller.signal });
@@ -130,17 +141,18 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl }: { reposit
   }
 
   function changeSelection(update: Partial<Pick<PanelState, 'modelId' | 'includeSource'>>) {
+    if (!activeRef.current) return;
     reviewRequest.current?.abort(); reviewRequest.current = null;
     setState(previous => previous ? { ...previous, ...update, pending: false, review: undefined } : null);
   }
 
   async function assess() {
-    if (!target || !visible?.modelId || reviewRequest.current || !visible.models.some(model => model.id === visible.modelId)) return;
+    if (!activeRef.current || !target || !visible?.modelId || reviewRequest.current || !visible.models.some(model => model.id === visible.modelId)) return;
     const snapshot = visible;
     const controller = new AbortController();
     reviewRequest.current = controller;
     setState({ ...snapshot, pending: true, review: undefined });
-    const isCurrent = () => reviewRequest.current === controller && !controller.signal.aborted
+    const isCurrent = () => activeRef.current && reviewRequest.current === controller && !controller.signal.aborted
       && currentUrl.current === snapshot.url && getSelectedWorkspace() === snapshot.workspace;
     try {
       const response = await fetch(withWorkspaceUrl('/api/mcp/model-risk-assessment', snapshot.workspace), {
@@ -163,12 +175,12 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl }: { reposit
   const source = review?.source;
   const unknown = t('mcp.modelRisk.unknown');
   const signal = (value: number | string | null) => value === null ? unknown : value;
-  return <Box component="section" aria-labelledby={headingId} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 2, mb: 2 }}>
+  return <Box hidden={!active} inert={!active} component="section" aria-labelledby={headingId} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 2, mb: 2 }}>
     <Stack spacing={1}>
       <Typography id={headingId} variant="subtitle2">{t('mcp.modelRisk.title')}</Typography>
       <Typography variant="body2">{t('mcp.modelRisk.description')}</Typography>
       {!target && <Typography variant="body2">{t('mcp.securityReview.unsupported')}</Typography>}
-      <Button size="small" variant="outlined" onClick={open} disabled={!target || !!visible?.loading} sx={{ alignSelf: 'flex-start' }}>{t('mcp.modelRisk.open')}</Button>
+      <Button size="small" variant="outlined" onClick={open} disabled={!active || !target || !!visible?.loading} sx={{ alignSelf: 'flex-start' }}>{t('mcp.modelRisk.open')}</Button>
       {visible && <>
         <Typography variant="body2">{t('mcp.modelRisk.privacy')}</Typography>
         <Typography variant="caption">{t('mcp.modelRisk.supported')}</Typography>
@@ -180,7 +192,7 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl }: { reposit
         <FormControlLabel control={<Checkbox disabled={visible.loading} checked={visible.includeSource} onChange={event => changeSelection({ includeSource: event.target.checked })} />}
           label={t('mcp.modelRisk.sourceOptIn')} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button size="small" onClick={assess} disabled={!visible.modelId || visible.loading || visible.pending}>{t(visible.pending ? 'mcp.modelRisk.assessing' : 'mcp.modelRisk.assess')}</Button>
+          <Button size="small" onClick={assess} disabled={!active || !visible.modelId || visible.loading || visible.pending}>{t(visible.pending ? 'mcp.modelRisk.assessing' : 'mcp.modelRisk.assess')}</Button>
           {visible.pending && <Button size="small" onClick={cancel}>{t('mcp.modelRisk.cancel')}</Button>}
           <Button size="small" onClick={() => { abort(); setState(null); }}>{t('mcp.modelRisk.hide')}</Button>
         </Box>

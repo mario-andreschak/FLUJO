@@ -212,7 +212,7 @@ test.each(['HOME', 'NPM_CONFIG_CACHE'])('a reviewed stale %s cannot silently cha
   expect(() => resolveStdioLaunch(changed, { isolateRuntimeHome: true })).toThrow();
 });
 
-test('package manifest drift cannot be covered by reusing the source digest', async () => {
+test('package manifest drift cannot be covered by reusing the source digest', () => ownedCase(async () => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
   const manifest = path.join(policy.packageRunner!.packageDirectory, 'node_modules', 'owned-probe', 'package.json');
   const original = fs.readFileSync(manifest);
@@ -221,7 +221,7 @@ test('package manifest drift cannot be covered by reusing the source digest', as
     fs.writeFileSync(manifest, JSON.stringify({ ...value, version: '9.9.9' }));
     await expect(verifyTrustedHostMcp(config)).rejects.toThrow();
   } finally { fs.writeFileSync(manifest, original); }
-});
+}), closureTimeout);
 
 test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mandatory dependency closure', state => ownedCase(async () => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);

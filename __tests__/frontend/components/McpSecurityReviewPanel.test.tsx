@@ -30,6 +30,33 @@ describe('Optional MCP repository review', () => {
   });
   afterEach(() => { jest.restoreAllMocks(); __resetWorkspaceSelectionForTests(); });
 
+  it('suspends pending review on tab hide and rejects late evidence without restarting', async () => {
+    const pending = deferred(); (global.fetch as jest.Mock).mockReturnValueOnce(pending.promise);
+    const { rerender } = render(<McpSecurityReviewPanel repositoryUrl={repositoryUrl} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review repository' }));
+    const signal = (global.fetch as jest.Mock).mock.calls[0][1].signal as AbortSignal;
+    rerender(<McpSecurityReviewPanel repositoryUrl={repositoryUrl} active={false} />);
+    expect(signal.aborted).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Review repository' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review repository', hidden: true }));
+    await act(async () => pending.resolve(response()));
+    rerender(<McpSecurityReviewPanel repositoryUrl={repositoryUrl} />);
+    expect(screen.getByText('Review cancelled.')).toBeInTheDocument();
+    expect(screen.queryByText('No skill manifest was found.')).not.toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves completed scanner evidence across tab suspension', async () => {
+    const { rerender } = render(<McpSecurityReviewPanel repositoryUrl={repositoryUrl} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review repository' }));
+    await screen.findByText('No skill manifest was found.');
+    rerender(<McpSecurityReviewPanel repositoryUrl={repositoryUrl} active={false} />);
+    expect(screen.getByText('No skill manifest was found.')).not.toBeVisible();
+    rerender(<McpSecurityReviewPanel repositoryUrl={repositoryUrl} />);
+    expect(screen.getByText('No skill manifest was found.')).toBeVisible();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('runs only on explicit request, binds the workspace, and renders evidence as text', async () => {
     window.localStorage.setItem('flujo-ui:workspace', 'research');
     const { rerender, container } = render(<McpSecurityReviewPanel repositoryUrl="" />);

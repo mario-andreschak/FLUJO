@@ -37,13 +37,15 @@ function isReview(value: unknown, target: string): value is McpSecurityReview {
 }
 
 /** Assistive evidence only: no install, consent, model, or tool callbacks. */
-export default function McpSecurityReviewPanel({ repositoryUrl }: { repositoryUrl: string }) {
+export default function McpSecurityReviewPanel({ repositoryUrl, active = true }: { repositoryUrl: string; active?: boolean }) {
   const { t } = useI18n();
   const headingId = useId();
   const target = repositoryTarget(repositoryUrl);
   const currentUrl = useRef(repositoryUrl);
   currentUrl.current = repositoryUrl;
   const request = useRef<AbortController | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [state, setState] = useState<{
     url: string; workspace: string; pending?: boolean; review?: McpSecurityReview;
   } | null>(null);
@@ -62,18 +64,27 @@ export default function McpSecurityReviewPanel({ repositoryUrl }: { repositoryUr
     };
   }, [repositoryUrl]);
 
+  useEffect(() => {
+    if (active) return;
+    request.current?.abort();
+    request.current = null;
+    setState(previous => previous?.pending
+      ? { ...previous, pending: false, review: { status: 'cancelled', message: '', limitations: [] } }
+      : previous);
+  }, [active]);
+
   const visible = state?.url === repositoryUrl && state.workspace === getSelectedWorkspace() ? state : null;
   const pending = Boolean(visible?.pending);
   const review = visible?.review;
 
   async function startReview() {
-    if (!target || request.current) return;
+    if (!activeRef.current || !target || request.current) return;
     const url = repositoryUrl;
     const workspace = getSelectedWorkspace();
     const controller = new AbortController();
     request.current = controller;
     setState({ url, workspace, pending: true });
-    const isCurrent = () => request.current === controller && !controller.signal.aborted
+    const isCurrent = () => activeRef.current && request.current === controller && !controller.signal.aborted
       && currentUrl.current === url && getSelectedWorkspace() === workspace;
     try {
       const response = await fetch(withWorkspaceUrl('/api/mcp/security-review', workspace), {
@@ -104,13 +115,13 @@ export default function McpSecurityReviewPanel({ repositoryUrl }: { repositoryUr
   const severityLabel = (severity: string) => severity.toUpperCase() === 'SAFE' ? t('mcp.securityReview.lowestRisk') : severity;
 
   return (
-    <Box component="section" aria-labelledby={headingId} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 2, mb: 2 }}>
+    <Box hidden={!active} inert={!active} component="section" aria-labelledby={headingId} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 2, mb: 2 }}>
       <Stack spacing={1}>
         <Typography id={headingId} variant="subtitle2">{t('mcp.securityReview.title')}</Typography>
         <Typography variant="body2" color="text.secondary">{t('mcp.securityReview.description')}</Typography>
         {!target && <Typography variant="body2">{t('mcp.securityReview.unsupported')}</Typography>}
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button size="small" variant="outlined" disabled={!target || pending} onClick={startReview}>
+          <Button size="small" variant="outlined" disabled={!active || !target || pending} onClick={startReview}>
             {t(pending ? 'mcp.securityReview.reviewing' : 'mcp.securityReview.button')}
           </Button>
           {pending && <Button size="small" onClick={cancelReview}>{t('mcp.securityReview.cancel')}</Button>}

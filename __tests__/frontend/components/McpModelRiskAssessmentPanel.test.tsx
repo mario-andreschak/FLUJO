@@ -52,6 +52,38 @@ describe('Optional configured-model MCP risk assessment', () => {
   });
   afterEach(() => { jest.restoreAllMocks(); __resetWorkspaceSelectionForTests(); });
 
+  it('aborts model-list loading on tab hide, rejects late choices and requires an explicit retry', async () => {
+    const pending = deferred(); (global.fetch as jest.Mock).mockReturnValueOnce(pending.promise);
+    const { rerender } = render(<McpModelRiskAssessmentPanel repositoryUrl={repositoryUrl} />);
+    fireEvent.click(screen.getByRole('button', { name: 'AI risk assessment' }));
+    const signal = (global.fetch as jest.Mock).mock.calls[0][1].signal as AbortSignal;
+    rerender(<McpModelRiskAssessmentPanel repositoryUrl={repositoryUrl} active={false} />);
+    expect(signal.aborted).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'AI risk assessment', hidden: true }));
+    await act(async () => pending.resolve(jsonResponse(models)));
+    rerender(<McpModelRiskAssessmentPanel repositoryUrl={repositoryUrl} />);
+    expect(screen.queryByRole('option', { name: 'Text B' })).not.toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'AI risk assessment' }));
+    await screen.findByRole('option', { name: 'Text B' });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves completed assessment, model and source choice while hiding all review controls', async () => {
+    const { rerender } = render(<McpModelRiskAssessmentPanel repositoryUrl={repositoryUrl} />);
+    await openAndChoose();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include sampled README and source excerpts' }));
+    submit(); await screen.findByText(malicious);
+    rerender(<McpModelRiskAssessmentPanel repositoryUrl={repositoryUrl} active={false} />);
+    expect(screen.queryByRole('combobox', { name: 'Assessment model' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send evidence and assess', hidden: true }));
+    rerender(<McpModelRiskAssessmentPanel repositoryUrl={repositoryUrl} />);
+    expect(screen.getByRole('combobox', { name: 'Assessment model' })).toHaveValue('text-b');
+    expect(screen.getByRole('checkbox', { name: 'Include sampled README and source excerpts' })).toBeChecked();
+    expect(screen.getByText(malicious)).toBeVisible();
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('makes no calls while browsing or typing; requires an explicit model and final send', async () => {
     window.localStorage.setItem('flujo-ui:workspace', 'research');
     const { rerender, container } = render(<McpModelRiskAssessmentPanel repositoryUrl="" />);
