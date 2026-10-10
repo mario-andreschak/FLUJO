@@ -109,6 +109,9 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
 
   /** Unique identifier for the message */
   id: string;
+
+  /** Read-only durable-log projection; caller-supplied values are discarded. */
+  executionOrigin?: 'input' | 'internal';
   
   /** Timestamp in milliseconds since epoch when the message was created/added */
   timestamp: number;

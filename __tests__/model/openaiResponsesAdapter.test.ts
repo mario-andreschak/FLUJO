@@ -41,6 +41,7 @@ import {
   fromResponse,
   __resetReasoningStore,
   __resetParamNegotiation,
+  withResponsesCacheBreakpoints,
 } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import type { Model } from '@/shared/types/model';
 
@@ -100,6 +101,20 @@ beforeEach(() => {
 });
 
 describe('toResponsesInput', () => {
+  it('marks Responses history without marking late instructions or changing encrypted reasoning', () => {
+    const reasoning = { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque', summary: [] };
+    const input = [
+      { role: 'user', content: 'task' }, reasoning,
+      { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'result' },
+      { role: 'system', content: 'late instruction' },
+    ];
+    const marked = withResponsesCacheBreakpoints(input as never);
+    expect(marked[1]).toBe(reasoning);
+    expect(marked[4]).toBe(input[4]);
+    expect(marked[0]).toMatchObject({ content: [{ prompt_cache_breakpoint: { mode: 'explicit' } }] });
+    expect(marked[3]).toMatchObject({ output: [{ prompt_cache_breakpoint: { mode: 'explicit' } }] });
+  });
   it('translates a full tool-using conversation', () => {
     const input = toResponsesInput([
       { role: 'system', content: 'You are helpful.' },
@@ -563,6 +578,37 @@ describe('optional-parameter negotiation', () => {
       status: 400,
       error: { message: `Unsupported parameter: '${param}' is not supported with this model.` },
     });
+
+  it.each([['openai', 'gpt-5.2'], ['openrouter', 'openai/gpt-5.6']])('omits explicit controls for unsupported %s %s', async (provider, name) => {
+    await call({ ...model(name), provider } as Model, [{ role: 'user', content: 'hi' }], { promptCacheMode: 'explicit' });
+    expect(bodyOf(0)).not.toHaveProperty('prompt_cache_options');
+    expect(JSON.stringify(bodyOf(0).input)).not.toContain('prompt_cache_breakpoint');
+  });
+
+  it('negotiates unsupported LiteLLM breakpoint controls away together and remembers', async () => {
+    const m = { ...model('openai/gpt-5.6'), provider: 'litellm' } as Model;
+    mockResponsesCreate.mockRejectedValueOnce(unsupported('input[0].content[0].prompt_cache_breakpoint'));
+    await call(m, [{ role: 'user', content: 'hi' }], { promptCacheMode: 'explicit' });
+    expect(bodyOf(0)).toHaveProperty('prompt_cache_options', { mode: 'explicit' });
+    expect(JSON.stringify(bodyOf(0).input)).toContain('prompt_cache_breakpoint');
+    expect(bodyOf(1)).not.toHaveProperty('prompt_cache_options');
+    expect(JSON.stringify(bodyOf(1).input)).not.toContain('prompt_cache_breakpoint');
+    mockResponsesCreate.mockClear();
+    await call(m, [{ role: 'user', content: 'hi' }], { promptCacheMode: 'explicit' });
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
+    expect(bodyOf(0)).not.toHaveProperty('prompt_cache_options');
+  });
+
+  it('marks supported multimodal parts and leaves opaque or unsupported parts unchanged', () => {
+    const input = [{ role: 'user', content: [
+      { type: 'input_image', image_url: 'https://example.com/fixture.png', detail: 'auto' },
+      { type: 'opaque_extension', payload: { nested: true } },
+    ] }, { role: 'user', content: [{ type: 'input_audio', data: 'fixture' }] }];
+    const marked = withResponsesCacheBreakpoints(input as never) as any[];
+    expect(marked[0].content[0]).toEqual({ ...input[0].content[0], prompt_cache_breakpoint: { mode: 'explicit' } });
+    expect(marked[0].content[1]).toBe(input[0].content[1]);
+    expect(marked[1]).toBe(input[1]);
+  });
 
   it('drops temperature when the model rejects it, then remembers', async () => {
     const m = model('o3');

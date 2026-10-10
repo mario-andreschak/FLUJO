@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { contextUsageFromCompletion } from './contextUsage';
+import { toAnthropicToolSchema } from './anthropicToolSchema';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import {
@@ -127,6 +128,7 @@ export const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-opus-4-9',
+  'claude-opus-5',
   'claude-fable-4',
   'claude-fable-5',
   'claude-sonnet-5',
@@ -166,7 +168,7 @@ export async function anthropicModelSupportsTemperature(
   modelName: string,
   client?: Anthropic
 ): Promise<boolean> {
-  const key = modelName.toLowerCase();
+  const key = modelName.toLowerCase().replace(/\./g, '-');
 
   // 1. Cache hit
   const cached = modelCapabilityCache.get(key);
@@ -341,10 +343,10 @@ export function toAnthropicTools(
     .map(t => ({
       name: t.function.name,
       description: t.function.description,
-      input_schema: (t.function.parameters as Anthropic.Tool.InputSchema) ?? {
+      input_schema: toAnthropicToolSchema(t.function.parameters ?? {
         type: 'object',
         properties: {},
-      },
+      }) as Anthropic.Tool.InputSchema,
     }));
 }
 
@@ -659,7 +661,9 @@ export class AnthropicAdapter implements CompletionAdapter {
     assertReadOnlyAssessmentInput(input);
     const { model, apiKey, messages, tools, temperature, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment } = input;
     const client = new Anthropic({
-      apiKey,
+      ...(model.provider === 'openrouter'
+        ? { apiKey: null, authToken: apiKey }
+        : { apiKey, authToken: null }),
       // Honour a custom base URL if one was configured; otherwise the SDK
       // default (api.anthropic.com) is used.
       ...(model.baseUrl ? { baseURL: model.baseUrl } : {}),

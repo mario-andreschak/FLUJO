@@ -427,6 +427,9 @@ export interface MessageEvent extends ExecutionEventBase {
   type: 'message';
   node?: NodeRef;
   message: FlujoChatMessage;
+  /** External admission (including API/agent inbox) vs runtime generation;
+   * never a claim of human identity or copied from message input. */
+  messageOrigin?: 'input' | 'internal';
 }
 /**
  * A message was removed from the conversation (the chat client sends the full,

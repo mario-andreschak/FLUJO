@@ -35,6 +35,8 @@ export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
  *                   Requesty gateway profiles.
  * - 'azure'      -> AzureOpenAiAdapter, Azure OpenAI's deployment-scoped Chat
  *                   Completions API through the AzureOpenAI SDK client.
+ * - 'openrouter-agent' -> OpenRouterAgentAdapter, @openrouter/agent callModel
+ *                   with manual tools; FLUJO drives the execution loop.
  * - 'gemini'     -> GeminiAdapter, native Google GenAI SDK.
  * - 'anthropic'  -> AnthropicAdapter, native Anthropic SDK.
  * - 'claude-cli' -> ClaudeSubscriptionAdapter, drives the `claude` CLI against a
@@ -47,6 +49,7 @@ export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
 export type ModelAdapter =
   | 'openai'
   | 'openai-responses'
+  | 'openrouter-agent'
   | 'azure'
   | 'gemini'
   | 'anthropic'
@@ -192,9 +195,9 @@ export function normalizeModelTemperature(
 
 const OPENAI_REASONING_MODEL = /(^|[/_-])(o[1-9]|gpt-5)(?:[./_-]|$)/i;
 const ANTHROPIC_ADAPTIVE_MODEL =
-  /claude-(?:fable|mythos)-5|claude-opus-4-(?:[7-9]|\d{2,})|claude-sonnet-5/i;
+  /claude-(?:opus|fable|mythos)-5|claude-opus-4[.-](?:[7-9]|\d{2,})|claude-sonnet-5/i;
 const ANTHROPIC_EFFORT_MODEL =
-  /^(?:opus|sonnet|fable)$|claude-(?:fable|mythos)-5|claude-opus-4-(?:[6-9]|\d{2,})|claude-sonnet-4-6/i;
+  /^(?:opus|sonnet|fable)$|claude-(?:opus|fable|mythos)-5|claude-opus-4[.-](?:[6-9]|\d{2,})|claude-sonnet-4[.-]6/i;
 
 /**
  * Resolve the controls that have a real request/runtime mapping for a selected
@@ -210,6 +213,16 @@ export function getModelConfigurationCapabilities(
   const resolvedAdapter = resolveModelAdapter(provider, adapter);
   const resolvedProvider = provider || 'openai';
   const name = modelName.trim();
+
+  if (resolvedAdapter === 'openrouter-agent') {
+    return {
+      ...(!ANTHROPIC_ADAPTIVE_MODEL.test(name) && !OPENAI_REASONING_MODEL.test(name)
+        ? { creativity: { min: 0, max: 2, step: 0.1 } }
+        : {}),
+      effortLevels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      maxOutputTokens: true,
+    };
+  }
 
   if (resolvedAdapter === 'antigravity-cli') {
     // FLUJO does not map generation controls onto the native CLI contract.
@@ -545,6 +558,25 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     showBaseUrl: true,
   },
   {
+    id: 'openrouter-messages',
+    label: 'OpenRouter Messages',
+    provider: 'openrouter',
+    adapter: 'anthropic',
+    sdkLabel: 'Anthropic SDK (Messages)',
+    baseUrl: 'https://openrouter.ai/api',
+    showBaseUrl: true,
+    supportsModelDiscovery: false,
+  },
+  {
+    id: 'openrouter-agent',
+    label: 'OpenRouter Agent SDK',
+    provider: 'openrouter',
+    adapter: 'openrouter-agent',
+    sdkLabel: 'OpenRouter Agent SDK',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    showBaseUrl: true,
+  },
+  {
     id: 'orcarouter',
     label: 'OrcaRouter',
     provider: 'orcarouter',
@@ -588,6 +620,15 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
   {
     id: 'litellm',
     label: 'LiteLLM',
+    provider: 'litellm',
+    adapter: 'openai-responses',
+    sdkLabel: 'OpenAI Responses SDK (via LiteLLM Proxy)',
+    baseUrl: 'http://localhost:4000/v1',
+    showBaseUrl: true,
+  },
+  {
+    id: 'litellm-chat-completions',
+    label: 'LiteLLM Chat Completions',
     provider: 'litellm',
     adapter: 'openai',
     sdkLabel: 'OpenAI SDK (via LiteLLM Proxy)',

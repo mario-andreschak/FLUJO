@@ -17,11 +17,14 @@ describe('provider profiles', () => {
       'openai-responses',
       'azure',
       'openrouter',
+      'openrouter-messages',
+      'openrouter-agent',
       'orcarouter',
       'requesty',
       'xai',
       'ollama',
       'litellm',
+      'litellm-chat-completions',
       'gemini-openai',
       'gemini-native',
       'anthropic-openai',
@@ -44,6 +47,13 @@ describe('provider profiles', () => {
     expect(getProviderProfile('codex', 'codex-cli').id).toBe('codex');
     expect(getProviderProfile('antigravity-cli', 'antigravity-cli').id).toBe('antigravity-cli');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
+    expect(getProviderProfile('openrouter', 'openrouter-agent').id).toBe('openrouter-agent');
+    expect(resolveModelAdapter('openrouter', 'openrouter-agent')).toBe('openrouter-agent');
+    expect(getProviderProfile('openrouter', 'anthropic')).toMatchObject({
+      id: 'openrouter-messages',
+      adapter: 'anthropic',
+      baseUrl: 'https://openrouter.ai/api',
+    });
     expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
     expect(getProviderProfile('openai', 'openai-responses').id).toBe('openai-responses');
     expect(getProviderProfile('azure', 'azure').id).toBe('azure');
@@ -55,6 +65,15 @@ describe('provider profiles', () => {
     // and for legacy models with no adapter at all.
     expect(getProviderProfile('openai', 'openai').id).toBe('openai');
     expect(getProviderProfile('openai', undefined).id).toBe('openai');
+  });
+
+  it('defaults LiteLLM to Responses while preserving an explicit Chat Completions choice', () => {
+    expect(getProviderProfileById('litellm')?.adapter).toBe('openai-responses');
+    // Existing saved connections keep their legacy route; new profiles select Responses explicitly.
+    expect(resolveModelAdapter('litellm', undefined)).toBe('openai');
+    expect(getProviderProfile('litellm', 'openai-responses').id).toBe('litellm');
+    expect(getProviderProfile('litellm', 'openai').id).toBe('litellm-chat-completions');
+    expect(resolveModelAdapter('litellm', 'openai')).toBe('openai');
   });
 
   it('puts legacy OpenAI last and uses Responses for gateway profiles and saved connections', () => {
