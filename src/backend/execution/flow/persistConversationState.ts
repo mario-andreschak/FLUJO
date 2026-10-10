@@ -5,6 +5,7 @@ import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { persistConversationSummary } from './conversationSummaryStore';
 import { commitExecutionExtensionMutation } from '@/backend/execution/extensions';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
 
@@ -71,11 +72,17 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
       await persistConversationSummary(idFromKey, state);
     });
     return;
-  } else if (state.executionAuthority?.commitWhileCurrent) {
-    await state.executionAuthority.commitWhileCurrent(writeSnapshot);
-  } else {
-    await state.executionAuthority?.assertCurrent();
-    await writeSnapshot();
   }
-  await persistConversationSummary(idFromKey, state);
+  // Snapshot and its sidebar projection belong to one admitted mutation.
+  // Nested storage writes retain their per-key queues and ownership checks,
+  // while recovery capture drains both publications before reading either.
+  await withWorkspaceMutation(async () => {
+    if (state.executionAuthority?.commitWhileCurrent) {
+      await state.executionAuthority.commitWhileCurrent(writeSnapshot);
+    } else {
+      await state.executionAuthority?.assertCurrent();
+      await writeSnapshot();
+    }
+    await persistConversationSummary(idFromKey, state);
+  });
 }

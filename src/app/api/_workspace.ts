@@ -20,6 +20,7 @@ import {
 } from '@/backend/services/security/bundledFlujoWorkload';
 import { isRequestHostAllowed, isLocalRequest } from '@/utils/http/localRequest';
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 
 const log = createLogger('app/api/_workspace');
 
@@ -177,6 +178,17 @@ export async function withWorkspace<T>(
 export function withWorkspaceRoute<
   H extends (request: never, ...rest: never[]) => Promise<Response> | Response,
 >(handler: H): H {
+  const invoke = async (...args: unknown[]): Promise<Response> => {
+    try {
+      return await (handler as unknown as (...a: unknown[]) => Promise<Response>)(...args);
+    } catch (error) {
+      if (!(error instanceof ConversationLogReadPressureError)) throw error;
+      return Response.json({ error: error.message, code: error.code }, {
+        status: error.status,
+        headers: { 'Retry-After': '5', 'Cache-Control': 'private, no-store' },
+      });
+    }
+  };
   return (async (request: Request | undefined, ...rest: unknown[]) => {
     // A number of route unit tests (and a few internal callers) invoke handlers
     // such as GET()/PUT() with no argument. Normalize before workspace parsing
@@ -210,7 +222,7 @@ export function withWorkspaceRoute<
               return new Response(JSON.stringify({ error: 'Forbidden.' }), { status: 403 });
             }
             await assertBundledFlujoWorkloadCurrent(workload.authorization, transportRequest);
-            return (handler as unknown as (...a: unknown[]) => Promise<Response>)(handlerRequest, ...rest);
+            return invoke(handlerRequest, ...rest);
           });
           await assertBundledFlujoWorkloadCurrent(workload.authorization, transportRequest);
           return selected instanceof Response
@@ -239,7 +251,7 @@ export function withWorkspaceRoute<
     }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
       const selected = await withWorkspace(admittedRequest, () => Promise.resolve(
-        (handler as unknown as (...a: unknown[]) => Promise<Response>)(
+        invoke(
           admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
           ...rest,
         ),

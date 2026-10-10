@@ -43,6 +43,7 @@ import {
   type PersonaAreaSubsection,
 } from './personaTypes';
 import PersonaStatusUpdates from './PersonaStatusUpdates';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 
 type PersonaNavigationArea = PersonaArea | 'behaviors' | 'apps';
 
@@ -272,6 +273,7 @@ export default function PersonaDetailShell({
           </Stack>
         </Stack>
       </Paper>
+      <AllowanceBar entity={{ kind: 'personas', id: detail.persona.id }} />
       <Paper variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>
         <Tabs
           data-persona-navigation

@@ -71,6 +71,7 @@ jest.mock('@/backend/execution/flow/loadConversationState', () => ({
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   flushConversationLog: jest.fn(async () => undefined),
   readConversationLog: jest.fn(async () => undefined),
+  withConversationLogEvents: async (id: string, consume: (events: unknown) => unknown) => consume(await jest.requireMock('@/backend/execution/flow/conversationLog').readConversationLog(id)),
   projectMessages: jest.fn(() => []),
 }));
 jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({

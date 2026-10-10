@@ -101,11 +101,18 @@ export const ModelTestDialog = ({
   onRetry,
 }: ModelTestDialogProps) => {
   const { t } = useI18n();
-  const sdkTitle = result?.provider === 'codex'
+  // The resolved route owns transport selection; a gateway's provider label
+  // does not establish that this check used the OpenAI SDK.
+  const adapterId = result?.adapterRoute?.adapterId;
+  const sdkTitle = adapterId === 'codex-cli'
     ? t('models.test.codexSdk')
-    : result?.provider === 'antigravity-cli'
+    : adapterId === 'antigravity-cli'
       ? t('models.test.antigravityCli')
-      : t('models.test.openaiSdk');
+      : adapterId === 'openai' || adapterId === 'openai-responses'
+        ? t('models.test.openaiSdk')
+        : adapterId
+          ? t('models.test.resolvedTransport', { adapter: adapterId })
+          : t('models.test.connectionAttempt');
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>

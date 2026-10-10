@@ -30,7 +30,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;
 };
-const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify.yml'), 'utf8');
+const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify-full.yml'), 'utf8');
 
 describe('isolated test stage', () => {
   it('lists only files that exist', () => {

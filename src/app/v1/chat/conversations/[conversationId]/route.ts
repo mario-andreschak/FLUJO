@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -130,6 +131,7 @@ async function GET_handler(
           log.info(`Conversation state not found in storage`, { requestId, conversationId });
         }
       } catch (storageError) {
+        if (storageError instanceof ConversationLogReadPressureError) throw storageError;
         log.warn(`Error loading conversation state from storage`, { requestId, conversationId, error: storageError });
         // Continue, maybe it's just not created yet or error is transient
       }
@@ -238,6 +240,8 @@ async function GET_handler(
     }
 
   } catch (error) {
+
+    if (error instanceof ConversationLogReadPressureError) throw error;
     // Use variable for logging
     log.error('Error retrieving conversation state', {
       requestId,
@@ -273,6 +277,7 @@ async function PATCH_handler(
     updateData = await request.json();
     log.debug('Received update data', { requestId, conversationId, updateData: JSON.stringify(updateData) });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.warn('Invalid JSON in PATCH request body', { requestId, conversationId, error });
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
@@ -466,6 +471,8 @@ async function PATCH_handler(
     return NextResponse.json(updatedSummary, { status: 200 });
 
     } catch (error) {
+
+      if (error instanceof ConversationLogReadPressureError) throw error;
       log.error('Error updating conversation state', {
         requestId,
         conversationId,
@@ -580,7 +587,9 @@ async function DELETE_handler(
 
     return new Response(null, { status: 204 }); // Success, No Content
 
-    } catch (error: unknown) {
+    } catch (error) {
+
+      if (error instanceof ConversationLogReadPressureError) throw error;
       // The conversation still exists (delete failed) — clear the tombstone so
       // it isn't left permanently unpersistable/unloggable.
       unmarkConversationDeleted(conversationId);

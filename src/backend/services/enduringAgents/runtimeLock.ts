@@ -1184,15 +1184,62 @@ const WORKSPACE_WRITER_LOCK = /^\.workspace-capture-writer-[0-9a-f-]{36}\.lock$/
 const workspaceWriterAdmissionChains = globalThis.__flujo_workspace_writer_admission_chains
   ??= new Map<string, Promise<void>>();
 
-/** Only one local registration needs to contend for the filesystem gate. */
-function registerWorkspaceWriter(task: () => Promise<void>): Promise<void> {
+interface WorkspaceWriterRegistration {
+  task: (admission: PersonaRuntimeLock) => Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+interface WorkspaceWriterRegistrationBatch { requests: WorkspaceWriterRegistration[] }
+const writerBatchRuntime = globalThis as typeof globalThis & {
+  __flujoWorkspaceWriterRegistrationBatches?: Map<string, WorkspaceWriterRegistrationBatch>;
+};
+const writerBatches = writerBatchRuntime.__flujoWorkspaceWriterRegistrationBatches ??= new Map();
+export const WORKSPACE_WRITER_REGISTRATION_BATCH_SIZE = 8;
+
+/** Coalesce bounded local registrations, never mutation bodies, under one physical admission lease. */
+function registerWorkspaceWriter(task: WorkspaceWriterRegistration['task']): Promise<void> {
   const key = getWorkspaceDbDir();
-  const previous = workspaceWriterAdmissionChains.get(key) ?? Promise.resolve();
-  const pending = previous.catch(() => undefined).then(task);
-  workspaceWriterAdmissionChains.set(key, pending);
-  return pending.finally(() => {
-    if (workspaceWriterAdmissionChains.get(key) === pending) workspaceWriterAdmissionChains.delete(key);
-  });
+  let batch = writerBatches.get(key);
+  const created = !batch;
+  if (!batch) { batch = { requests: [] }; writerBatches.set(key, batch); }
+  const pending = new Promise<void>((resolve, reject) => batch!.requests.push({ task, resolve, reject }));
+  if (created) {
+    const current = batch;
+    const draining = Promise.resolve().then(async () => {
+      while (current.requests.length) {
+        const requests = current.requests.splice(0, WORKSPACE_WRITER_REGISTRATION_BATCH_SIZE);
+        const outcomes = new Map<WorkspaceWriterRegistration, unknown>();
+        let admission: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+        let failure: unknown;
+        try {
+          admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
+          for (const request of requests) {
+            try {
+              await admission.lock.assertOwned();
+              await request.task(admission.lock);
+            } catch (error) { outcomes.set(request, error); }
+          }
+        } catch (error) { failure = error; }
+        finally {
+          try { await admission?.release(); }
+          catch (error) { failure = error; }
+        }
+        // No mutation starts before the physical capture-admission lease is released.
+        for (const request of requests) {
+          if (failure !== undefined) request.reject(failure);
+          else if (outcomes.has(request)) request.reject(outcomes.get(request));
+          else request.resolve();
+        }
+      }
+      // Detach synchronously before resolved callers can enqueue the next burst.
+      if (writerBatches.get(key) === current) writerBatches.delete(key);
+    }).finally(() => {
+      if (writerBatches.get(key) === current) writerBatches.delete(key);
+      if (workspaceWriterAdmissionChains.get(key) === draining) workspaceWriterAdmissionChains.delete(key);
+    });
+    workspaceWriterAdmissionChains.set(key, draining);
+  }
+  return pending;
 }
 
 /**
@@ -1210,13 +1257,7 @@ export async function withWorkspaceProcessMutation<T>(task: () => Promise<T>): P
     let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
     try {
       await registerWorkspaceWriter(async () => {
-        const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
-        try {
-          await admission.lock.assertOwned();
-          writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
-        } finally {
-          await admission.release();
-        }
+        writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
       });
       await writer!.lock.assertOwned();
       return await task();

@@ -26,6 +26,7 @@ import type { PersonaSummary } from '@/frontend/services/personas/summary';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 import { personaCapabilities } from './personaCapabilities';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 
 function statusColor(
   status: PersonaSummary['status'],
@@ -132,6 +133,7 @@ export default function PersonaSummaryCard({
           </Stack>
         </Stack>
       </CardContent>
+      <AllowanceBar entity={{ kind: 'personas', id: summary.id }} />
       <Divider />
       <CardActions disableSpacing sx={{ px: 2, py: 1.5, flexWrap: 'wrap', gap: 1 }}>
         {capabilities.open && (
