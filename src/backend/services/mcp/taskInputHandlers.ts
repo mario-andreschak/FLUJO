@@ -5,6 +5,7 @@ import {
 
 export interface TaskInputOptions {
   signal?: AbortSignal;
+  expectedConversationId?: string;
   assertCurrent?: () => void | Promise<void>;
 }
 type InputHandler = (request: { params?: unknown }, options?: TaskInputOptions) => Promise<unknown>;

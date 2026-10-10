@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
-import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -565,7 +565,9 @@ function rejectedParam(err: unknown, alreadyDropped: Set<Droppable>): Droppable 
 // ---------------------------------------------------------------------------
 
 export class OpenAiResponsesAdapter implements CompletionAdapter {
-  async createCompletion({
+  async createCompletion(assessmentInput: CompletionInput): Promise<CompletionResult> {
+    assertReadOnlyAssessmentInput(assessmentInput);
+    const {
     model,
     apiKey,
     messages,
@@ -580,7 +582,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     nodeId,
     promptCacheKey,
     toolNameMap,
-  }: CompletionInput): Promise<CompletionResult> {
+    readOnlyAssessment,
+    } = assessmentInput;
     const openai = createOpenAIClient({
       apiKey,
       baseURL: model.baseUrl,
@@ -635,10 +638,10 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
           { adapter: 'openai-responses', operation: 'responses.create', request: body },
           () => openai.responses.create(
               body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-              signal ? { signal } : undefined,
+              readOnlyAssessment ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
             ),
         ),
-        { signal, onAttempt: onProviderAttempt },
+        { signal, onAttempt: onProviderAttempt, ...(readOnlyAssessment ? { maxAttempts: 1 } : {}) },
       ) as Promise<OpenAI.Responses.Response>;
     };
 
@@ -651,6 +654,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         response = await send(omit);
         break;
       } catch (error) {
+        if (readOnlyAssessment) throw error;
         const param = rejectedParam(error, omit);
         if (!param) throw error;
         omit.add(param);
@@ -701,7 +705,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     onSdkRequest,
     onSdkRequestResult,
     toolNameMap,
+    readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
+    if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     const openai = createOpenAIClient({
       apiKey,
       baseURL: model.baseUrl,

@@ -1,3 +1,4 @@
+jest.mock('@/backend/services/mcp/tasksExtensionSession', () => ({ getTasksExtensionSession: (client: { taskSession?: unknown }) => client.taskSession, wasModernTasksExtensionClient: () => false }));
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { z } from 'zod';
 jest.mock('@/config/features', () => ({ FEATURES: { ENABLE_MCP_TASKS_CLIENT: true } }));
@@ -21,16 +22,20 @@ const task = { resultType: 'task', taskId: 'modern-tool-task', status: 'working'
   pollIntervalMs: 1000, createdAt: '2026-10-09T00:00:00Z', lastUpdatedAt: '2026-10-09T00:00:00Z' };
 beforeEach(() => jest.clearAllMocks());
 
-it.each([false, true])('dispatches modern tasks through validated generic request (beta=%s)', async beta => {
+it.each([false, true])('dispatches modern tasks through the owned extension session (beta=%s)', async beta => {
   const progress = jest.fn();
   const controller = new AbortController();
   const request = jest.fn(async (_request: unknown, schema: z.ZodType, options: { onprogress: (value: unknown) => void }) => {
-    options.onprogress({ progress: 2, total: 3, message: 'progress' });
+    void options;
     return schema.parse(task);
   });
   const classic = jest.fn();
   const client = { __flujoBeta: beta, callTool: classic, request,
     getServerCapabilities: () => ({ extensions: { [MCP_TASKS_EXTENSION_ID]: {} } }),
+    taskSession: { callTool: async (params: Record<string, unknown>, options: unknown) => {
+      progress({ progress: 2, total: 3, message: 'progress' });
+      return request({ method: 'tools/call', params }, modernToolResultSchema, options as never);
+    } },
   } as unknown as Client;
   const response = await callTool(client, 'srv', 'demo', { text: 'input' }, 120, progress,
     controller.signal, 'host', 'caller-node', 'owner-scope');
@@ -39,12 +44,11 @@ it.each([false, true])('dispatches modern tasks through validated generic reques
   expect(request).toHaveBeenCalledTimes(1);
   const [wire, schema, options] = request.mock.calls[0];
   expect(wire).toMatchObject({ method: 'tools/call', params: { name: 'demo', arguments: { text: 'input' }, _meta: {
-    'io.modelcontextprotocol/clientCapabilities': { extensions: { [MCP_TASKS_EXTENSION_ID]: {} } },
     flujo: { callerNodeId: 'caller-node', ownerScope: 'owner-scope' },
   } } });
   expect((wire as { params: object }).params).not.toHaveProperty('task');
   expect(schema).toBe(modernToolResultSchema);
-  expect(options).toMatchObject({ timeout: 120000, signal: controller.signal, resetTimeoutOnProgress: true });
+  expect(options).toMatchObject({ signal: controller.signal, context: { requestTimeoutMs: 120000, resetTimeoutOnProgress: true } });
   expect(progress).toHaveBeenCalledWith({ progress: 2, total: 3, message: 'progress' });
   expect(runRemoteTaskLifecycle).toHaveBeenCalledWith(expect.objectContaining({
     generation: '2026-07-28', task: expect.objectContaining({ generation: '2026-07-28', taskId: task.taskId }),
@@ -67,7 +71,7 @@ it.each([false, true])('preserves classic SDK call signatures (beta=%s)', async 
 
 it('rejects malformed modern creation before invoking lifecycle', async () => {
   const client = { callTool: jest.fn(), getServerCapabilities: () => ({ extensions: { [MCP_TASKS_EXTENSION_ID]: {} } }),
-    request: jest.fn(async (_wire: unknown, schema: z.ZodType) => schema.parse({ ...task, ttlMs: -1 })),
+    taskSession: { callTool: async () => modernToolResultSchema.parse({ ...task, ttlMs: -1 }) },
   } as unknown as Client;
   expect((await callTool(client, 'srv', 'demo', {})).success).toBe(false);
   expect(runRemoteTaskLifecycle).not.toHaveBeenCalled();

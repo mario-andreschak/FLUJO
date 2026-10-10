@@ -137,6 +137,17 @@ describe('installAssistedMcpServer', () => {
       }),
     );
   });
+
+  it('preserves an existing-configuration refusal and never calls it installed or awaiting OAuth', async () => {
+    const remotePlan = { ...plan, transport: 'streamable' as const, command: undefined, args: undefined, serverUrl: 'https://example.test/mcp', requiredEnvNames: [] };
+    installRegistryServerMock.mockResolvedValueOnce({ installed: false, plan: remotePlan });
+    installRegistryServerMock.mockResolvedValueOnce({ installed: false, alreadyExisted: true, needsConfiguration: true, existingServerName: 'search', serverName: 'search', plan: remotePlan, error: 'Open the existing configuration; it is disabled or differs from the reviewed plan.' });
+    const result = await installAssistedMcpServer({ registryName: remotePlan.registryName, transport: 'streamable', serverName: 'search', reviewedPlan: remotePlan, approved: true, authMode: 'oauth-dcr' });
+    expect(result).toMatchObject({ installed: false, alreadyExisted: true, needsConfiguration: true, existingServerName: 'search' });
+    expect(result.needsAuthentication).toBeUndefined();
+    expect(installRegistryServerMock).toHaveBeenCalledTimes(2);
+    expect(installRegistryServerMock.mock.calls[1][2].expectedPlan).toEqual(remotePlan);
+  });
 });
 
 describe('assisted install policy helpers', () => {

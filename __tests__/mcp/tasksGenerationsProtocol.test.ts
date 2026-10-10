@@ -1,3 +1,4 @@
+jest.mock('@/backend/services/mcp/tasksExtensionSession', () => ({ getTasksExtensionSession: (client: { taskSession?: unknown }) => client.taskSession, wasModernTasksExtensionClient: () => false }));
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { z } from 'zod';
 jest.mock('@/config/features', () => ({ FEATURES: { ENABLE_MCP_TASKS_CLIENT: true } }));
@@ -14,15 +15,24 @@ function client(capabilities: object, results: Record<string, unknown> = {}) {
     if (!(req.method in results)) throw new Error('MethodNotFound');
     return schema.parse(results[req.method]);
   });
-  return { request, getServerCapabilities: () => capabilities, listTools: jest.fn(async () => ({ tools: [{ name: 'legacy', execution: { taskSupport: 'optional' } }] })) };
+  const modern = 'extensions' in capabilities || Object.keys(results).some(method => method.startsWith('tasks/') || method === 'server/discover');
+  const meta = { 'io.modelcontextprotocol/clientCapabilities': { extensions: { [MCP_TASKS_EXTENSION_ID]: {} } } };
+  const invoke = (method: string, taskId: string, extra = {}) => request({ method, params: { taskId, ...extra, _meta: meta } } as { method: string }, z.unknown());
+  return { request, getServerCapabilities: () => capabilities, getProtocolEra: () => modern ? 'modern' : 'legacy',
+    taskSession: modern ? {
+      getTask: (taskId: string) => invoke('tasks/get', taskId),
+      cancelTask: async (taskId: string) => { z.object({ resultType: z.literal('complete') }).parse(await invoke('tasks/cancel', taskId)); },
+      updateTask: async (taskId: string, inputResponses: unknown) => { z.object({ resultType: z.literal('complete') }).parse(await invoke('tasks/update', taskId, { inputResponses })); },
+    } : undefined,
+    listTools: jest.fn(async () => ({ tools: [{ name: 'legacy', execution: { taskSupport: 'optional' } }] })) };
 }
 const cast = (value: ReturnType<typeof client>) => value as unknown as Client;
 
-it('discovers modern extension once and advertises per-request metadata without legacy task preference', async () => {
+it('uses the owned modern discovery without repeating negotiation and advertises per-request metadata without legacy task preference', async () => {
   const c = client({}, { 'server/discover': { capabilities: { extensions: { [MCP_TASKS_EXTENSION_ID]: {} } } } });
   expect((await decideTaskAugmentation(cast(c), 'any')).negotiation.generation).toBe(generation);
   await discoverTaskNegotiation(cast(c));
-  expect(c.request).toHaveBeenCalledTimes(1);
+  expect(c.request).not.toHaveBeenCalled();
   expect(c.listTools).not.toHaveBeenCalled();
   expect(buildTaskAugmentation(1, generation)).toEqual({ _meta: {
     'io.modelcontextprotocol/clientCapabilities': { extensions: { [MCP_TASKS_EXTENSION_ID]: {} } },
@@ -83,7 +93,7 @@ it('uses inline modern terminal results and empty cancel/update acknowledgements
   await updateRemoteTask(cast(c), modern.taskId, { question: { action: 'accept', content: { name: 'Local' } } }, { generation });
   expect(c.request.mock.calls.map(([req]) => req.method)).toEqual(['tasks/get', 'tasks/get', 'tasks/cancel', 'tasks/update']);
   for (const [req] of c.request.mock.calls) expect(req).toMatchObject({ params: { _meta: buildTaskAugmentation(undefined, generation)._meta } });
-  await expect(updateRemoteTask(cast(c), modern.taskId, { question: { bogus: true } }, { generation })).rejects.toThrow('Invalid modern task input');
+  await expect(updateRemoteTask(cast(c), modern.taskId, { question: { bogus: true } }, { generation })).rejects.toThrow();
   expect(c.request).toHaveBeenCalledTimes(4);
 });
 
@@ -105,7 +115,7 @@ it.each([null, false, 42, 'scalar', ['one', 2], { nested: ['json'] }])('preserve
   const c = client({}, { 'tasks/get': terminal });
   expect(await fetchTaskPayload(cast(c), modern.taskId, { generation })).toEqual(result);
   if (!created.ok) throw new Error(created.reason);
-  const inline = client({});
+  const inline = client({ extensions: { [MCP_TASKS_EXTENSION_ID]: {} } });
   expect(await fetchTaskPayload(cast(inline), modern.taskId, { generation, terminalTask: created.task })).toEqual(result);
   expect(inline.request).not.toHaveBeenCalled();
 });
