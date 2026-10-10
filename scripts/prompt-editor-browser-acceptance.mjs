@@ -201,9 +201,10 @@ try {
         || JSON.stringify(syntheticSelectAll.before) !== JSON.stringify(syntheticSelectAll.after)) {
         throw new Error('Synthetic Select All acquired selection authority');
       }
+      await page.evaluate(()=>navigator.clipboard.writeText('Replacement'));
       for (const modifier of ['Control', 'Meta']) {
         await page.keyboard.press(modifier + '+a');
-        await page.keyboard.type('Replacement');
+        await page.keyboard.press('Control+v');
         await expect(input).toHaveText('Replacement');
         await expect(referenceButton).toHaveCount(0);
         await page.keyboard.press('Control+z');
