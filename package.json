@@ -99,7 +99,7 @@
     "postinstall": "node packages/antigravity-cli/install.cjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.295",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
     "@anthropic-ai/sdk": "^0.115.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
