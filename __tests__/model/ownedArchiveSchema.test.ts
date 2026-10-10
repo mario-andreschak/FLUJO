@@ -16,7 +16,7 @@ jest.mock('zod', () => {
   } };
 });
 import { buildOwnedArchiveSchema, buildOwnedToolInputShape, createOwnedToolSchemaBuilder,
-  getOwnedArchiveSchema, OWNED_SCHEMA_LIMITS, requireOwnedArchiveSchema } from '@/backend/services/model/adapters/ownedArchiveSchema';
+  getOwnedArchiveSchema, OWNED_SCHEMA_LIMITS, projectArchiveSchema, requireOwnedArchiveSchema } from '@/backend/services/model/adapters/ownedArchiveSchema';
 import { buildToolInputShape, jsonSchemaNodeToZod } from './fixtures/legacyJsonSchemaToZod';
 import { estimateArchivePayload, getArchiveWritePressure, ModelTurnArchiveMemoryError,
   withArchiveWriteMemory, isArchiveSchema } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
@@ -37,6 +37,16 @@ const cases: Array<{ name: string; schema: unknown; values: unknown[] }> = [
   { name: 'local ref', schema: { $ref: '#/$defs/A', $defs: { A: { type: 'integer' } } }, values: [1, 'x'] },
   { name: 'cyclic ref degradation', schema: { $ref: '#/$defs/A', $defs: { A: { type: 'object', properties: { next: { $ref: '#/$defs/A' } } } } }, values: [{}, { next: { any: 1 } }] },
   { name: 'conditional fallback', schema: { if: { type: 'string' } }, values: ['x', 1] },
+  { name: 'nested compact union', schema: { anyOf: [{ anyOf: [{ type: 'string' }, { type: 'number' }] }, { type: 'null' }, { type: 'boolean' }] }, values: ['x', 1, null, true] },
+  { name: 'duplicate compact union', schema: { anyOf: [{ type: 'string' }, { type: 'string' }] }, values: ['x', 1] },
+  { name: 'constrained union', schema: { anyOf: [{ type: 'integer' }, { type: 'number' }] }, values: [1.5, 'x'] },
+  { name: 'described nullable', schema: { type: ['string', 'null'], description: 'nullable text' }, values: ['x', null, 1] },
+  { name: 'annotated union branch', schema: { anyOf: [{ type: 'string', description: 'retained' }, { type: 'number' }] }, values: ['x', 1, false] },
+  { name: 'intersection duplicate fields', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'string' }, b: { type: 'number' } }, required: ['b'] }] }, values: [{ a: 'x', b: 1 }, { b: 'x' }] },
+  { name: 'intersection conflicting fields', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { a: { type: 'number' } } }] }, values: [{}, { a: 'x' }, { a: 1 }] },
+  { name: 'intersection nested objects', schema: { allOf: [{ type: 'object', properties: { a: { type: 'object', properties: { x: { type: 'string' } } } } }, { type: 'object', properties: { a: { type: 'object', properties: { y: { type: 'number' } } } } }] }, values: [{ a: { x: 'x', y: 1 } }, { a: { y: 'x' } }] },
+  { name: 'annotated intersection member', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } }, description: 'retained' }, { type: 'object', properties: { b: { type: 'number' } } }] }, values: [{ a: 'x', b: 1 }, { b: 'x' }] },
+  { name: 'intersection distributes over union', schema: { allOf: [{ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }, { anyOf: [{ type: 'object', properties: { b: { type: 'number' } }, required: ['b'] }, { type: 'object', properties: { c: { type: 'boolean' } }, required: ['c'] }] }] }, values: [{ a: 'x', b: 1 }, { a: 'x', c: true }, { b: 1 }] },
 ];
 
 it.each(cases)('retains actual provider parsing and exact represented metadata: $name', ({ schema, values }) => {
@@ -78,6 +88,16 @@ it('shares constructor/output capacity across tools instead of renewing per-tool
   expect(admitted).toBeGreaterThan(0);
   expect(admitted).toBeLessThan(100);
   expect(OWNED_SCHEMA_LIMITS.representedBytes).toBe(8 * 1024 * 1024);
+});
+
+it('charges distributed intersection expansion before exceeding owned construction capacity', () => {
+  const properties = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`a${index}`, { type: 'string' }]));
+  const schema = { allOf: [{ type: 'object', properties }, { anyOf: Array.from({ length: 30 }, (_, index) => ({
+    type: 'object', properties: { [`b${index}`]: { type: 'number' } },
+  })) }] };
+  projectionProbe.mockClear();
+  expect(() => buildOwnedArchiveSchema(schema)).toThrow(ModelTurnArchiveMemoryError);
+  expect(projectionProbe).not.toHaveBeenCalled();
 });
 
 it('writes and reads exact owned archive bytes without invoking the actual Zod projector', async () => {
@@ -159,5 +179,48 @@ it('does not invoke Zod Symbol.hasInstance through an opaque marker getter', () 
   const getter = jest.fn(() => { throw new Error('Opaque marker getter executed'); });
   const value = Object.defineProperty({}, '_zod', { get: getter });
   expect(isArchiveSchema(value)).toBe(false);
+  expect(getter).not.toHaveBeenCalled();
+});
+
+it('recognizes actual installed SDK schema prototypes without reading projector accessors', () => {
+  const schemas = [z.string(), z.object({ text: z.string() }), z.string().nullable(), z.number().optional()];
+  for (const schema of schemas) {
+    const getter = jest.fn(() => { throw new Error('Projector accessor evaluated'); });
+    Object.defineProperty(schema, 'toJSONSchema', { get: getter });
+    expect(isArchiveSchema(schema)).toBe(true);
+    expect(estimateArchivePayload({ schema }, true)).toBeGreaterThan(0);
+    expect(projectArchiveSchema(schema, 'legacy-unbounded')).toEqual(z.toJSONSchema(schema));
+    expect(getter).not.toHaveBeenCalled();
+  }
+});
+
+it('rejects lookalike schemas, arbitrary inherited accessors and proxy prototypes without hooks', () => {
+  const getter = jest.fn(() => { throw new Error('Untrusted inherited projector evaluated'); });
+  const prototype = Object.defineProperty({}, 'toJSONSchema', { get: getter });
+  const value = Object.create(prototype);
+  const marker = Object.defineProperty({}, 'traits', { get: getter });
+  Object.defineProperty(value, '_zod', { value: marker });
+  Object.defineProperty(value, 'type', { value: 'string' });
+  expect(isArchiveSchema(value)).toBe(false);
+  const trap = jest.fn(() => { throw new Error('Proxy prototype evaluated'); });
+  Object.setPrototypeOf(value, new Proxy(prototype, { get: trap, getOwnPropertyDescriptor: trap, getPrototypeOf: trap }));
+  expect(isArchiveSchema(value)).toBe(false);
+  expect(getter).not.toHaveBeenCalled();
+  expect(trap).not.toHaveBeenCalled();
+});
+
+it('treats a second actual Zod module as opaque without traversing its schema graph', () => {
+  let foreign!: z.ZodType;
+  jest.isolateModules(() => {
+    const separate = jest.requireActual<typeof import('zod')>('zod');
+    foreign = separate.z.object({ text: separate.z.string() });
+  });
+  expect(Object.getPrototypeOf(foreign)).not.toBe(z.ZodObject.prototype);
+  const getter = jest.fn(() => { throw new Error('Foreign schema graph evaluated'); });
+  Object.defineProperty(foreign, 'privateArchiveHook', { enumerable: true, get: getter });
+  Object.defineProperty(foreign, 'toJSONSchema', { get: getter });
+  expect(isArchiveSchema(foreign)).toBe(false);
+  expect(estimateArchivePayload({ foreign }, true)).toBeGreaterThan(0);
+  expect(() => estimateArchivePayload(foreign)).toThrow(ModelTurnArchiveMemoryError);
   expect(getter).not.toHaveBeenCalled();
 });

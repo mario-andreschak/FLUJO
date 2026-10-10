@@ -146,7 +146,7 @@
     "undici": "^7.29.1",
     "uuid": "^14.0.1",
     "yaml": "^1.10.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "overrides": {
     "fast-glob": "$fast-glob",

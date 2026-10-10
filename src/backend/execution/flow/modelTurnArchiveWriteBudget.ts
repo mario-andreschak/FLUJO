@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants, promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { types } from 'node:util';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { getOwnedArchiveSchema, isOwnedArchiveDescriptor, type ArchiveSchemaProjectionPolicy } from '@/backend/services/model/adapters/ownedArchiveSchema';
 
 export function archiveOmission(key: string): string | undefined {
@@ -12,15 +12,22 @@ export function archiveOmission(key: string): string | undefined {
   if (key === 'signal' || key === 'abortSignal') return '[AbortSignal]';
 }
 
+// Use only the installed library's public constructor prototypes. In Zod 4.6
+// toJSONSchema moved to a prototype accessor; reading it would evaluate a hook.
+const archiveSchemaPrototypes = new Set<object>(Object.entries(z)
+  .filter(([name, constructor]) => name.startsWith('Zod') && typeof constructor === 'function')
+  .map(([, constructor]) => Object.getOwnPropertyDescriptor(constructor, 'prototype')?.value)
+  .filter((prototype): prototype is object => !!prototype && typeof prototype === 'object'));
+
 export function isArchiveSchema(value: object): value is z.ZodType {
   if (types.isProxy(value)) return false;
   // Zod's Symbol.hasInstance reads _zod.traits and can invoke a user getter.
-  // Recognize its public/opaque own descriptors without following that graph.
+  // Recognize its trusted prototype and opaque own descriptors without
+  // following that graph or reading any inherited property.
   const marker = Object.getOwnPropertyDescriptor(value, '_zod');
-  const projector = Object.getOwnPropertyDescriptor(value, 'toJSONSchema');
   const kind = Object.getOwnPropertyDescriptor(value, 'type');
   return !!marker && !marker.enumerable && 'value' in marker
-    && typeof projector?.value === 'function' && typeof kind?.value === 'string';
+    && typeof kind?.value === 'string' && archiveSchemaPrototypes.has(Object.getPrototypeOf(value));
 }
 
 /** Intrinsic Object prototypes can come from another VM/structuredClone realm. */
