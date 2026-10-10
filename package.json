@@ -117,7 +117,7 @@
     "@modelcontextprotocol/ext-tasks": "0.2.2",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@modelcontextprotocol/server": "2.3.1",
-    "@mui/icons-material": "^6.5.0",
+    "@mui/icons-material": "^9.4.0",
     "@mui/material": "^6.5.0",
     "@openai/codex-sdk": "0.162.1",
     "@xyflow/react": "^12.11.2",
