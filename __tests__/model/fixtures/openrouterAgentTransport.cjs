@@ -115,5 +115,9 @@ const server = http.createServer(async (req, res) => {
   console.log(JSON.stringify({ contract: 'real-sdk-loopback', assertions: 'passed', requests: requests.length }));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
-  fs.rmSync(data, { recursive: true, force: true });
+  const cleanupTarget = path.resolve(data);
+  const tempRoot = path.resolve(os.tmpdir());
+  assert.equal(path.dirname(cleanupTarget), tempRoot);
+  assert.ok(path.basename(cleanupTarget).startsWith('flujo-agent-transport-'));
+  fs.rmSync(cleanupTarget, { recursive: true, force: true });
 });
