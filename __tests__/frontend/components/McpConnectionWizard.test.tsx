@@ -57,6 +57,38 @@ function renderWizard(overrides?: Partial<React.ComponentProps<typeof McpConnect
 }
 
 describe('McpConnectionWizard', () => {
+  it('focuses and names new questions immediately when moving forward or Back', () => {
+    renderWizard();
+    const expectQuestion = () => {
+      const heading = screen.getAllByRole('heading')[0];
+      expect(heading).toHaveFocus();
+      expect(screen.getByRole('dialog')).toHaveAccessibleName(heading.textContent!);
+    };
+    expectQuestion();
+    const choose = screen.getByRole('button', { name: /help me choose/i });
+    choose.focus();
+    fireEvent.click(choose);
+    expectQuestion();
+    fireEvent.click(screen.getByRole('button', { name: /custom app/i }));
+    expectQuestion();
+    const back = screen.getByRole('button', { name: /back/i });
+    back.focus();
+    fireEvent.click(back);
+    expectQuestion();
+  });
+
+  it('preserves the assisted search autofocus and typing while naming its current step', async () => {
+    renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /ai-assisted/i }));
+    const input = screen.getByLabelText(/one thing to connect/i);
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: 'search' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    expect(input).toHaveFocus();
+    const heading = screen.getAllByRole('heading')[0];
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(heading.textContent!);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     researchMock.mockResolvedValue(recommendation);

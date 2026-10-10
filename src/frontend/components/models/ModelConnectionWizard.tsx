@@ -54,6 +54,7 @@ import {
 } from './connectionWizardCatalog';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
+import { useSetupStepFocus } from '@/frontend/hooks/useSetupStepFocus';
 
 type Experience = 'beginner' | 'familiar';
 type WizardStep =
@@ -244,6 +245,7 @@ function OptionCard({
           borderColor: alpha(theme.palette.primary.main, 0.7),
           boxShadow: `0 16px 38px ${alpha(theme.palette.primary.main, 0.16)}`,
         },
+        '@media (prefers-reduced-motion: reduce)': { transition: 'none', '&:hover': { transform: 'none' } },
         '&:focus-visible': {
           outline: `3px solid ${alpha(theme.palette.primary.main, 0.3)}`,
           outlineOffset: 3,
@@ -305,6 +307,7 @@ export default function ModelConnectionWizard({
 }: ModelConnectionWizardProps) {
   const theme = useTheme();
   const { t, tp } = useI18n();
+  const { titleId, stepContentRef } = useSetupStepFocus(open);
   const [step, setStep] = useState<WizardStep>('welcome');
   const [history, setHistory] = useState<WizardStep[]>([]);
   const [experience, setExperience] = useState<Experience>('beginner');
@@ -672,7 +675,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Chip icon={<AutoAwesomeRoundedIcon />} label={t('models.wizard.twoMinuteSetup')} color="primary" variant="outlined" sx={{ mb: 2 }} />
-          <Typography variant="h4">{t('models.wizard.welcomeTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.welcomeTitle')}</Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 680 }}>
             {t('models.wizard.welcomeQuestion')}
           </Typography>
@@ -689,7 +692,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.firstThings')}</Typography>
-          <Typography variant="h4">{t('models.wizard.budgetTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.budgetTitle')}</Typography>
           {verbose ? (
             <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 700 }}>
               {t('models.wizard.budgetVerbose')}
@@ -708,7 +711,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.freeRoute')}</Typography>
-          <Typography variant="h4">{t('models.wizard.locationTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.locationTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose
               ? t('models.wizard.locationVerbose')
@@ -726,7 +729,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.copy.freeOnline')}</Typography>
-          <Typography variant="h4">{t('models.wizard.chooseGateway')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.chooseGateway')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.freeGatewayVerbose') : t('models.wizard.freeGatewayBrief')}
           </Typography>
@@ -743,7 +746,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.useExisting')}</Typography>
-          <Typography variant="h4">{t('models.wizard.whichService')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.whichService')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.subscriptionVerbose') : t('models.wizard.subscriptionBrief')}
           </Typography>
@@ -761,7 +764,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.payUsage')}</Typography>
-          <Typography variant="h4">{t('models.wizard.chooseModelGateway')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.chooseModelGateway')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.paidVerbose') : t('models.wizard.paidBrief')}
           </Typography>
@@ -780,7 +783,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t('models.wizard.freeOffline')}</Typography>
-          <Typography variant="h4">{t('models.wizard.ollamaTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.ollamaTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.5 }}>
             {t('models.wizard.ollamaDescription')}
           </Typography>
@@ -836,7 +839,7 @@ export default function ModelConnectionWizard({
       return (
         <>
           <Typography variant="overline" color="primary.main">{t(setup.eyebrow)}</Typography>
-          <Typography variant="h4">{t(setup.title)}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t(setup.title)}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2, maxWidth: 720 }}>{t(setup.summary)}</Typography>
 
           {isAntigravityCli ? (
@@ -960,10 +963,10 @@ export default function ModelConnectionWizard({
       const allNames = [...created, ...existing].map((model) => model.displayName || model.name);
       return (
         <Box sx={{ textAlign: 'center', py: 2 }}>
-          <Box sx={{ width: 78, height: 78, mx: 'auto', mb: 2, display: 'grid', placeItems: 'center', borderRadius: '50%', color: 'success.main', bgcolor: alpha(theme.palette.success.main, 0.13), animation: `${pop} 520ms cubic-bezier(.2,.8,.2,1) both` }}>
+          <Box data-setup-decoration sx={{ width: 78, height: 78, mx: 'auto', mb: 2, display: 'grid', placeItems: 'center', borderRadius: '50%', color: 'success.main', bgcolor: alpha(theme.palette.success.main, 0.13), animation: `${pop} 520ms cubic-bezier(.2,.8,.2,1) both` }}>
             <CheckCircleRoundedIcon sx={{ fontSize: 47 }} />
           </Box>
-          <Typography variant="h4">{t('models.wizard.successTitle')}</Typography>
+          <Typography variant="h4" component="h2" id={titleId} tabIndex={-1}>{t('models.wizard.successTitle')}</Typography>
           <Alert severity="info" sx={{ mt: 2, textAlign: 'left' }}>{t('models.wizard.unverifiedSaved')}</Alert>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2 }}>
             {created.length ? tp('models.wizard.created', created.length) : t('models.wizard.alreadyMatched')}
@@ -981,13 +984,13 @@ export default function ModelConnectionWizard({
   };
 
   return (
-    <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-label={t('models.wizard.aria')}>
+    <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-labelledby={titleId}>
       <DialogContent
         data-tour="ai-setup-wizard"
-        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto' }}
+        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto', '@media (prefers-reduced-motion: reduce)': { '& [data-setup-decoration]': { animation: 'none' } } }}
       >
-        <Box aria-hidden sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
-        <Box aria-hidden sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
+        <Box aria-hidden data-setup-decoration sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
+        <Box aria-hidden data-setup-decoration sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
 
         <Box sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -1007,6 +1010,7 @@ export default function ModelConnectionWizard({
           {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
           <Box
             key={step}
+            ref={stepContentRef}
             sx={{
               animation: `${arrive} 260ms ease-out both`,
               '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
