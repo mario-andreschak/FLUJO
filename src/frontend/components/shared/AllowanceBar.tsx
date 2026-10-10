@@ -56,7 +56,7 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
       aria-expanded={expanded} aria-controls={detailsId} title={t('models.allowance.summaryNote')} sx={{ justifyContent: 'space-between', textTransform: 'none' }}>
       <span>{t('models.allowance.title')}</span><span>{expanded ? '−' : '+'}</span>
     </Button>
-    <Stack direction="row" spacing={0.75} aria-label={t('models.allowance.accounts')}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: 0.75 }} aria-label={t('models.allowance.accounts')}>
       {accounts.map((row, index) => {
         const percent = row.windows.some(window => window.remainingPercent === null) ? null : modelAllowancePercent(row);
         return <Box key={`${row.provider}:${row.accountGroup ?? row.modelId}`} sx={{ flex: 1, minWidth: 0 }}>
@@ -66,7 +66,7 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
             : <Box sx={{ height: 4, bgcolor: 'action.disabledBackground', borderRadius: 1 }} />}
         </Box>;
       })}
-    </Stack>
+    </Box>
     {accounts.length === 0 && <Typography variant="caption">{t(loading ? 'models.allowance.loading' : 'models.allowance.unknown')}</Typography>}
     <Collapse in={expanded} id={detailsId} unmountOnExit>
       <Stack spacing={1} sx={{ mt: 1 }}>

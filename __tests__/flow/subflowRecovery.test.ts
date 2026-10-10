@@ -12,6 +12,7 @@ jest.mock('@/backend/execution/flow/persistConversationState', () => ({
 jest.mock('@/utils/storage/backend', () => ({
   listCollectionItems: (...args: unknown[]) => listCollectionItemsMock(...args),
   loadCollectionItem: (...args: unknown[]) => loadCollectionItemMock(...args),
+  withConversationSnapshot: async (id: string, consume: (state: unknown) => Promise<unknown>) => consume(await loadCollectionItemMock('conversations', id, undefined)),
 }));
 
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';

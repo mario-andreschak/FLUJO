@@ -2365,6 +2365,7 @@ export class MCPService {
         callerNodeId,
         ownerScope,
         executionExtensionContext,
+        trustedContext?.conversationId,
       );
       if (result.success && trustedTicketConversationId) {
         const ticketId = createdTicketIdFromMcpResult(result.data);

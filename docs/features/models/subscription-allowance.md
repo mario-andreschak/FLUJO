@@ -38,6 +38,36 @@ account identifiers and native diagnostics are not included in the response.
 
 ## Local API
 
+### Experimental read-only JavaScript helper and CLI
+
+The shipped `scripts/subscription-allowance.mjs` exports `readSubscriptionAllowance`
+and also runs as a standalone command. This is an experimental helper, not a stable
+JavaScript SDK. It performs one cached `GET /api/model/allowance`, never a refresh,
+provider request, or native CLI startup.
+
+```sh
+node scripts/subscription-allowance.mjs --base-url http://127.0.0.1:4200 --workspace default-workspace
+```
+
+```js
+import { readSubscriptionAllowance } from './scripts/subscription-allowance.mjs';
+const allowance = await readSubscriptionAllowance({
+  baseUrl: 'http://127.0.0.1:4200', workspace: 'default-workspace',
+  token: process.env.FLUJO_OWNER_API_TOKEN,
+});
+```
+
+Only exact loopback hosts (`localhost`, `127.0.0.1`, `[::1]`) are accepted.
+When an owner policy requires authentication, set `FLUJO_OWNER_API_TOKEN` in the
+CLI environment; tokens are not accepted as command-line arguments. The helper
+accepts an optional abort signal and a 10-second default timeout (CLI override:
+`--timeout-ms`). Responses are streamed within a 1 MiB limit and projected onto
+known allowance metadata; redirects and raw HTTP diagnostics are refused.
+Unknown, stale, and elapsed-reset values remain unknown. The printed snapshot
+does not create a new subscription balance or establish per-model quota scope.
+
+### Endpoint behavior
+
 `GET /api/model/allowance` returns cached model observations and Flow/Persona model
 reference maps. It performs no CLI startup or provider request.
 

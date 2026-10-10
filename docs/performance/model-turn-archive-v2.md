@@ -46,6 +46,33 @@ collapsed. SDK-internal HTTP retries remain inside that invocation, as before.
 No change is made to canonical history, run-cache eviction or active, paused,
 approval and recovery ownership.
 
+## Ordinary dispatch write contention
+
+Ordinary model dispatches may wait for an archive writer instead of failing a
+burst immediately. The process-wide limits remain four active writers and
+512 MiB of reserved archive payloads. At most 512 writes wait, for at most
+30 seconds; their retained payload estimates count against the same byte limit
+before any archive cloning. Queued writes receive permits in FIFO order.
+
+Cancellation removes a waiting write and prevents its preparation callback and
+provider dispatch. Payload estimates and cancellation are checked again after
+waiting and immediately before materialization. Overflow, timeout or byte
+pressure returns the existing `MODEL_TURN_ARCHIVE_MEMORY_BUSY` refusal.
+An uncertain descriptor close keeps its writer and byte reservation quarantined.
+Already admitted local-media I/O keeps the reservation until its handle closes,
+even if its outer callback settles early. A settled scope cannot start further
+media reads or allocate another read buffer.
+
+Journalled native, execution-authority, extension and Persona dispatches retain their
+existing immediate-refusal behavior. The queue does not bypass workspace
+capture or durable ownership fences, and it does not change canonical history.
+Local workspace writer registrations coalesce in batches of at most eight under
+one physical capture-admission lease. Each writer still owns a separate lock;
+mutation bodies start only after that lease releases, and capture still drains
+all active writers. This reduces repeated registration overhead without making
+mutation bodies run serially. The synthetic local reproduction does not establish
+the original production deployment's latency or resolve every #757 finding.
+
 ## Consumer compatibility and recovery
 
 Readers must support archive v2 before accepting v2-producing application data.

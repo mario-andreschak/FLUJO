@@ -33,11 +33,14 @@ import type { McpAssistantCandidate, McpAssistantResearchResult } from '@/shared
 import { modelService } from '@/frontend/services/model';
 import { installMcpRecommendation, researchMcpConnection } from '@/frontend/services/mcp/assistant';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { supportsMcpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 
 interface McpAiConnectionPanelProps {
   onInstalled: (serverName: string) => void | Promise<void>;
   onAuthenticate: (serverName: string) => Promise<void>;
   onManual: () => void;
+  onConfigureExisting?: (serverName: string) => void | Promise<void>;
+  onInstallingChange?: (installing: boolean) => void;
 }
 
 function formatCount(value: number): string {
@@ -55,6 +58,8 @@ export default function McpAiConnectionPanel({
   onInstalled,
   onAuthenticate,
   onManual,
+  onConfigureExisting,
+  onInstallingChange,
 }: McpAiConnectionPanelProps) {
   const theme = useTheme();
   const { t } = useI18n();
@@ -74,7 +79,10 @@ export default function McpAiConnectionPanel({
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [existingConflict, setExistingConflict] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(false);
+  const installingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,8 +91,9 @@ export default function McpAiConnectionPanel({
     modelService.loadModels()
       .then((loaded) => {
         if (cancelled) return;
-        setModels(loaded);
-        setModelId((current) => loaded.some((model) => model.id === current) ? current : loaded[0]?.id ?? '');
+        const textModels = loaded.filter(supportsMcpModelRiskAssessment);
+        setModels(textModels);
+        setModelId((current) => textModels.some((model) => model.id === current) ? current : textModels[0]?.id ?? '');
       })
       .catch(() => {
         if (!cancelled) setModelsFailed(true);
@@ -97,7 +106,13 @@ export default function McpAiConnectionPanel({
     };
   }, [modelLoadAttempt]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const selected = useMemo(
     () => result?.candidates.find((candidate) => candidate.id === selectedId) ?? null,
@@ -105,13 +120,14 @@ export default function McpAiConnectionPanel({
   );
 
   const startResearch = async () => {
-    if (!query.trim() || !modelId || working) return;
-    abortRef.current?.abort();
+    if (!query.trim() || installingRef.current || abortRef.current) return;
     const controller = new AbortController();
     abortRef.current = controller;
+    const ownsResearch = () => mountedRef.current && abortRef.current === controller && !controller.signal.aborted;
     setWorking(true);
     setError(null);
     setSuccess(null);
+    setExistingConflict(null);
     setResult(null);
     setSelectedId('');
     setServerName('');
@@ -122,34 +138,60 @@ export default function McpAiConnectionPanel({
       const next = await researchMcpConnection(
         { query: query.trim(), modelId },
         (event) => {
-          if (event.type === 'progress') {
+          if (ownsResearch() && event.type === 'progress') {
             setProgress((current) => [...current.filter((message) => message !== event.message), event.message].slice(-5));
           }
         },
         controller.signal,
       );
+      if (!ownsResearch()) return;
       setResult(next);
       const nextSelectedId = next.recommendedId ?? next.candidates[0]?.id ?? '';
       const nextSelected = next.candidates.find((candidate) => candidate.id === nextSelectedId);
       setSelectedId(nextSelectedId);
       setServerName(nextSelected?.plan.serverName ?? '');
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+      if (ownsResearch()) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      if (!controller.signal.aborted) setWorking(false);
+      if (ownsResearch()) {
+        abortRef.current = null;
+        setWorking(false);
+      }
     }
   };
 
   const selectCandidate = (candidate: McpAssistantCandidate) => {
+    if (installingRef.current) return;
     setSelectedId(candidate.id);
     setServerName(candidate.plan.serverName);
     setApproved(false);
     setInputs({});
     setError(null);
+    setExistingConflict(null);
+  };
+
+  const openManual = () => {
+    if (!mountedRef.current || installingRef.current || abortRef.current) return;
+    onManual();
+  };
+
+  const configureExisting = async (name: string) => {
+    if (!mountedRef.current || !onConfigureExisting || installingRef.current || abortRef.current) return;
+    installingRef.current = true;
+    onInstallingChange?.(true);
+    setInstalling(true);
+    try { await onConfigureExisting(name); }
+    catch { if (mountedRef.current) setError(t('mcp.ai.existingUnavailable')); }
+    finally {
+      installingRef.current = false;
+      if (mountedRef.current) { onInstallingChange?.(false); setInstalling(false); }
+    }
   };
 
   const install = async () => {
-    if (!selected || !approved || installing) return;
+    if (!selected || selected.action === 'configure-existing' || !approved || installingRef.current || abortRef.current) return;
+    installingRef.current = true;
+    onInstallingChange?.(true);
     setInstalling(true);
     setError(null);
     setSuccess(null);
@@ -163,6 +205,13 @@ export default function McpAiConnectionPanel({
         inputs,
         authMode: selected.authMode,
       });
+      if (!mountedRef.current) return;
+      if (installResult.needsConfiguration && installResult.existingServerName === serverName) {
+        setExistingConflict(serverName);
+        setApproved(false);
+        setError(t('mcp.ai.existingHelp', { name: serverName }));
+        return;
+      }
       if (!installResult.installed || !installResult.serverName) {
         throw new Error(installResult.error || t('mcp.ai.installFailed'));
       }
@@ -170,11 +219,16 @@ export default function McpAiConnectionPanel({
         ? t('mcp.ai.alreadyConnected', { name: installResult.serverName })
         : t('mcp.ai.connected', { name: installResult.serverName }));
       if (installResult.needsAuthentication) await onAuthenticate(installResult.serverName);
+      if (!mountedRef.current) return;
       await onInstalled(installResult.serverName);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setInstalling(false);
+      installingRef.current = false;
+      if (mountedRef.current) {
+        setInstalling(false);
+        onInstallingChange?.(false);
+      }
     }
   };
 
@@ -212,7 +266,7 @@ export default function McpAiConnectionPanel({
             }}
             placeholder={t('mcp.ai.placeholder')}
             label={t('mcp.ai.requestLabel')}
-            disabled={working}
+            disabled={working || installing}
             inputProps={{ maxLength: 400 }}
           />
           <Box sx={{ display: 'flex', gap: 1.2, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -223,7 +277,7 @@ export default function McpAiConnectionPanel({
                 label={t('mcp.ai.model')}
                 value={modelId}
                 onChange={(event) => setModelId(event.target.value)}
-                disabled={working || modelsLoading || models.length === 0}
+                disabled={working || installing || modelsLoading || models.length === 0}
               >
                 {models.map((model) => (
                   <MenuItem key={model.id} value={model.id}>{model.displayName || model.name}</MenuItem>
@@ -235,9 +289,9 @@ export default function McpAiConnectionPanel({
               size="large"
               startIcon={working ? <CircularProgress size={18} color="inherit" /> : <SearchRoundedIcon />}
               onClick={() => void startResearch()}
-              disabled={working || modelsLoading || !query.trim() || !modelId}
+              disabled={working || installing || modelsLoading || !query.trim()}
             >
-              {working ? t('mcp.ai.researching') : t('mcp.ai.research')}
+              {working ? t('mcp.ai.researching') : modelId ? t('mcp.ai.research') : t('mcp.ai.findBundled')}
             </Button>
           </Box>
         </Stack>
@@ -245,12 +299,15 @@ export default function McpAiConnectionPanel({
 
       {!modelsLoading && (modelsFailed || models.length === 0) ? (
         <Alert severity={modelsFailed ? 'error' : 'info'}>
-          {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noModels')}
+          {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noTextModels')}
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button onClick={() => setModelLoadAttempt((attempt) => attempt + 1)} disabled={working}>
+            <Button onClick={() => {
+              if (installingRef.current || abortRef.current) return;
+              setModelLoadAttempt((attempt) => attempt + 1);
+            }} disabled={working || installing}>
               {t('mcp.ai.retryModels')}
             </Button>
-            <Button onClick={onManual} disabled={working}>{t('mcp.ai.openManual')}</Button>
+            <Button onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
           </Stack>
         </Alert>
       ) : null}
@@ -270,6 +327,7 @@ export default function McpAiConnectionPanel({
       ) : null}
 
       {error ? <Alert severity="error" onClose={() => setError(null)}>{error}</Alert> : null}
+      {existingConflict ? <Button variant="outlined" disabled={!onConfigureExisting || installing} onClick={() => void configureExisting(existingConflict)}>{t('mcp.ai.configureExisting')}</Button> : null}
       {success ? <Alert severity="success" icon={<CloudDoneRoundedIcon />}>{success}</Alert> : null}
 
       {result ? (
@@ -277,7 +335,7 @@ export default function McpAiConnectionPanel({
           <Alert severity={result.candidates.length ? 'info' : 'warning'}>{result.summary}</Alert>
 
           {result.candidates.length === 0 ? (
-            <Button variant="outlined" onClick={onManual}>{t('mcp.ai.openManual')}</Button>
+            <Button variant="outlined" onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
           ) : (
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, .9fr) minmax(0, 1.1fr)' }, gap: 1.5 }}>
               <Stack spacing={1}>
@@ -290,6 +348,7 @@ export default function McpAiConnectionPanel({
                       type="button"
                       variant="outlined"
                       onClick={() => selectCandidate(candidate)}
+                      disabled={installing}
                       sx={{
                         p: 1.5,
                         borderRadius: 2.5,
@@ -315,9 +374,11 @@ export default function McpAiConnectionPanel({
                       </Typography>
                       <Box sx={{ display: 'flex', gap: 0.7, mt: 1.1, flexWrap: 'wrap' }}>
                         <Chip size="small" variant="outlined" label={candidate.plan.transport === 'stdio' ? t('mcp.ai.local') : t('mcp.ai.remote')} />
+                        {candidate.recommendationTier ? <Chip size="small" variant="outlined" label={t(`mcp.ai.tier.${candidate.recommendationTier}`)} /> : null}
+                        {candidate.cost ? <Chip size="small" variant="outlined" label={t(`mcp.ai.cost.${candidate.cost.kind}`)} /> : null}
                         {candidate.githubStars !== undefined ? <Chip size="small" icon={<GitHubIcon />} label={formatCount(candidate.githubStars)} /> : null}
                         {candidate.weeklyDownloads !== undefined ? <Chip size="small" icon={<DownloadRoundedIcon />} label={`${formatCount(candidate.weeklyDownloads)}/wk`} /> : null}
-                        {candidate.authMode === 'oauth-dcr' ? <Chip size="small" color="success" label="OAuth 2.1 DCR" /> : null}
+                        {candidate.authMode === 'oauth-dcr' ? <Chip size="small" color="success" label={t('mcp.ai.signIn')} /> : null}
                         {candidate.authMode === 'none' && candidate.plan.transport !== 'stdio' ? <Chip size="small" color="success" label={t('mcp.ai.noOAuth')} /> : null}
                       </Box>
                     </Paper>
@@ -331,6 +392,7 @@ export default function McpAiConnectionPanel({
                     <Box>
                       <Typography variant="h6">{t('mcp.ai.reviewTitle')}</Typography>
                       <Typography variant="body2" color="text.secondary">{selected.freeNote}</Typography>
+                      {selected.cost?.evidence && selected.cost.evidence !== selected.freeNote ? <Typography variant="body2" color="text.secondary">{selected.cost.evidence}</Typography> : null}
                     </Box>
                     <Box component="ul" sx={{ pl: 2.4, my: 0 }}>
                       {selected.reasons.map((reason) => <Typography component="li" variant="body2" key={reason}>{reason}</Typography>)}
@@ -338,13 +400,24 @@ export default function McpAiConnectionPanel({
                     {selected.warnings.length ? <Alert severity="warning">{selected.warnings.join(' ')}</Alert> : null}
                     {selected.authHelp ? <Alert severity="info">{selected.authHelp}</Alert> : null}
                     <Divider />
+                    {selected.action === 'configure-existing' && selected.existingServerName ? (
+                      <>
+                        <Typography variant="body2">{t('mcp.ai.existingHelp', { name: selected.existingServerName })}</Typography>
+                        <Button variant="contained" disabled={!onConfigureExisting || installing} onClick={() => {
+                          if (selected.existingServerName) void configureExisting(selected.existingServerName);
+                        }}>{t('mcp.ai.configureExisting')}</Button>
+                      </>
+                    ) : <>
                     <TextField
                       size="small"
                       label={t('mcp.ai.connectionName')}
+                      disabled={installing}
                       value={serverName}
                       onChange={(event) => {
                         setServerName(event.target.value);
                         setApproved(false);
+                        if (existingConflict) setError(null);
+                        setExistingConflict(null);
                       }}
                       error={!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(serverName)}
                       helperText={t('mcp.ai.connectionNameHelper')}
@@ -362,6 +435,7 @@ export default function McpAiConnectionPanel({
                       <TextField
                         key={name}
                         type="password"
+                        disabled={installing}
                         size="small"
                         label={name}
                         value={inputs[name] ?? ''}
@@ -371,7 +445,7 @@ export default function McpAiConnectionPanel({
                       />
                     ))}
                     <FormControlLabel
-                      control={<Checkbox checked={approved} onChange={(event) => setApproved(event.target.checked)} />}
+                      control={<Checkbox disabled={installing} checked={approved} onChange={(event) => setApproved(event.target.checked)} />}
                       label={selected.plan.transport === 'stdio'
                         ? t('mcp.ai.approveLocal')
                         : t('mcp.ai.approveRemote')}
@@ -390,6 +464,7 @@ export default function McpAiConnectionPanel({
                     >
                       {installing ? t('mcp.ai.installing') : t('mcp.ai.connectBest')}
                     </Button>
+                    </>}
                     {selected.repositoryUrl ? (
                       <Link href={selected.repositoryUrl} target="_blank" rel="noreferrer" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, fontSize: 13 }}>
                         {t('mcp.ai.inspectSource')} <OpenInNewRoundedIcon fontSize="inherit" />

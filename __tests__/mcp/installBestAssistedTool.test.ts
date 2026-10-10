@@ -97,6 +97,23 @@ beforeEach(() => {
 });
 
 describe('install_best_mcp_server assisted mode', () => {
+  it('hands off an existing bundled server for configuration without resolving, enabling or falling through to third-party installation', async () => {
+    const configured = {
+      ...researchResult.candidates[0],
+      id: 'existing::my-files', registryName: '@mario.andreschak/mcp-filesystem', title: 'filesystem (my-files)',
+      action: 'configure-existing', existingServerName: 'my-files',
+      recommendationTier: 'flujo-supported', cost: { kind: 'free', evidence: 'Bundled local core only; external services remain separate.' },
+      supportEvidence: { kind: 'shipped-package', source: 'https://github.com/mario-andreschak/FLUJO/tree/main/mcp-servers/filesystem' },
+      plan: { ...plan, registryName: '@mario.andreschak/mcp-filesystem', resolvedName: '@mario.andreschak/mcp-filesystem', serverName: 'my-files', requiredEnvNames: [], verificationStatus: 'bundled' },
+    };
+    researchMcpServersMock.mockResolvedValueOnce({ ...researchResult, recommendedId: configured.id, candidates: [configured, researchResult.candidates[0]] });
+    const body = payload(await authoringCallTool('install_best_mcp_server', { capability: 'read local files' }));
+    expect(body).toMatchObject({ installed: false, needsConfiguration: true, existingServerName: 'my-files', candidate: { action: 'configure-existing', existingServerName: 'my-files', recommendationTier: 'flujo-supported', cost: { kind: 'free' }, supportEvidence: { kind: 'shipped-package' } } });
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(installBestForCapabilityMock).not.toHaveBeenCalled();
+    expect(appendInstallAuditMock).not.toHaveBeenCalled();
+    expect(body.attempts).toEqual([]);
+  });
   it('keeps find_best_mcp_server strictly read-only', async () => {
     const result = await authoringCallTool('find_best_mcp_server', {
       capability: 'connect my PayPal account',

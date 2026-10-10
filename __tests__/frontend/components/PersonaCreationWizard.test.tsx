@@ -267,6 +267,55 @@ describe('PersonaCreationWizard', () => {
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
   });
 
+  it('moves keyboard focus to each step heading without clearing the entered identity', async () => {
+    render(wizard());
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Mina' } });
+    const next = screen.getByRole('button', { name: 'Next' });
+    act(() => next.focus());
+    fireEvent.click(next);
+    expect(await screen.findByRole('heading', { name: 'personas.create.roleTitle' })).toHaveFocus();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+    expect(screen.getByRole('heading', { name: 'personas.create.roleTitle' })).toHaveFocus();
+    expect(screen.getByRole('radio', { name: 'Helper' }).querySelector('[tabindex="0"]')).toBeNull();
+    const back = screen.getByRole('button', { name: 'personas.create.back' });
+    act(() => back.focus());
+    fireEvent.click(back);
+    expect(screen.getByRole('heading', { name: 'Who are you creating?' })).toHaveFocus();
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Mina');
+  });
+
+  it('exposes the discard explanation to assistive technology and returns to editing', async () => {
+    render(wizard());
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Mina' } });
+    const cancel = screen.getByRole('button', { name: 'personas.action.cancel' });
+    act(() => cancel.focus());
+    fireEvent.click(cancel);
+    const confirmation = await screen.findByRole('dialog', { name: 'personas.create.cancelTitle' });
+    expect(confirmation).toHaveAccessibleDescription('personas.create.cancelHelp');
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.keepEditing' }));
+    await waitFor(() => expect(confirmation).not.toBeInTheDocument());
+    expect(cancel).toHaveFocus();
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Mina');
+    expect(deleteDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps Behavior keyboard toggling usable after clicking its managed Flow card', async () => {
+    render(wizard({ draft: draftRecord() }));
+    const behavior = await screen.findByRole('checkbox', { name: 'Research' });
+    const visualAction = behavior.querySelector<HTMLElement>('[role="button"][tabindex="-1"]');
+    expect(visualAction).not.toBeNull();
+    act(() => visualAction!.focus());
+    fireEvent.click(visualAction!);
+    expect(behavior).toHaveFocus();
+    expect(behavior).toHaveAttribute('aria-checked', 'false');
+    fireEvent.keyDown(behavior, { key: ' ' });
+    expect(behavior).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+    await waitFor(() => expect(updateDraftMock).toHaveBeenCalledWith('draft_existing', {
+      expectedRevision: 4, payload: fullPayload,
+    }));
+  });
+
   it('fails closed on a preflight network error and preserves a resumable draft', async () => {
     creationReadinessMock.mockRejectedValueOnce(new Error('offline'));
     render(wizard({ draft: draftRecord({ ...fullPayload, step: 4 }) }));

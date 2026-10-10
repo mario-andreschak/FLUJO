@@ -2,6 +2,7 @@ import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/secu
 import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
+import { withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { StorageKey } from '../../shared/types/storage';
@@ -264,7 +265,27 @@ export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () 
   });
 }
 
+/** Authoritative ordinary-backup read: absent files are empty; interrupted or corrupt files fail. */
+export async function loadItemForBackup<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultValue;
+    throw error;
+  }
+  if (!content.trim()) throw new Error('Backup storage item is empty');
+  return JSON.parse(content) as T;
+}
+
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  // Returned conversation values become caller-owned once this read scope ends.
+  if (key.startsWith('conversations/')) {
+    return withConversationSnapshot<T, T>(key.slice('conversations/'.length), async state => state === undefined ? defaultValue : state);
+  }
   // Outside tolerant recovery: a pending migration must never look like empty data.
   await assertCredentialStoreReady(getFilePath(key));
   try {
@@ -313,6 +334,41 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
     log.error(`CRITICAL: Error loading item with key "${key}" from ${getFilePath(key)}:`, error);
     throw error; // Re-throw the error instead of returning default
   }
+}
+
+/** Opt-in conversation hydration: reserve before materialization and retain through adoption.
+ * The descriptor is closed before parsing/consumer work so recovery writes can rename on Windows.
+ */
+export async function withConversationSnapshot<T, R>(conversationId: string,
+  consume: (state: T | undefined, reservation: ConversationReadReservation) => Promise<R>): Promise<R> {
+  assertSafeCollectionId(conversationId);
+  const key = `conversations/${conversationId}` as StorageKey;
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let expected: BigIntStats;
+  try { expected = await fs.lstat(filePath, { bigint: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return withConversationLogReadAdmission(0, reservation => consume(undefined, reservation));
+    }
+    throw error;
+  }
+  const size = Number(expected.size);
+  return withConversationLogReadAdmission(size, async reservation => {
+    const content = (await readPlainFile(filePath, { expected })).toString('utf8');
+    if (!content.trim()) return consume(undefined, reservation);
+    let state: T;
+    try { state = JSON.parse(content) as T; }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      const backupPath = `${filePath}.corrupted.${Date.now()}.bak`;
+      try { await fs.writeFile(backupPath, content); }
+      catch (backupError) { log.error('Failed to back up corrupted conversation snapshot:', backupError); }
+      throw new Error(`Failed to parse JSON from ${filePath}. A backup has been created at ${backupPath}. Original error: ${error.message}`);
+    }
+    return consume(state, reservation);
+  });
 }
 
 export async function clearItem(key: StorageKey): Promise<void> {
@@ -833,6 +889,10 @@ export async function saveCollectionItem<T>(collection: string, id: string, valu
 
 export async function loadCollectionItem<T>(collection: string, id: string, defaultValue: T): Promise<T> {
   assertSafeCollectionId(id);
+  // Other collections retain their existing read policy and parsing behavior.
+  if (collection === 'conversations') {
+    return withConversationSnapshot<T, T>(id, async state => state === undefined ? defaultValue : state);
+  }
   const filePath = getCollectionItemPath(collection, id);
   try {
     const content = await fs.readFile(filePath, 'utf-8');
