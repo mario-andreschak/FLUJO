@@ -27,6 +27,11 @@ test('the main bridge runs genuine required jobs and the broad workflow remains 
 
 for (const [label, change] of [
   ['mutable action', (files) => { files['verify.yml'].jobs.typecheck.steps[0].uses = 'actions/checkout@main'; }],
+  ['unconditional Codex merge', files => { delete files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.run?.includes('gh pr merge')).if; }],
+  ['unmatched Codex merge head', files => { const step = files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.run?.includes('gh pr merge')); step.run = step.run.replace(' --match-head-commit "$HEAD_SHA"', ''); }],
+  ['untrusted Codex checkout', files => { files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.uses?.startsWith('actions/checkout@')).with.ref = '${{ github.event.workflow_run.head_sha }}'; }],
+  ['tolerated Codex qualification error', files => { files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.id === 'qualification')['continue-on-error'] = true; }],
+  ['drifting Codex merge inputs', files => { files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.run?.includes('gh pr merge')).env.HEAD_SHA = '${{ github.sha }}'; }],
   ['persisted checkout credentials', (files) => { files['verify.yml'].jobs.typecheck.steps[0].with['persist-credentials'] = true; }],
   ['broad default token', (files) => { files['verify.yml'].permissions.contents = 'write'; }],
   ['missing permission default', (files) => { delete files['verify.yml'].permissions; }],
@@ -105,6 +110,79 @@ for (const [label, change] of [
     assert.throws(() => assertFullWorkflowContract(files));
   });
 }
+
+function codexSelectionFixture(t) {
+  const tempRoot = realpathSync.native(os.tmpdir());
+  const root = realpathSync.native(mkdtempSync(path.join(tempRoot, 'flujo-codex-selection-')));
+  t.after(() => {
+    const relative = path.relative(tempRoot, realpathSync.native(root));
+    assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    rmSync(root, { recursive: true, force: true });
+  });
+  const script = readWorkflows()['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.id === 'qualification').run.match(/node --input-type=module <<'NODE'\n([\s\S]*?)\nNODE\n/)[1];
+  const head = 'a'.repeat(40);
+  const pr = { author: { login: 'app/dependabot' }, state: 'OPEN', baseRefName: 'main', headRefOid: head, headRepository: { nameWithOwner: 'mario-andreschak/FLUJO' } };
+  const files = [{ filename: 'package.json', patch: '@@ -1 +1 @@\n-  "@openai/codex-sdk": "0.158.0",\n+  "@openai/codex-sdk": "0.159.0",' }, { filename: 'package-lock.json' }];
+  const execute = (evidence = pr, changed = files, environment = {}) => {
+    writeFileSync(path.join(root, 'codex-update-pr.json'), typeof evidence === 'string' ? evidence : JSON.stringify(evidence));
+    writeFileSync(path.join(root, 'codex-update-files.json'), typeof changed === 'string' ? changed : JSON.stringify(changed));
+    const output = path.join(root, 'output');
+    writeFileSync(output, '');
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10_000,
+      env: { ...process.env, RUNNER_TEMP: root, REPOSITORY: 'mario-andreschak/FLUJO', PR_NUMBER: '123', HEAD_SHA: head, GITHUB_OUTPUT: output, ...environment } });
+    assert.ifError(result.error);
+    return { ...result, output: readFileSync(output, 'utf8') };
+  };
+  return { pr, files, execute };
+}
+
+test('actual Codex workflow selects only an exact pinned SDK manifest update', t => {
+  const f = codexSelectionFixture(t);
+  for (const login of ['app/dependabot', 'dependabot[bot]']) {
+    const result = f.execute({ ...f.pr, author: { login } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.output, 'eligible=true\n');
+  }
+});
+
+test('actual Codex workflow succeeds without merge eligibility for unrelated, stale and unqualified updates', t => {
+  const f = codexSelectionFixture(t);
+  const patch = f.files[0].patch;
+  for (const [pr, files] of [
+    [f.pr, [{ filename: '.github/workflows/pages.yml' }]],
+    [f.pr, [{ ...f.files[0], patch: patch.replaceAll('@openai/codex-sdk', 'slate-react') }, f.files[1]]],
+    [{ ...f.pr, state: 'CLOSED' }, f.files],
+    [{ ...f.pr, state: 'MERGED' }, f.files],
+    [{ ...f.pr, headRefOid: 'b'.repeat(40) }, f.files],
+    [{ ...f.pr, author: { login: 'other-bot' } }, f.files],
+    [{ ...f.pr, baseRefName: 'other' }, f.files],
+    [{ ...f.pr, headRepository: { nameWithOwner: 'other/FLUJO' } }, f.files],
+    [f.pr, [...f.files, { filename: 'src/extra.ts' }]],
+    [f.pr, [{ ...f.files[0], patch: patch.replace('"0.159.0"', '"^0.159.0"') }, f.files[1]]],
+    [f.pr, [{ ...f.files[0], patch: patch + '\n+  "other-package": "1.0.0",' }, f.files[1]]],
+    [f.pr, [{ ...f.files[0], patch: patch.replace('\n- ', '\n+ ') }, f.files[1]]],
+  ]) {
+    const result = f.execute(pr, files);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.output, 'eligible=false\n');
+  }
+});
+
+test('actual Codex workflow fails closed on malformed trusted inputs or missing evidence', t => {
+  const f = codexSelectionFixture(t);
+  for (const [pr, files, env] of [
+    ['{bad json', f.files], [f.pr, '{bad json'], [null, f.files],
+    [{ ...f.pr, author: null }, f.files], [{ ...f.pr, headRefOid: 'missing' }, f.files],
+    [f.pr, {}], [f.pr, [null]], [f.pr, [{ filename: 1 }]],
+    [f.pr, [f.files[0], f.files[0]]], [f.pr, [{ filename: 'package.json' }, f.files[1]]],
+    [f.pr, f.files, { HEAD_SHA: 'untrusted' }], [f.pr, f.files, { PR_NUMBER: '123; false' }],
+    [f.pr, f.files, { REPOSITORY: '../outside' }], [f.pr, f.files, { GITHUB_OUTPUT: '' }],
+  ]) {
+    const result = f.execute(pr, files, env);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.output, '', 'invalid evidence cannot publish eligibility');
+  }
+});
 
 function journeyGitFixture(t) {
   const tempRoot = realpathSync.native(os.tmpdir());

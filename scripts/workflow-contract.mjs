@@ -128,8 +128,31 @@ function assertInstallerProvenance(workflow) {
   }
 }
 
+function assertCodexUpdateSelection(workflow) {
+  const job = workflow?.jobs?.enable;
+  const steps = job?.steps ?? [];
+  const select = steps.find(step => step.id === 'qualification');
+  const merges = steps.filter(step => /gh pr merge/.test(step.run ?? ''));
+  if (JSON.stringify(workflow?.on?.workflow_run) !== JSON.stringify({ workflows: ['verify'], types: ['completed'] })
+      || job?.if !== "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.actor.login == 'dependabot[bot]' && github.event.workflow_run.pull_requests[0].number"
+      || !steps.some(step => step.uses?.startsWith('actions/checkout@') && step.with?.ref === 'main')
+      || !select || select.if !== undefined || select['continue-on-error'] || select.shell !== 'bash'
+      || !select.run?.startsWith('set -euo pipefail\n') || !select.run.includes('fs.appendFileSync(GITHUB_OUTPUT, `eligible=${eligible}\\n`);')
+      || merges.length !== 1 || steps.indexOf(merges[0]) <= steps.indexOf(select)
+      || merges[0].if !== "steps.qualification.outputs.eligible == 'true'" || merges[0]['continue-on-error']
+      || merges[0].shell !== 'bash' || merges[0].run !== 'set -euo pipefail\ngh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --auto --squash --match-head-commit "$HEAD_SHA"\n') {
+    throw new Error('Codex update automation must select trusted evidence and merge only the exact eligible head after normal required checks.');
+  }
+  for (const step of [select, merges[0]]) {
+    if (JSON.stringify(step.env) !== JSON.stringify({ GH_TOKEN: '${{ github.token }}', REPOSITORY: '${{ github.repository }}', PR_NUMBER: '${{ github.event.workflow_run.pull_requests[0].number }}', HEAD_SHA: '${{ github.event.workflow_run.head_sha }}' })) {
+      throw new Error('Codex update selection and merge must bind identical trusted workflow inputs.');
+    }
+  }
+}
+
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
+  assertCodexUpdateSelection(workflows['codex-sdk-auto-merge.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
   const docsWorkflow = workflows['scorecard-source.yml'];
