@@ -1,4 +1,5 @@
 "use client";
+import { cancelPendingElicitation } from './elicitationState';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { useRouter } from 'next/navigation';
@@ -2432,6 +2433,11 @@ const Chat: React.FC = () => {
             message: event.message,
             requestedSchema: event.requestedSchema,
           });
+        }
+        break;
+      case 'run:elicitation_cancelled':
+        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+          setPendingElicitation((pending) => cancelPendingElicitation(pending, event.elicitationId));
         }
         break;
       case 'run:awaiting_question':

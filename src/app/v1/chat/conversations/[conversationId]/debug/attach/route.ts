@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -56,6 +57,7 @@ async function POST_handler(
     log.info('Debugger attach requested', { conversationId });
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error requesting debugger attach', { conversationId, error });
     return NextResponse.json({ error: 'Internal server error attaching debugger' }, { status: 500 });
   }

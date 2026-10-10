@@ -17,6 +17,7 @@ describe('provider profiles', () => {
       'openai-responses',
       'azure',
       'openrouter',
+      'orcarouter',
       'requesty',
       'xai',
       'ollama',
@@ -171,4 +172,10 @@ describe('provider profiles', () => {
       'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
     ]);
   });
+});
+
+it('keeps OrcaRouter on Chat Completions for new and saved connections', () => {
+  expect(getProviderProfile('orcarouter')).toMatchObject({ id: 'orcarouter', provider: 'orcarouter', adapter: 'openai', baseUrl: 'https://api.orcarouter.ai/v1', showBaseUrl: true });
+  expect(resolveModelAdapter('orcarouter', 'openai')).toBe('openai');
+  expect(supportsProviderModelDiscovery(getProviderProfile('orcarouter'), 'https://api.orcarouter.ai/v1')).toBe(true);
 });

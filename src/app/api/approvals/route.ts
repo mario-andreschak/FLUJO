@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
@@ -77,6 +78,7 @@ async function GET_handler(request: Request) {
         }
         if (!state || isPersonaOwnedConversationState(state)) requiresStrictControlPlane = true;
       } catch (error) {
+        if (error instanceof ConversationLogReadPressureError) throw error;
         requiresStrictControlPlane = true;
         log.debug(`Could not load state for approval ${entry.approvalId}`, error);
       }
@@ -117,7 +119,10 @@ async function GET_handler(request: Request) {
     const pendingQuestions = listAllPendingQuestions();
     for (const question of pendingQuestions) {
       const state = FlowExecutor.conversationStates.get(question.conversationId)
-        ?? await loadConversationState(question.conversationId).catch(() => undefined);
+        ?? await loadConversationState(question.conversationId).catch(error => {
+          if (error instanceof ConversationLogReadPressureError) throw error;
+          return undefined;
+        });
       if (!state || isPersonaOwnedConversationState(state)) {
         requiresStrictControlPlane = true;
         break;
@@ -162,6 +167,7 @@ async function GET_handler(request: Request) {
 
     return json({ approvals, questions }, 200);
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error handling GET /api/approvals', error);
     return json({ error: 'Internal server error' }, 500);
   }

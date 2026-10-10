@@ -319,6 +319,8 @@ export interface MCPServiceResponse<T = unknown> {
     shutdownReceipt?: MCPShutdownReceipt;
   data?: T;
   error?: string;
+  /** Validated modern Tasks failure; never persisted in the remote-task ledger. */
+  taskError?: { code: number; message: string; data?: unknown };
   statusCode?: number;
   progressToken?: string;
   errorType?: string;

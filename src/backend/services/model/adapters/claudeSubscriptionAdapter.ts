@@ -13,6 +13,8 @@ import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handle
 import { createClaudeOwnedProcessSpawner } from './claudeOwnedProcess';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
+import { collectClaudeAllowance, claudeAllowanceSnapshot } from '@/backend/services/model/allowance/claude';
+import { allowanceAccountKey, recordAllowanceSnapshot } from '@/backend/services/model/allowance/store';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
@@ -1196,11 +1198,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // from partial text. Racing the loop against the signal both surfaces the
     // cancellation AND returns within the cancel-poll cadence instead of
     // waiting out the subprocess teardown.
+    let allowanceObservation: ReturnType<typeof collectClaudeAllowance> | undefined;
+    const allowanceKey = allowanceAccountKey('claude', apiKey);
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
         // An issued descendant can lose saved lineage while its SDK still
         // yields messages. Fence every frame before live/transcript/usage callbacks.
         await nativeOriginalProcessHost?.assertOutputCurrent();
+        // Observe the existing initialized query only; this never starts another model turn.
+        if (!allowanceObservation && !signal?.aborted) {
+          allowanceObservation = collectClaudeAllowance(response, allowanceKey);
+        }
         const streamType = message.type === 'stream_event'
           ? (message as SDKPartialAssistantMessage).event.type : undefined;
         const liveProgress = message.type === 'assistant'
@@ -1426,6 +1434,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      if (allowanceObservation && !signal?.aborted && !abortController.signal.aborted) {
+        const observation = await allowanceObservation;
+        recordAllowanceSnapshot(allowanceKey, claudeAllowanceSnapshot(observation));
+      }
       if (nativeOriginalProcessHost) {
         closeInput();
         response.close();

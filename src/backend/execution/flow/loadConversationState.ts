@@ -1,5 +1,6 @@
 import { FlowExecutor } from './FlowExecutor';
-import { loadItem as loadItemBackend, assertSafeCollectionId } from '@/utils/storage/backend';
+import { ConversationLogReadPressureError } from './conversationLogReadAdmission';
+import { withConversationSnapshot, assertSafeCollectionId } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
 import { recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from './conversationLog';
@@ -42,16 +43,16 @@ export async function loadConversationStateReadOnly(
     return live;
   }
 
-  const storageKey = `conversations/${conversationId}` as StorageKey;
   let guardEligibilityFailed = false;
   try {
-    const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
-    try { assertGuardEligibility?.(state); }
-    catch (error) { guardEligibilityFailed = true; throw error; }
-    await assertExecutionStateAccess(state, conversationId);
-    return state || undefined;
+    return await withConversationSnapshot<SharedState, Readonly<SharedState> | undefined>(conversationId, async state => {
+      try { assertGuardEligibility?.(state); }
+      catch (error) { guardEligibilityFailed = true; throw error; }
+      await assertExecutionStateAccess(state, conversationId);
+      return state || undefined;
+    });
   } catch (error) {
-    if (guardEligibilityFailed) throw error;
+    if (guardEligibilityFailed || error instanceof ConversationLogReadPressureError) throw error;
     log.warn('Error reading conversation state without recovery', { conversationId, error });
     return undefined;
   }
@@ -102,62 +103,65 @@ export async function loadConversationState(conversationId: string): Promise<Sha
 async function loadFromDurableStorage(conversationId: string): Promise<SharedState | undefined> {
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
-    const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
-    await assertExecutionStateAccess(state, conversationId);
-    if (state) {
-      log.debug('Loaded state from storage', { conversationId });
-      // Persona snapshots deliberately omit their runtime capability. A read or
-      // legacy control route may inspect that durable projection, but it must
-      // never replay logs, classify interruption, repair tools, or persist a
-      // replacement snapshot without first reacquiring the owning Activity.
-      // The Persona dispatcher installs authority before runFlow performs these
-      // recovery steps.
-      if ((state.personaAttribution && !state.executionAuthority) || (isExecutionProtectedState(state) && !state.executionExtensionContext)) {
+    return await withConversationSnapshot<SharedState, SharedState | undefined>(conversationId, async (state, reservation) => {
+      await assertExecutionStateAccess(state, conversationId);
+      if (state) {
+        log.debug('Loaded state from storage', { conversationId });
+        // Persona snapshots deliberately omit their runtime capability. A read or
+        // legacy control route may inspect that durable projection, but it must
+        // never replay logs, classify interruption, repair tools, or persist a
+        // replacement snapshot without first reacquiring the owning Activity.
+        // The Persona dispatcher installs authority before runFlow performs these
+        // recovery steps.
+        if ((state.personaAttribution && !state.executionAuthority) || (isExecutionProtectedState(state) && !state.executionExtensionContext)) {
+          FlowExecutor.conversationStates.set(conversationId, state);
+          noteWrite(conversationId, state);
+          return state;
+        }
+        // Per-step durability lives in the append-only log; the snapshot is only
+        // written at run boundaries. Fold in anything the snapshot missed.
+        await recoverMessagesFromLog(state, reservation);
+        // Wire artifacts are derived metadata. Stale or cross-conversation records
+        // are ignored; they are never used to repair or replace canonical messages.
+        state.compactionState = validateCompactionState(
+          state.compactionState,
+          conversationId,
+          state.messages,
+        );
+        // Issue #355: a persisted running record owned by a prior process did not
+        // reach a terminal boundary. Reclassify it before any resume/control route
+        // can accidentally treat it as live. Legacy states without owner metadata
+        // remain untouched.
+        await reconcileInterruptedRecovery(storageKey, state);
+        // Issue #256: a crash mid-tool leaves an assistant tool_calls turn with no
+        // matching role:'tool' result, which every provider 400s on. Heal it on
+        // first load (covers /respond, /approvals, /debug/*, /edit-state) so the
+        // conversation is well-formed before any request is built. Persist the
+        // synthetic results to the append-only log AND back to the snapshot so the
+        // repair survives even if no runFlow follows.
+        try {
+          const repaired = repairDanglingToolCalls(state);
+          if (repaired.length) {
+            log.info('Repaired dangling tool call(s) on load', { conversationId, count: repaired.length });
+            markDanglingToolEffectsUnknown(state);
+            await appendRawForState(state, [
+              ...repaired.map(m => ({ type: 'message' as const, message: m })),
+              { type: 'recovery:checkpoint', checkpoint: state.recovery!.currentCheckpoint! },
+              { type: 'recovery:transition', recovery: { ...state.recovery! } },
+            ]);
+            await persistConversationState(storageKey, state);
+          }
+        } catch (repairError) {
+          log.warn('Failed to repair dangling tool calls on load; continuing', { conversationId, repairError });
+        }
         FlowExecutor.conversationStates.set(conversationId, state);
         noteWrite(conversationId, state);
         return state;
       }
-      // Per-step durability lives in the append-only log; the snapshot is only
-      // written at run boundaries. Fold in anything the snapshot missed.
-      await recoverMessagesFromLog(state);
-      // Wire artifacts are derived metadata. Stale or cross-conversation records
-      // are ignored; they are never used to repair or replace canonical messages.
-      state.compactionState = validateCompactionState(
-        state.compactionState,
-        conversationId,
-        state.messages,
-      );
-      // Issue #355: a persisted running record owned by a prior process did not
-      // reach a terminal boundary. Reclassify it before any resume/control route
-      // can accidentally treat it as live. Legacy states without owner metadata
-      // remain untouched.
-      await reconcileInterruptedRecovery(storageKey, state);
-      // Issue #256: a crash mid-tool leaves an assistant tool_calls turn with no
-      // matching role:'tool' result, which every provider 400s on. Heal it on
-      // first load (covers /respond, /approvals, /debug/*, /edit-state) so the
-      // conversation is well-formed before any request is built. Persist the
-      // synthetic results to the append-only log AND back to the snapshot so the
-      // repair survives even if no runFlow follows.
-      try {
-        const repaired = repairDanglingToolCalls(state);
-        if (repaired.length) {
-          log.info('Repaired dangling tool call(s) on load', { conversationId, count: repaired.length });
-          markDanglingToolEffectsUnknown(state);
-          await appendRawForState(state, [
-            ...repaired.map(m => ({ type: 'message' as const, message: m })),
-            { type: 'recovery:checkpoint', checkpoint: state.recovery!.currentCheckpoint! },
-            { type: 'recovery:transition', recovery: { ...state.recovery! } },
-          ]);
-          await persistConversationState(storageKey, state);
-        }
-      } catch (repairError) {
-        log.warn('Failed to repair dangling tool calls on load; continuing', { conversationId, repairError });
-      }
-      FlowExecutor.conversationStates.set(conversationId, state);
-      noteWrite(conversationId, state);
-      return state;
-    }
+      return undefined;
+    });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.warn('Error loading conversation state from storage', { conversationId, error });
   }
   return undefined;

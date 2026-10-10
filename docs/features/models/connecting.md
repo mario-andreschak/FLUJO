@@ -12,6 +12,23 @@ Cloud requests send content and credentials to the selected provider. Store secr
 
 Continue with [your first conversation](../../getting-started/README.md) or [model settings](settings.md).
 
+## OrcaRouter
+
+Choose **OrcaRouter** under paid cloud providers in guided setup, or select its
+profile in manual creation. Enter an OrcaRouter API key and select a model your
+account can access. The default endpoint is `https://api.orcarouter.ai/v1` and
+the profile uses the existing OpenAI Chat Completions adapter. An OpenRouter
+key does not authenticate with OrcaRouter. Model discovery uses the configured
+endpoint's authenticated `/models` catalogue; vendor/model names are preserved.
+See [OrcaRouter's setup guidance](https://www.orcarouter.ai/switch/openrouter).
+
+Use **Test model** before running an agent. It checks SDK access, HTTP access
+and a diagnostic tool round trip; a saved configuration alone does not prove
+that your account can use the selected model. Streaming and tools use FLUJO's
+existing OpenAI-compatible path. Provider routing, caching, pricing and budgets
+remain subject to the provider and your account settings. This integration does
+not enroll the connection in a partner program or add referral attribution.
+
 ## Antigravity CLI
 
 Choose **Antigravity CLI** in guided setup or manual creation. FLUJO installs a pinned native executable for its model runs. Enter a Gemini API key, or confirm an existing local Google account login. Model availability and quota depend on your account or API key.

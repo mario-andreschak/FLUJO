@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
@@ -37,6 +38,7 @@ async function GET_handler(
     }
     return NextResponse.json(await getSubflowRecoveryOptions(conversationId));
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status: 500 },
@@ -75,6 +77,7 @@ async function POST_handler(
     const result = await retrySubflowRecoveryScope(conversationId, scope);
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     const status = /not found/i.test(message) ? 404 : /already running|no recoverable/i.test(message) ? 409 : 500;
     return NextResponse.json({ error: message }, { status });
