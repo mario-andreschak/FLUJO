@@ -68,7 +68,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [data, setData] = useState<AutomationMapResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [view, setView] = useWorkspaceUiPreference<WavesView>(VIEW_PREF_KEY, 'playground');
+  const [view, setView] = useWorkspaceUiPreference<WavesView>(VIEW_PREF_KEY, 'day');
   const [mode, setMode] = useWorkspaceUiPreference<PlaygroundMode>(MODE_PREF_KEY, 'simple');
   const [activeWaveId, setActiveWaveId] = useWorkspaceUiPreference<string | null>(ACTIVE_WAVE_PREF_KEY, null);
   const [visiblePackageNames, setVisiblePackageNames] = useState<string[]>([]);
@@ -151,13 +151,13 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
         '& .MuiToggleButton-root': { px: { xs: 1.15, sm: 1.75 }, gap: 0.7, textTransform: 'none', fontWeight: 700 },
       }}
     >
-      <ToggleButton value="playground" aria-label={t('waves.playground')}>
-        <HubRoundedIcon sx={{ fontSize: 18 }} />
-        {t('waves.playground')}
-      </ToggleButton>
       <ToggleButton value="day" aria-label={t('waves.day')}>
         <CalendarViewDayRoundedIcon sx={{ fontSize: 18 }} />
         {t('waves.day')}
+      </ToggleButton>
+      <ToggleButton value="playground" aria-label={t('waves.playground')}>
+        <HubRoundedIcon sx={{ fontSize: 18 }} />
+        {t('waves.playground')}
       </ToggleButton>
       <ToggleButton value="factory" aria-label="FACTORY swarm">
         <HubRoundedIcon sx={{ fontSize: 18 }} />
@@ -173,7 +173,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
         icon={WavesRoundedIcon}
         eyebrowKey="waves.mapEyebrow"
         titleKey="waves.title"
-        descriptionKey="waves.playgroundDescription"
+        descriptionKey={view === 'day' ? 'waves.dayDescription' : 'waves.playgroundDescription'}
         badge={data?.paused ? <Chip size="small" color="warning" label={t('waves.schedulerPaused')} /> : undefined}
         actions={headerActions}
       />

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 const mockLoad = jest.fn();
-let mockSavedView = 'playground';
+let mockSavedView: string | undefined = 'playground';
 const mockPlaygroundCanvas = jest.fn((_props: unknown) => <div data-testid="playground-canvas" />);
 
 jest.mock('@/frontend/services/automationMap', () => ({
@@ -9,7 +9,7 @@ jest.mock('@/frontend/services/automationMap', () => ({
 }));
 
 jest.mock('@/frontend/hooks/useUiPreference', () => ({
-  useWorkspaceUiPreference: (key: string, initial: unknown) => [key === 'flujo-ui:waves:view' ? mockSavedView : initial, jest.fn()],
+  useWorkspaceUiPreference: (key: string, initial: unknown) => [key === 'flujo-ui:waves:view' ? mockSavedView ?? initial : initial, jest.fn()],
 }));
 
 jest.mock('@/frontend/components/Waves/FactoryObservatoryPanel', () => ({
@@ -29,6 +29,19 @@ describe('Waves full-page layout (#325)', () => {
     mockLoad.mockReset();
     mockPlaygroundCanvas.mockClear();
     mockSavedView = 'playground';
+  });
+
+  it('opens the calendar with date guidance when no view has been saved', async () => {
+    mockSavedView = undefined;
+    mockLoad.mockResolvedValue({
+      paused: false, generatedAt: '2026-10-10T12:00:00.000Z',
+      packages: [], flows: [], executions: [], relations: [], waves: [], components: [], orphanExecutionIds: [],
+    });
+    render(<WavesManager />);
+    expect(await screen.findByTestId('waves-day-view')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Day' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('See what’s planned for your day. Pick a date to explore.')).toBeInTheDocument();
+    expect(screen.queryByTestId('playground-canvas')).not.toBeInTheDocument();
   });
 
   it('lets the unified Playground canvas fill the constrained manager height', async () => {
@@ -70,6 +83,7 @@ describe('Waves full-page layout (#325)', () => {
 
     expect(await screen.findByTestId('playground-canvas')).toBeInTheDocument();
     expect(screen.getByTestId('waves-playground')).toBeInTheDocument();
+    expect(screen.getByText('See how your automations connect. Choose Expert for more detail.')).toBeInTheDocument();
     const lastCanvasCall = mockPlaygroundCanvas.mock.calls[mockPlaygroundCanvas.mock.calls.length - 1];
     expect(lastCanvasCall?.[0]).toEqual(expect.objectContaining({
       data: response,

@@ -146,6 +146,8 @@ export default function RegistryAccountSettings() {
           ? { type: 'success', text: t('packages.account.confirmationSent') }
           : { type: 'error', text: result.message || t('packages.account.resendFailed') },
       );
+    } catch {
+      setMessage({ type: 'error', text: t('packages.account.resendFailed') });
     } finally {
       setBusy(false);
     }
@@ -183,6 +185,8 @@ export default function RegistryAccountSettings() {
           ? { type: 'success', text: t('packages.account.urlSaved') }
           : { type: 'error', text: result.message || t('packages.account.invalidUrl') },
       );
+    } catch {
+      setMessage({ type: 'error', text: t('automations.modal.saveFailed') });
     } finally {
       setBusy(false);
     }
