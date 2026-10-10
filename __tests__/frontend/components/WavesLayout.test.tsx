@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 const mockLoad = jest.fn();
 let mockSavedView = 'playground';
@@ -20,11 +20,6 @@ jest.mock('@/frontend/components/Waves/FactoryObservatoryPanel', () => ({
 jest.mock('@/frontend/components/Waves/PlaygroundCanvas', () => ({
   __esModule: true,
   default: (props: unknown) => mockPlaygroundCanvas(props),
-}));
-
-jest.mock('@/frontend/components/Waves/DayView', () => ({
-  __esModule: true,
-  default: () => <div data-testid="day-view" />,
 }));
 
 import WavesManager from '@/frontend/components/Waves';
@@ -88,5 +83,59 @@ describe('Waves full-page layout (#325)', () => {
     render(<WavesManager />);
     expect(await screen.findByTestId('factory-observatory')).toBeInTheDocument();
     expect(mockLoad).not.toHaveBeenCalled();
+  });
+
+  it.each(['day', 'playground'])('warns after a failed %s refresh and clears the warning on recovery without resetting the view', async (view) => {
+    jest.useFakeTimers();
+    mockSavedView = view;
+    const response = {
+      paused: false, generatedAt: '2026-10-10T12:00:00.000Z',
+      packages: [], flows: [], executions: [], relations: [], waves: [], components: [], orphanExecutionIds: [],
+    };
+    const recovered = { ...response, paused: true, generatedAt: '2026-10-10T12:01:00.000Z' };
+    mockLoad.mockResolvedValueOnce(response).mockRejectedValueOnce(new Error('Offline')).mockResolvedValue(recovered);
+    const rendered = render(<WavesManager />);
+    try {
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      const initialView = screen.getByTestId(view === 'day' ? 'waves-day-view' : 'waves-playground');
+      let selectedDay: string | null = null;
+      let timeline: HTMLElement | null = null;
+      if (view === 'day') {
+        fireEvent.click(screen.getByRole('button', { name: 'Next day' }));
+        const grid = within(initialView).getByRole('grid', { hidden: true });
+        selectedDay = within(grid).getByRole('gridcell', { selected: true, hidden: true }).querySelector('button')!.getAttribute('aria-label');
+        timeline = screen.getByRole('region', { hidden: true });
+        timeline.scrollTop = 433;
+      }
+
+      await act(async () => { await jest.advanceTimersByTimeAsync(30_000); });
+      expect(mockLoad).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't refresh. These details may be out of date.");
+      expect(screen.getByTestId(view === 'day' ? 'waves-day-view' : 'waves-playground')).toBe(initialView);
+      if (view === 'day') {
+        const grid = within(initialView).getByRole('grid', { hidden: true });
+        expect(within(grid).getByRole('gridcell', { selected: true, hidden: true }).querySelector('button')).toHaveAttribute('aria-label', selectedDay);
+        expect(timeline!.scrollTop).toBe(433);
+      } else {
+        expect(mockPlaygroundCanvas.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ data: response }));
+      }
+
+      await act(async () => { await jest.advanceTimersByTimeAsync(30_000); });
+      expect(mockLoad).toHaveBeenCalledTimes(3);
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByTestId(view === 'day' ? 'waves-day-view' : 'waves-playground')).toBe(initialView);
+      if (view === 'day') {
+        const grid = within(initialView).getByRole('grid', { hidden: true });
+        expect(within(grid).getByRole('gridcell', { selected: true, hidden: true }).querySelector('button')).toHaveAttribute('aria-label', selectedDay);
+        expect(timeline!.scrollTop).toBe(433);
+        expect(within(initialView).getByText('Scheduler paused')).toBeInTheDocument();
+      } else {
+        expect(mockPlaygroundCanvas.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ data: recovered }));
+      }
+    } finally {
+      rendered.unmount();
+      jest.useRealTimers();
+    }
   });
 });
