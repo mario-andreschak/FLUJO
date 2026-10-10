@@ -9,12 +9,10 @@ import MarketplaceTab from './tabs/MarketplaceTab';
 import SpotlightTab from './tabs/SpotlightTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
 import RemoteTab from './tabs/RemoteTab';
-import { useThemeUtils } from '@/frontend/utils/theme';
+import { getSelectedWorkspace, onWorkspaceChanged } from '@/frontend/utils/workspaceSelection';
 import {
   Dialog,
   DialogContent,
-  DialogActions,
-  Button,
   Tabs,
   Tab,
   Box,
@@ -40,6 +38,8 @@ const ServerModal: React.FC<ServerModalProps> = ({
   // tabs and the configure form unusable at phone widths (#394).
   const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const [activeTab, setActiveTab] = useState<ServerSetupTab>(initialTab);
+  const [marketplaceVisited, setMarketplaceVisited] = useState(false);
+  const [workspace, setWorkspace] = useState(getSelectedWorkspace);
   
   // The single source→sink message (#392). Every inbound tab prop below is
   // derived from it, so adding a new handoff never adds a prop to all six tabs.
@@ -58,38 +58,28 @@ const ServerModal: React.FC<ServerModalProps> = ({
     setActiveTab(next.to === 'github' ? 'github' : 'configure');
   };
   
-  // Track which tabs have been visited/initialized
-  const [initializedTabs, setInitializedTabs] = useState<{
-    spotlight: boolean;
-    marketplace: boolean;
-    github: boolean;
-    configure: boolean;
-    reference: boolean;
-    remote: boolean;
-  }>({
-    spotlight: false,
-    marketplace: false,
-    github: false,
-    configure: false,
-    reference: false,
-    remote: false
-  });
-
-  // Initialize fields only on first visit to each tab in add mode
+  // Preserve only read-only discovery state during this modal session. Other
+  // setup tabs can start processes, so their existing unmount lifecycle remains.
   useEffect(() => {
-    if (!initialConfig && !initializedTabs[activeTab]) {
-      // Mark this tab as visited
-      setInitializedTabs(prev => ({ ...prev, [activeTab]: true }));
-    }
-  }, [activeTab, initialConfig, initializedTabs]);
+    if (isOpen && !initialConfig && activeTab === 'marketplace') setMarketplaceVisited(true);
+  }, [activeTab, initialConfig, isOpen]);
+
+  useEffect(() => onWorkspaceChanged(() => {
+    setWorkspace(getSelectedWorkspace());
+    setMarketplaceVisited(false);
+    setHandoff(null);
+    setActiveTab(initialTab);
+  }), [initialTab]);
 
   // Each wizard route opens the existing setup experience at the relevant
   // destination. Re-apply it on open so a previous visit never leaks through.
   useEffect(() => {
     if (isOpen && !initialConfig) setActiveTab(initialTab);
+    if (!isOpen) {
+      setMarketplaceVisited(false);
+      setHandoff(null);
+    }
   }, [initialConfig, initialTab, isOpen]);
-
-  const { getThemeValue } = useThemeUtils();
   
   const handleTabChange = (event: React.SyntheticEvent, newValue: ServerSetupTab) => {
     // A manual tab change is not a handoff — don't re-trigger the auto run or
@@ -107,6 +97,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
   const handleClose = () => {
     // Drop the handoff (and with it the parsed config / auto-run / prefill)
     setHandoff(null);
+    setMarketplaceVisited(false);
     // Reset to default tab
     setActiveTab('spotlight');
     // Call the original onClose
@@ -169,7 +160,12 @@ const ServerModal: React.FC<ServerModalProps> = ({
           </Box>
         ) : null}
 
-        <Box sx={{ p: { xs: 2, sm: 3 } }}>
+        <Box key={workspace} sx={{ p: { xs: 2, sm: 3 } }}>
+          {!initialConfig && isOpen && (marketplaceVisited || activeTab === 'marketplace') && (
+            <Box hidden={activeTab !== 'marketplace'} inert={activeTab !== 'marketplace'}>
+              <MarketplaceTab active={activeTab === 'marketplace'} onAdd={onAdd} onClose={handleClose} onHandoff={handleHandoff} />
+            </Box>
+          )}
           {/* Render the active tab or the edit form */}
           {initialConfig ? (
             <ConfigureTab
@@ -182,9 +178,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
             />
           ) : activeTab === 'spotlight' ? (
             <SpotlightTab onAdd={onAdd} onClose={onClose} onHandoff={handleHandoff} />
-          ) : activeTab === 'marketplace' ? (
-            <MarketplaceTab onAdd={onAdd} onClose={onClose} onHandoff={handleHandoff} />
-          ) : activeTab === 'github' ? (
+          ) : activeTab === 'marketplace' ? null : activeTab === 'github' ? (
             <GitHubTab
               onAdd={onAdd}
               onClose={onClose}

@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
+import { supportsMcpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
 import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
@@ -90,6 +91,9 @@ export interface ModelSteering {
 }
 
 export interface CompletionInput {
+  /** Internal restrictive request policy: one non-streaming, tool-free text attempt.
+   * Callers own the deadline controller and final response byte/schema limits. */
+  readOnlyAssessment?: boolean;
   directCompletion?: boolean;
   temperatureOverride?: number;
   /** Re-check execution authority immediately before every policy member. */
@@ -374,6 +378,23 @@ export interface CompletionAdapter {
    * delta sink is available and falls back to createCompletion otherwise.
    */
   createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
+}
+
+/** Reject authority-bearing inputs before any client, lookup, or remote request. */
+export function assertReadOnlyAssessmentInput(input: CompletionInput): void {
+  if (!input.readOnlyAssessment) return;
+  if (!supportsMcpModelRiskAssessment(input.model) || !input.signal
+    || !Number.isSafeInteger(input.maxTokens) || input.maxTokens! < 1 || input.maxTokens! > 4096
+    || input.tools !== undefined || input.toolNameMap !== undefined || input.localToolExecutors !== undefined
+    || input.nativeToolPort || input.nativeOriginalProcessHost || input.executionExtensionContext
+    || input.beforeToolDispatch || input.afterToolDispatch || input.requestToolApproval || input.authorizePersonaCoreMcp
+    || input.conversationId || input.nodeId || input.sessionResume || input.codexSession || input.steering
+    || input.consumeSteeringMessages || input.runResourceMarkers
+    || input.messages.some(message => !['system', 'developer', 'user'].includes(message.role)
+      || typeof message.content !== 'string')) {
+    throw new Error('Read-only assessment requires a bounded, cancellable, tool-free text request.');
+  }
+  input.signal.throwIfAborted();
 }
 
 /**

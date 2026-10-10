@@ -13,8 +13,9 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
-import { fingerprintTrustedHostSource, trustedHostEnvironment } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource, trustedHostEnvironment, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
+import { materializeProtectedPackageRunner } from '../mcp/fixtures/protectedPackageRunner';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
@@ -158,23 +159,34 @@ describe('stdio MCP runtime homes', () => {
     expect(launchA.env.HOME).not.toBe(launchB.env.HOME);
   });
 
-  it('rejects dynamic package runners without a reviewed fixed executable', () => {
-    const runner: MCPStdioConfig = {
-      ...config,
-      name: 'weather-mcp',
-      command: 'npx',
-      args: ['-y', '@example/weather-mcp'],
-      rootPath: 'mcp-servers/weather-mcp',
+  it('keeps reviewed npx package runners in private runtime cwd outside their managed source roots', () => {
+    const resolveRunner = (name: string) => {
+      const fixture = installTrustedHostProfile({ name, runtimeHome: 'isolated' });
+      try {
+        process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
+        process.env.FLUJO_DATA_DIR = dataRoot;
+        const runner = materializeProtectedPackageRunner(name, 'process.exitCode = 0;\n');
+        fixture.approve(runner);
+        return { runner, launch: resolveIsolatedLaunch(runner) };
+      } finally { fixture.restore(); }
     };
-    const otherRunner: MCPStdioConfig = {
-      ...runner,
-      name: 'search-mcp',
-      rootPath: 'mcp-servers/search-mcp',
-    };
-
-    for (const server of [runner, otherRunner]) {
-      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(server)))
-        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+    const first = runWithWorkspace('runtime-a', () => resolveRunner('weather-mcp'));
+    const second = runWithWorkspace('runtime-a', () => resolveRunner('search-mcp'));
+    const otherWorkspace = runWithWorkspace('runtime-b', () => resolveRunner('weather-mcp'));
+    for (const { runner, launch } of [first, second, otherWorkspace]) {
+      const policy = trustedHostMcpPolicySchema.parse(runner.trustedHost);
+      expect(launch.command).toBe(process.execPath);
+      expect(launch.args[0]).toBe(policy.entryPoint);
+      expect(launch.args).toContain('--offline');
+      expect(launch.args).toContain('owned-probe@1.0.0');
+      expect(launch.cwd).toContain(`${path.sep}userdata${path.sep}mcp-runtime${path.sep}`);
+      expect(path.relative(policy.sourceRoot, launch.cwd)).toMatch(/^\.\.(?:[\\/]|$)/);
+    }
+    expect(first.launch.cwd).not.toBe(second.launch.cwd);
+    expect(first.runner.name).toBe(otherWorkspace.runner.name);
+    expect(first.launch.cwd).not.toBe(otherWorkspace.launch.cwd);
+    for (const name of ['HOME', 'NPM_CONFIG_CACHE', 'TMP', 'TEMP']) {
+      expect(first.launch.env[name]).not.toBe(otherWorkspace.launch.env[name]);
     }
   });
 
