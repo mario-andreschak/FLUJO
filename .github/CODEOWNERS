@@ -1,6 +1,10 @@
 # Current human maintainer. Backup reviewer consent/readiness belongs to #576.
 # These routes require an active repository rule to enforce owner approval.
+# GitHub evaluates the base branch's file; these routes must reach main before
+# they enforce ownership on later PRs. Source coverage is not human acceptance.
 /.github/ @mario-andreschak
+# Runtime launch, image policy, bounded readers and acceptance/release tools.
+/scripts/ @mario-andreschak
 /scripts/*release* @mario-andreschak
 /scripts/verification-* @mario-andreschak
 /scripts/workflow-contract* @mario-andreschak
@@ -20,8 +24,14 @@
 /src/backend/services/mcp/ @mario-andreschak
 /src/backend/services/snapshot/ @mario-andreschak
 /src/backend/services/model/encryption.ts @mario-andreschak
+# SDK/provider authority and workspace credential/snapshot/worker boundaries.
+/src/backend/services/model/ @mario-andreschak
+/src/backend/services/workspace/ @mario-andreschak
 /src/backend/services/security/ @mario-andreschak
 /src/utils/http/ @mario-andreschak
 /src/app/api/oauth/ @mario-andreschak
+# Authentication, credential, snapshot, worker and update ingress lives here.
+/src/app/api/ @mario-andreschak
 /src/app/mcp-proxy/ @mario-andreschak
 /mcp-servers/ @mario-andreschak
+/docs/security/ @mario-andreschak
