@@ -109,6 +109,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 // with `ephemeral: true`) rather than through a mock of it.
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => mockLoadItem(...args),
+  withConversationSnapshot: async (id: string, consume: (state: SharedState | undefined, token: unknown) => Promise<unknown>) => jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission').withConversationLogReadAdmission(100, async (token: unknown) => consume(await mockLoadItem(`conversations/${id}`, undefined), token)),
   saveItem: jest.fn(async (_key: string, value: any) => {
     boundaryTrace.push('persist');
     persistedStates.push(JSON.parse(JSON.stringify(value)));

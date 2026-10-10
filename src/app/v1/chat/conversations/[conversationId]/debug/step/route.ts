@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -137,6 +138,8 @@ async function POST_handler(
     return response;
 
   } catch (error) {
+
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error during debug step execution', {
       requestId,
       conversationId,

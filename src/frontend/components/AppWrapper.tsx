@@ -12,6 +12,7 @@ import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 import WorkspaceBootstrap from './WorkspaceBootstrap';
+import { AllowanceProvider } from '@/frontend/contexts/AllowanceContext';
 import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
 import './AvatarWorld/embed.css';
 
@@ -181,6 +182,7 @@ export default function AppWrapper({ children }: AppWrapperProps) {
           <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
             <ThemeProvider>
               <StorageProvider>
+                <AllowanceProvider>
                 <AskFlujoProvider>
                   <TourProvider>
                     <LocalizedAppShell>
@@ -188,6 +190,7 @@ export default function AppWrapper({ children }: AppWrapperProps) {
                     </LocalizedAppShell>
                   </TourProvider>
                 </AskFlujoProvider>
+                </AllowanceProvider>
               </StorageProvider>
             </ThemeProvider>
           </WorkspaceBootstrap>

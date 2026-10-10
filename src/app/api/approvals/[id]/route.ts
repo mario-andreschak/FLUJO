@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
@@ -108,6 +109,7 @@ async function POST_handler(
       throw new Error('Invalid request body. Required: action ("approve", "deny", "question-answer" or "question-decline").');
     }
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     return json(
       { error: 'Invalid request body', details: error instanceof Error ? error.message : 'Unknown error' },
       400
@@ -471,6 +473,7 @@ async function POST_handler(
     });
     });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error resolving approval', {
       requestId,
       approvalId: id,

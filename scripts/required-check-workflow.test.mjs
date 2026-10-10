@@ -21,6 +21,7 @@ for (const [label, mutate] of [
   ['omitted build', value => { value.jobs.verification.steps = value.jobs.verification.steps.filter(step => step.run !== 'npm run build'); }],
   ['duplicate install', value => { value.jobs.verification.steps.push({ run: 'npm ci --include=dev' }); }],
   ['removed transfer regression', value => { value.jobs.verification.steps.find(step => step.name?.startsWith('Critical')).run = 'node scripts/run-local-jest.cjs'; }],
+  ['omitted model setup regression', value => { value.jobs.verification.steps = value.jobs.verification.steps.filter(step => step.name !== 'Critical model setup regressions'); }],
   ['filtered PR', value => { value.on.pull_request = { paths: ['src/**'] }; }],
   ['muted failure', value => { value.jobs.verification.steps.find(step => step.run === 'npm run build').run += ' || true'; }],
 ]) test('reject ' + label, () => { const value = actual(); mutate(value); assert.throws(() => assertRequiredCheckWorkflow(value)); });

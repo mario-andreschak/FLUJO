@@ -1,3 +1,4 @@
+import { registerTaskInputHandler } from './taskInputHandlers';
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
@@ -357,5 +358,7 @@ export function createRootsListHandler(config: MCPServerConfig,
  * capability is always declared).
  */
 export function registerRootsHandler(client: Client, config: MCPServerConfig): void {
-  client.setRequestHandler(ListRootsRequestSchema, createRootsListHandler(config, client));
+  const handler = createRootsListHandler(config, client);
+  registerTaskInputHandler(client, 'roots/list', handler);
+  client.setRequestHandler(ListRootsRequestSchema, handler);
 }

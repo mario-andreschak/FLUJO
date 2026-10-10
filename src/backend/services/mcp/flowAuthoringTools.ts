@@ -740,6 +740,11 @@ export async function authoringCallTool(
           registryName: candidate.registryName,
           title: candidate.title,
           score: candidate.score,
+          action: candidate.action ?? 'install',
+          ...(candidate.existingServerName ? { existingServerName: candidate.existingServerName } : {}),
+          ...(candidate.recommendationTier ? { recommendationTier: candidate.recommendationTier } : {}),
+          ...(candidate.supportEvidence ? { supportEvidence: candidate.supportEvidence } : {}),
+          ...(candidate.cost ? { cost: candidate.cost } : {}),
           transport: candidate.plan.transport,
           authMode: candidate.authMode,
           freeNote: candidate.freeNote,
@@ -755,6 +760,17 @@ export async function authoringCallTool(
       const neededInputs = new Set<string>();
 
       for (const candidate of research.candidates) {
+        if (candidate.action === 'configure-existing') {
+          return textResult({
+            installed: false,
+            needsConfiguration: true,
+            existingServerName: candidate.existingServerName ?? candidate.plan.serverName,
+            message: 'A relevant bundled server is already configured. Open its existing configuration and review readiness and execution consent before using it.',
+            candidate: researchEvidence.candidates.find(entry => entry.id === candidate.id),
+            attempts,
+            research: researchEvidence,
+          });
+        }
         const transport = candidate.plan.transport;
         const oauthDynamicClientRegistration = candidate.authMode === 'oauth-dcr';
         const preview = await installRegistryServer(candidate.registryName, undefined, {

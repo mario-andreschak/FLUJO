@@ -8,6 +8,8 @@ import { shippedDescriptorForConfig, shippedMcpAppRoot } from '../mcp/shippedSer
 import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackages';
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
+import { previewPackageRunnerConsent } from './packageRunnerConsent';
+import { trustedHostMcpPolicySchema } from './trustedHostMcp';
 import { consentDiagnosticStage, consentDiagnosticStageSync, BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
 import { BUNDLED_FLUJO_WORKLOAD_PURPOSE, computeBundledFlujoWorkloadInventory } from '../mcp/bundledFlujoWorkloadInventory';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
@@ -113,6 +115,10 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   const stored = current.find(item => item.name === serverName);
   if (!stored || stored.transport !== 'stdio' || stored.disabled || stored.isolation !== undefined
       || stored._buildCommand || stored._installCommand) throw new Error('This server has no fixed bundled runtime proposal.');
+  if (stored.trustedHost !== undefined) {
+    const requested = trustedHostMcpPolicySchema.parse(stored.trustedHost);
+    if (requested.packageRunner) return previewPackageRunnerConsent(stored, options.runtimeHome);
+  }
   const descriptor = shippedDescriptorForConfig(stored);
   if (!descriptor) throw new Error('Unknown installed package.');
   const revision = await inspectShippedWorkspaceProvenance(getWorkspaceDataDir(), descriptor.packageDirectory, shippedMcpAppRoot());

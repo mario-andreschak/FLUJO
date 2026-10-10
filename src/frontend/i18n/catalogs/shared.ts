@@ -1,6 +1,8 @@
 import type { MessageRow } from '../schema';
 
 export const sharedMessageRows = {
+  'cardPicker.repair': ['Repair', 'Reparar', 'Reparieren', 'Réparer', 'Ripara', 'Reparar', '修复'],
+  'cardPicker.missing': ['This referenced item is no longer available.', 'Este elemento referenciado ya no está disponible.', 'Dieses referenzierte Element ist nicht mehr verfügbar.', 'Cet élément référencé n’est plus disponible.', 'Questo elemento di riferimento non è più disponibile.', 'Este item referenciado não está mais disponível.', '此引用项已不可用。'],
   'common.close': ['Close', 'Cerrar', 'Schließen', 'Fermer', 'Chiudi', 'Fechar', '关闭'],
   'common.create': ['Create', 'Crear', 'Erstellen', 'Créer', 'Crea', 'Criar', '创建'],
   'common.loading': ['Loading…', 'Cargando…', 'Wird geladen…', 'Chargement…', 'Caricamento…', 'Carregando…', '正在加载…'],

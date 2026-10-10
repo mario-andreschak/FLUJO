@@ -723,7 +723,7 @@ interface IsolatedStdioRuntime {
   env: Record<string, string>;
 }
 
-function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
+export function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
   const workspaceRoot = getWorkspaceDataDir();
   const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
 
@@ -860,13 +860,23 @@ export function resolveStdioLaunch(
     if (isolateHome !== (authority.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (isolateHome) {
       const runtime = isolatedStdioRuntime(config.name);
+      if (authority.policy.packageRunner && path.resolve(config.cwd!) !== path.resolve(runtime.cwd)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
       for (const [name, value] of Object.entries(runtime.env)) {
         if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        if (authority.policy.packageRunner) {
+          const declared = Object.entries(launch.env).find(([key]) => key.toUpperCase() === name.toUpperCase())?.[1];
+          if (declared && declared !== value) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        }
         launch.env[name] = value;
       }
+      if (authority.policy.packageRunner) {
+        const cacheIndex = launch.args.findIndex(argument => argument.startsWith('--cache='));
+        if (cacheIndex < 0) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        launch.args[cacheIndex] = `--cache=${runtime.env.NPM_CONFIG_CACHE}`;
+      }
     }
-    // Fixed native/Node entries retain their approved source cwd. The private
-    // runtime cwd is for package runners, which this profile never authorizes.
+    // Fixed entries retain their source cwd; reviewed package runners retain
+    // their separately bound private working directory outside that source.
     log.debug('Transformed environment variable names', Object.keys(launch.env));
     return launch;
   }
