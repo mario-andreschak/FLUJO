@@ -22,6 +22,10 @@ import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionA
 import { hidePresetParameters } from '@/utils/shared/toolParameterPresets';
 
 const codexCtorMock = jest.fn();
+jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
+  acquireOrdinaryCodexExecutable: jest.fn(async () => ({ executable: undefined, release: jest.fn(async () => {}) })),
+  readOrdinaryCodexVersion: jest.fn(async () => '0.162.1'),
+}));
 const startThreadMock = jest.fn();
 const resumeThreadMock = jest.fn();
 const runStreamedMock = jest.fn();
@@ -191,7 +195,7 @@ describe('CodexAdapter — catalog snapshot lifetime', () => {
     })() }));
     await new CodexAdapter().createCompletion(baseInput());
     expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1);
-    expect(prepareModelCatalogMock).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(prepareModelCatalogMock).toHaveBeenCalledWith(expect.any(AbortSignal), undefined);
   });
 
   it('cleans up a snapshot when runtime preparation refuses the run', async () => {

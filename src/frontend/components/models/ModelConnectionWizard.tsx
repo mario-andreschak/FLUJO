@@ -45,6 +45,7 @@ import WorkspacePremiumRoundedIcon from '@mui/icons-material/WorkspacePremiumRou
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { Model } from '@/shared/types';
+import { modelService } from '@/frontend/services/model';
 import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import {
@@ -541,9 +542,26 @@ export default function ModelConnectionWizard({
         return;
       }
     }
+    if (kind === 'codex-subscription') {
+      const session = sessionRef.current;
+      operationRef.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        const models = await modelService.fetchProviderModels('', '', undefined, undefined, 'codex');
+        if (session !== sessionRef.current) return;
+        if (!models.length) throw new Error(t('models.wizard.createFailed'));
+        await finish(buildGuidedModels({ kind, codexModels: models }), session);
+      } catch {
+        if (session === sessionRef.current) setError(t('models.wizard.createFailed'));
+      } finally {
+        if (session === sessionRef.current) { operationRef.current = false; setBusy(false); }
+      }
+      return;
+    }
     await finish(buildGuidedModels({
       kind,
-      apiKey: kind === 'codex-subscription' ? undefined : apiKey,
+      apiKey,
       azureEndpoint,
       azureDeployment,
       azureApiVersion,

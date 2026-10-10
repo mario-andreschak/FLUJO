@@ -7,14 +7,13 @@ import { StorageKey } from '@/shared/types/storage';
 import type { Settings } from '@/shared/types/storage/storage';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readStableFile } from '@/utils/readStableFile';
+import { readOrdinaryCodexVersion } from './codexRuntimeUpdate';
 
 const log = createLogger('backend/services/model/adapters/codexModelCatalog');
 
 // Codex Desktop may refresh ~/.codex/models_cache.json with a schema that an
-// older bundled CLI cannot deserialize. Keep this in lockstep with the
-// @openai/codex-sdk version in package.json and only reuse catalogs produced by
-// the same CLI compatibility line.
-const CODEX_CATALOG_COMPATIBILITY_LINE = '0.153.';
+// older CLI cannot deserialize. Derive compatibility from the executable
+// actually selected for this invocation, including a managed CLI update.
 // Match the existing verified private-profile catalog budget. Never allocate an
 // unbounded operator-controlled cache while preparing a model invocation.
 const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
@@ -34,13 +33,13 @@ type CodexCatalog = {
   models?: unknown;
 };
 
-function isCompatibleCatalog(value: unknown): boolean {
+function isCompatibleCatalog(value: unknown, cliVersion: string): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 
   const catalog = value as CodexCatalog;
   if (
     typeof catalog.client_version !== 'string'
-    || !catalog.client_version.startsWith(CODEX_CATALOG_COMPATIBILITY_LINE)
+    || !catalog.client_version.startsWith(cliVersion.slice(0, cliVersion.lastIndexOf('.') + 1))
     || !Array.isArray(catalog.models)
     || catalog.models.length === 0
   ) {
@@ -77,6 +76,7 @@ function isCompatibleCatalog(value: unknown): boolean {
  */
 export async function prepareCodexModelCatalogSnapshot(
   signal?: AbortSignal,
+  executable?: string,
 ): Promise<CodexModelCatalogSnapshot | undefined> {
   assertNotCancelled(signal);
   try {
@@ -97,7 +97,9 @@ export async function prepareCodexModelCatalogSnapshot(
   try {
     contents = await readStableFile(catalogPath, MAX_CATALOG_BYTES, { allowSymbolicLink: true });
     assertNotCancelled(signal);
-    if (!isCompatibleCatalog(JSON.parse(contents.toString('utf8')))) return undefined;
+    const cliVersion = await readOrdinaryCodexVersion(executable);
+    assertNotCancelled(signal);
+    if (!isCompatibleCatalog(JSON.parse(contents.toString('utf8')), cliVersion)) return undefined;
   } catch {
     assertNotCancelled(signal);
     return undefined;

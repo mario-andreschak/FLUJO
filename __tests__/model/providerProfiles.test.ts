@@ -125,16 +125,10 @@ describe('provider profiles', () => {
     expect(GEMINI_NATIVE_FALLBACK_MODELS).not.toContain('gemini-2.0-flash');
   });
 
-  it('offers the current Codex CLI model catalog', () => {
-    expect(getProviderProfileById('codex')?.defaultModels).toEqual([
-      'gpt-6-astra',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
-    ]);
+  it('discovers Codex without a URL instead of freezing a release-specific catalogue', () => {
+    const codex = getProviderProfileById('codex')!;
+    expect(supportsProviderModelDiscovery(codex, '')).toBe(true);
+    expect(codex.defaultModels).toEqual([]);
   });
 
   it('keeps Antigravity CLI local authentication separate from native Gemini', () => {

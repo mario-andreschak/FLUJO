@@ -41,6 +41,7 @@ jest.mock('@/backend/services/model/cache', () => {
 });
 
 import { modelService } from '@/backend/services/model';
+jest.mock('@/backend/services/model/adapters/codexDiscovery', () => ({ fetchCodexModels: jest.fn() }));
 
 const storageMock = jest.requireMock('@/utils/storage/backend') as {
   loadItem: jest.Mock;
@@ -61,6 +62,13 @@ const cacheMock = jest.requireMock('@/backend/services/model/cache') as {
 const discovered = [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }];
 
 describe('profile-aware provider model service', () => {
+  it('discovers subscription Codex without a URL or API key', async () => {
+    const discovery = jest.requireMock('@/backend/services/model/adapters/codexDiscovery') as { fetchCodexModels: jest.Mock };
+    discovery.fetchCodexModels.mockResolvedValue([{ id: 'future-model', name: 'Future' }]);
+    expect(await modelService.fetchProviderModels('', undefined, undefined, undefined, 'codex')).toEqual([{ id: 'future-model', name: 'Future' }]);
+    expect(discovery.fetchCodexModels).toHaveBeenCalled();
+    expect(providerMock.fetchModelsFromProvider).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     const logger = jest.requireMock('@/utils/logger') as { createLogger: jest.Mock };
     logger.createLogger.mock.results.forEach(({ value }) => Object.values(value).forEach(fn => (fn as jest.Mock).mockClear()));

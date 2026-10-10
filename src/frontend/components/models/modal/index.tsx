@@ -312,6 +312,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     fetchModels,
   ]);
 
+  // Refresh the live Codex catalogue while the editor is open.
+  useEffect(() => {
+    if (!open || currentProfile.id !== 'codex') return;
+    // Pick up account/catalogue changes and a completed background CLI update.
+    const interval = setInterval(() => {
+      fetchModels('', undefined, 'codex', discoveryCredential);
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [open, currentProfile.id, discoveryCredential, fetchModels]);
+
   // Cleanup timeout on component unmount
   useEffect(() => {
     return () => {
@@ -381,6 +391,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     formState.adapter,
     formState.name,
   );
+  const discoveredEfforts = openRouterModels.find(candidate => candidate.id === formState.name)?.reasoningEfforts;
+  if (currentProfile.id === 'codex' && discoveredEfforts?.length) {
+    configurationCapabilities.effortLevels = discoveredEfforts as NonNullable<typeof configurationCapabilities.effortLevels>;
+  }
   const visibleProviderModels = useMemo(
     () => settings?.experimental?.showModelsWithoutToolCapabilities
       ? openRouterModels

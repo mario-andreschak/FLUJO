@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { Model } from '@/shared/types';
+import type { NormalizedModel } from '@/shared/types/model/response';
 import {
   AZURE_OPENAI_DEFAULT_API_VERSION,
   ANTIGRAVITY_CLI_API_KEY_MODELS,
@@ -31,6 +32,7 @@ interface GuidedModelInput {
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  codexModels?: NormalizedModel[];
 }
 
 interface ModelTemplate {
@@ -191,44 +193,7 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
       supportsTools: true,
     },
   ],
-  'codex-subscription': [
-    {
-      name: 'gpt-6-astra',
-      displayName: 'Codex Astra',
-      description: 'The most capable Codex model for complex reasoning and agent work.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'high',
-      supportsTools: true,
-    },
-    {
-      name: 'gpt-5.6-terra',
-      displayName: 'Codex Terra',
-      description: 'A balanced Codex model for everyday agent work.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'medium',
-      supportsTools: true,
-    },
-    {
-      name: 'gpt-5.6-sol',
-      displayName: 'Codex Sol',
-      description: 'The high-capability Codex model for difficult work.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'high',
-      supportsTools: true,
-    },
-    {
-      name: 'gpt-5.4-mini',
-      displayName: 'Codex Mini',
-      description: 'A quick, efficient Codex option for smaller tasks.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'medium',
-      supportsTools: true,
-    },
-  ],
+  'codex-subscription': [],
   'gemini-native': GEMINI_NATIVE_GUIDED_MODELS.map((name) => ({
     name,
     ...GEMINI_GUIDED_METADATA[name],
@@ -275,6 +240,11 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
           supportsTools: true,
         },
       ]
+    : input.kind === 'codex-subscription'
+      ? (input.codexModels ?? []).map(model => ({
+          name: model.id, displayName: model.name, description: model.description ?? '',
+          provider: 'codex' as const, adapter: 'codex-cli' as const,
+        }))
     : input.kind === 'antigravity-cli' && apiKey
       ? TEMPLATES[input.kind].filter(template =>
         (ANTIGRAVITY_CLI_API_KEY_MODELS as readonly string[]).includes(template.name))
