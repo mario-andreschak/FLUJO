@@ -19,6 +19,7 @@ import {
 import { InstallOptionList } from '../../components/InstallOptionPicker';
 import useRegistryInstall from '../../hooks/useRegistryInstall';
 import McpSecurityReviewPanel from '@/frontend/components/mcp/McpSecurityReviewPanel';
+import McpModelRiskAssessmentPanel from '@/frontend/components/mcp/McpModelRiskAssessmentPanel';
 import {
   DEFAULT_MARKETPLACE_FILTERS,
   filterMarketplaceResults,
@@ -66,12 +67,15 @@ import DownloadIcon from '@mui/icons-material/Download';
 import TuneIcon from '@mui/icons-material/Tune';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
+import { getSelectedWorkspace, onWorkspaceChanged } from '@/frontend/utils/workspaceSelection';
 
 const PAGE_SIZE = 30;
+type DiscoveryCoverage = { bounded: boolean; partial: boolean; truncated: boolean };
 
-const MarketplaceTab: React.FC<TabProps> = ({
+const MarketplaceTab: React.FC<TabProps & { active?: boolean }> = ({
   onClose,
-  onHandoff
+  onHandoff,
+  active = true,
 }) => {
   const theme = useTheme();
   const { t, formatNumber, formatList } = useI18n();
@@ -83,8 +87,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
-  const [message, setMessage] = useState<MessageState | null>(null);
+  const [message, setMessage] = useState<MessageState | { type: 'info'; text: string } | null>(null);
+  const [discoveryCoverage, setDiscoveryCoverage] = useState<DiscoveryCoverage | null>(null);
   const [filters, setFilters] = useState<MarketplaceSearchFilters>(DEFAULT_MARKETPLACE_FILTERS);
+  const [openFilter, setOpenFilter] = useState<keyof MarketplaceSearchFilters | null>(null);
   // The trust gate lives in the shared install pipeline: install actions stay
   // disabled until the user explicitly confirms they trust the server, and the
   // confirmation is reset every time the details dialog opens (#392).
@@ -93,6 +99,35 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const trustConfirmed = registryInstall.trustConfirmed;
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
+  const fetchRequest = useRef<AbortController | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const cancelFetch = useCallback(() => {
+    fetchIdRef.current++;
+    fetchRequest.current?.abort();
+    fetchRequest.current = null;
+  }, []);
+  useEffect(() => () => cancelFetch(), [cancelFetch]);
+  useEffect(() => {
+    if (!active) {
+      const interrupted = fetchRequest.current !== null;
+      cancelFetch();
+      setIsLoading(false);
+      setIsLoadingMore(false);
+      setOpenFilter(null);
+      if (interrupted) setMessage({ type: 'info', text: t('mcp.marketplace.searchInterrupted') });
+    }
+  }, [active, cancelFetch, t]);
+  const resetSelection = registryInstall.close;
+  useEffect(() => onWorkspaceChanged(() => {
+    cancelFetch();
+    setSearchInput(''); setActiveSearch(''); setResults([]); setNextCursor(null);
+    setIsLoading(false); setIsLoadingMore(false); setMessage(null);
+    setDiscoveryCoverage(null);
+    setFilters(DEFAULT_MARKETPLACE_FILTERS);
+    setOpenFilter(null);
+    resetSelection();
+  }), [cancelFetch, resetSelection]);
   const visibleResults = useMemo(
     () => filterMarketplaceResults(results, filters),
     [filters, results],
@@ -100,6 +135,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const filtersActive = hasActiveMarketplaceFilters(filters);
 
   const openServerDetails = useCallback((server: RegistryServer) => {
+    if (!activeRef.current) return;
     registryInstall.open(server);
   }, [registryInstall]);
 
@@ -108,10 +144,18 @@ const MarketplaceTab: React.FC<TabProps> = ({
   }, [registryInstall]);
 
   const fetchServers = useCallback(async (search: string, cursor?: string) => {
+    if (!activeRef.current) return;
+    cancelFetch();
     const fetchId = ++fetchIdRef.current;
+    const controller = new AbortController();
+    fetchRequest.current = controller;
+    const workspace = getSelectedWorkspace();
+    const isCurrent = () => fetchId === fetchIdRef.current && !controller.signal.aborted
+      && activeRef.current && workspace === getSelectedWorkspace();
     const isFirstPage = !cursor;
     if (isFirstPage) {
       setIsLoading(true);
+      setDiscoveryCoverage(null);
     } else {
       setIsLoadingMore(true);
     }
@@ -122,65 +166,73 @@ const MarketplaceTab: React.FC<TabProps> = ({
       if (search) params.set('search', search);
       if (cursor) params.set('cursor', cursor);
 
-      const response = await fetch(`/api/mcp-registry?${params.toString()}`);
-      const data: { success?: boolean; error?: string } & RegistryListResponse =
+      const response = await fetch(`/api/mcp-registry?${params.toString()}`, { signal: controller.signal });
+      const data: { success?: boolean; error?: string; metadata?: RegistryListResponse['metadata'] & {
+        discovery?: { bounded?: unknown; partial?: unknown; truncated?: unknown };
+      } } & RegistryListResponse =
         await response.json();
 
-      if (fetchId !== fetchIdRef.current) return; // superseded by a newer request
+      if (!isCurrent()) return;
 
       if (!response.ok || data.success === false) {
         throw new Error(data.error || String(response.status));
       }
 
       const servers = data.servers ?? [];
+      const coverage = data.metadata?.discovery;
+      const parsedCoverage = coverage && typeof coverage === 'object' && !Array.isArray(coverage)
+        ? { bounded: coverage.bounded === true, partial: coverage.partial === true, truncated: coverage.truncated === true }
+        : null;
+      // Pagination extends the same snapshot; a later page must not erase the
+      // coverage warning that accompanied its first page.
+      setDiscoveryCoverage(previous => isFirstPage ? parsedCoverage : parsedCoverage ? {
+        bounded: Boolean(previous?.bounded || parsedCoverage.bounded),
+        partial: Boolean(previous?.partial || parsedCoverage.partial),
+        truncated: Boolean(previous?.truncated || parsedCoverage.truncated),
+      } : previous);
       setResults(prev => (isFirstPage ? servers : [...prev, ...servers]));
       // The registry returns a nextCursor even on the last page when the page
       // is exactly full; an empty page just ends pagination gracefully.
       setNextCursor(servers.length > 0 ? data.metadata?.nextCursor ?? null : null);
     } catch (error) {
-      if (fetchId !== fetchIdRef.current) return;
+      if (!isCurrent()) return;
       console.error('Error fetching from MCP Registry:', error);
       setMessage({
         type: 'error',
         text: t('mcp.marketplace.loadError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       });
     } finally {
-      if (fetchId === fetchIdRef.current) {
+      if (isCurrent()) {
         setIsLoading(false);
         setIsLoadingMore(false);
       }
+      if (fetchRequest.current === controller) fetchRequest.current = null;
     }
-  }, [t]);
-
-  // Committed searches only (Enter) — nothing is fetched on mount or while typing,
-  // so opening the tab issues no request to the registry
-  useEffect(() => {
-    if (activeSearch) {
-      fetchServers(activeSearch);
-    }
-  }, [activeSearch, fetchServers]);
+  }, [cancelFetch, t]);
 
   const handleClearSearch = () => {
+    if (!activeRef.current) return;
     setSearchInput('');
     setActiveSearch('');
     // Empty the grid without a network request and invalidate any in-flight fetch
-    fetchIdRef.current++;
+    cancelFetch();
     setIsLoading(false);
     setIsLoadingMore(false);
     setResults([]);
     setNextCursor(null);
     setMessage(null);
+    setDiscoveryCoverage(null);
   };
 
   const handleSearch = () => {
+    if (!activeRef.current) return;
     const term = searchInput.trim();
     if (!term) {
       handleClearSearch();
-    } else if (term === activeSearch) {
-      // Same term committed again — re-run it (e.g. retry after an error).
-      fetchServers(term);
     } else {
       setActiveSearch(term);
+      // Event-driven, so returning to a preserved tab never replays a request.
+      fetchServers(term);
     }
   };
 
@@ -192,6 +244,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   };
 
   const handleInstall = (server: RegistryServer, option: InstallOption) => {
+    if (!activeRef.current || registryInstall.installBlocked) return;
     const missing = registryInstall.install(server, option);
     setMessage({
       type: missing.length > 0 ? 'warning' : 'success',
@@ -205,6 +258,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   // Launch-and-connect (#392): save it as an HTTP server carrying its launch
   // spec. No test run — nothing answers until the user starts the process.
   const handleConfigureAsRemote = (server: RegistryServer, option: ManualLaunchOption) => {
+    if (!activeRef.current || registryInstall.installBlocked) return;
     registryInstall.configureAsRemote(server, option);
     setMessage({ type: 'success', text: t('mcp.marketplace.prepared') });
   };
@@ -224,6 +278,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   // "Manual setup" fallback: hand the repository URL to the GitHub tab, where the
   // user can clone the repo and configure the server from there
   const handleManualInstall = (server: RegistryServer) => {
+    if (!activeRef.current || registryInstall.installBlocked) return;
     const repoUrl = githubRepoUrl(server);
     if (!repoUrl || !onHandoff) return;
     closeServerDetails();
@@ -255,7 +310,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const selectedOptions = registryInstall.options;
 
   return (
-    <Box sx={{ width: '100%' }}>
+    <Box hidden={!active} inert={!active} sx={{ width: '100%' }}>
       <Stack spacing={3}>
         <Typography variant="h6" gutterBottom>
           {t('mcp.marketplace.title')}
@@ -330,6 +385,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
           <FormControl size="small">
             <InputLabel id="marketplace-transport-filter-label">{t('mcp.marketplace.filterType')}</InputLabel>
             <Select
+              open={active && openFilter === 'transport'}
+              MenuProps={{ inert: !active, 'aria-hidden': !active || undefined }}
+              onOpen={() => { if (activeRef.current) setOpenFilter('transport'); }}
+              onClose={() => setOpenFilter(null)}
               labelId="marketplace-transport-filter-label"
               value={filters.transport}
               label={t('mcp.marketplace.filterType')}
@@ -343,6 +402,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
           <FormControl size="small">
             <InputLabel id="marketplace-setup-filter-label">{t('mcp.marketplace.filterSetup')}</InputLabel>
             <Select
+              open={active && openFilter === 'setup'}
+              MenuProps={{ inert: !active, 'aria-hidden': !active || undefined }}
+              onOpen={() => { if (activeRef.current) setOpenFilter('setup'); }}
+              onClose={() => setOpenFilter(null)}
               labelId="marketplace-setup-filter-label"
               value={filters.setup}
               label={t('mcp.marketplace.filterSetup')}
@@ -356,6 +419,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
           <FormControl size="small">
             <InputLabel id="marketplace-verification-filter-label">{t('mcp.marketplace.filterTrust')}</InputLabel>
             <Select
+              open={active && openFilter === 'verification'}
+              MenuProps={{ inert: !active, 'aria-hidden': !active || undefined }}
+              onOpen={() => { if (activeRef.current) setOpenFilter('verification'); }}
+              onClose={() => setOpenFilter(null)}
               labelId="marketplace-verification-filter-label"
               value={filters.verification}
               label={t('mcp.marketplace.filterTrust')}
@@ -369,6 +436,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
           <FormControl size="small">
             <InputLabel id="marketplace-sort-label">{t('mcp.marketplace.sort')}</InputLabel>
             <Select
+              open={active && openFilter === 'sort'}
+              MenuProps={{ inert: !active, 'aria-hidden': !active || undefined }}
+              onOpen={() => { if (activeRef.current) setOpenFilter('sort'); }}
+              onClose={() => setOpenFilter(null)}
               labelId="marketplace-sort-label"
               value={filters.sort}
               label={t('mcp.marketplace.sort')}
@@ -535,6 +606,13 @@ const MarketplaceTab: React.FC<TabProps> = ({
               })}
             </Grid>
 
+            {(discoveryCoverage?.bounded || discoveryCoverage?.partial || discoveryCoverage?.truncated) && (
+              <Alert severity="info">
+                {discoveryCoverage.bounded && <Typography variant="body2">{t('mcp.marketplace.boundedSearch')}</Typography>}
+                {(discoveryCoverage.partial || discoveryCoverage.truncated) && <Typography variant="body2">{t('mcp.marketplace.partialSearch')}</Typography>}
+              </Alert>
+            )}
+
             {nextCursor && results.length > 0 && (
               <Box sx={{ display: 'flex', justifyContent: 'center' }}>
                 <Button
@@ -560,7 +638,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
       {/* Details + trust gate — every card click lands here first. Install
           happens only from an explicit action, and only once the user confirms
           they trust the server. */}
-      <Dialog open={selectedServer !== null} onClose={closeServerDetails} maxWidth="sm" fullWidth>
+      <Dialog keepMounted inert={!active} aria-hidden={!active || undefined} open={active && selectedServer !== null} onClose={closeServerDetails} maxWidth="sm" fullWidth>
         {selectedServer && (
           <>
             <DialogTitle component="div">
@@ -616,7 +694,8 @@ const MarketplaceTab: React.FC<TabProps> = ({
                 {selectedServer.description || t('mcp.spotlight.noDescription')}
               </Typography>
 
-              <McpSecurityReviewPanel key={selectedServer.name} repositoryUrl={selectedServer.repository?.url ?? ''} />
+              <McpSecurityReviewPanel active={active} key={selectedServer.name} repositoryUrl={selectedServer.repository?.url ?? ''} />
+              <McpModelRiskAssessmentPanel active={active} key={`model-risk:${selectedServer.name}`} repositoryUrl={selectedServer.repository?.url ?? ''} />
 
               {/* Persistent security warning + explicit trust confirmation */}
               <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1 }}>
