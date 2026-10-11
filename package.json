@@ -170,7 +170,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19",
     "@types/react-window": "^1.8.8",
-    "@typescript-eslint/parser": "^8.65.0",
+    "@typescript-eslint/parser": "8.71.1",
     "buffer": "^6.0.3",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.4.0",
@@ -184,11 +184,11 @@
     "picomatch": "4.0.7",
     "postcss": "^8.5.29",
     "postcss-flexbugs-fixes": "^5.0.2",
-    "postcss-preset-env": "^11.3.2",
+    "postcss-preset-env": "11.6.1",
     "process": "^0.11.10",
     "tinyglobby": "0.2.17",
     "typescript": "^6.0.3",
-    "wait-on": "^9.1.0",
-    "webpack": "^5.109.2"
+    "wait-on": "9.5.1",
+    "webpack": "5.111.1"
   }
 }
