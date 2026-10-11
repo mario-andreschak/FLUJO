@@ -63,8 +63,8 @@ async function beginApprovedInstall(props: Partial<React.ComponentProps<typeof M
     <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} {...props} />
   </ThemeProvider>);
   fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
-  await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-  fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+  await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: /find options/i }));
   fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
   fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
   return view;
@@ -81,8 +81,8 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'free web search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     expect(await screen.findByText('Supported by FLUJO')).toBeInTheDocument();
     expect(screen.getByText('Bring your own key')).toBeInTheDocument();
     expect(screen.getByText('The service requires your own provider account; usage charges may apply.')).toBeInTheDocument();
@@ -99,8 +99,8 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} onConfigureExisting={configure} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'work with local files' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
     expect(configure).toHaveBeenCalledWith('filesystem');
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
@@ -115,8 +115,8 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     expect(await screen.findByText('Service pricing unconfirmed')).toBeInTheDocument();
     expect(screen.queryByText('Free for this capability')).not.toBeInTheDocument();
   });
@@ -131,9 +131,9 @@ describe('McpAiConnectionPanel', () => {
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={manual} />
     </ThemeProvider>);
-    expect(await screen.findByText(/choose a saved text model for research/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
+    expect(await screen.findByText(/no saved AI is available for this search/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find included options/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /set up myself/i }));
     expect(manual).toHaveBeenCalledTimes(1); expect(researchMcpConnectionMock).not.toHaveBeenCalled();
   });
 
@@ -145,9 +145,9 @@ describe('McpAiConnectionPanel', () => {
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} onConfigureExisting={configure} />
     </ThemeProvider>);
-    await screen.findByText(/choose a saved text model for research/i);
+    await screen.findByText(/no saved AI is available for this search/i);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'work with local files' } });
-    fireEvent.click(screen.getByRole('button', { name: /find bundled options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /find included options/i }));
     fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
     expect(researchMcpConnectionMock).toHaveBeenCalledWith({ query: 'work with local files', modelId: '' }, expect.any(Function), expect.any(AbortSignal));
     expect(configure).toHaveBeenCalledWith('filesystem'); expect(installMcpRecommendationMock).not.toHaveBeenCalled();
@@ -161,8 +161,8 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={installed} onAuthenticate={authenticate} onManual={jest.fn()} onConfigureExisting={configure} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
     fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
     fireEvent.click(await screen.findByRole('button', { name: /configure existing server/i }));
@@ -179,8 +179,8 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} onConfigureExisting={configure} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
     fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
     await screen.findByRole('button', { name: /configure existing server/i });
@@ -200,21 +200,21 @@ describe('McpAiConnectionPanel', () => {
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={manual} onConfigureExisting={configure} />
     </ThemeProvider>);
-    await screen.findByText(/choose a saved text model for research/i);
+    await screen.findByText(/no saved AI is available for this search/i);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'local files' } });
-    fireEvent.click(screen.getByRole('button', { name: /find bundled options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /find included options/i }));
     const handoff = await screen.findByRole('button', { name: /configure existing server/i });
     act(() => {
       fireEvent.click(handoff);
-      fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
-      fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
+      fireEvent.click(screen.getByRole('button', { name: /set up myself/i }));
+      fireEvent.click(screen.getByRole('button', { name: /try again/i }));
     });
-    expect(screen.getByRole('button', { name: /open manual setup/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /retry loading models/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /set up myself/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeDisabled();
     expect(manual).not.toHaveBeenCalled();
     expect(modelService.tryLoadModels).toHaveBeenCalledTimes(1);
     await act(async () => { finish(); });
-    fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
+    fireEvent.click(screen.getByRole('button', { name: /set up myself/i }));
     expect(manual).toHaveBeenCalledTimes(1);
   });
 
@@ -226,14 +226,14 @@ describe('McpAiConnectionPanel', () => {
     </ThemeProvider>);
     const request = screen.getByLabelText(/one thing to connect/i);
     fireEvent.change(request, { target: { value: 'search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+      fireEvent.click(screen.getByRole('button', { name: /find options/i }));
       fireEvent.keyDown(request, { key: 'Enter' });
     });
     expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
     await act(async () => { finish(result); });
-    expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled();
   });
   it('does not authenticate or refresh after an installing panel unmounts', async () => {
     let finish!: (value: unknown) => void;
@@ -245,8 +245,8 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={onInstalled} onAuthenticate={onAuthenticate} onManual={jest.fn()} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
     fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
     view.unmount();
@@ -263,15 +263,15 @@ describe('McpAiConnectionPanel', () => {
     const onInstalled = jest.fn(() => new Promise<void>(resolve => { installed = resolve; }));
     await beginApprovedInstall({ onAuthenticate, onInstalled });
     await waitFor(() => expect(onAuthenticate).toHaveBeenCalledWith('search'));
-    expect(screen.queryByText(/^search (?:is connected\.|was already connected;)/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^search (?:is connected\.|was already connected\.)/i)).not.toBeInTheDocument();
     expect(onInstalled).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /connecting/i })).toBeDisabled();
 
     await act(async () => { authenticate(); });
     expect(onInstalled).toHaveBeenCalledWith('search');
-    expect(screen.queryByText(/^search (?:is connected\.|was already connected;)/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^search (?:is connected\.|was already connected\.)/i)).not.toBeInTheDocument();
     await act(async () => { installed(); });
-    expect(await screen.findByText(alreadyExisted ? 'search was already connected; its existing configuration was kept.' : 'search is connected.')).toBeInTheDocument();
+    expect(await screen.findByText(alreadyExisted ? 'search was already connected. Your settings were kept.' : 'search is connected.')).toBeInTheDocument();
     expect(onAuthenticate).toHaveBeenCalledTimes(1);
     expect(onInstalled).toHaveBeenCalledTimes(1);
     expect(installMcpRecommendationMock).toHaveBeenCalledTimes(1);
@@ -288,7 +288,7 @@ describe('McpAiConnectionPanel', () => {
       : jest.fn(async () => undefined);
     await beginApprovedInstall({ onAuthenticate, onInstalled });
     expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.queryByText(/^search (?:is connected\.|was already connected;)/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^search (?:is connected\.|was already connected\.)/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/connection name/i)).toHaveValue('search');
     expect(screen.getByLabelText(/one thing to connect/i)).toHaveValue('web search');
     expect(screen.getByRole('checkbox')).toBeChecked();
@@ -324,13 +324,13 @@ describe('McpAiConnectionPanel', () => {
     </ThemeProvider>);
     const request = screen.getByLabelText(/one thing to connect/i);
     fireEvent.change(request, { target: { value: 'connect my accounting app' } });
-    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /find included options/i })).toBeDisabled();
     fireEvent.keyDown(request, { key: 'Enter' });
     expect(researchMcpConnectionMock).not.toHaveBeenCalled();
     expect(request).toHaveValue('connect my accounting app');
 
     await act(async () => { finishLoading([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never); });
-    expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled();
     fireEvent.keyDown(request, { key: 'Enter' });
     await screen.findByText(result.summary);
     expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
@@ -350,7 +350,7 @@ describe('McpAiConnectionPanel', () => {
     </ThemeProvider>);
     const request = screen.getByLabelText(/one thing to connect/i);
     fireEvent.change(request, { target: { value: 'connect my accounting app' } });
-    const retry = await screen.findByRole('button', { name: /retry loading models/i });
+    const retry = await screen.findByRole('button', { name: /try again/i });
     if (timing === 'in the same update') {
       act(() => {
         fireEvent.click(retry);
@@ -363,7 +363,7 @@ describe('McpAiConnectionPanel', () => {
     }
     expect(researchMcpConnectionMock).not.toHaveBeenCalled();
     expect(request).toHaveValue('connect my accounting app');
-    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /find included options/i })).toBeDisabled();
 
     await act(async () => { finishLoading([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never); });
     fireEvent.keyDown(request, { key: 'Enter' });
@@ -374,16 +374,16 @@ describe('McpAiConnectionPanel', () => {
     );
   });
 
-  it('allows Enter to find bundled options after an empty model load completes', async () => {
+  it('allows Enter to find included options after an empty model load completes', async () => {
     jest.mocked(modelService.tryLoadModels).mockResolvedValueOnce([]);
     researchMcpConnectionMock.mockResolvedValue(result);
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
     </ThemeProvider>);
-    await screen.findByText(/choose a saved text model for research/i);
+    await screen.findByText(/no saved AI is available for this search/i);
     const request = screen.getByLabelText(/one thing to connect/i);
     fireEvent.change(request, { target: { value: 'work with local files' } });
-    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /find included options/i })).toBeEnabled();
     fireEvent.keyDown(request, { key: 'Enter' });
     await screen.findByText(result.summary);
     expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
@@ -400,15 +400,15 @@ describe('McpAiConnectionPanel', () => {
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={onManual} />
     </ThemeProvider>);
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'free web search' } });
-    await screen.findByRole('button', { name: /retry loading models/i });
-    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /open manual setup/i })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    await screen.findByRole('button', { name: /try again/i });
+    expect(screen.getByRole('button', { name: /find included options/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /set up myself/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
     expect(screen.getByLabelText(/one thing to connect/i)).toHaveValue('free web search');
     expect(modelService.tryLoadModels).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText('Could not load AI models.')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    expect(screen.queryByText('Your saved AI choices couldn’t load.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     await waitFor(() => expect(researchMcpConnectionMock).toHaveBeenCalledWith(
       { query: 'free web search', modelId: 'model-1' }, expect.any(Function), expect.any(AbortSignal),
     ));
@@ -454,15 +454,15 @@ describe('McpAiConnectionPanel', () => {
       const request = screen.getByLabelText(/one thing to connect/i);
       fireEvent.change(request, { target: { value: 'connect my accounting app' } });
       const alert = await screen.findByRole('alert');
-      expect(alert).toHaveTextContent('Could not load AI models.');
-      expect(alert).not.toHaveTextContent(/choose a saved text model for research/i);
-      expect(screen.getByRole('button', { name: /find bundled options/i })).toBeEnabled();
-      expect(screen.getByRole('button', { name: /open manual setup/i })).toBeEnabled();
+      expect(alert).toHaveTextContent('Your saved AI choices couldn’t load.');
+      expect(alert).not.toHaveTextContent(/no saved AI is available for this search/i);
+      expect(screen.getByRole('button', { name: /find included options/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /set up myself/i })).toBeEnabled();
       expect(researchMcpConnectionMock).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledWith('/api/model', undefined);
 
-      fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
-      await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
       expect(request).toHaveValue('connect my accounting app');
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -480,8 +480,8 @@ describe('McpAiConnectionPanel', () => {
       render(<ThemeProvider theme={createTheme()}>
         <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
       </ThemeProvider>);
-      expect(await screen.findByRole('alert')).toHaveTextContent(/choose a saved text model for research/i);
-      expect(screen.queryByText('Could not load AI models.')).not.toBeInTheDocument();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/no saved AI is available for this search/i);
+      expect(screen.queryByText('Your saved AI choices couldn’t load.')).not.toBeInTheDocument();
       const request = screen.getByLabelText(/one thing to connect/i);
       fireEvent.change(request, { target: { value: 'work with local files' } });
       fireEvent.keyDown(request, { key: 'Enter' });
@@ -497,7 +497,7 @@ describe('McpAiConnectionPanel', () => {
       render(<ThemeProvider theme={createTheme()}>
         <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
       </ThemeProvider>);
-      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load AI models.');
+      expect(await screen.findByRole('alert')).toHaveTextContent('Your saved AI choices couldn’t load.');
       const request = screen.getByLabelText(/one thing to connect/i);
       fireEvent.change(request, { target: { value: 'work with local files' } });
       fireEvent.keyDown(request, { key: 'Enter' });
@@ -514,7 +514,7 @@ describe('McpAiConnectionPanel', () => {
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={onManual} />
     </ThemeProvider>);
-    fireEvent.click(await screen.findByRole('button', { name: /open manual setup/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /set up myself/i }));
     expect(onManual).toHaveBeenCalledTimes(1);
     expect(researchMcpConnectionMock).not.toHaveBeenCalled();
   });
@@ -535,8 +535,8 @@ describe('McpAiConnectionPanel', () => {
     );
 
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'free web search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     expect(await screen.findByText('Checking GitHub and npm…')).toBeInTheDocument();
 
     await act(async () => { finishResearch(result); });
@@ -600,8 +600,8 @@ describe('McpAiConnectionPanel', () => {
     );
 
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'PayPal' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
 
     expect(await screen.findByLabelText(/connection name/i)).toHaveValue('paypal');
     expect(screen.queryByLabelText(/^Authorization$/i)).not.toBeInTheDocument();

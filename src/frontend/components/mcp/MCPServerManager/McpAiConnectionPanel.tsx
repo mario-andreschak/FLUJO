@@ -300,6 +300,7 @@ export default function McpAiConnectionPanel({
             <Button
               variant="contained"
               size="large"
+              sx={{ minHeight: 48 }}
               startIcon={working ? <CircularProgress size={18} color="inherit" /> : <SearchRoundedIcon />}
               onClick={() => void startResearch()}
               disabled={working || installing || modelsLoading || !query.trim()}
@@ -313,18 +314,18 @@ export default function McpAiConnectionPanel({
       {!modelsLoading && (modelsFailed || models.length === 0) ? (
         <Alert severity={modelsFailed ? 'error' : 'info'}>
           {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noTextModels')}
-          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button onClick={() => {
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+            <Button variant="outlined" onClick={() => {
               if (modelsLoadingRef.current || installingRef.current || abortRef.current) return;
               // Claim loading before the effect so Enter in the same update
               // cannot submit a missing model while the retry is starting.
               modelsLoadingRef.current = true;
               setModelsLoading(true);
               setModelLoadAttempt((attempt) => attempt + 1);
-            }} disabled={working || installing}>
+            }} disabled={working || installing} sx={{ minHeight: 44 }}>
               {t('mcp.ai.retryModels')}
             </Button>
-            <Button onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
+            <Button onClick={openManual} disabled={working || installing} sx={{ minHeight: 44 }}>{t('mcp.ai.openManual')}</Button>
           </Stack>
         </Alert>
       ) : null}
