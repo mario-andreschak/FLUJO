@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -42,6 +42,7 @@ interface ServerPick {
   /** Tool names the server exposes, loaded lazily on expand. undefined = not yet loaded. */
   available?: string[];
   loading?: boolean;
+  loadError?: boolean;
 }
 
 export interface QuickChatStartSelection {
@@ -92,6 +93,8 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   const [serverNames, setServerNames] = useState<string[]>([]);
   const [loadingLists, setLoadingLists] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  const [listAttempt, setListAttempt] = useState(0);
+  const toolLoadGeneration = useRef(0);
 
   const [modelId, setModelId] = useState<string>('');
   const [flowName, setFlowName] = useState<string>('');
@@ -109,18 +112,16 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
     (async () => {
       try {
         const [loadedModels, serverConfigs] = await Promise.all([
-          modelService.loadModels(),
+          modelService.tryLoadModels(),
           mcpService.loadServerConfigs(),
         ]);
         if (cancelled) return;
-        setModels(loadedModels);
-        const configuredNames = Array.isArray(serverConfigs)
-          ? serverConfigs.flatMap((server) => {
-              if (!server || typeof server !== 'object') return [];
-              const record = server as Record<string, unknown>;
-              return record.disabled !== true && typeof record.name === 'string' ? [record.name] : [];
-            })
-          : [];
+        if (!Array.isArray(loadedModels) || !Array.isArray(serverConfigs)) throw new Error('Chat setup unavailable');
+        const configuredNames = serverConfigs.flatMap((server) => {
+          if (!server || typeof server !== 'object') return [];
+          const record = server as Record<string, unknown>;
+          return record.disabled !== true && typeof record.name === 'string' ? [record.name] : [];
+        });
         const names = connectedServersOnly
           ? (await Promise.all(configuredNames.map(async (name) => ({
               name,
@@ -130,6 +131,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
               .map(({ name }) => name)
           : configuredNames;
         if (cancelled) return;
+        setModels(loadedModels);
         setServerNames(names);
         // Default the model to the first available one so a user can start in two clicks.
         setModelId(prev => initialModelId || prev || loadedModels[0]?.id || '');
@@ -143,7 +145,10 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [connectedServersOnly, initialModelId, open, t]);
+  }, [connectedServersOnly, initialModelId, listAttempt, open, t]);
+
+  // A response from a closed dialog must not replace a later session's choices.
+  useEffect(() => () => { toolLoadGeneration.current += 1; }, [open]);
 
   // Initialize conversion defaults on open and reset transient state on close.
   useEffect(() => {
@@ -170,28 +175,36 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
     });
   }, []);
 
-  const toggleExpand = useCallback(async (name: string) => {
+  const loadTools = useCallback(async (name: string) => {
+    const generation = toolLoadGeneration.current;
+    setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: true, loadError: false } }));
+    try {
+      const { tools, error } = await mcpService.listServerTools(name);
+      if (error) throw new Error('App actions unavailable');
+      if (generation !== toolLoadGeneration.current) return;
+      const names = tools.map((tool) => tool.name);
+      setPicks(prev => ({
+        ...prev,
+        [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: names, loading: false },
+      }));
+    } catch (err) {
+      if (generation !== toolLoadGeneration.current) return;
+      log.warn(`Failed to load tools for ${name}`, err);
+      setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: false, loadError: true } }));
+    }
+  }, []);
+
+  const toggleExpand = useCallback((name: string) => {
     setPicks(prev => {
       const current = prev[name] ?? { selected: false, tools: null, expanded: false };
       return { ...prev, [name]: { ...current, expanded: !current.expanded } };
     });
-    // Lazily load the server's tools the first time it is expanded.
+    // Only a successful result is cached; a failed listing remains retryable.
     const existing = picks[name];
-    if (!existing?.available && !existing?.loading) {
-      setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: true } }));
-      try {
-        const { tools } = await mcpService.listServerTools(name);
-        const names = tools.map((tool) => tool.name);
-        setPicks(prev => ({
-          ...prev,
-          [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: names, loading: false },
-        }));
-      } catch (err) {
-        log.warn(`Failed to load tools for ${name}`, err);
-        setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: [], loading: false } }));
-      }
+    if (!existing?.expanded && !existing?.available && !existing?.loading) {
+      void loadTools(name);
     }
-  }, [picks]);
+  }, [loadTools, picks]);
 
   const toggleTool = useCallback((name: string, tool: string, available: string[]) => {
     setPicks(prev => {
@@ -206,10 +219,12 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   }, []);
 
   const needsFlowName = initialFlowName !== undefined;
-  const canStart = Boolean(modelId)
+  const hasSelectedModel = models.some(model => model.id === modelId);
+  const canStart = hasSelectedModel
     && (!needsFlowName || Boolean(flowName.trim()))
     && !starting
-    && !loadingLists;
+    && !loadingLists
+    && !listError;
 
   const handleStart = async () => {
     if (!modelId) {
@@ -253,7 +268,13 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
           {helpText ?? t('chat.quick.help')}
         </Typography>
 
-        {listError && <Alert severity="error" sx={{ mb: 2 }}>{listError}</Alert>}
+        {listError && (
+          <Alert severity="error" sx={{ mb: 2 }} action={
+            <Button color="inherit" sx={{ minHeight: 44 }} onClick={() => setListAttempt(attempt => attempt + 1)}>
+              {t('common.tryAgain')}
+            </Button>
+          }>{listError}</Alert>
+        )}
 
         <FormControl
           fullWidth
@@ -265,7 +286,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
           <Select
             labelId="quick-chat-model-label"
             label={t('chat.quick.model')}
-            value={modelId}
+            value={hasSelectedModel ? modelId : ''}
             onChange={e => setModelId(e.target.value)}
           >
             {models.length === 0 && (
@@ -317,7 +338,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
           <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
             <CircularProgress size={22} />
           </Box>
-        ) : serverNames.length === 0 ? (
+        ) : listError ? null : serverNames.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
             {noServersText ?? t('chat.quick.noServers')}
           </Typography>
@@ -360,6 +381,12 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
                   <Box sx={{ pl: 4, pb: 1 }}>
                     {pick?.loading ? (
                       <CircularProgress size={16} />
+                    ) : pick?.loadError ? (
+                      <Alert severity="error" action={
+                        <Button color="inherit" sx={{ minHeight: 44 }} onClick={() => void loadTools(name)}>
+                          {t('common.tryAgain')}
+                        </Button>
+                      }>{t('chat.quick.toolsLoadFailed')}</Alert>
                     ) : available && available.length > 0 ? (
                       available.map(tool => {
                         const on = activeTools ? activeTools.has(tool) : true;
