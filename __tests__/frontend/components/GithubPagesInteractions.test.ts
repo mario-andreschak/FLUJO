@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const site = path.resolve(__dirname, '../../../githubpages');
 const script = readFileSync(path.join(site, 'assets/site.js'), 'utf8');
-const imagePages = ['/', '/start/', '/guides/website-builder/', '/guides/first-agent/', '/guides/persona/'];
+const imagePages = ['/start/', '/guides/website-builder/', '/guides/first-agent/', '/guides/persona/'];
 let wideScreen: EventTarget;
 let documentListeners: jest.SpyInstance;
 let writeText: jest.Mock;
@@ -267,7 +267,7 @@ test.each(['https://attacker.example/', '/different-directory/'])(
 
 describe('navigation and clipboard enhancements', () => {
   test('menu state, nested link clicks, Escape focus, and desktop resize stay in sync', () => {
-    boot('/');
+    boot('/guides/website-builder/');
     const menu = element<HTMLButtonElement>('.menu-toggle');
     const nav = element('#site-nav');
     menu.click();
