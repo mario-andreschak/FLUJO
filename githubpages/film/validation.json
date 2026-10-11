@@ -1,61 +1,10 @@
 {
-  "status": "complete",
-  "updatedAtUtc": "2026-10-11T13:25:11Z",
-  "branch": "codex/readme-website-journeys-20261011",
-  "baseRevision": "569079d632a19f100c3bb194e7036aaba5cdc283",
-  "revisionScope": "Uncommitted film files identified by SHA-256 below; parent owns integration and publication.",
+  "status": "film-lane-complete-ready-for-integration",
+  "updatedDate": "2026-10-11",
+  "baseRevision": "3e82b6e84affb593ef3ed595db870bad65bf9b24",
+  "sourceScope": "githubpages/film; capture lane owns film/media",
   "durationSeconds": 60,
-  "runtimeDependencies": 0,
   "audio": false,
-  "timelineScenes": 10,
-  "captureRuntimeVersion": "3.46.2",
-  "captureKeys": 7,
-  "provenance": {
-    "file": "docs/journeys/evidence/capture-manifest.json",
-    "status": "final",
-    "usedAssets": [
-      {
-        "file": "githubpages/assets/journeys/03-github-url.png",
-        "sha256": "a0feffc41915e0319272e08ff1630913709c91d71fad717b720ed5a99189ee3b",
-        "bytes": 333279
-      },
-      {
-        "file": "githubpages/assets/journeys/04-mcp-test.png",
-        "sha256": "fe984efd11c679769f4287151d52863662695a9509afaf02d059dd612d7174b1",
-        "bytes": 249268
-      },
-      {
-        "file": "githubpages/assets/journeys/05-agent-app.png",
-        "sha256": "38042003115cb12de29d8113c2b5f42f98775ca18b4a9b348d2f92d9d8eae299",
-        "bytes": 565982
-      },
-      {
-        "file": "githubpages/assets/journeys/07-verified-checklist.png",
-        "sha256": "bf0a13a22c618f5c0f34068698d501a16443a24fb7e88c20240154e035320b23",
-        "bytes": 514649
-      },
-      {
-        "file": "githubpages/assets/journeys/11-day1-plan.png",
-        "sha256": "3ceaa716773550f4a08520eeaf64bc8fb891066ae921a5314d5b995708b0cb06",
-        "bytes": 359725
-      },
-      {
-        "file": "githubpages/assets/journeys/13-day2-progress.png",
-        "sha256": "1e3193860bd1f0c4e1c83fa87fe396f6396cdeb60916495ea019e8020e9e9ea0",
-        "bytes": 345266
-      },
-      {
-        "file": "githubpages/assets/journeys/14-day3-runsheet.png",
-        "sha256": "1e60b77b2748579a99c3e7e6e70f16a81cee379d008c44a603c722fe670fa82a",
-        "bytes": 420498
-      },
-      {
-        "file": "githubpages/assets/journeys/16-day3-goal-completed.png",
-        "sha256": "06c266bf94e966f39c72f4c039aa2101c65bab54c63d50967192b163bbcdad64",
-        "bytes": 453092
-      }
-    ]
-  },
   "browserAcceptance": {
     "passed": true,
     "checks": [
@@ -88,6 +37,10 @@
         "passed": true
       },
       {
+        "name": "genuine clips seek deterministically, stay silent and pause with the timeline",
+        "passed": true
+      },
+      {
         "name": "reduced-motion preference and manual toggle",
         "passed": true
       },
@@ -96,322 +49,179 @@
         "passed": true
       },
       {
+        "name": "narrow desktop pane uses readable portrait framing with visible controls",
+        "passed": true
+      },
+      {
         "name": "no console errors or failed local resources",
         "passed": true
       }
     ],
-    "measuredElapsedSeconds": 6.9,
-    "frames": [
+    "elapsedSeconds": 19,
+    "captureCount": 11,
+    "captureAssets": [
       {
-        "layout": "desktop",
-        "seconds": 3,
-        "signature": "6fa2bbc919e0",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/film/media/product-helper-expert.png",
+        "sha256": "11adcaec878f6214b0f1ebcec21b9949b4a5649b5c5f10e25615106b5abcad2d",
+        "bytes": 579295
       },
       {
-        "layout": "desktop",
-        "seconds": 6.5,
-        "signature": "3f91f23a035b",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/film/media/product-provider-choices.png",
+        "sha256": "22011f6adc396b9b41354f7ed04e47b65815de19b26c6bd6898301f1e032a1f4",
+        "bytes": 519857
       },
       {
-        "layout": "desktop",
-        "seconds": 9,
-        "signature": "b4befbf4d5f9",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/film/media/product-helper-easy.png",
+        "sha256": "a2b6813784ccb8ce3bb970b472c220944c50baf488f6411050ab7b06f72d3855",
+        "bytes": 535595
       },
       {
-        "layout": "desktop",
-        "seconds": 15,
-        "signature": "d6c09e959d22",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/02-ai-test.png",
+        "sha256": "1defe092a2efa0c7023fdae2151e2d0ed7a58c4a91e01d9c74a11fbe78aa35b2",
+        "bytes": 513007
       },
       {
-        "layout": "desktop",
-        "seconds": 21,
-        "signature": "aae1b503c35a",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/03-github-url.png",
+        "sha256": "a0feffc41915e0319272e08ff1630913709c91d71fad717b720ed5a99189ee3b",
+        "bytes": 333279
       },
       {
-        "layout": "desktop",
-        "seconds": 26,
-        "signature": "23d4e3740e80",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/04-mcp-test.png",
+        "sha256": "fe984efd11c679769f4287151d52863662695a9509afaf02d059dd612d7174b1",
+        "bytes": 249268
       },
       {
-        "layout": "desktop",
-        "seconds": 33,
-        "signature": "fd29c18e140d",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/film/media/product-fetch-result.png",
+        "sha256": "c9518c87fe49f9a0d4b986f9003bdcacd1f582349d93222224e0903763b3fe0f",
+        "bytes": 461384
       },
       {
-        "layout": "desktop",
-        "seconds": 38,
-        "signature": "8e4620c27c75",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/07-verified-checklist.png",
+        "sha256": "bf0a13a22c618f5c0f34068698d501a16443a24fb7e88c20240154e035320b23",
+        "bytes": 514649
       },
       {
-        "layout": "desktop",
-        "seconds": 41,
-        "signature": "bfa73fadd316",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/10-day1-memory.png",
+        "sha256": "62f75ce69309b9705a0812e04c8d11069fd34112ca61d216f13e7714f9326f63",
+        "bytes": 393090
       },
       {
-        "layout": "desktop",
-        "seconds": 46,
-        "signature": "dccf1d34ac3f",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/13-day2-progress.png",
+        "sha256": "1e3193860bd1f0c4e1c83fa87fe396f6396cdeb60916495ea019e8020e9e9ea0",
+        "bytes": 345266
       },
       {
-        "layout": "desktop",
-        "seconds": 52,
-        "signature": "f87e13aed1fb",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/assets/journeys/16-day3-goal-completed.png",
+        "sha256": "06c266bf94e966f39c72f4c039aa2101c65bab54c63d50967192b163bbcdad64",
+        "bytes": 453092
       },
       {
-        "layout": "desktop",
-        "seconds": 58,
-        "signature": "6f820c45b355",
-        "width": 1358,
-        "height": 764
+        "file": "githubpages/film/media/product-fetch-transition.mp4",
+        "sha256": "79cebeb69a0f8b5a16272c7ebb2901cf366ad005a0568690a3627eb17fe8d87a",
+        "bytes": 1579129
       },
       {
-        "layout": "desktop-repeat",
-        "seconds": 33,
-        "signature": "fd29c18e140d",
-        "width": 1358,
-        "height": 764
-      },
-      {
-        "layout": "gentle",
-        "seconds": 33,
-        "signature": "81e9e212e4e7",
-        "width": 1118,
-        "height": 629
-      },
-      {
-        "layout": "gentle-still",
-        "seconds": 33.2,
-        "signature": "81e9e212e4e7",
-        "width": 1118,
-        "height": 629
-      },
-      {
-        "layout": "mobile",
-        "seconds": 6.5,
-        "signature": "a37c57addcf7",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 9,
-        "signature": "82681ee9ae58",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 15,
-        "signature": "28bf4769ce05",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 21,
-        "signature": "b32798c04326",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 26,
-        "signature": "983f15013c49",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 33,
-        "signature": "6e7637865dfb",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 38,
-        "signature": "0fc4bc659a64",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 41,
-        "signature": "be192d4993fb",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 46,
-        "signature": "f1530278135e",
-        "width": 360,
-        "height": 480
-      },
-      {
-        "layout": "mobile",
-        "seconds": 58,
-        "signature": "395884490888",
-        "width": 360,
-        "height": 480
+        "file": "githubpages/film/media/product-helper-transition.mp4",
+        "sha256": "a4d8b150a0e9de8be8e445fb8fa100cb9f382a5d9c31a69e35db304eefa6643b",
+        "bytes": 1095095
       }
     ],
     "browserErrors": [],
     "failedResources": []
   },
-  "visualReview": {
-    "desktop": [
-      3,
-      6.5,
-      9,
-      15,
-      26,
-      33,
-      38,
-      41,
-      58
-    ],
-    "portrait": [
-      6.5,
-      9,
-      15,
-      26,
-      33,
-      38,
-      41,
-      46,
-      58
-    ],
-    "notes": [
-      "Reviewed source crops and primary narrative text on desktop and portrait compositions.",
-      "Exact chapter starts remain readable when paused.",
-      "Day 3 subtitle and day trail do not overlap.",
-      "Phone completed badge is cropped from real UI and remains legible.",
-      "Final Day 2 phone crop and regenerated poster were reviewed."
-    ],
-    "temporaryScreenshotsRetained": false
+  "sourceHashes": {
+    "renderer.js": "c0da37359be5969efb2cf8522aaaaa0c2eb0427445e2818666d0a9b9e5af2d3c",
+    "player.js": "176a09c1fd6ef8835172a74b7a33681697e44332c91de29c8f43907c25e6206e",
+    "captures.js": "fea7d62e55d277e01c7fb77be02a7abd169410e114e6c16149354ab2038a8229",
+    "index.html": "908747ab037b90a428b454967aede19f37baec5e1dd58d7c150928b805bb2e18",
+    "film.css": "2d73a1d20306148326d1ad79ca7aed99863469c9c0eb83488202d99e3803ea07",
+    "brand.svg": "fdcc6d1491ad0f9ab8902262f7247bb98ed1d65cec36a66e7e9a08ee9b464d25",
+    "tools/verify.mjs": "7d22a9823df4b009adfa7c277f5a8e4df9612b03701c4c1f10cde47df3ac2a52",
+    "tools/render.mjs": "6506b1568ecb78ce4565ad474bffbba97e4d911fca70b38e0489416cb5a89c8c",
+    "README.md": "f56c8a7d591f30343af8196c5c4d429e02c8ac85be4f6aa33cd3b8fdda3de54e",
+    "media/product-capture-manifest.json": "4ed86ce004e0143e672185f8e33c78df4a8ef22cc2aed302f3f43242d74215dc"
   },
-  "sourceFiles": [
-    {
-      "file": "githubpages/film/index.html",
-      "sha256": "95404082a196a9833997151ecdee478953e05802619ec07305086a0db23902c9"
-    },
-    {
-      "file": "githubpages/film/film.css",
-      "sha256": "8d925f7b9f98dbb36420b47099a6da3043781d494c6c509d750c517939c26091"
-    },
-    {
-      "file": "githubpages/film/renderer.js",
-      "sha256": "812a23c501939ab4a0a89c177980d4303930294bd0c7024dd2363a36c8c5112a"
-    },
-    {
-      "file": "githubpages/film/player.js",
-      "sha256": "9c1bbd7bb6b011752f481d9725b647b96e7da29c7068994315144f55ed98e591"
-    },
-    {
-      "file": "githubpages/film/captures.js",
-      "sha256": "6aa91203017be97f3155a98e9400ebe980db1ca86081d902bc488672ae55af3e"
-    },
-    {
-      "file": "githubpages/film/tools/render.mjs",
-      "sha256": "191503f6b90c01264e8be2fb90716dd44b9c9c826c9f76d5d0dd093cbbd2c7db"
-    },
-    {
-      "file": "githubpages/film/tools/verify.mjs",
-      "sha256": "25b9e6c1aa2decbc5bcd5861a38edf735cc8c407379d3f7abf1971b57c57759d"
-    },
-    {
-      "file": "githubpages/film/README.md",
-      "sha256": "ab854e32a28080628631c5d11dd85d175be2f4a2ab3ec9f4c2a1b19243606a5d"
-    }
+  "creativeChanges": "Actual product graph, close-up Easy/Expert action, saved tool inspection, Continue goal and ordinary draft-memory review controls. Creative source frozen for review.",
+  "pending": [
+    "Parent integration into the existing PR and required CI"
   ],
+  "currentServices": [],
+  "previewOwnership": "Parent-owned static preview; no film-owned persistent service.",
+  "oldShortFilmChanges": false,
+  "notes": [
+    "Supplementary clips inspect saved state and do not record new model execution.",
+    "Known imperfect temperature wording is outside the film output crops; the full evidence is preserved."
+  ],
+  "independentReview": {
+    "fullMotion": "Passed all acts; observed exactly 60s playback in 60.026s wall time; no creative or factual blocker.",
+    "boundaryRecheck": "Passed cold, after full playback, and replay 0.001s before each boundary; first active frames readyState 4, not seeking, within 12ms of source start; no page or media errors."
+  },
+  "creativeReview": {
+    "accepted": true,
+    "scope": "Parent and independent critic accepted the assembled story; required switch, goal, memory and desktop resolution changes applied.",
+    "responsive": "At 711 × 900, portrait canvas is 427.5 × 570 and player controls end at 870px; no overflow. The 390 × 844 phone and 1440 × 900 desktop layouts are preserved. Editor and Persona scenes were visually reviewed.",
+    "parentFinalInspection": "Passed final page and continuous playback inspection: narrow-pane framing and controls visible, full timeline ends cleanly, CTA readable, and genuine UI/action crops accepted."
+  },
+  "artifacts": {
+    "poster.png": {
+      "bytes": 326207,
+      "sha256": "2addc5e87e82e450ca8ac4dc7b9b6acdb16c4eaa9d72cdb23e6565614db1a729"
+    },
+    "flujo-product-60s.mp4": {
+      "bytes": 6443024,
+      "sha256": "cff2e16501037b1d43936d8112b7a9457d3040c2e6193ef80c5e10ac551d9c9c"
+    }
+  },
   "export": {
-    "file": "githubpages/film/flujo-coffee-60s.mp4",
-    "sha256": "a8c1b524b53711eaa9cf18509e2b41bf8f97c01f3ebd98a193ce0185a5f0a1d5",
-    "bytes": 1341528,
-    "codec": "h264",
+    "file": "flujo-product-60s.mp4",
+    "durationSeconds": 60,
+    "frames": 1800,
+    "fps": 30,
     "width": 1280,
     "height": 720,
-    "frames": 1800,
-    "framesPerSecond": 30,
-    "durationSeconds": 60,
+    "codec": "h264",
     "audioStreams": 0,
-    "measuredRenderElapsedSeconds": 56,
-    "downloadHttpStatus": 200,
-    "downloadContentType": "video/mp4",
-    "verification": "ffprobe checked one H.264 video stream, exact duration, dimensions, frame count and frame rate."
-  },
-  "poster": {
-    "file": "githubpages/film/poster.png",
-    "sha256": "e8b56687b9df64e65327f62a0d98d96bd1642d134149969651ac37f02c3acc11",
-    "bytes": 85516
-  },
-  "otherChecks": {
-    "javascriptSyntax": "passed for renderer, player, captures, exporter and verifier",
-    "marketingSite": {
-      "pages": 8,
-      "localReferences": 230,
-      "errors": []
+    "measuredRenderSeconds": 149.5,
+    "browserErrors": [],
+    "fullDecodePassed": true,
+    "download": {
+      "status": 200,
+      "contentType": "video/mp4",
+      "bytes": 6443024
     },
-    "gitDiffCheck": "passed",
-    "independentCopyReview": "No material factual or accessibility contradictions found.",
-    "smallTextContrastRatios": {
-      "softOnMint": 4.98,
-      "softOnPaper": 6.24,
-      "inkOnCoral": 4.74,
-      "softOnLilac": 4.66
+    "browserPlayback": {
+      "duration": 60,
+      "playbackAdvanced": true,
+      "seekSamples": [
+        24,
+        34,
+        49
+      ],
+      "visuallyReviewed": true
     }
   },
-  "limitations": [
-    "Agent-operated live software demonstration; not an independent human usability study.",
-    "Day 1â€“3 are compressed demo sessions, not elapsed days or unattended reliability evidence.",
-    "The displayed checklist is corrected after reading the complete source.",
-    "Operator-reviewed memories, explicit approval and quantity reconciliation were required. Some older app status wording remained stale.",
-    "Phone layout was checked in headless Chromium touch emulation; no physical-device test is claimed."
-  ],
-  "timingNote": "The original poster/render checks overlapped the 56-second export. The current 6.9-second browser verification ran separately after the verifier security fix; the video was not re-rendered because its inputs are unchanged.",
-  "currentServices": [],
-  "durableArtifacts": [
-    "githubpages/film/flujo-coffee-60s.mp4",
-    "githubpages/film/poster.png"
-  ],
-  "primaryCheckoutWrites": false,
-  "oldShortFilmChanges": false,
-  "cleanup": {
-    "status": "complete",
-    "method": "flujo-bash MCP run tool through the task MCP client helper",
-    "removedFiles": 60,
-    "reclaimedBytes": 6372426,
-    "freeDiskBytes": 169231372288,
-    "ownedDirectoryAbsent": true,
-    "remainingOwnedTemporaryTargets": [],
-    "notes": "Final MP4, poster and this validation receipt are retained. No shared service or dependency directory was removed."
+  "staticSiteCheck": {
+    "pages": 8,
+    "localReferences": 234,
+    "errors": [],
+    "scope": "Current pages, local anchors/assets, CSS URLs, film capture assets and release-version contracts. No remote-link or visual claims."
   },
-  "securityFollowup": {
-    "rule": "js/file-system-race",
-    "change": "The verifier maps directory URLs to index.html before a single readFile call, removing the separate filesystem stat/read sequence.",
-    "browserAcceptanceRerun": "10 checks passed after the verifier change; player, renderer, screenshots and MP4 bytes are unchanged."
-  }
+  "syntaxAndDiffChecks": "Passed five JavaScript syntax checks and git diff --check.",
+  "deliveryBoundary": "Film lane does not commit, create a PR, merge or publish. Parent owns integration, CI and public delivery.",
+  "cleanup": {
+    "tool": "flujo-bash MCP",
+    "removed": [
+      "superseded flujo-coffee-60s.mp4",
+      "owned film-rebuild-qa scratch directory"
+    ],
+    "removedFiles": 50,
+    "reclaimedBytes": 14652691,
+    "freeDiskBytes": 167226408960,
+    "freeDiskGiB": 155.74,
+    "verifiedAbsent": true,
+    "remainingOwnedCleanupTargets": [],
+    "preserved": "Final poster, product MP4, reviewed source media, source files and parent-owned preview."
+  },
+  "nextAction": "Parent commits the stable film batch with the website changes in the existing PR, then completes required CI and public delivery.",
+  "sourceHashFormat": "SHA-256 after normalizing CRLF to LF, so these source fingerprints also match Git checkouts and GitHub Pages. Media and artifact hashes use exact bytes."
 }

@@ -16,11 +16,11 @@ const candidates=[process.env.PLAYWRIGHT_MODULE,'playwright'].filter(Boolean);
 let chromium;
 for(const candidate of candidates){try{({chromium}=require(candidate));break}catch{}}
 if(!chromium)throw new Error('Playwright is required for export only. Set PLAYWRIGHT_MODULE to an existing installation.');
-const output=resolve(process.argv[2]||join(here,'../flujo-coffee-60s.mp4'));
+const output=resolve(process.argv[2]||join(here,'../flujo-product-60s.mp4'));
 const poster=process.argv.includes('--poster');
 const portrait=process.argv.includes('--portrait');
 const previewTime=Number(process.argv.find(arg=>arg.startsWith('--t='))?.slice(4)||3);
-const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png','.jpg':'image/jpeg','.webp':'image/webp','.svg':'image/svg+xml'};
+const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png','.jpg':'image/jpeg','.webp':'image/webp','.svg':'image/svg+xml','.mp4':'video/mp4'};
 const server=createServer(async(req,res)=>{
   try{
     const urlPath=decodeURIComponent(new URL(req.url,'http://localhost').pathname);

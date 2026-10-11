@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f5f1e8">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23213e35'/%3E%3Ctext x='16' y='26' text-anchor='middle' font-family='Georgia' font-size='31' font-style='italic' fill='%23f5f1e8'%3Ef%3C/text%3E%3C/svg%3E">
-  <title>One idea. A little help. — A 60-second FLUJO film</title>
-  <meta name="description" content="A silent, 60-second story about preparing a small coffee workshop with FLUJO. Play, pause, and explore at your own pace.">
+  <meta name="theme-color" content="#080c17">
+  <link rel="icon" type="image/svg+xml" href="brand.svg">
+  <title>FLUJO in 60 seconds — Your AI. Your tools. One workspace.</title>
+  <meta name="description" content="Choose your AI, connect tools, and build reusable agents in FLUJO. See the workspace in a 60-second silent product film.">
   <link rel="canonical" href="https://flujo.com.co/film/">
-  <meta property="og:title" content="One idea. A little help. — FLUJO">
-  <meta property="og:description" content="A coffee workshop, a useful helper, and a plan coming together. A silent 60-second film.">
+  <meta property="og:title" content="FLUJO — Your AI. Your tools. One workspace.">
+  <meta property="og:description" content="Choose your AI. Connect tools. Build reusable agents. See FLUJO in 60 seconds.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://flujo.com.co/film/">
   <meta property="og:image" content="https://flujo.com.co/film/poster.png">
@@ -20,19 +20,23 @@
 <body>
   <a class="skip-link" href="#player">Skip to the film</a>
   <header class="page-header">
-    <a class="wordmark" href="../" aria-label="FLUJO home"><span class="brand-symbol" aria-hidden="true">f</span>FLUJO</a>
-    <nav aria-label="Main"><a href="../guides/first-agent/">Try the story</a><a class="header-cta" href="../start/">Get started <span aria-hidden="true">↗</span></a></nav>
+    <a class="wordmark" href="../" aria-label="FLUJO home"><img src="brand.svg" width="30" height="30" alt="">FLUJO<span aria-hidden="true">.</span></a>
+    <a class="primary-cta" href="../start/">Try FLUJO <span aria-hidden="true">↗</span></a>
   </header>
   <main>
-    <div class="intro"><p class="eyebrow">A SMALL IDEA, IN MOTION</p><h1>One idea. A little help.</h1><p>A coffee workshop, coming together. <span>60 seconds. Sound off.</span></p></div>
+    <div class="intro">
+      <p class="eyebrow"><span aria-hidden="true"></span> FLUJO IN 60 SECONDS</p>
+      <h1>Build AI assistants <span>that use your tools.</span></h1>
+      <p>Choose your AI. Connect tools. Build reusable agents.</p>
+    </div>
     <section id="player" class="player" aria-label="60-second FLUJO film" tabindex="0">
       <div class="screen">
-        <canvas id="film-canvas" width="1600" height="900" aria-label="Animated coffee workshop story. A full text description follows the player." role="img"></canvas>
-        <button id="start-overlay" class="start-overlay" aria-label="Play the 60-second film"><span class="play-disc" aria-hidden="true">▶</span><span>Watch the story<small>60 seconds · silent</small></span></button>
+        <canvas id="film-canvas" width="1600" height="900" aria-label="FLUJO product film. A full text description follows the player." role="img"></canvas>
+        <button id="start-overlay" class="start-overlay" type="button" aria-label="Play the 60-second film"><span class="play-disc" aria-hidden="true">▶</span><span>Play film<small>60 seconds · no audio</small></span></button>
       </div>
       <div class="controls">
         <button id="play" type="button" aria-label="Play film"><span class="play-icon" aria-hidden="true">▶</span><span class="play-label">Play</span></button>
-        <button id="replay" class="icon-button" type="button" aria-label="Replay from the beginning" title="Replay from the beginning">↺</button>
+        <button id="replay" type="button" aria-label="Replay from the beginning" title="Replay from the beginning"><span class="replay-icon" aria-hidden="true">↺</span><span>Replay</span></button>
         <label class="sr-only" for="seek">Film position in seconds</label>
         <input id="seek" type="range" min="0" max="60" step="0.1" value="0" aria-valuetext="0 seconds of 60">
         <output id="time" aria-hidden="true">0:00 / 1:00</output>
@@ -41,14 +45,21 @@
       </div>
       <p id="scene-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
     </section>
-    <div class="under-film"><p>Made to watch at your own pace. Pause or drag to explore.</p><div class="film-links"><a href="flujo-coffee-60s.mp4" download>Download MP4</a><a href="../start/">Make your first helper <span aria-hidden="true">↗</span></a></div></div>
-    <div class="story-context">
-      <p>“Day 1–3” are compressed sessions in an agent-operated live demo, not elapsed days or proof of unattended reliability. Personas are experimental. Keep FLUJO running and review their work. <a href="https://github.com/mario-andreschak/FLUJO/blob/main/docs/journeys/evidence/workshop-pack.md">Read the reviewed workshop pack →</a></p>
-      <p>FLUJO runs locally. Connected models and tools may receive data and have their own costs. <a href="../guides/persona/">Explore the full journey →</a></p>
+    <div class="under-film">
+      <p><span class="film-duration">01:00</span> No audio needed.</p>
+      <a class="download-link" href="flujo-product-60s.mp4" download>Download MP4 <span aria-hidden="true">↓</span></a>
     </div>
-    <details class="transcript"><summary>Read the story &amp; jump to a scene</summary><ol id="chapters"></ol><p class="keyboard-help">With the player focused: Space plays or pauses; ← / → moves five seconds; Home / End jumps to either end; F opens fullscreen. The timeline also supports its native arrow keys.</p></details>
-    <noscript><p class="no-script">The animated film needs JavaScript. <a href="../guides/first-agent/">Read the first-helper guide</a> or <a href="../guides/persona/">follow Maya’s workshop journey</a>.</p></noscript>
+    <details class="transcript">
+      <summary>Transcript &amp; recording notes</summary>
+      <ol id="chapters"></ol>
+      <div class="recording-notes">
+        <p>Recorded FLUJO screens with animated explanations. Personas are experimental: keep FLUJO running and review their work. The demonstration compresses work sessions; it does not show elapsed days or unattended operation.</p>
+        <p>Connected models and tools may receive data and have their own costs. <a href="https://github.com/mario-andreschak/FLUJO/blob/main/docs/journeys/evidence/capture-provenance.md">Recording provenance <span aria-hidden="true">↗</span></a></p>
+        <p class="keyboard-help">Player shortcuts: Space to play or pause, ← / → to move five seconds, Home / End to jump to either end, and F for fullscreen. The timeline also supports its native arrow keys.</p>
+      </div>
+    </details>
+    <noscript><p class="no-script">Enable JavaScript to play the interactive film, or <a href="flujo-product-60s.mp4">watch the MP4</a>.</p></noscript>
   </main>
-  <footer><a href="../">FLUJO</a><span>A little help for what you want to do.</span></footer>
+  <footer><span>FLUJO</span><span>Runs on your computer. Open source.</span></footer>
 </body>
 </html>

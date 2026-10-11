@@ -21,7 +21,7 @@ for (const candidate of candidates) {
 if (!chromium) throw new Error('Set PLAYWRIGHT_MODULE to an existing Playwright installation.');
 
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4' };
 const server = createServer(async (req, res) => {
   try {
     if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405).end(); return; }
@@ -92,15 +92,21 @@ try {
   captureCount = await page.evaluate(() => window.film.captureCount ?? 0);
 
   await check('capture files match reviewed provenance records', async () => {
-    const manifest = JSON.parse(await readFile(resolve(root, '../docs/journeys/evidence/capture-manifest.json'), 'utf8'));
-    assert.equal(manifest.status, 'final', 'Capture provenance must be finalized');
-    const CAPTURES = await page.evaluate(async () => (await import('./captures.js')).CAPTURES);
-    const sources = [...new Set(Object.values(CAPTURES).flatMap(entry => [entry.src, entry.mobileSrc]).filter(Boolean))];
-    for (const source of sources) {
+    const { CAPTURES, CLIPS } = await page.evaluate(async () => {
+      const { CAPTURES, CLIPS } = await import('./captures.js'); return { CAPTURES, CLIPS };
+    });
+    const entries = [...Object.values(CAPTURES), ...Object.values(CLIPS)];
+    const seen = new Set();
+    for (const entry of entries) for (const source of [entry.src, entry.mobileSrc].filter(Boolean)) {
+      if (seen.has(source)) continue; seen.add(source);
       const absolute = resolve(root, 'film', source);
       assert.ok(absolute.startsWith(root + sep), 'Capture source must stay inside the published site');
       const file = 'githubpages/' + absolute.slice(root.length + 1).split(sep).join('/');
-      const record = manifest.screenshots.find(item => item.file === file);
+      const manifestPath = entry.provenance ? resolve(root, 'film', entry.provenance) : resolve(root, '../docs/journeys/evidence/capture-manifest.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      assert.equal(manifest.status, 'final', 'Capture provenance must be finalized');
+      const records = [...(manifest.screenshots || []), ...(manifest.clips || []), ...(manifest.assets || [])];
+      const record = records.find(item => item.file === file || resolve(dirname(manifestPath), item.file) === absolute);
       assert.ok(record, `No provenance record for ${file}`);
       assert.equal(record.publicUse, 'reviewed', `${file} is not reviewed for publication`);
       const bytes = await readFile(absolute);
@@ -129,7 +135,7 @@ try {
   });
 
   await check('representative desktop scenes render distinctly and deterministically', async () => {
-    const times = [3, 6.5, 9, 15, 21, 26, 33, 38, 41, 46, 52, 58];
+    const times = [3, 6.5, 9, 15, 21, 23.5, 24, 27, 30, 33, 34, 38, 40, 42, 45, 47, 49, 53, 58];
     const signatures = [];
     for (const time of times) signatures.push(await inspectFrame(page, time, 'desktop'));
     assert.equal(new Set(signatures).size, times.length);
@@ -138,7 +144,7 @@ try {
 
   await check('API seek clamps negative, overshoot and nonfinite values', async () => {
     for (const [input, expected] of [[-10, 0], [75, 60], [Infinity, 0], [NaN, 0], [23.5, 23.5]]) {
-      const time = await page.evaluate(value => { window.film.seek(value); return window.film.currentTime; }, input);
+      const time = await page.evaluate(async value => { await window.film.seek(value); return window.film.currentTime; }, input);
       assert.equal(time, expected);
     }
   });
@@ -182,6 +188,35 @@ try {
     }
   });
 
+  await check('genuine clips seek deterministically, stay silent and pause with the timeline', async () => {
+    const clips = await page.evaluate(async () => (await import('./captures.js')).CLIPS);
+    assert.ok(Object.keys(clips).length >= 2, 'The product film must include genuine action clips');
+    for (const [key, clip] of Object.entries(clips)) {
+      const time = clip.start + .4;
+      await page.evaluate(t => window.film.seek(t), time);
+      const expected = (clip.sourceStart || 0) + .4 * (clip.rate || 1);
+      let state = await page.evaluate(k => window.film.mediaState.find(item => item.key === k), key);
+      assert.ok(Math.abs(state.time - expected) < .07, `${key} seek missed the recorded frame`);
+      assert.equal(state.paused, true); assert.equal(state.muted, true); assert.ok(state.readyState >= 2);
+      await page.evaluate(() => window.film.play());
+      await page.waitForFunction(t => window.film.currentTime > t + .3, time);
+      await page.evaluate(() => window.film.pause());
+      state = await page.evaluate(k => window.film.mediaState.find(item => item.key === k), key);
+      assert.ok(state.time > expected + .1, `${key} did not advance during playback`);
+      assert.equal(state.paused, true);
+      await page.evaluate(async t => { await Promise.all([window.film.seek(t), window.film.seek(t + .2)]); }, time);
+      assert.ok(Math.abs(await page.evaluate(() => window.film.currentTime) - time - .2) < .001);
+      assert.equal(await page.evaluate(() => window.film.mediaError), '');
+      await page.evaluate(t => window.film.seek(t), clip.start - .2);
+      await page.evaluate(() => window.film.play());
+      await page.waitForFunction(t => window.film.currentTime >= t, clip.start);
+      const boundary = await page.evaluate(k => window.film.mediaState.find(item => item.key === k), key);
+      assert.ok(boundary.readyState >= 2 && !boundary.seeking, `${key} was not prepared at the scene boundary`);
+      assert.ok(Math.abs(boundary.time - (clip.sourceStart || 0)) < .3, `${key} briefly showed the wrong source interval`);
+      await page.evaluate(() => window.film.pause());
+    }
+  });
+
   await check('reduced-motion preference and manual toggle', async () => {
     const gentle = await browser.newPage({ viewport: { width: 1200, height: 900 }, reducedMotion: 'reduce' });
     watch(gentle); await open(gentle, '?t=33');
@@ -208,7 +243,7 @@ try {
     assert.equal(geometry.overflow, false);
     assert.ok(geometry.visibleWidth >= 300 && geometry.visibleHeight > geometry.visibleWidth);
     assert.ok(geometry.height > geometry.width, 'Canvas backing dimensions must reflow too');
-    for (const time of [6.5, 9, 15, 21, 26, 33, 38, 41, 46, 58]) await inspectFrame(mobile, time, 'mobile');
+    for (const time of [3, 6.5, 9, 15, 21, 23.5, 24, 27, 30, 33, 34, 38, 40, 42, 45, 47, 49, 53, 58]) await inspectFrame(mobile, time, 'mobile');
     for (const id of ['play', 'replay', 'seek', 'motion']) {
       const control = mobile.locator(`#${id}`); await control.scrollIntoViewIfNeeded();
       const bounds = await control.boundingBox();
@@ -218,6 +253,21 @@ try {
     await mobile.locator('#play').tap(); assert.equal(await mobile.evaluate(() => window.film.playing), true);
     await mobile.locator('#play').tap(); assert.equal(await mobile.evaluate(() => window.film.playing), false);
     await mobile.close();
+  });
+  await check('narrow desktop pane uses readable portrait framing with visible controls', async () => {
+    const pane = await browser.newPage({ viewport: { width: 711, height: 900 }, deviceScaleFactor: 1 });
+    watch(pane); await open(pane, '?t=23.5');
+    const geometry = await pane.evaluate(() => {
+      const canvas = document.getElementById('film-canvas'), rect = canvas.getBoundingClientRect();
+      return { overflow: document.documentElement.scrollWidth > innerWidth + 1,
+        width: rect.width, height: rect.height, playerBottom: document.getElementById('player').getBoundingClientRect().bottom };
+    });
+    assert.equal(geometry.overflow, false);
+    assert.ok(geometry.height > geometry.width, 'The narrow desktop pane needs the close portrait composition');
+    assert.ok(geometry.width >= 330, 'Portrait stage should stay large enough to read');
+    assert.ok(geometry.playerBottom <= 900, 'Player controls should fit without scrolling');
+    for (const time of [21, 23.5, 24, 27, 30, 45, 47, 49, 53]) await inspectFrame(pane, time, 'narrow-desktop');
+    await pane.close();
   });
   await check('no console errors or failed local resources', async () => {
     assert.deepEqual(browserErrors, []); assert.deepEqual(failedResources, []);

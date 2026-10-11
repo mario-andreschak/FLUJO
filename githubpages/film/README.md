@@ -1,82 +1,73 @@
-# One idea. A little help.
+# FLUJO in 60 seconds
 
-A new, silent, exactly **60-second HTML5 film** for the coffee-workshop journey.
-The existing `../short/` film and studio are unchanged. The new page has no runtime
-dependencies, narration calls, audio tracks, analytics, or external font requests.
+A silent product film showing how FLUJO connects an AI, tools and instructions into
+a reusable agent, then extends work through experimental Personas.
 
-## Watch and inspect
+## Watch
 
-Serve `githubpages/` as a static directory, then open `/film/`.
+Serve `githubpages/` as a static directory and open `/film/`. The player has
+play/pause, replay, seek, fullscreen, a reduced-motion option, and a seekable
+transcript. It does not autoplay, and pauses when the tab is hidden.
 
-- Play/pause, replay, seek, fullscreen, and a gentle-motion toggle are available.
-- The film waits for a click to play and pauses when its tab becomes hidden.
-- With the player focused: Space/K toggles playback, arrows seek five seconds,
-  Home/End selects either end, and F toggles fullscreen. Native controls keep
-  their own keyboard behavior.
-- `?t=33` opens a paused, deterministic preview. Values are clamped to 0–60.
-- `?render=1&t=33` shows only the canvas for screenshots and export.
-- Narrow viewports use a separately composed portrait layout.
-- Reduced-motion preferences suppress animated entrance movement; the complete
-  story is also available as a semantic, seekable text transcript.
+The page uses a wide desktop composition and a separate portrait composition.
+`?t=26` opens a paused preview; `?render=1&t=26` exposes only the canvas.
 
-## Timeline
+## Product story
 
-| Time | Scene |
+| Time | What the viewer sees |
 | --- | --- |
-| 0–5 | An idea: a small coffee workshop |
-| 5–11 | Install and connect a useful web-reading tool |
-| 11–18 | Ask with a public source |
-| 18–23 | A practical checklist |
-| 23–29 | Maya, Day 1: goal and context |
-| 29–36 | Day 2: continue the plan and invitation draft |
-| 36–43 | Day 3: shopping list, run sheet, review |
-| 43–49 | The workshop materials together |
-| 49–54 | Connect a tool. Make a helper. Keep going. |
-| 54–60 | Get started |
+| 0–5 | FLUJO: build AI assistants with your own AI and tools |
+| 5–12 | Choose and test an AI connection |
+| 12–20 | Import a GitHub tool and verify its MCP connection |
+| 20–32 | Instructions, AI and tools in the same saved agent |
+| 32–43 | Inspect the agent’s tool use and result |
+| 43–54 | A Persona goal, reviewed memory and completion |
+| 54–60 | FLUJO and a direct invitation to try it |
 
-Day 1–3 are **compressed demonstration sessions**, not elapsed days or proof of
-unattended reliability. Illustrative cards are labeled. Only verified framebuffer
-captures may be configured in `captures.js`; never create imitation application
-screens. The capture lane's runtime is the published FLUJO 3.46.2 release, while
-the surrounding source checkout is 3.46.3.
+Source interface pixels are genuine recordings. Editorial crops, camera moves,
+framing and captions explain the product without reconstructing its UI or
+manufacturing cursor actions. `captures.js` maps images and reviewed clips to the
+film; `renderer.js` defines the camera choreography. `player.js` synchronizes
+recorded video to the same 60-second timeline used by the exporter. Reduced
+motion replaces camera movement and recorded motion with held frames.
 
-This is an agent-operated live software demonstration with operator-reviewed
-outputs, not an independent human usability study. The operator reviewed memories,
-resumed the goal, saved final approval, and reconciled shopping quantities. The
-controller marked the goal complete after four work sessions within the three
-compressed sessions. Some older status wording remained stale. Read the complete
-[workshop pack](../../docs/journeys/evidence/workshop-pack.md) and
-[capture provenance](../../docs/journeys/evidence/capture-provenance.md) for those
-limits and the original evidence. The film does not claim a correct first answer:
-its checklist capture is the corrected reply after a complete source read.
+The genuine clips show the Easy/Expert switch, selection of an AI task, and
+inspection of an already completed tool call. They do not show a new model run.
+The [supplementary capture manifest](media/product-capture-manifest.json) records
+source offsets, action times, hashes and the limits of the privacy review.
+Small clips are buffered once as local browser blobs so deterministic seeking
+also works with static servers that do not support HTTP Range requests.
 
-The connection scene summarizes a setup process, not a one-click installation.
-In the recorded 3.46.2 flow, `fetch-mcp` requires correcting the detected install
-command to `npm install --include=dev`, followed by a separate build with Bun
-available. The complete guide carries those steps.
+The example task is demonstration data, not the film's subject. The source
+checklist was corrected after a complete read, but retains imperfect temperature
+wording outside the film's output crops; the Persona required operator
+review, resumption and approval. The demonstration compresses work sessions and
+does not establish unattended reliability. Detailed evidence remains in the
+[journey provenance](../../docs/journeys/evidence/capture-provenance.md) and the
+[reviewed workshop pack](../../docs/journeys/evidence/workshop-pack.md).
 
-## Verify and export
+## Reproduce
 
-The tooling reuses an existing Playwright installation; it installs nothing.
-Set `PLAYWRIGHT_MODULE` to its module path if it cannot be resolved locally.
+The tooling reuses an installed Playwright. Set `PLAYWRIGHT_MODULE` to an existing
+module path if normal Node resolution cannot find it. FFmpeg and ffprobe must
+already be available.
 
 ```powershell
 node githubpages/film/tools/verify.mjs
-node githubpages/film/tools/render.mjs githubpages/film/flujo-coffee-60s.mp4
-ffprobe -v error -show_entries format=duration:stream=codec_type,nb_frames,r_frame_rate -of json githubpages/film/flujo-coffee-60s.mp4
+node githubpages/film/tools/render.mjs githubpages/film/flujo-product-60s.mp4
+ffprobe -v error -show_entries format=duration:stream=codec_type,nb_frames,r_frame_rate -of json githubpages/film/flujo-product-60s.mp4
 ```
 
-The exporter samples the HTML5 canvas at `frame / 30` for frames 0–1799, streams
-JPEG frames directly to FFmpeg, and produces 1,800 H.264 frames at 30 fps with no
-audio. No temporary frame directory or intermediate video is created. Both the
-browser and temporary HTTP server close in `finally` blocks.
+The exporter renders frames 0–1799 at `frame / 30`, streams them directly to
+FFmpeg, and produces a 60-second H.264 file with no audio track. It creates no
+intermediate frame directory. Its browser and local server close on completion.
 
-For a poster or a specific frame:
+For a single frame:
 
 ```powershell
-node githubpages/film/tools/render.mjs githubpages/film/poster.png --poster
-node githubpages/film/tools/render.mjs C:/path/to/phone-frame.png --poster --portrait --t=33
+node githubpages/film/tools/render.mjs githubpages/film/poster.png --poster --t=3
+node githubpages/film/tools/render.mjs C:/path/to/phone-frame.png --poster --portrait --t=26
 ```
 
-All cleanup and deletion must go through flujo-bash MCP, including any optional
-QA screenshots. Keep the poster and MP4 as user deliverables.
+Use flujo-bash MCP for all cleanup or deletion. Preserve the final poster, MP4,
+reviewed media and provenance. The existing `../short/` experience is unchanged.
