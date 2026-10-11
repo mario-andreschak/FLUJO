@@ -9,7 +9,8 @@ jest.mock('@/frontend/services/automationMap', () => ({
 }));
 
 jest.mock('@/frontend/hooks/useUiPreference', () => ({
-  useWorkspaceUiPreference: (key: string, initial: unknown) => [key === 'flujo-ui:waves:view' ? mockSavedView ?? initial : initial, jest.fn()],
+  useWorkspaceUiPreference: (key: string, initial: unknown) =>
+    jest.requireActual<typeof import('react')>('react').useState(key === 'flujo-ui:waves:view' ? mockSavedView ?? initial : initial),
 }));
 
 jest.mock('@/frontend/components/Waves/FactoryObservatoryPanel', () => ({
@@ -97,6 +98,49 @@ describe('Waves full-page layout (#325)', () => {
     render(<WavesManager />);
     expect(await screen.findByTestId('factory-observatory')).toBeInTheDocument();
     expect(mockLoad).not.toHaveBeenCalled();
+  });
+
+  it.each(['wave', 'execution', 'playground', 'factory'])('keeps the selected calendar date after visiting %s', async (destination) => {
+    mockSavedView = 'day';
+    const response = {
+      paused: false, generatedAt: new Date().toISOString(),
+      packages: [], flows: [], relations: [], components: [], orphanExecutionIds: [],
+      executions: [{
+        executionId: 'report', name: 'Morning report', flowId: 'flow', enabled: true,
+        packageNames: [], trigger: { type: 'schedule', cron: '0 12 * * *' },
+        triggerKind: 'schedule', status: { armed: true, running: false },
+        lastRun: null, isRoot: true, waveIds: destination === 'wave' ? ['wave-1'] : [],
+      }],
+      waves: destination === 'wave' ? [{
+        id: 'wave-1', rootExecutionIds: ['report'], executionIds: ['report'],
+        flowIds: ['flow'], relationIds: [], hasCycle: false,
+      }] : [],
+    };
+    mockLoad.mockResolvedValue(response);
+    render(<WavesManager />);
+    const calendar = await screen.findByTestId('waves-day-view');
+    const selectedDay = () => within(within(screen.getByTestId('waves-day-view')).getByRole('grid', { hidden: true }))
+      .getByRole('gridcell', { selected: true, hidden: true }).querySelector('button')!.getAttribute('aria-label');
+    const today = selectedDay();
+    fireEvent.click(within(calendar).getByRole('button', { name: 'Next day' }));
+    const nextDay = selectedDay();
+    expect(nextDay).not.toBe(today);
+    if (destination === 'wave' || destination === 'execution') {
+      fireEvent.click(screen.getByRole('button', { name: /, Morning report, Run$/ }));
+      expect(await screen.findByTestId('playground-canvas')).toBeInTheDocument();
+      expect(mockPlaygroundCanvas.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+        activeWaveId: destination === 'wave' ? 'wave-1' : null,
+      }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: destination === 'factory' ? 'FACTORY swarm' : 'Playground' }));
+      expect(await screen.findByTestId(destination === 'factory' ? 'factory-observatory' : 'playground-canvas')).toBeInTheDocument();
+    }
+    expect(screen.queryByTestId('waves-day-view')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Day' }));
+    await screen.findByTestId('waves-day-view');
+    expect(selectedDay()).toBe(nextDay);
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    expect(selectedDay()).toBe(today);
   });
 
   it.each(['day', 'playground'])('warns after a failed %s refresh and clears the warning on recovery without resetting the view', async (view) => {

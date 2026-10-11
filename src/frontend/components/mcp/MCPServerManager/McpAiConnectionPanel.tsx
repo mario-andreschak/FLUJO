@@ -85,9 +85,11 @@ export default function McpAiConnectionPanel({
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(false);
   const installingRef = useRef(false);
+  const modelsLoadingRef = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
+    modelsLoadingRef.current = true;
     setModelsLoading(true);
     setModelsFailed(false);
     modelService.loadModels()
@@ -101,7 +103,10 @@ export default function McpAiConnectionPanel({
         if (!cancelled) setModelsFailed(true);
       })
       .finally(() => {
-        if (!cancelled) setModelsLoading(false);
+        if (!cancelled) {
+          modelsLoadingRef.current = false;
+          setModelsLoading(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -122,7 +127,7 @@ export default function McpAiConnectionPanel({
   );
 
   const startResearch = async () => {
-    if (!query.trim() || installingRef.current || abortRef.current) return;
+    if (!query.trim() || modelsLoading || modelsLoadingRef.current || installingRef.current || abortRef.current) return;
     const controller = new AbortController();
     abortRef.current = controller;
     const ownsResearch = () => mountedRef.current && abortRef.current === controller && !controller.signal.aborted;
@@ -306,7 +311,11 @@ export default function McpAiConnectionPanel({
           {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noTextModels')}
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
             <Button onClick={() => {
-              if (installingRef.current || abortRef.current) return;
+              if (modelsLoadingRef.current || installingRef.current || abortRef.current) return;
+              // Claim loading before the effect so Enter in the same update
+              // cannot submit a missing model while the retry is starting.
+              modelsLoadingRef.current = true;
+              setModelsLoading(true);
               setModelLoadAttempt((attempt) => attempt + 1);
             }} disabled={working || installing}>
               {t('mcp.ai.retryModels')}

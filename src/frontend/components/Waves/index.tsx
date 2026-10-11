@@ -73,6 +73,8 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [activeWaveId, setActiveWaveId] = useWorkspaceUiPreference<string | null>(ACTIVE_WAVE_PREF_KEY, null);
   const [visiblePackageNames, setVisiblePackageNames] = useState<string[]>([]);
   const [packageMenuAnchor, setPackageMenuAnchor] = useState<HTMLElement | null>(null);
+  // Inspecting an item switches views and remounts DayView on return.
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
 
   const refresh = useCallback(async () => {
     const response = await automationMapService.load();
@@ -324,6 +326,8 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
           <Box data-testid="waves-day-view" sx={{ flex: 1, minHeight: 0 }}>
             <DayView
               data={data}
+              selectedDate={selectedDate}
+              onSelectedDateChange={setSelectedDate}
               height="100%"
               onSelectWave={selectWaveFromDay}
               onSelectExecution={selectExecutionFromDay}

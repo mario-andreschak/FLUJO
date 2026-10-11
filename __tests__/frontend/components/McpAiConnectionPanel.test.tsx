@@ -314,6 +314,83 @@ describe('McpAiConnectionPanel', () => {
     jest.mocked(modelService.loadModels).mockReset().mockResolvedValue([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never);
   });
 
+  it('waits for the saved model before researching with Enter', async () => {
+    let finishLoading!: (models: Awaited<ReturnType<typeof modelService.loadModels>>) => void;
+    jest.mocked(modelService.loadModels).mockImplementationOnce(() => new Promise(resolve => { finishLoading = resolve; }));
+    researchMcpConnectionMock.mockResolvedValue(result);
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+    </ThemeProvider>);
+    const request = screen.getByLabelText(/one thing to connect/i);
+    fireEvent.change(request, { target: { value: 'connect my accounting app' } });
+    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeDisabled();
+    fireEvent.keyDown(request, { key: 'Enter' });
+    expect(researchMcpConnectionMock).not.toHaveBeenCalled();
+    expect(request).toHaveValue('connect my accounting app');
+
+    await act(async () => { finishLoading([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never); });
+    expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled();
+    fireEvent.keyDown(request, { key: 'Enter' });
+    await screen.findByText(result.summary);
+    expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
+    expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+      { query: 'connect my accounting app', modelId: 'model-1' }, expect.any(Function), expect.any(AbortSignal),
+    );
+  });
+
+  it.each(['in the same update', 'while loading'])('waits for the model retry before researching with Enter %s', async timing => {
+    let finishLoading!: (models: Awaited<ReturnType<typeof modelService.loadModels>>) => void;
+    jest.mocked(modelService.loadModels)
+      .mockRejectedValueOnce(new Error('Temporary connection failure'))
+      .mockImplementationOnce(() => new Promise(resolve => { finishLoading = resolve; }));
+    researchMcpConnectionMock.mockResolvedValue(result);
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+    </ThemeProvider>);
+    const request = screen.getByLabelText(/one thing to connect/i);
+    fireEvent.change(request, { target: { value: 'connect my accounting app' } });
+    const retry = await screen.findByRole('button', { name: /retry loading models/i });
+    if (timing === 'in the same update') {
+      act(() => {
+        fireEvent.click(retry);
+        fireEvent.keyDown(request, { key: 'Enter' });
+      });
+    } else {
+      fireEvent.click(retry);
+      await waitFor(() => expect(modelService.loadModels).toHaveBeenCalledTimes(2));
+      fireEvent.keyDown(request, { key: 'Enter' });
+    }
+    expect(researchMcpConnectionMock).not.toHaveBeenCalled();
+    expect(request).toHaveValue('connect my accounting app');
+    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeDisabled();
+
+    await act(async () => { finishLoading([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never); });
+    fireEvent.keyDown(request, { key: 'Enter' });
+    await screen.findByText(result.summary);
+    expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
+    expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+      { query: 'connect my accounting app', modelId: 'model-1' }, expect.any(Function), expect.any(AbortSignal),
+    );
+  });
+
+  it('allows Enter to find bundled options after an empty model load completes', async () => {
+    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    researchMcpConnectionMock.mockResolvedValue(result);
+    render(<ThemeProvider theme={createTheme()}>
+      <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+    </ThemeProvider>);
+    await screen.findByText(/choose a saved text model for research/i);
+    const request = screen.getByLabelText(/one thing to connect/i);
+    fireEvent.change(request, { target: { value: 'work with local files' } });
+    expect(screen.getByRole('button', { name: /find bundled options/i })).toBeEnabled();
+    fireEvent.keyDown(request, { key: 'Enter' });
+    await screen.findByText(result.summary);
+    expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
+    expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+      { query: 'work with local files', modelId: '' }, expect.any(Function), expect.any(AbortSignal),
+    );
+  });
+
   it('retries a failed model load without losing the request or remounting', async () => {
     jest.mocked(modelService.loadModels).mockRejectedValueOnce(new Error('Temporary connection failure'));
     researchMcpConnectionMock.mockResolvedValue(result);
