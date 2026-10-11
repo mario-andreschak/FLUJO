@@ -1077,6 +1077,10 @@ export const mcpMessageRows = {
     "Erro",
     "错误",
   ],
+  "mcp.status.requiresApproval": [
+    "Approval required", "Aprobación necesaria", "Freigabe erforderlich",
+    "Approbation requise", "Approvazione richiesta", "Aprovação necessária", "需要批准",
+  ],
   "mcp.status.connecting": [
     "Connecting",
     "Conectando",

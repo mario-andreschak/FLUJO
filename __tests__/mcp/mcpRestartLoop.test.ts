@@ -63,6 +63,7 @@ import {
   shouldRecreateClient,
 } from '@/backend/services/mcp/connection';
 import * as configModule from '@/backend/services/mcp/config';
+import { TrustedHostMcpError } from '@/backend/services/security/trustedHostMcp';
 
 interface FakeTransport {
   onclose?: () => void;
@@ -129,6 +130,19 @@ describe('MCPService restart-loop protection', () => {
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
+  });
+
+  it('stops reconnect timers and exposes approval failures as user action', async () => {
+    await service.connectServer('srv');
+    transports[0].onclose?.();
+    mockCreateTransport.mockImplementation(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
+    await jest.advanceTimersByTimeAsync(5000);
+    const attempts = mockCreateTransport.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(300000);
+    expect(mockCreateTransport).toHaveBeenCalledTimes(attempts);
+    expect(await service.getServerStatus('srv')).toMatchObject({
+      status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED',
+    });
   });
 
   it('ignores a late close event from a replaced (zombie) transport', async () => {
