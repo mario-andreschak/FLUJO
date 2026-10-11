@@ -5841,6 +5841,15 @@ const Chat: React.FC = () => {
                   ? t('chat.page.selectOrCreate')
                   : t('chat.page.createToStart')}
               </Typography>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<BoltIcon />}
+                onClick={sidebarOpenQuickChat}
+                sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
+              >
+                {t('chat.page.quickChat')}
+              </Button>
               {flows.length > 0 && (
                 <Button
                   variant="contained"
