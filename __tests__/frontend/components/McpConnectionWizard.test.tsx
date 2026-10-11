@@ -30,8 +30,8 @@ const recommendation = {
 async function beginInstall() {
   fireEvent.click(screen.getByRole('button', { name: /ai-assisted/i }));
   fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'search' } });
-  await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-  fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+  await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: /find options/i }));
   fireEvent.click(await screen.findByLabelText(/approve saving and connecting/i));
   fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
 }
@@ -83,7 +83,7 @@ describe('McpConnectionWizard', () => {
     const input = screen.getByLabelText(/one thing to connect/i);
     expect(input).toHaveFocus();
     fireEvent.change(input, { target: { value: 'search' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
     expect(input).toHaveFocus();
     const heading = screen.getAllByRole('heading')[0];
     expect(screen.getByRole('dialog')).toHaveAccessibleName(heading.textContent!);
@@ -161,14 +161,14 @@ describe('McpConnectionWizard', () => {
     const view = render(<ThemeProvider theme={createTheme()}><McpConnectionWizard {...props} /></ThemeProvider>);
     fireEvent.click(screen.getByRole('button', { name: /ai-assisted/i }));
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'old request' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     view.rerender(<ThemeProvider theme={createTheme()}><McpConnectionWizard {...props} open={false} /></ThemeProvider>);
     view.rerender(<ThemeProvider theme={createTheme()}><McpConnectionWizard {...props} /></ThemeProvider>);
     fireEvent.click(screen.getByRole('button', { name: /ai-assisted/i }));
     fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'new request' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /find options/i }));
     await screen.findByText('Reviewed search');
     await act(async () => {
       oldProgress({ type: 'progress', message: 'Obsolete progress' });
