@@ -240,6 +240,51 @@ describe('ModelConnectionWizard', () => {
     expect(global.fetch).not.toHaveBeenCalledWith('/api/model/test', expect.anything());
   });
 
+  it.each([
+    ['OpenRouter', 'Requesty', 'requesty'],
+    ['Requesty', 'OpenRouter', 'openrouter'],
+  ])('clears the %s key when switching to %s and requires its own key before saving', async (previous, next, provider) => {
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+    fireEvent.click(screen.getByRole('heading', { name: previous }).closest('button')!);
+    fireEvent.change(screen.getByLabelText(`${previous} API key`, { exact: true }), { target: { value: 'previous-provider-key' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('heading', { name: next }).closest('button')!);
+    const key = screen.getByLabelText(`${next} API key`, { exact: true });
+    expect(key).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    expect(props.onCreateModels).not.toHaveBeenCalled();
+    expect(screen.getByText('Paste your API key first.')).toBeInTheDocument();
+
+    fireEvent.change(key, { target: { value: 'next-provider-key' } });
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
+    const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({ provider, ApiKey: 'next-provider-key' });
+  });
+
+  it.each(['OpenRouter', 'Requesty'])('keeps the %s key when returning to the same setup', async (provider) => {
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+    fireEvent.click(screen.getByRole('heading', { name: provider }).closest('button')!);
+    fireEvent.change(screen.getByLabelText(`${provider} API key`, { exact: true }), { target: { value: 'same-provider-key' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('heading', { name: provider }).closest('button')!);
+    expect(screen.getByLabelText(`${provider} API key`, { exact: true })).toHaveValue('same-provider-key');
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+    await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
+    expect((props.onCreateModels as jest.Mock).mock.calls[0][0]).toEqual([
+      expect.objectContaining({ provider: provider.toLowerCase(), ApiKey: 'same-provider-key' }),
+    ]);
+  });
+
   it('shows the shorter path for users who already know a bit', () => {
     renderWizard();
 
