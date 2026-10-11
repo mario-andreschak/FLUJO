@@ -103,6 +103,137 @@ describe('plannedExecutionsService.list compatibility', () => {
   });
 });
 
+describe('plannedExecutionsService.previewSchedule', () => {
+  it.each([
+    { valid: true, nextRuns: ['2026-10-12T09:00:00.000Z', '2026-10-13T09:00:00.000Z'] },
+    { valid: true, nextRuns: [] },
+    { valid: false, error: 'Invalid cron expression', nextRuns: [] },
+    { valid: false, nextRuns: [] },
+  ])('preserves a genuine API result %j', async (body) => {
+    fetchMock.mockResolvedValue(Response.json(body));
+
+    const result = await plannedExecutionsService.previewSchedule('0 9 * * *', 'America/Bogota');
+
+    expect(result).toEqual(body);
+    expect(result).not.toHaveProperty('unavailable');
+    expect(fetchMock).toHaveBeenCalledWith('/api/planned-executions/preview-schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cron: '0 9 * * *', timezone: 'America/Bogota' }),
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('marks an HTTP failure as unavailable before reading its response body', async () => {
+    const response = new Response('Service unavailable', { status: 503 });
+    const decode = jest.spyOn(response, 'json');
+    fetchMock.mockResolvedValue(response);
+
+    await expect(plannedExecutionsService.previewSchedule('0 9 * * *')).resolves.toEqual({
+      valid: false, unavailable: true, error: 'HTTP 503', nextRuns: [],
+    });
+    expect(decode).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a network failure from an invalid schedule', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(plannedExecutionsService.previewSchedule('0 9 * * *')).resolves.toEqual({
+      valid: false, unavailable: true, error: 'Failed to fetch', nextRuns: [],
+    });
+  });
+
+  it('marks unreadable JSON as unavailable', async () => {
+    fetchMock.mockResolvedValue(new Response('not JSON'));
+
+    await expect(plannedExecutionsService.previewSchedule('0 9 * * *')).resolves.toEqual({
+      valid: false, unavailable: true, error: expect.any(String), nextRuns: [],
+    });
+  });
+
+  it.each([
+    ['null', null],
+    ['missing fields', {}],
+    ['missing validity', { nextRuns: [] }],
+    ['a string validity', { valid: 'true', nextRuns: [] }],
+    ['missing upcoming runs', { valid: true }],
+    ['non-array upcoming runs', { valid: true, nextRuns: {} }],
+    ['a numeric run', { valid: true, nextRuns: [1791795600000] }],
+    ['a null run', { valid: true, nextRuns: [null] }],
+    ['an unreadable date', { valid: true, nextRuns: ['not a date'] }],
+    ['an empty date', { valid: true, nextRuns: [''] }],
+    ['an out-of-range date', { valid: true, nextRuns: ['2026-13-01T09:00:00.000Z'] }],
+    ['an invalid later date', { valid: true, nextRuns: ['2026-10-12T09:00:00.000Z', 'broken'] }],
+    ['a non-string error', { valid: false, error: { message: 'Invalid cron' }, nextRuns: [] }],
+    ['a null error', { valid: false, error: null, nextRuns: [] }],
+  ])('marks %s as unavailable instead of passing malformed data to the editor', async (_label, body) => {
+    fetchMock.mockResolvedValue(Response.json(body));
+
+    await expect(plannedExecutionsService.previewSchedule('0 9 * * *')).resolves.toEqual({
+      valid: false, unavailable: true, error: 'Invalid schedule preview response', nextRuns: [],
+    });
+  });
+});
+
+describe('plannedExecutionsService.previewSchedule request deadline', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it.each(['fetch', 'response body'])('aborts a stalled %s after 30 seconds', async (stage) => {
+    const decode = jest.fn(() => new Promise<never>(() => {}));
+    if (stage === 'fetch') {
+      fetchMock.mockReturnValue(new Promise<Response>(() => {}));
+    } else {
+      const response = Response.json({ valid: true, nextRuns: [] });
+      jest.spyOn(response, 'json').mockImplementation(decode);
+      fetchMock.mockResolvedValue(response);
+    }
+    let settled = false;
+    const result = plannedExecutionsService.previewSchedule('0 9 * * *').then((value) => {
+      settled = true;
+      return value;
+    });
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+
+    await jest.advanceTimersByTimeAsync(29_999);
+    expect(settled).toBe(false);
+    if (stage === 'response body') expect(decode).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(1);
+
+    expect(settled).toBe(true);
+    expect(await result).toEqual({
+      valid: false, unavailable: true, error: timeoutMessage, nextRuns: [],
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it.each(['success', 'failure'])('clears the deadline after %s without a later abort', async (outcome) => {
+    if (outcome === 'success') {
+      fetchMock.mockResolvedValue(Response.json({ valid: true, nextRuns: [] }));
+    } else {
+      fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    }
+
+    await expect(plannedExecutionsService.previewSchedule('0 9 * * *')).resolves.toEqual(
+      outcome === 'success'
+        ? { valid: true, nextRuns: [] }
+        : { valid: false, unavailable: true, error: 'Failed to fetch', nextRuns: [] },
+    );
+    expect(jest.getTimerCount()).toBe(0);
+
+    await jest.advanceTimersByTimeAsync(30_000);
+
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+  });
+});
+
 const boundedRequests = [
   { name: 'strict list', read: true, run: () => plannedExecutionsService.list({ throwOnError: true }) },
   { name: 'delete', read: false, run: () => plannedExecutionsService.delete('weekly-check') },
