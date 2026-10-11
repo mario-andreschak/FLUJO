@@ -1,0 +1,649 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "scope": "Act 1 reviewed stills: real dashboard navigation, creation of Website Builder AI and a successful model test after credential re-entry. Final status refers to this still collection, not to the completed walkthrough film.",
+  "runtime": {
+    "package": "flujo-ai",
+    "version": "3.46.2",
+    "modelAlias": "Website Builder AI",
+    "modelProvider": "OpenRouter",
+    "model": "google/gemini-3-flash-preview"
+  },
+  "recordingStartedAtUtc": "2026-10-11T15:02:14.217826051Z",
+  "captureMethod": "Actual application UI operated and captured through the ai-computer MCP. PNGs are the original returned pixels, copied unchanged through the flujo-bash MCP.",
+  "timestampMeaning": "Each asset's UTC interval comes from the capture call's beforeUtc and afterUtc in the private action log. capturedAtUtc is the call completion time, not a separately measured exposure time. Action times and click points are the recorded tool-call values, not an invented cursor trace.",
+  "coordinateSystem": {
+    "width": 1600,
+    "height": 1000,
+    "pointFormat": "[x, y]",
+    "rectangleFormat": "[x, y, width, height]",
+    "targetRectangleSource": "Capture operator-provided UI bounds, visually checked against the stills. Rectangles identify controls; they do not assert additional clicks."
+  },
+  "stillReview": {
+    "status": "reviewed",
+    "reviewedAssetCount": 13,
+    "result": "No visible credential values, private filesystem paths, terminal windows or browser-administration UI in the selected PNGs. Credential fields remain password-masked.",
+    "edits": "No crops, redraws, synthetic UI, cursor additions or pixel changes."
+  },
+  "observedOutcome": {
+    "modelSaved": true,
+    "connectionTest": "passed-after-recovery",
+    "providerStatus": 200,
+    "toolRoundTrip": "passed",
+    "adapter": "openai-responses",
+    "endpoint": "/responses",
+    "measurements": {
+      "sdk": {
+        "httpStatus": 200,
+        "elapsedMs": 1035
+      },
+      "axios": {
+        "httpStatus": 200,
+        "elapsedMs": 1024
+      },
+      "adapter": {
+        "httpStatus": 200,
+        "elapsedMs": 1035
+      },
+      "flujoToolRoundTrip": {
+        "result": "passed",
+        "elapsedMs": 2974
+      }
+    },
+    "measurementScope": "One observed test run, as displayed in the actual application.",
+    "evidenceImage": "act1-model-test-success.png",
+    "note": "The initial test failed with HTTP 401. After private credential re-entry and saving, the real model test passed; both outcomes remain in this collection."
+  },
+  "publicFootage": {
+    "status": "not-reviewed-or-finalized",
+    "rawPublicationAllowed": false,
+    "note": "This manifest approves only the listed still images. It does not approve any continuous raw video interval.",
+    "mandatoryExcludedIntervals": [
+      {
+        "fromUtc": "2026-10-11T15:09:10.396Z",
+        "throughUtc": "2026-10-11T15:09:40.848Z",
+        "publicReplacementLabel": "Credential entered privately, field remains masked.",
+        "reason": "Private credential entry through the first reviewed masked-field frame. Omit the private interval and use the verified before/after UI stills."
+      },
+      {
+        "fromUtc": "2026-10-11T15:26:03.669Z",
+        "throughUtc": "2026-10-11T15:29:12.473Z",
+        "publicReplacementLabel": "Credential re-entered privately, field remains masked.",
+        "reason": "Private credential repair through the reviewed masked-field confirmation. Exclude this entire interval from public footage."
+      }
+    ]
+  },
+  "targets": {
+    "ai-setup": {
+      "label": "AI Setup",
+      "rect": [
+        240,
+        16,
+        105,
+        41
+      ]
+    },
+    "connect-ai": {
+      "label": "Connect AI",
+      "rect": [
+        1376,
+        286,
+        171,
+        41
+      ]
+    },
+    "expert": {
+      "label": "I'm an expert",
+      "rect": [
+        940,
+        434,
+        267,
+        166
+      ]
+    },
+    "display-name": {
+      "label": "Display name",
+      "rect": [
+        65,
+        156,
+        701,
+        60
+      ]
+    },
+    "provider": {
+      "label": "Provider",
+      "rect": [
+        65,
+        250,
+        701,
+        56
+      ]
+    },
+    "openrouter-option": {
+      "label": "OpenRouter",
+      "rect": [
+        73,
+        397,
+        680,
+        38
+      ]
+    },
+    "masked-key": {
+      "label": "API key (masked)",
+      "rect": [
+        65,
+        449,
+        701,
+        56
+      ]
+    },
+    "technical-name": {
+      "label": "Technical name",
+      "rect": [
+        65,
+        547,
+        701,
+        56
+      ]
+    },
+    "save": {
+      "label": "Save",
+      "rect": [
+        1486,
+        901,
+        65,
+        40
+      ]
+    },
+    "test": {
+      "label": "Test model",
+      "rect": [
+        45,
+        559,
+        30,
+        36
+      ]
+    },
+    "test-after-layout": {
+      "label": "Test model after saved-card layout change",
+      "rect": [
+        45,
+        596,
+        30,
+        36
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "act1-action-01",
+      "label": "Open AI Setup",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:02:36.484Z",
+      "completedAtUtc": "2026-10-11T15:02:36.797Z",
+      "recordedPoint": [
+        293,
+        36
+      ],
+      "targetId": "ai-setup",
+      "targetRect": [
+        240,
+        16,
+        105,
+        41
+      ],
+      "beforeImage": "act1-dashboard.png",
+      "afterImage": "act1-ai-setup.png"
+    },
+    {
+      "id": "act1-action-02",
+      "label": "Open Connect AI",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:03:06.442Z",
+      "completedAtUtc": "2026-10-11T15:03:06.790Z",
+      "recordedPoint": [
+        1444,
+        306
+      ],
+      "targetId": "connect-ai",
+      "targetRect": [
+        1376,
+        286,
+        171,
+        41
+      ],
+      "beforeImage": "act1-ai-setup.png",
+      "afterImage": "act1-setup-choice.png"
+    },
+    {
+      "id": "act1-action-03",
+      "label": "Open expert model settings",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:03:38.184Z",
+      "completedAtUtc": "2026-10-11T15:03:38.550Z",
+      "recordedPoint": [
+        1066,
+        518
+      ],
+      "targetId": "expert",
+      "targetRect": [
+        940,
+        434,
+        267,
+        166
+      ],
+      "beforeImage": "act1-setup-choice.png",
+      "afterImage": "act1-model-form.png"
+    },
+    {
+      "id": "act1-action-04",
+      "label": "Enter the display name Website Builder AI",
+      "kind": "text-entry",
+      "startedAtUtc": "2026-10-11T15:04:08.180Z",
+      "completedAtUtc": "2026-10-11T15:04:08.400Z",
+      "recordedPoint": null,
+      "targetId": "display-name",
+      "targetRect": [
+        65,
+        156,
+        701,
+        60
+      ],
+      "beforeImage": "act1-model-form.png",
+      "afterImage": "act1-display-name.png"
+    },
+    {
+      "id": "act1-action-05",
+      "label": "Open the provider menu",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:04:10.591Z",
+      "completedAtUtc": "2026-10-11T15:04:10.870Z",
+      "recordedPoint": [
+        416,
+        278
+      ],
+      "targetId": "provider",
+      "targetRect": [
+        65,
+        250,
+        701,
+        56
+      ],
+      "beforeImage": "act1-display-name.png",
+      "afterImage": "act1-provider-options.png"
+    },
+    {
+      "id": "act1-action-06",
+      "label": "Choose OpenRouter",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:07:01.715Z",
+      "completedAtUtc": "2026-10-11T15:07:02.057Z",
+      "recordedPoint": [
+        169,
+        416
+      ],
+      "targetId": "openrouter-option",
+      "targetRect": [
+        73,
+        397,
+        680,
+        38
+      ],
+      "beforeImage": "act1-provider-options.png",
+      "afterImage": "act1-openrouter-selected.png"
+    },
+    {
+      "id": "act1-action-07",
+      "label": "Credential entered privately, field remains masked.",
+      "kind": "private-step-omitted",
+      "startedAtUtc": "2026-10-11T15:09:10.396Z",
+      "completedAtUtc": "2026-10-11T15:09:12.575Z",
+      "recordedPoint": null,
+      "targetId": "masked-key",
+      "targetRect": [
+        65,
+        449,
+        701,
+        56
+      ],
+      "beforeImage": "act1-openrouter-selected.png",
+      "afterImage": "act1-credential-masked.png",
+      "publicFootage": "excluded; use before/after stills only"
+    },
+    {
+      "id": "act1-action-08",
+      "label": "Focus the technical model-name field",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:11:13.201Z",
+      "completedAtUtc": "2026-10-11T15:11:13.566Z",
+      "recordedPoint": [
+        361,
+        575
+      ],
+      "targetId": "technical-name",
+      "targetRect": [
+        65,
+        547,
+        701,
+        56
+      ],
+      "beforeImage": "act1-credential-masked.png",
+      "afterImage": "act1-model-search.png"
+    },
+    {
+      "id": "act1-action-09",
+      "label": "Enter google/gemini-3-flash-preview",
+      "kind": "text-entry",
+      "startedAtUtc": "2026-10-11T15:11:13.567Z",
+      "completedAtUtc": "2026-10-11T15:11:13.862Z",
+      "recordedPoint": null,
+      "targetId": "technical-name",
+      "targetRect": [
+        65,
+        547,
+        701,
+        56
+      ],
+      "beforeImage": "act1-credential-masked.png",
+      "afterImage": "act1-model-search.png"
+    },
+    {
+      "id": "act1-action-10",
+      "label": "Close the model suggestions",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:12:23.702Z",
+      "completedAtUtc": "2026-10-11T15:12:24.138Z",
+      "recordedPoint": [
+        1093,
+        131
+      ],
+      "targetId": null,
+      "targetRect": null,
+      "beforeImage": "act1-model-search.png",
+      "afterImage": "act1-ready-to-save.png"
+    },
+    {
+      "id": "act1-action-11",
+      "label": "Save Website Builder AI",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:12:26.248Z",
+      "completedAtUtc": "2026-10-11T15:12:26.666Z",
+      "recordedPoint": [
+        1518,
+        921
+      ],
+      "targetId": "save",
+      "targetRect": [
+        1486,
+        901,
+        65,
+        40
+      ],
+      "beforeImage": "act1-ready-to-save.png",
+      "afterImage": "act1-model-saved.png"
+    },
+    {
+      "id": "act1-action-12",
+      "label": "Test the newly saved model",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:14:13.934Z",
+      "completedAtUtc": "2026-10-11T15:14:14.281Z",
+      "recordedPoint": [
+        60,
+        577
+      ],
+      "targetId": "test",
+      "targetRect": [
+        45,
+        559,
+        30,
+        36
+      ],
+      "beforeImage": "act1-model-saved.png",
+      "afterImage": "act1-test-auth-error.png"
+    },
+    {
+      "id": "act1-action-13",
+      "label": "Credential re-entered privately, field remains masked.",
+      "kind": "private-step-omitted",
+      "startedAtUtc": "2026-10-11T15:26:03.669Z",
+      "completedAtUtc": "2026-10-11T15:29:12.473Z",
+      "recordedPoint": null,
+      "targetId": "masked-key",
+      "targetRect": [
+        65,
+        449,
+        701,
+        56
+      ],
+      "publicFootage": "excluded; timing marks the excluded repair interval"
+    },
+    {
+      "id": "act1-action-14",
+      "label": "Save the repaired connection",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:30:38.354Z",
+      "completedAtUtc": "2026-10-11T15:30:38.805Z",
+      "recordedPoint": [
+        1518,
+        921
+      ],
+      "targetId": "save",
+      "targetRect": [
+        1486,
+        901,
+        65,
+        40
+      ]
+    },
+    {
+      "id": "act1-action-15",
+      "label": "Test the repaired model",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:31:51.244Z",
+      "completedAtUtc": "2026-10-11T15:31:51.511Z",
+      "recordedPoint": [
+        60,
+        614
+      ],
+      "targetId": "test-after-layout",
+      "targetRect": [
+        45,
+        596,
+        30,
+        36
+      ],
+      "afterImage": "act1-model-test-success.png"
+    }
+  ],
+  "assets": [
+    {
+      "file": "githubpages/film/media/walkthrough/act1-dashboard.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 696315,
+      "sha256": "b989af6a73537e69500e05136fcaddf184f6b66c8b74603bc3656d8f9c2db6de",
+      "captureCallStartedAtUtc": "2026-10-11T15:02:21.407Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:02:21.967Z",
+      "capturedAtUtc": "2026-10-11T15:02:21.967Z",
+      "caption": "The preserved workspace dashboard before opening AI Setup; existing setup progress is already present."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-ai-setup.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 694473,
+      "sha256": "9e7886cbd42e2e623bad4516f09d6a7418a12544370c91164b4e5e2a6abacbbd",
+      "captureCallStartedAtUtc": "2026-10-11T15:02:53.541Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:02:54.090Z",
+      "capturedAtUtc": "2026-10-11T15:02:54.090Z",
+      "caption": "AI Setup shows the existing Workshop AI connection and the Connect AI control."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-setup-choice.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 498599,
+      "sha256": "d1c5d0b260d6679f5d10fc8fe5597e735954853bf122fd5016fb0397032a4766",
+      "captureCallStartedAtUtc": "2026-10-11T15:03:17.205Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:03:17.672Z",
+      "capturedAtUtc": "2026-10-11T15:03:17.672Z",
+      "caption": "The Connect AI wizard offers No idea, I know a bit and I'm an expert."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-model-form.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 197678,
+      "sha256": "ebd5776fec027cced8df0bbfca047574c631a2db811041b3d8fe9babaef3df24",
+      "captureCallStartedAtUtc": "2026-10-11T15:03:45.246Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:03:45.633Z",
+      "capturedAtUtc": "2026-10-11T15:03:45.633Z",
+      "caption": "The expert model form opens with the display-name field focused; no new model details have been entered."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-display-name.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 197553,
+      "sha256": "5b7f52304d0c7d848a6ae3874cd7b0f5d56a5a6d00ea6e3011858a6a21c03a10",
+      "captureCallStartedAtUtc": "2026-10-11T15:04:10.287Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:04:10.591Z",
+      "capturedAtUtc": "2026-10-11T15:04:10.591Z",
+      "caption": "The new connection is named Website Builder AI; the provider has not yet been changed."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-provider-options.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 214490,
+      "sha256": "d861ff8a7023e39940de7fb0a64fd196d17a7fd34c5014e139c0f491f3eec5ab",
+      "captureCallStartedAtUtc": "2026-10-11T15:04:15.559Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:04:15.851Z",
+      "capturedAtUtc": "2026-10-11T15:04:15.851Z",
+      "caption": "The provider menu is open, with OpenRouter among the visible choices."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-openrouter-selected.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 198404,
+      "sha256": "bdafd54def6bffad4a27e8857f68e38de4b7ea84531c025170361735dc7bb46d",
+      "captureCallStartedAtUtc": "2026-10-11T15:07:03.823Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:07:04.231Z",
+      "capturedAtUtc": "2026-10-11T15:07:04.231Z",
+      "caption": "OpenRouter is selected and its public API base URL is filled; the credential field is still empty."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-credential-masked.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 198015,
+      "sha256": "712c88c487af8833cb7d558419dbced1a78cb4662645c1fa09ed7eaed1683cf1",
+      "captureCallStartedAtUtc": "2026-10-11T15:09:40.457Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:09:40.848Z",
+      "capturedAtUtc": "2026-10-11T15:09:40.848Z",
+      "caption": "Credential entered privately, field remains masked."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-model-search.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 242826,
+      "sha256": "c93c6a646a01312c58b61bda86bb11564aae572ce5794de6f826d30e07c4999a",
+      "captureCallStartedAtUtc": "2026-10-11T15:11:15.312Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:11:15.650Z",
+      "capturedAtUtc": "2026-10-11T15:11:15.650Z",
+      "caption": "The technical model ID is entered and matching provider-catalogue suggestions are visible; the key remains masked."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-ready-to-save.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 201287,
+      "sha256": "c2640407d42be4816d62e359fd11d67e68dfdfbd16afe48791cfadfef75c9edd",
+      "captureCallStartedAtUtc": "2026-10-11T15:12:25.801Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:12:26.247Z",
+      "capturedAtUtc": "2026-10-11T15:12:26.247Z",
+      "caption": "Website Builder AI is ready to save with OpenRouter, the selected model ID and a masked credential."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-model-saved.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 683313,
+      "sha256": "2fefbd42417425a6326ba805ea6086275a68233c8a3695537564265ef09d8bd2",
+      "captureCallStartedAtUtc": "2026-10-11T15:13:03.060Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:13:03.562Z",
+      "capturedAtUtc": "2026-10-11T15:13:03.562Z",
+      "caption": "The newly saved Website Builder AI card appears beside the existing Workshop AI card."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-test-auth-error.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 507805,
+      "sha256": "e19d288f408c5e9350dc5f3a36f80b4b5bd72f1f653880cb041375b9b0d11e2d",
+      "captureCallStartedAtUtc": "2026-10-11T15:15:51.787Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:15:52.289Z",
+      "capturedAtUtc": "2026-10-11T15:15:52.289Z",
+      "caption": "The new model's connection test reports HTTP 401 User not found; the FLUJO tool round trip is skipped."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act1-model-test-success.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 540069,
+      "sha256": "92998525c15ca69943724f74705c5a670f7760da19cf32e45f2ac894d21d3176",
+      "captureCallStartedAtUtc": "2026-10-11T15:33:04.750Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:33:05.286Z",
+      "capturedAtUtc": "2026-10-11T15:33:05.286Z",
+      "caption": "After private credential re-entry, Website Builder AI passes the real model test: SDK, axios and adapter return HTTP 200, and the FLUJO tool round trip passes in 2,974 ms."
+    }
+  ],
+  "recovery": {
+    "initialAttempt": {
+      "modelSaved": true,
+      "connectionTest": "failed",
+      "providerStatus": 401,
+      "message": "User not found",
+      "toolRoundTrip": "skipped",
+      "note": "The saved card proves configuration persistence. It does not prove a working model connection. Both test-result captures show the same authentication failure; the later clear result is included."
+    },
+    "credentialVerification": {
+      "httpStatus": 200,
+      "evidence": "The capture operator separately verified the existing credential file with OpenRouter. This was a private verification, not a public screenshot."
+    },
+    "suspectedCause": "Incomplete simulated keyboard entry is consistent with the observed failure and recovery. The exact difference was not established by a plaintext comparison.",
+    "resolution": "The capture operator re-entered the credential through the actual application's clipboard path while the password field remained masked, saved the connection, and reran the model test successfully.",
+    "recordingStartedAtUtc": "2026-10-11T15:26:06.132110397Z",
+    "evidenceImage": "act1-model-test-success.png",
+    "disclosure": "Credential values and private repair operations are excluded from public evidence. No credential value was read during this still-review task."
+  }
+}

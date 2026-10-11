@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "createdAtUtc": "2026-10-11T14:00:15.721Z",
+  "scope": "Supplementary genuine product footage for the FLUJO film, captured October 11, 2026. Original journey captures and evidence remain unchanged.",
+  "runtime": {
+    "package": "flujo-ai",
+    "version": "3.46.2",
+    "modelProvider": "OpenRouter",
+    "model": "google/gemini-3-flash-preview",
+    "modelAlias": "Workshop AI",
+    "toolServer": "fetch-mcp",
+    "toolServerVersion": "1.1.2"
+  },
+  "captureMethod": "Actual Chromium desktop operated through ai-computer MCP. After the app transport closed, a fresh stdio MCP client reconnected to the same configured mcp-virtual-computer server. Screenshots are original MCP pixels; videos are actual X11 screen recordings at 1600x1000 and 20fps.",
+  "allowedChangesMade": [
+    "Used the actual Tidy up layout control and saved node positions in the existing helper; no prompt, binding, flow-semantic or conversation edits.",
+    "Opened and cancelled the provider chooser before credential entry."
+  ],
+  "executionBoundary": "No new model calls, imports, goals, or resumed Persona work during supplementary capture. This is inspection of the existing demonstrated setup and saved results.",
+  "timestampMeaning": "Screenshot fileWrittenAtUtc is the time the MCP response image was written locally, rather than an independently measured exposure time. Raw recordingStartedAtUtc was recorded immediately before FFmpeg launch. Video fileWrittenAtUtc is export time.",
+  "stillReview": "All seven original screenshots visually reviewed for secrets and private paths. No credential input screen was opened. Public article excerpt is limited to the visible beginning; the full article was not captured as a deliverable.",
+  "privateRawRecordings": [
+    {
+      "file": "helper-take-01.mp4",
+      "bytes": 3254181,
+      "sha256": "1b985c0b0187c76700ba6635b9d323fe81f825ed45689fe08f59cc90950edf4a",
+      "fileWrittenAtUtc": "2026-10-11T13:46:54.000Z",
+      "recordingStartedAtUtc": "2026-10-11T13:45:24.184623855Z",
+      "durationSeconds": 90,
+      "storage": "Preserved privately outside repository; raw take is not approved for direct publication."
+    },
+    {
+      "file": "fetch-take-01.mp4",
+      "bytes": 1910113,
+      "sha256": "f0ddb86a23cdf4c5671978e82983f9a5ca228d9dfcbf21942093d973e1709dda",
+      "fileWrittenAtUtc": "2026-10-11T13:53:21.000Z",
+      "recordingStartedAtUtc": "2026-10-11T13:52:11.716682423Z",
+      "durationSeconds": 70,
+      "storage": "Preserved privately outside repository; raw take is not approved for direct publication."
+    }
+  ],
+  "assets": [
+    {
+      "file": "product-helper-easy.png",
+      "bytes": 535595,
+      "sha256": "a2b6813784ccb8ce3bb970b472c220944c50baf488f6411050ab7b06f72d3855",
+      "fileWrittenAtUtc": "2026-10-11T13:44:59.278Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Same saved Coffee workshop helper in Easy mode, showing WHEN, AI step, connected app, THEN, and model/app bindings.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-helper-expert.png",
+      "bytes": 579295,
+      "sha256": "11adcaec878f6214b0f1ebcec21b9949b4a5649b5c5f10e25615106b5abcad2d",
+      "fileWrittenAtUtc": "2026-10-11T13:43:55.976Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Same saved helper in Expert mode: four actual nodes and three connections, with AI task selected and model/app bindings visible.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-provider-billing.png",
+      "bytes": 501578,
+      "sha256": "b87344accc390889551b688914f040ca02c55273783ff9b2a9e70301537d8d00",
+      "fileWrittenAtUtc": "2026-10-11T13:47:01.098Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Three billing/setup paths offered by the Connect AI wizard; no connection created.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-provider-choices.png",
+      "bytes": 519857,
+      "sha256": "22011f6adc396b9b41354f7ed04e47b65815de19b26c6bd6898301f1e032a1f4",
+      "fileWrittenAtUtc": "2026-10-11T13:47:17.098Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Paid gateway choices offered by the wizard: OpenRouter, Requesty and Azure OpenAI. Availability in this UI is not proof that each provider was tested.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-provider-subscriptions.png",
+      "bytes": 499296,
+      "sha256": "64c1588be591daa934c0e9159113f7ec8903c80f058987ca160dd8521f4bc219",
+      "fileWrittenAtUtc": "2026-10-11T13:47:46.757Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Existing-account choices offered by the wizard: Claude, ChatGPT/Codex and Gemini Native. Availability in this UI is not proof that each provider was tested.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-fetch-result.png",
+      "bytes": 461384,
+      "sha256": "c9518c87fe49f9a0d4b986f9003bdcacd1f582349d93222224e0903763b3fe0f",
+      "fileWrittenAtUtc": "2026-10-11T13:51:37.720Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Existing successful fetch_readable call expanded, showing public source URL, max_length 20000, success check and a brief beginning of the returned article.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-workshop-checklist.png",
+      "bytes": 618660,
+      "sha256": "07b11411d5689a0fd659b4a886947591f618e8f4c917f5240e3a4bbb0a96be18",
+      "fileWrittenAtUtc": "2026-10-11T13:53:09.697Z",
+      "kind": "screenshot",
+      "width": 1600,
+      "height": 1000,
+      "description": "Unchanged final saved helper response and conversation-completed badge. Planning advice is distinguished from source advice. The temperature/rest wording remains imperfect; do not present the entire answer as independently validated.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-helper-transition.mp4",
+      "bytes": 1095095,
+      "sha256": "a4d8b150a0e9de8be8e445fb8fa100cb9f382a5d9c31a69e35db304eefa6643b",
+      "fileWrittenAtUtc": "2026-10-11T13:48:40.000Z",
+      "kind": "screen-recording-excerpt",
+      "width": 1600,
+      "height": 1000,
+      "fps": 20,
+      "durationSeconds": 38,
+      "audio": false,
+      "rawSource": "helper-take-01.mp4",
+      "rawStartSeconds": 8,
+      "rawEndSeconds": 46,
+      "actions": [
+        {
+          "atSeconds": 6.3,
+          "action": "Switch same saved helper from Easy to Expert."
+        },
+        {
+          "atSeconds": 12.35,
+          "action": "Dismiss node selection to show Flow inspector."
+        },
+        {
+          "atSeconds": 31,
+          "action": "Select actual AI task; Node inspector and model/app bindings appear by 31.15s."
+        }
+      ],
+      "description": "Real editor interaction; no model execution. Continuous source interval, re-encoded without speed change or synthetic frames.",
+      "privacyReview": "One-second visual samples across all 38 seconds, eight full-resolution checks and scene detection across 760 frames. No observed terminal, credentials, private paths or personal account. Sampling and scene detection cannot prove absence of a tiny sub-second text flash.",
+      "publicUse": "reviewed"
+    },
+    {
+      "file": "product-fetch-transition.mp4",
+      "bytes": 1579129,
+      "sha256": "79cebeb69a0f8b5a16272c7ebb2901cf366ad005a0568690a3627eb17fe8d87a",
+      "fileWrittenAtUtc": "2026-10-11T13:54:15.000Z",
+      "kind": "screen-recording-excerpt",
+      "width": 1600,
+      "height": 1000,
+      "fps": 20,
+      "durationSeconds": 60,
+      "audio": false,
+      "rawSource": "fetch-take-01.mp4",
+      "rawStartSeconds": 2,
+      "rawEndSeconds": 62,
+      "actions": [
+        {
+          "atSeconds": 7.35,
+          "action": "Expand the existing successful fetch_readable call; full input/result view settles by 7.75s."
+        },
+        {
+          "atSeconds": 48.5,
+          "action": "Collapse tool result and scroll to final saved response; settled by 49.15s."
+        }
+      ],
+      "description": "Inspection of an already completed saved conversation: correction request, expanded successful full fetch call, then unchanged resulting checklist. No new execution. Continuous source interval, re-encoded without speed change or synthetic frames.",
+      "editorialCaution": "The saved response includes imperfect temperature/rest wording. Prefer the clearly correct ratio/bloom or workshop-planning region when emphasizing useful output; preserve the full original evidence.",
+      "privacyReview": "One-second visual samples across all 60 seconds, five full-resolution checks and scene detection across 1200 frames. Source alignment checked across all 1200 downscaled frames. No observed terminal, credentials, private paths or personal account. Sampling and scene detection cannot prove absence of a tiny sub-second text flash.",
+      "publicUse": "reviewed"
+    }
+  ]
+}
