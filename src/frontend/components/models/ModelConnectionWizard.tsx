@@ -397,6 +397,11 @@ export default function ModelConnectionWizard({
   };
 
   const selectSetup = (nextKind: GuidedConnectionKind) => {
+    // Installation feedback belongs to the selected setup, just like its key.
+    if (nextKind !== kind) {
+      setInstallResult('idle');
+      setInstallOutput([]);
+    }
     setKind(nextKind);
     setConfirmedLogin(false);
     // A masked credential from the previous setup must not be saved for a
