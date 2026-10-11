@@ -1,6 +1,6 @@
 # What can you do with FLUJO?
 
-Connect your models and tools once, build an agent around a job, and see how it gets an answer. Start with [a coffee workshop checklist](../journeys/first-agent.md), then add more structure when you need it.
+Connect your models and tools once, build an agent around a job, and see how it works. Start with [a reusable Website Builder](../journeys/website-builder.md), then add more structure when you need it.
 
 ## Make useful helpers
 
@@ -16,7 +16,7 @@ Connect your models and tools once, build an agent around a job, and see how it 
 
 **Use interactive results.** Servers that implement MCP Apps can return an interface inside chat. Enable Apps for that connection; ordinary text results remain the fallback. The Apps dashboard discovers interfaces published by enabled connections. [Apps support](../features/mcp/apps.md).
 
-**Put agents together.** Use subflows to reuse a helper inside another agent, or bring multiple agents into a shared Meeting. Each model and tool still needs the right connection and access.
+**Put agents together.** Use subflows to reuse a helper inside another agent, or bring multiple agents into an experimental Meeting. Each model and tool still needs the right connection and access.
 
 ## Reuse what you set up
 
@@ -32,6 +32,8 @@ Connect your models and tools once, build an agent around a job, and see how it 
 
 **Give a Persona continuing context — experimental.** A Persona has a name, instructions, memory and goals across conversations. You can review its activity and memories, adjust its tools and model, and pause or stop ongoing goals. Try [Maya's workshop example](../journeys/persona.md). Short demonstrations and controlled tests do not establish indefinite unattended reliability.
 
+**Explore planned work in Waves — experimental.** The Day and Playground views visualize planned executions and relationships between flows and automations. Forecasts help you inspect a plan; check run history for what actually executed.
+
 ## Maturity at a glance
 
 | Scope | Status and boundary |
@@ -41,6 +43,7 @@ Connect your models and tools once, build an agent around a job, and see how it 
 | Workspaces, backups and integration endpoints | Available within their documented local/transfer boundaries |
 | Schedules and triggers | Available while the server runs; successful execution must be checked |
 | Personas, Roles and persistent goals | Experimental; owner supervision and recovery can be needed |
+| Meetings and Waves | Experimental; a discussion or forecast is not a verified completed task |
 | MCP Skills, beta protocol features and selected generators | Opt-in experiments; availability depends on configuration |
 
 This page is a source-backed overview, not certification that every feature was tested on every platform. See [project status and acceptance evidence](../project-status.md), [privacy and costs](privacy.md), and [release notes](../../CHANGELOG.md).

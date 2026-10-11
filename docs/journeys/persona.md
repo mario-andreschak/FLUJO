@@ -118,4 +118,4 @@ Personas, Roles and persistent goals are experimental. Schedules require the FLU
 
 The [runtime evidence](evidence/journey-runtime-evidence.json) contains the exact prompts, dates, saved tasks, memories and outputs. The sample prompts here are readable guide versions, not a verbatim transcript. The [capture manifest](evidence/capture-manifest.json) and [provenance notes](evidence/capture-provenance.md) identify each image and later retake. All three demonstration sessions took place on October 11, 2026. The software was operated by an agent, including the review and approval steps; this was not an independent human usability study.
 
-[First helper](first-agent.md) · [Start here](../start-here/README.md) · [Privacy and costs](../start-here/privacy.md)
+[Website Builder](website-builder.md) · [Coffee-reading helper](first-agent.md) · [Start here](../start-here/README.md) · [Privacy and costs](../start-here/privacy.md)

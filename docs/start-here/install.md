@@ -38,7 +38,7 @@ This starts the latest published npm release without a local build. Some connect
 
 1. Open **AI Setup → Connect AI** and connect a cloud provider, supported subscription login, or local Ollama model.
 2. Use **Test model** on the saved model card. Saving alone does not check access or quota; the test may consume provider allowance.
-3. Follow [the workshop helper guide](../journeys/first-agent.md), or start with [one AI-only conversation](../getting-started/README.md).
+3. Follow [the Website Builder guide](../journeys/website-builder.md), or start with [one AI-only conversation](../getting-started/README.md).
 
 If port 4200 is already in use, open the existing FLUJO instance before starting another. For login or model errors, [check the connection first](using-flujo.md#when-something-goes-wrong).
 

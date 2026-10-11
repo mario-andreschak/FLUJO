@@ -27,8 +27,8 @@ The fit descriptions below are editorial judgments based on official documentati
 
 ## Try one task before choosing
 
-Use a small job you can judge: read a public page, make a checklist, then revise it with one new constraint. Check the output, the setup effort, what data leaves your computer, and the provider or hosting costs. Avoid choosing from a feature count alone.
+Use a small job you can judge: build a local page, try its form, then revise it with one new constraint. Check the output, the setup effort, what data leaves your computer, and the provider or hosting costs. Avoid choosing from a feature count alone.
 
-For FLUJO, [build the coffee workshop helper](../journeys/first-agent.md). Personas remain experimental, schedules require a running server, and the default local profile has no owner login. [Privacy, costs and deployment boundaries](privacy.md).
+For FLUJO, [create a reusable Website Builder](../journeys/website-builder.md). Personas remain experimental, schedules require a running server, and the default local profile has no owner login. [Privacy, costs and deployment boundaries](privacy.md).
 
 [Start here](README.md)

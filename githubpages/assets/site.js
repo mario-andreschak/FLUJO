@@ -54,28 +54,44 @@
   });
 
   const imageLinks = document.querySelectorAll('a[data-zoom]');
-  if (!imageLinks.length || typeof HTMLDialogElement === 'undefined') return;
+  if (!imageLinks.length) return;
+  function screenshotUrl(link) {
+    // Check the raw path before URL normalization can hide traversal, whitespace
+    // or protocol payloads. Screenshots are local raster files, not arbitrary URLs.
+    const source = link.getAttribute('href');
+    if (!source || source !== source.trim() || !/^(?:\/|\.\/)?(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.(?:png|jpe?g|webp|gif|avif)$/i.test(source)) return null;
+    const url = new URL(source, window.location.href);
+    if (!/^https?:$/.test(url.protocol) || url.origin !== window.location.origin || link.href !== url.href) return null;
+    return url.href;
+  }
   const dialog = document.createElement('dialog');
+  const supportsDialog = typeof dialog.showModal === 'function';
   dialog.className = 'screenshot-dialog';
   dialog.setAttribute('aria-label', 'Full-size screenshot');
   dialog.innerHTML = '<div class="dialog-toolbar"><a class="original-link" target="_blank" rel="noopener">Open original image ↗</a><button type="button" autofocus>Close <span aria-hidden="true">×</span></button></div><img alt=""><p id="screenshot-caption"></p>';
   dialog.setAttribute('aria-describedby', 'screenshot-caption');
-  document.body.append(dialog);
+  if (supportsDialog) document.body.append(dialog);
   const image = dialog.querySelector('img');
   const caption = dialog.querySelector('p');
   const original = dialog.querySelector('.original-link');
   let trigger;
   imageLinks.forEach(link => link.addEventListener('click', event => {
-    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    const source = screenshotUrl(link);
+    if (!source) { event.preventDefault(); return; }
+    if (!supportsDialog || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
     event.preventDefault();
     trigger = link;
-    image.src = link.href;
+    image.src = source;
     image.alt = link.querySelector('img')?.alt || 'FLUJO screenshot';
     caption.textContent = link.closest('figure')?.querySelector('figcaption span')?.textContent || image.alt;
-    original.href = link.href;
+    original.href = source;
     dialog.showModal();
     document.body.classList.add('no-scroll');
   }));
+  imageLinks.forEach(link => link.addEventListener('auxclick', event => {
+    if (!screenshotUrl(link)) event.preventDefault();
+  }));
+  if (!supportsDialog) return;
   dialog.querySelector('button').addEventListener('click', () => dialog.close());
   dialog.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;

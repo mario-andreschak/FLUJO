@@ -333,16 +333,17 @@ li+li {
 .hero {
   padding: 74px 0 80px;
   display: grid;
-  grid-template-columns: 1.05fr 1fr;
-  gap: 64px;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 40px;
   align-items: center;
 }
 
 .hero h1 {
-  font-size: clamp(3.6rem,6vw,6.4rem);
+  font-size: clamp(3.1rem,5.3vw,5.4rem);
 }
 
 .hero h1 em {
+  display: block;
   color: var(--coral);
 }
 
@@ -356,78 +357,26 @@ li+li {
   margin-top: 30px;
 }
 
-.hero-art {
-  background: #dfe7dc;
-  border-radius: 130px 130px 12px 12px;
-  padding: 34px 30px 30px;
-  min-width: 0;
-  position: relative;
+.hero-screen.screenshot {
+  margin: 0;
 }
 
-.hero-art .art-heading {
-  font-size: .72rem;
-  letter-spacing: .12em;
-  font-weight: 700;
-  text-align: center;
-  text-transform: uppercase;
-  margin: 0 0 20px;
+.hero-screen .section-label {
+  margin-bottom: 14px;
+  color: var(--muted);
 }
 
-.workshop-art {
-  width: 100%;
-  height: 195px;
+.hero-screen.screenshot figcaption {
   display: block;
-  margin: 8px 0 20px;
 }
 
-.paper-note {
-  background: var(--white);
-  padding: 27px 28px;
-  box-shadow: 0 8px 0 #183b3210;
-  transform: rotate(-2deg);
-  border: 1px solid #d1d6c9;
+.hero-screen figcaption span {
+  display: block;
 }
 
-.paper-note h2 {
-  font-size: 2.1rem;
-  letter-spacing: -.04em;
-  margin: 0 0 18px;
-}
-
-.paper-note ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: .9rem;
-}
-
-.paper-note li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  border-top: 1px solid #dfe1d6;
-  padding: 10px 0;
-  margin: 0;
-}
-
-.paper-note li:before {
-  content: '';
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--green) url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%2712%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2 6l3 3 5-6%27 fill=%27none%27 stroke=%27%23183b32%27 stroke-width=%271.4%27/%3E%3C/svg%3E") center/11px 11px no-repeat;
-  display: grid;
-  place-items: center;
-  font-size: .75rem;
-  flex-shrink: 0;
-}
-
-.art-caption {
-  font-size: .7rem;
-  line-height: 1.5;
-  margin: 20px 0 0;
-  text-align: center;
-  color: #4e6657;
+.hero-screen figcaption a {
+  display: inline-block;
+  margin-top: 8px;
 }
 
 .home-intro {
@@ -1242,14 +1191,7 @@ details p:last-child {
 
 @media(min-width:1440px) {
   .hero {
-    gap: 95px;
     padding-block: 86px;
-  }
-  .hero-art {
-    padding-inline: 40px;
-  }
-  .workshop-art {
-    height: 220px;
   }
 }
 
@@ -1266,15 +1208,6 @@ details p:last-child {
   }
   .hero h1 {
     font-size: 5.3vw;
-  }
-  .hero-art {
-    padding-inline: 23px;
-  }
-  .paper-note {
-    padding: 22px;
-  }
-  .paper-note h2 {
-    font-size: 1.8rem;
   }
   .guide-layout {
     gap: 35px;
@@ -1332,31 +1265,15 @@ details p:last-child {
     gap: 35px;
   }
   .hero h1 {
-    font-size: clamp(3.4rem,11vw,5.6rem);
+    font-size: clamp(3rem,9vw,4.2rem);
     max-width: 590px;
+  }
+  .hero h1 em {
+    display: inline;
   }
   .hero .lede {
     font-size: 1.05rem;
     max-width: 560px;
-  }
-  .hero-art {
-    max-width: 500px;
-    width: 100%;
-    justify-self: center;
-    border-radius: 100px 100px 12px 12px;
-    padding: 26px 30px;
-  }
-  .workshop-art {
-    height: 150px;
-  }
-  .art-heading {
-    font-size: .66rem!important;
-  }
-  .paper-note h2 {
-    font-size: 2rem;
-  }
-  .art-caption {
-    font-size: .66rem;
   }
   .microcopy {
     margin-top: 23px;
@@ -1564,12 +1481,6 @@ details p:last-child {
   }
   .actions {
     gap: 18px;
-  }
-  .hero-art {
-    padding-inline: 18px;
-  }
-  .paper-note {
-    padding: 20px;
   }
   .site-nav .button {
     margin-left: 0;

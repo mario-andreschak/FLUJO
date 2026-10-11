@@ -6,7 +6,7 @@
 
 Build a helper, give it the right tools, and talk to it. See what it does, adjust the steps, and use it again.
 
-[**Install FLUJO**](docs/start-here/install.md) · [**Try the workshop guide**](docs/journeys/first-agent.md) · [**Watch the one-minute film**](https://flujo.com.co/film/) · [**Website**](https://flujo.com.co/)
+[**Install FLUJO**](docs/start-here/install.md) · [**Build your first website**](docs/journeys/website-builder.md) · [**Watch the walkthrough**](https://flujo.com.co/film/) · [**Website**](https://flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-3.46.3-green.svg)](package.json)
@@ -15,21 +15,22 @@ Build a helper, give it the right tools, and talk to it. See what it does, adjus
 
 FLUJO is an open-source AI workspace that runs on your computer. Choose an AI, connect useful tools, and build your own helper with simple steps or a visual diagram. See how each answer was made and reuse what you set up for the next job.
 
-## Start with a coffee workshop
+## Build a website, then reuse your agent
 
-A small, real-world task makes the pieces easier to understand:
+Create a Website Builder and ask it to make **First Pour**, a simple coffee-workshop site:
 
-1. **Connect a useful tool.** Install a web-reading app from its GitHub URL.
-2. **Build a workshop helper.** Give it your chosen AI and the tool, then ask it to read a public coffee guide and make a preparation checklist.
-3. **Keep planning with Maya.** Try an experimental Persona that carries context across conversations to develop the plan, invitation draft, shopping list and run sheet.
+1. **Connect and test your AI.** Save a model connection you can use in different agents.
+2. **Give it tools.** Install Desktop Commander from GitHub so it can write files and start a local preview.
+3. **Save a reusable Website Builder.** Keep its approach general; put this site's content, style and interactions in chat.
+4. **Review the result together.** Open the page, try the demo signup, check a phone-width layout and ask for improvements in the same conversation.
 
-[Follow the first-agent guide →](docs/journeys/first-agent.md) · [Meet Maya →](docs/journeys/persona.md)
+[Build your Website Builder →](docs/journeys/website-builder.md)
 
-The Persona story uses **Day 1 / Day 2 / Day 3 as compressed demonstration sessions**. They are not elapsed days or proof of unattended reliability.
+[![The generated First Pour page after revision, showing three practice stations and a labeled local-demo signup form](githubpages/film/media/walkthrough/act4-final-desktop-labels.png)](docs/journeys/website-builder.md)
 
-[![A real FLUJO conversation separates source-based coffee advice from workshop planning suggestions](githubpages/assets/journeys/07-verified-checklist.png)](docs/journeys/first-agent.md)
+*Built through a real FLUJO 3.46.2 conversation, then reviewed and revised. The signup is a local demonstration; the guide shows the setup and desktop/phone-width checks.*
 
-*Real chat in FLUJO 3.46.2 after a follow-up source read. The guide explains the corrections and one remaining detail to review.*
+More examples: [read a public coffee guide with a helper](docs/journeys/first-agent.md), or [plan the workshop with Maya](docs/journeys/persona.md). Maya's three “days” are compressed demonstration sessions, not elapsed-day reliability evidence.
 
 ## Why try FLUJO?
 

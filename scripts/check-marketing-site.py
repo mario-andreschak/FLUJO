@@ -3,7 +3,7 @@
 
 The preserved /short/ film and its studio are excluded from page quality checks;
 links into them must still resolve. Browser QA remains necessary for readability,
-layout, interactions, and the 60-second film.
+layout, interactions, and the guided walkthrough.
 """
 from html.parser import HTMLParser
 from pathlib import Path

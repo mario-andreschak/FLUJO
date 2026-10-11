@@ -2,13 +2,15 @@
 
 FLUJO runs on your computer. Connect an AI, give it the tools it needs, and turn a question into useful work you can inspect and reuse.
 
-Our example is a small coffee workshop. Start with a helper that reads a public guide and makes a preparation checklist. Then try Maya, an experimental Persona, to carry the plan through three demonstration sessions.
+Start with a Website Builder you can reuse for different projects. Our example gives it a coffee-workshop brief, opens the page it builds, and improves the draft in the same conversation.
 
 1. **[Install and open FLUJO](install.md).** Choose the setup that fits your computer.
-2. **[Build your workshop helper](../journeys/first-agent.md).** Install a web-reading tool from GitHub, add it to an agent, and get an answer in chat.
-3. **[Plan the workshop with Maya](../journeys/persona.md).** Keep decisions together while preparing a plan, invitation draft, shopping list and run sheet.
+2. **[Create your Website Builder](../journeys/website-builder.md).** Test an AI connection, install file and terminal tools from GitHub, and save a reusable agent.
+3. **[Build, review and improve the site](../journeys/website-builder.md#4-give-it-a-website-brief).** Give the agent a brief in chat, then check its local preview and phone-width layout.
 
 Want a smaller first step? [Get one successful AI-only reply](../getting-started/README.md) before adding a tool.
+
+More examples: [a coffee-reading helper](../journeys/first-agent.md) turns a public guide into a checklist; [Maya](../journeys/persona.md), an experimental Persona, carries workshop planning through three compressed demonstration sessions.
 
 ## Choose your next step
 
@@ -24,4 +26,4 @@ Want a smaller first step? [Get one successful AI-only reply](../getting-started
 
 The software is MIT licensed. Model providers and connected services have their own accounts, charges and data policies. Personas are experimental; scheduled work needs a running FLUJO server and may need your attention.
 
-[Website](https://flujo.com.co/) · [One-minute film](https://flujo.com.co/film/) · [Documentation index](../README.md)
+[Website](https://flujo.com.co/) · [Guided walkthrough](https://flujo.com.co/film/) · [Documentation index](../README.md)

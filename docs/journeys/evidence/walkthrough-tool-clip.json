@@ -1,0 +1,592 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "publicUse": "reviewed",
+  "reviewedAtUtc": "2026-10-11T16:24:49.743Z",
+  "title": "Install DesktopCommanderMCP from GitHub and recover to a connected server",
+  "provenance": {
+    "kind": "Genuine screen recording of operator actions in real software",
+    "operator": "Demo operator using agent-operated UI tools",
+    "humanUsabilityStudy": false,
+    "runtimePackage": "flujo-ai",
+    "runtimeVersion": "3.46.2",
+    "documentationSourceVersion": "3.46.3"
+  },
+  "source": {
+    "fileName": "act2-tool.mp4",
+    "storage": "Private recording retained outside the repository",
+    "sha256": "edf2eaf67ec0394ed78e4fb4db35116f2f8d828bdc9db2ed52dfd1b9de085ffd",
+    "captureStartUtc": "2026-10-11T15:36:29.193792115Z",
+    "durationSeconds": 1800,
+    "width": 1600,
+    "height": 1000,
+    "framesPerSecond": 20,
+    "frameCount": 36000,
+    "bytes": 30509018,
+    "videoCodec": "h264",
+    "audioStreams": 0
+  },
+  "edit": {
+    "method": "Chronological real source intervals at normal speed, with long waits and recovery actions omitted. Full frame, no overlays, synthetic UI, generated typing, or added cursor.",
+    "rangeConvention": "Start inclusive, end exclusive; seconds from source start",
+    "totalOutputSeconds": 118,
+    "captionForFilm": "The operator corrected the launch arguments, then reopened configuration after a missed save click. A manually entered path typo was corrected before the final successful test and Add server.",
+    "embeddedCaption": false
+  },
+  "clips": [
+    {
+      "id": "github-import",
+      "summary": "Connect App, choose I have connection details and GitHub, enter the real repository URL, Parse, Clone repository, and reach automatic dependency installation.",
+      "output": {
+        "path": "githubpages/film/media/walkthrough/act2-github-import.mp4",
+        "sha256": "8f55fd3b1134b58909e5a57b72c69f835c4e9b42fd8dac830fcb2551bd9cdcf6",
+        "durationSeconds": 44,
+        "width": 1600,
+        "height": 1000,
+        "framesPerSecond": 20,
+        "frameCount": 880,
+        "bytes": 1366190,
+        "videoCodec": "h264",
+        "pixelFormat": "yuv420p",
+        "audioStreams": 0,
+        "fastStart": true
+      },
+      "ranges": [
+        {
+          "sourceStart": 230,
+          "sourceEnd": 236,
+          "outputStart": 0,
+          "outputEnd": 6,
+          "sourceStartUtc": "2026-10-11T15:40:19.193Z",
+          "sourceEndUtc": "2026-10-11T15:40:25.193Z"
+        },
+        {
+          "sourceStart": 265,
+          "sourceEnd": 271,
+          "outputStart": 6,
+          "outputEnd": 12,
+          "sourceStartUtc": "2026-10-11T15:40:54.193Z",
+          "sourceEndUtc": "2026-10-11T15:41:00.193Z"
+        },
+        {
+          "sourceStart": 290,
+          "sourceEnd": 296,
+          "outputStart": 12,
+          "outputEnd": 18,
+          "sourceStartUtc": "2026-10-11T15:41:19.193Z",
+          "sourceEndUtc": "2026-10-11T15:41:25.193Z"
+        },
+        {
+          "sourceStart": 314,
+          "sourceEnd": 320,
+          "outputStart": 18,
+          "outputEnd": 24,
+          "sourceStartUtc": "2026-10-11T15:41:43.193Z",
+          "sourceEndUtc": "2026-10-11T15:41:49.193Z"
+        },
+        {
+          "sourceStart": 333,
+          "sourceEnd": 339,
+          "outputStart": 24,
+          "outputEnd": 30,
+          "sourceStartUtc": "2026-10-11T15:42:02.193Z",
+          "sourceEndUtc": "2026-10-11T15:42:08.193Z"
+        },
+        {
+          "sourceStart": 356,
+          "sourceEnd": 364,
+          "outputStart": 30,
+          "outputEnd": 38,
+          "sourceStartUtc": "2026-10-11T15:42:25.193Z",
+          "sourceEndUtc": "2026-10-11T15:42:33.193Z"
+        },
+        {
+          "sourceStart": 441,
+          "sourceEnd": 447,
+          "outputStart": 38,
+          "outputEnd": 44,
+          "sourceStartUtc": "2026-10-11T15:43:50.193Z",
+          "sourceEndUtc": "2026-10-11T15:43:56.193Z"
+        }
+      ],
+      "actions": [
+        {
+          "label": "47-open-connect-app",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:40:21.458Z",
+          "afterUtc": "2026-10-11T15:40:21.788Z",
+          "sourceSeconds": 232.264,
+          "outputSeconds": 2.264,
+          "point": [
+            1414,
+            121
+          ]
+        },
+        {
+          "label": "50-have-connection-details",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:40:56.704Z",
+          "afterUtc": "2026-10-11T15:40:56.999Z",
+          "sourceSeconds": 267.51,
+          "outputSeconds": 8.51,
+          "point": [
+            1054,
+            508
+          ]
+        },
+        {
+          "label": "52-choose-github",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:41:21.465Z",
+          "afterUtc": "2026-10-11T15:41:21.746Z",
+          "sourceSeconds": 292.271,
+          "outputSeconds": 14.271,
+          "point": [
+            789,
+            516
+          ]
+        },
+        {
+          "label": "54-focus-github-url",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:41:43.934Z",
+          "afterUtc": "2026-10-11T15:41:44.212Z",
+          "sourceSeconds": 314.74,
+          "outputSeconds": 18.74,
+          "point": [
+            539,
+            558
+          ]
+        },
+        {
+          "label": "55-enter-desktop-commander-url",
+          "tool": "type",
+          "beforeUtc": "2026-10-11T15:41:45.037Z",
+          "afterUtc": "2026-10-11T15:41:45.300Z",
+          "sourceSeconds": 315.843,
+          "outputSeconds": 19.843,
+          "enteredPublicText": "https://github.com/wonderwhy-er/DesktopCommanderMCP"
+        },
+        {
+          "label": "57-parse-github-url",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:42:03.788Z",
+          "afterUtc": "2026-10-11T15:42:04.152Z",
+          "sourceSeconds": 334.594,
+          "outputSeconds": 25.594,
+          "point": [
+            1492,
+            631
+          ]
+        },
+        {
+          "label": "59-clone-desktop-commander",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:42:27.119Z",
+          "afterUtc": "2026-10-11T15:42:27.399Z",
+          "sourceSeconds": 357.925,
+          "outputSeconds": 31.925,
+          "point": [
+            1450,
+            674
+          ]
+        }
+      ],
+      "sceneChangeOutputSeconds": [
+        3.45,
+        8.95,
+        15.05,
+        15.15,
+        27.1,
+        39.3,
+        39.55,
+        39.65,
+        39.8,
+        39.9,
+        42.65,
+        43.8
+      ]
+    },
+    {
+      "id": "install-build-test",
+      "summary": "Inspect installation, finish npm install --include=dev, run npm run build, then replace the package-runner arguments with dist/index.js and --no-onboarding and pass the local MCP connection test. The node command was changed in omitted footage.",
+      "output": {
+        "path": "githubpages/film/media/walkthrough/act2-install-build-test.mp4",
+        "sha256": "d37d27ccb67741189911bfbcf7ccec7a944498a3910a9ea492ffb4f4b25cdd36",
+        "durationSeconds": 46,
+        "width": 1600,
+        "height": 1000,
+        "framesPerSecond": 20,
+        "frameCount": 920,
+        "bytes": 989307,
+        "videoCodec": "h264",
+        "pixelFormat": "yuv420p",
+        "audioStreams": 0,
+        "fastStart": true
+      },
+      "ranges": [
+        {
+          "sourceStart": 524,
+          "sourceEnd": 531,
+          "outputStart": 0,
+          "outputEnd": 7,
+          "sourceStartUtc": "2026-10-11T15:45:13.193Z",
+          "sourceEndUtc": "2026-10-11T15:45:20.193Z"
+        },
+        {
+          "sourceStart": 624,
+          "sourceEnd": 642,
+          "outputStart": 7,
+          "outputEnd": 25,
+          "sourceStartUtc": "2026-10-11T15:46:53.193Z",
+          "sourceEndUtc": "2026-10-11T15:47:11.193Z"
+        },
+        {
+          "sourceStart": 806,
+          "sourceEnd": 812,
+          "outputStart": 25,
+          "outputEnd": 31,
+          "sourceStartUtc": "2026-10-11T15:49:55.193Z",
+          "sourceEndUtc": "2026-10-11T15:50:01.193Z"
+        },
+        {
+          "sourceStart": 825,
+          "sourceEnd": 831,
+          "outputStart": 31,
+          "outputEnd": 37,
+          "sourceStartUtc": "2026-10-11T15:50:14.193Z",
+          "sourceEndUtc": "2026-10-11T15:50:20.193Z"
+        },
+        {
+          "sourceStart": 845,
+          "sourceEnd": 854,
+          "outputStart": 37,
+          "outputEnd": 46,
+          "sourceStartUtc": "2026-10-11T15:50:34.193Z",
+          "sourceEndUtc": "2026-10-11T15:50:43.193Z"
+        }
+      ],
+      "actions": [
+        {
+          "label": "63-open-install-build-settings",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:45:15.134Z",
+          "afterUtc": "2026-10-11T15:45:15.402Z",
+          "sourceSeconds": 525.94,
+          "outputSeconds": 1.94,
+          "point": [
+            1009,
+            282
+          ]
+        },
+        {
+          "label": "84-focus-local-entry-corrected",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:49:57.019Z",
+          "afterUtc": "2026-10-11T15:49:57.308Z",
+          "sourceSeconds": 807.825,
+          "outputSeconds": 26.825,
+          "point": [
+            339,
+            511
+          ]
+        },
+        {
+          "label": "85-enter-local-entry-corrected",
+          "tool": "type",
+          "beforeUtc": "2026-10-11T15:49:58.122Z",
+          "afterUtc": "2026-10-11T15:49:58.335Z",
+          "sourceSeconds": 808.928,
+          "outputSeconds": 27.928,
+          "enteredPublicText": "dist/index.js"
+        },
+        {
+          "label": "87-focus-onboarding-option",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:50:15.592Z",
+          "afterUtc": "2026-10-11T15:50:15.864Z",
+          "sourceSeconds": 826.398,
+          "outputSeconds": 32.398,
+          "point": [
+            451,
+            563
+          ]
+        },
+        {
+          "label": "88-set-no-onboarding-option",
+          "tool": "type",
+          "beforeUtc": "2026-10-11T15:50:16.695Z",
+          "afterUtc": "2026-10-11T15:50:16.922Z",
+          "sourceSeconds": 827.501,
+          "outputSeconds": 33.501,
+          "enteredPublicText": "--no-onboarding"
+        },
+        {
+          "label": "90-run-local-tool-test",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T15:50:36.556Z",
+          "afterUtc": "2026-10-11T15:50:36.857Z",
+          "sourceSeconds": 847.362,
+          "outputSeconds": 39.362,
+          "point": [
+            955,
+            253
+          ]
+        },
+        {
+          "label": "91-local-tool-test-result",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T15:50:39.161Z",
+          "afterUtc": "2026-10-11T15:50:39.429Z",
+          "sourceSeconds": 849.967,
+          "outputSeconds": 41.967
+        }
+      ],
+      "sceneChangeOutputSeconds": [
+        7.1,
+        20.4,
+        25,
+        39.75,
+        41.75,
+        42,
+        42.1
+      ]
+    },
+    {
+      "id": "tool-connected",
+      "summary": "After manual recovery, inspect the corrected root path, rerun the test, observe 26 tools, click Add server, and see six server cards including DesktopCommanderMCP Connected. The opening still contains the previous failed-test log.",
+      "output": {
+        "path": "githubpages/film/media/walkthrough/act2-tool-connected.mp4",
+        "sha256": "fac58abfe79e2fe511d6eddc5d8b0d01444ac97b1d8388ab2fc828769bcdb1d0",
+        "durationSeconds": 28,
+        "width": 1600,
+        "height": 1000,
+        "framesPerSecond": 20,
+        "frameCount": 560,
+        "bytes": 770733,
+        "videoCodec": "h264",
+        "pixelFormat": "yuv420p",
+        "audioStreams": 0,
+        "fastStart": true
+      },
+      "ranges": [
+        {
+          "sourceStart": 1626,
+          "sourceEnd": 1631,
+          "outputStart": 0,
+          "outputEnd": 5,
+          "sourceStartUtc": "2026-10-11T16:03:35.193Z",
+          "sourceEndUtc": "2026-10-11T16:03:40.193Z"
+        },
+        {
+          "sourceStart": 1720,
+          "sourceEnd": 1731,
+          "outputStart": 5,
+          "outputEnd": 16,
+          "sourceStartUtc": "2026-10-11T16:05:09.193Z",
+          "sourceEndUtc": "2026-10-11T16:05:20.193Z"
+        },
+        {
+          "sourceStart": 1771,
+          "sourceEnd": 1783,
+          "outputStart": 16,
+          "outputEnd": 28,
+          "sourceStartUtc": "2026-10-11T16:06:00.193Z",
+          "sourceEndUtc": "2026-10-11T16:06:12.193Z"
+        }
+      ],
+      "actions": [
+        {
+          "label": "133-test-corrected-path",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:05:11.211Z",
+          "afterUtc": "2026-10-11T16:05:11.491Z",
+          "sourceSeconds": 1722.017,
+          "outputSeconds": 7.017,
+          "point": [
+            954,
+            613
+          ]
+        },
+        {
+          "label": "134-corrected-test-settled",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:05:15.816Z",
+          "afterUtc": "2026-10-11T16:05:16.092Z",
+          "sourceSeconds": 1726.622,
+          "outputSeconds": 11.622
+        },
+        {
+          "label": "135-add-server-settled",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:06:02.335Z",
+          "afterUtc": "2026-10-11T16:06:02.618Z",
+          "sourceSeconds": 1773.141,
+          "outputSeconds": 18.141,
+          "point": [
+            1470,
+            930
+          ]
+        },
+        {
+          "label": "136-added-server-list",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:06:06.442Z",
+          "afterUtc": "2026-10-11T16:06:06.934Z",
+          "sourceSeconds": 1777.248,
+          "outputSeconds": 22.248
+        }
+      ],
+      "sceneChangeOutputSeconds": [
+        5,
+        7.45,
+        9.2,
+        9.3,
+        9.45,
+        19.1
+      ]
+    }
+  ],
+  "actionTimingBasis": "Allowlisted real action-log events only. UTC tool-call times mapped to the nanosecond recording start and selected ranges, rounded to milliseconds. These are tool-call times, not exact visual-event timestamps or a generated cursor trace.",
+  "observedConfiguration": {
+    "repositoryUrl": "https://github.com/wonderwhy-er/DesktopCommanderMCP",
+    "packageVersionSeenInBuildOutput": "0.2.52",
+    "transport": "Standard IO",
+    "installCommand": "npm install --include=dev",
+    "buildCommand": "npm run build",
+    "runCommand": "node",
+    "arguments": [
+      "dist/index.js",
+      "--no-onboarding"
+    ],
+    "rootPath": "/workspace/flujo-data/workspaces/default-workspace/mcp-servers/DesktopCommanderMCP",
+    "toolsDiscovered": 26,
+    "finalCard": "DesktopCommanderMCP Connected",
+    "finalServerCount": 6,
+    "scope": "This chapter demonstrates installation and connection, not yet an agent writing or running a website."
+  },
+  "recoveryContext": {
+    "installation": "The selected installation footage includes deprecation warnings and an earlier module-not-found warning. The later local-command connection test succeeds. No flawless automatic configuration is claimed.",
+    "firstSave": {
+      "event": {
+        "label": "92-save-connected-tool",
+        "tool": "click",
+        "beforeUtc": "2026-10-11T15:51:02.716Z",
+        "afterUtc": "2026-10-11T15:51:03.010Z",
+        "sourceSeconds": 873.522,
+        "point": [
+          1470,
+          908
+        ]
+      },
+      "sourceFramesReviewedSeconds": [
+        873,
+        873.6,
+        874,
+        875
+      ],
+      "settledButtonLabel": "Update server",
+      "approximateButtonRectangle": {
+        "left": 1408,
+        "top": 830,
+        "right": 1535,
+        "bottom": 870
+      },
+      "approximateDialogBottomY": 894,
+      "observation": "The recorded click at [1470,908] falls below the settled dialog, outside Update server. The dialog closes and the list still has five cards.",
+      "conclusion": "Evidence supports a missed click on the backdrop, not a demonstrated application persistence failure."
+    },
+    "manualRecovery": "The operator reopened the configuration and reused the existing cloned, built repository. A manually entered root path omitted the hyphen in mcp-servers. Clipboard inspection and UI paste corrected the path before the final test. These recovery operations are omitted from public video.",
+    "correctedPathAtUtc": "2026-10-11T16:03:34.066Z",
+    "staleFailure": "The first five seconds of tool-connected show the corrected root alongside the previous ENOENT test log. This is a retained prior result, not a new failure after correction. The subsequent live test passes and discovers 26 tools.",
+    "finalSave": "The actual Add server click at [1470,930] is followed by six cards and DesktopCommanderMCP Connected.",
+    "omittedActionMetadata": [
+      {
+        "label": "93-tool-saved-card",
+        "tool": "look_at_screen",
+        "beforeUtc": "2026-10-11T15:51:05.021Z",
+        "afterUtc": "2026-10-11T15:51:05.546Z",
+        "sourceSeconds": 875.827
+      },
+      {
+        "label": "128-read-ui-root-through-clipboard",
+        "tool": "terminal_execute",
+        "beforeUtc": "2026-10-11T16:02:21.535Z",
+        "afterUtc": "2026-10-11T16:02:22.771Z",
+        "sourceSeconds": 1552.341
+      },
+      {
+        "label": "129-correct-root-using-ui-paste",
+        "tool": "terminal_execute",
+        "beforeUtc": "2026-10-11T16:03:26.792Z",
+        "afterUtc": "2026-10-11T16:03:34.066Z",
+        "sourceSeconds": 1617.598
+      },
+      {
+        "label": "130-root-corrected",
+        "tool": "look_at_screen",
+        "beforeUtc": "2026-10-11T16:03:34.067Z",
+        "afterUtc": "2026-10-11T16:03:34.340Z",
+        "sourceSeconds": 1624.873
+      }
+    ]
+  },
+  "privacyReview": {
+    "method": "118 one-second output samples across three clips, full-resolution source frames at key actions and logs, allowlisted action-log matching, and decoded scene-change scans of all 2360 output frames at threshold 0.04. All detected scene changes were visually reviewed in contact sheets.",
+    "fullResolutionSourceSeconds": [
+      233,
+      269,
+      295,
+      318,
+      338,
+      362,
+      380,
+      403,
+      420,
+      440,
+      462,
+      528,
+      590,
+      625,
+      631,
+      635,
+      640,
+      724,
+      773,
+      790,
+      810,
+      849,
+      852,
+      873,
+      873.6,
+      874,
+      875,
+      1154,
+      1264,
+      1390,
+      1473,
+      1626,
+      1670,
+      1723,
+      1725,
+      1727,
+      1774,
+      1775,
+      1778,
+      1782
+    ],
+    "mandatoryExcludedInterval": {
+      "sourceStart": 1552,
+      "sourceEnd": 1625,
+      "reason": "Conservative exclusion around actions 128 and 129, which used a terminal for clipboard inspection and paste."
+    },
+    "observations": [
+      "No standalone terminal, credential value, password value, email address, or private host filesystem path was observed in the selected output.",
+      "The green-on-black install and test logs are embedded FLUJO panels.",
+      "Owned demo container paths and localhost proxy URLs remain visible intentionally. They are part of the configuration being demonstrated.",
+      "Actual screen contents, including prior failures, were preserved. No cursor was added during editing."
+    ],
+    "limitations": "Visual sampling and all-frame scene-change detection, not OCR or manual inspection of every frame. The raw capture and full action log remain private.",
+    "publicScope": "Only the three listed video outputs and this sanitized manifest are reviewed for public use."
+  }
+}
