@@ -56,6 +56,19 @@ const result: McpAssistantResearchResult = {
   }],
 };
 
+async function beginApprovedInstall(props: Partial<React.ComponentProps<typeof McpAiConnectionPanel>>) {
+  researchMcpConnectionMock.mockResolvedValue(result);
+  const view = render(<ThemeProvider theme={createTheme()}>
+    <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} {...props} />
+  </ThemeProvider>);
+  fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'web search' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+  fireEvent.click(await screen.findByLabelText(/approve downloading and running this exact package command/i));
+  fireEvent.click(screen.getByRole('button', { name: /install and connect/i }));
+  return view;
+}
+
 describe('McpAiConnectionPanel', () => {
   it('shows the recommendation category and evidenced service cost before consent', async () => {
     researchMcpConnectionMock.mockResolvedValue({
@@ -239,6 +252,62 @@ describe('McpAiConnectionPanel', () => {
     await act(async () => { finish({ installed: true, serverName: 'search', needsAuthentication: true }); });
     expect(onAuthenticate).not.toHaveBeenCalled();
     expect(onInstalled).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('waits for sign-in and handoff before showing connection success (existing: %s)', async alreadyExisted => {
+    installMcpRecommendationMock.mockResolvedValue({ installed: true, serverName: 'search', needsAuthentication: true, alreadyExisted });
+    let authenticate!: () => void;
+    let installed!: () => void;
+    const onAuthenticate = jest.fn(() => new Promise<void>(resolve => { authenticate = resolve; }));
+    const onInstalled = jest.fn(() => new Promise<void>(resolve => { installed = resolve; }));
+    await beginApprovedInstall({ onAuthenticate, onInstalled });
+    await waitFor(() => expect(onAuthenticate).toHaveBeenCalledWith('search'));
+    expect(screen.queryByText(/^search (?:is connected\.|was already connected;)/i)).not.toBeInTheDocument();
+    expect(onInstalled).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /connecting/i })).toBeDisabled();
+
+    await act(async () => { authenticate(); });
+    expect(onInstalled).toHaveBeenCalledWith('search');
+    expect(screen.queryByText(/^search (?:is connected\.|was already connected;)/i)).not.toBeInTheDocument();
+    await act(async () => { installed(); });
+    expect(await screen.findByText(alreadyExisted ? 'search was already connected; its existing configuration was kept.' : 'search is connected.')).toBeInTheDocument();
+    expect(onAuthenticate).toHaveBeenCalledTimes(1);
+    expect(onInstalled).toHaveBeenCalledTimes(1);
+    expect(installMcpRecommendationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['sign-in', 'handoff'])('shows the %s failure without a connection success receipt or automatic retry', async boundary => {
+    installMcpRecommendationMock.mockResolvedValue({ installed: true, serverName: 'search', needsAuthentication: true });
+    const message = boundary === 'sign-in' ? 'Sign-in failed. Open the app and sign in again.' : 'Could not finish connecting. Try again.';
+    const onAuthenticate = boundary === 'sign-in'
+      ? jest.fn(async () => { throw new Error(message); })
+      : jest.fn(async () => undefined);
+    const onInstalled = boundary === 'handoff'
+      ? jest.fn(async () => { throw new Error(message); })
+      : jest.fn(async () => undefined);
+    await beginApprovedInstall({ onAuthenticate, onInstalled });
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(/^search (?:is connected\.|was already connected;)/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/connection name/i)).toHaveValue('search');
+    expect(screen.getByLabelText(/one thing to connect/i)).toHaveValue('web search');
+    expect(screen.getByRole('checkbox')).toBeChecked();
+    expect(screen.getByRole('button', { name: /install and connect/i })).toBeEnabled();
+    expect(onAuthenticate).toHaveBeenCalledTimes(1);
+    expect(onInstalled).toHaveBeenCalledTimes(boundary === 'sign-in' ? 0 : 1);
+    expect(installMcpRecommendationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not finish a connection when the panel unmounts during sign-in', async () => {
+    installMcpRecommendationMock.mockResolvedValue({ installed: true, serverName: 'search', needsAuthentication: true });
+    let authenticate!: () => void;
+    const onAuthenticate = jest.fn(() => new Promise<void>(resolve => { authenticate = resolve; }));
+    const onInstalled = jest.fn();
+    const view = await beginApprovedInstall({ onAuthenticate, onInstalled });
+    await waitFor(() => expect(onAuthenticate).toHaveBeenCalledWith('search'));
+    view.unmount();
+    await act(async () => { authenticate(); });
+    expect(onInstalled).not.toHaveBeenCalled();
+    expect(installMcpRecommendationMock).toHaveBeenCalledTimes(1);
   });
   beforeEach(() => {
     jest.clearAllMocks();

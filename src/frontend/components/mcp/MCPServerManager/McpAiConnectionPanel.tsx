@@ -217,12 +217,14 @@ export default function McpAiConnectionPanel({
       if (!installResult.installed || !installResult.serverName) {
         throw new Error(installResult.error || t('mcp.ai.installFailed'));
       }
-      setSuccess(installResult.alreadyExisted
-        ? t('mcp.ai.alreadyConnected', { name: installResult.serverName })
-        : t('mcp.ai.connected', { name: installResult.serverName }));
       if (installResult.needsAuthentication) await onAuthenticate(installResult.serverName);
       if (!mountedRef.current) return;
       await onInstalled(installResult.serverName);
+      if (!mountedRef.current) return;
+      // Saving the connection alone does not complete sign-in or its handoff.
+      setSuccess(installResult.alreadyExisted
+        ? t('mcp.ai.alreadyConnected', { name: installResult.serverName })
+        : t('mcp.ai.connected', { name: installResult.serverName }));
     } catch (cause) {
       if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
