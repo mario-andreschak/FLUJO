@@ -34,6 +34,12 @@ npx flujo-ai@latest
 
 This starts the latest published npm release without a local build. Some connected tools still need Git, Python or uv. [Data location, ports and npm options](npm.md).
 
+### If FLUJO asks to update Node.js
+
+When `flujo`, `npm start` or `npm run dev` finds an unsupported Node.js version, it shows the version and offers an update. Accepting installs a verified official release for FLUJO and restarts the same command. FLUJO reuses that installation next time; other programs keep using the Node.js version already set up on your computer.
+
+Declining shows manual installation instructions. Starts without an interactive terminal also show those instructions; use `flujo --update-node`, `npm start -- --update-node` or `npm run dev -- --update-node` to request the update explicitly. Connected MCP tools do not prompt for updates: configure their host to use a supported Node.js installation. [Runtime locations, verification and recovery](../operations/windows-native-runtime-profile.md).
+
 ## Get your first result
 
 1. Open **AI Setup → Connect AI** and connect a cloud provider, supported subscription login, or local Ollama model.
