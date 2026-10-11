@@ -20,6 +20,14 @@ test('complete two-language extended scans with current-source upload are requir
   assertScannerWorkflowContract(workflow());
 });
 
+test('scanner contract accepts a paired immutable CodeQL update', () => {
+  const value = workflow();
+  for (const step of value.jobs.codeql.steps.slice(1)) {
+    step.uses = step.uses.replace(/@[a-f0-9]{40}$/, '@24c54180a607b1449ed407dd24f251e4e9147c8d');
+  }
+  assertScannerWorkflowContract(value);
+});
+
 for (const [label, mutate] of [
   ['missing scanner', value => { delete value.jobs.codeql; }],
   ['conditional source checkout', value => { value.jobs.codeql.steps[0].if = 'false'; }],
@@ -48,6 +56,8 @@ for (const [label, mutate] of [
   ['matrix excludes a language', value => { value.jobs.codeql.strategy.matrix.exclude = [{ language: 'actions' }]; }],
   ['language failure cancels the other analysis', value => { value.jobs.codeql.strategy['fail-fast'] = true; }],
   ['mutable CodeQL action', value => { value.jobs.codeql.steps[2].uses = 'github/codeql-action/analyze@v4'; }],
+  ['initialization-only CodeQL update', value => { value.jobs.codeql.steps[1].uses = 'github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d'; }],
+  ['analysis-only CodeQL update', value => { value.jobs.codeql.steps[2].uses = 'github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d'; }],
 ]) {
   test(`scanner contract refuses ${label}`, () => {
     const value = workflow(); mutate(value);
