@@ -1,4 +1,6 @@
 import React from 'react';
+import { ReadableStream } from 'node:stream/web';
+import { TextDecoder } from 'node:util';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
@@ -18,6 +20,18 @@ import { Model } from '@/shared/types';
 import { ANTIGRAVITY_CLI_GUIDED_MODELS } from '@/shared/types/model/provider';
 
 const originalFetch = global.fetch;
+const originalTextDecoder = global.TextDecoder;
+
+function installerResponse(tool: string, success: boolean): Response {
+  const events = Buffer.from([
+    JSON.stringify({ type: 'stdout', data: `${tool} installer output` }),
+    JSON.stringify({ type: 'result', success, error: success ? undefined : 'fixture installation failed' }),
+  ].join('\n') + '\n');
+  return {
+    ok: true,
+    body: new ReadableStream({ start(controller) { controller.enqueue(events); controller.close(); } }),
+  } as unknown as Response;
+}
 
 function renderWizard(overrides?: Partial<React.ComponentProps<typeof ModelConnectionWizard>>) {
   const onCreateModels = jest.fn(async (models: Model[]) => ({
@@ -183,6 +197,61 @@ describe('ModelConnectionWizard', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled());
   });
 
+  it.each([
+    ['Claude', 'ChatGPT / Codex', 'claude', true],
+    ['ChatGPT / Codex', 'Claude', 'codex', true],
+    ['Claude', 'ChatGPT / Codex', 'claude', false],
+    ['ChatGPT / Codex', 'Claude', 'codex', false],
+  ] as const)('clears the %s installation receipt when switching to %s (installer: %s, success: %s)', async (previous, next, tool, success) => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation((_url: string, options?: RequestInit) => Promise.resolve(options?.method === 'POST'
+      ? installerResponse(tool, success)
+      : { ok: true, json: async () => ({ platform: 'win32', installMode: 'git', oneClickInstall: true }) }));
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: previous }).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install with WinGet' }));
+    expect(await screen.findByText(`${tool} installer output`)).toBeInTheDocument();
+    if (success) expect(await screen.findByText('Installed. Continue with the sign-in command below.')).toBeInTheDocument();
+    else expect(await screen.findByText('fixture installation failed')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('heading', { name: next }).closest('button')!);
+    expect(screen.queryByText('Installed. Continue with the sign-in command below.')).not.toBeInTheDocument();
+    expect(screen.queryByText(`${tool} installer output`)).not.toBeInTheDocument();
+    expect(screen.queryByText('fixture installation failed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install with WinGet' })).toBeEnabled();
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toEqual([
+      ['/api/setup/ai-cli', expect.objectContaining({ body: JSON.stringify({ tool }) })],
+    ]);
+    expect(props.onCreateModels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Claude', 'claude'],
+    ['ChatGPT / Codex', 'codex'],
+  ])('keeps the completed %s installation receipt when returning to the same setup', async (provider, tool) => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation((_url: string, options?: RequestInit) => Promise.resolve(options?.method === 'POST'
+      ? installerResponse(tool, true)
+      : { ok: true, json: async () => ({ platform: 'win32', installMode: 'git', oneClickInstall: true }) }));
+    renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: provider }).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install with WinGet' }));
+    expect(await screen.findByText('Installed. Continue with the sign-in command below.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('heading', { name: provider }).closest('button')!);
+    expect(screen.getByText('Installed. Continue with the sign-in command below.')).toBeInTheDocument();
+    expect(screen.getByText(`${tool} installer output`)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
+  });
+
   it('keeps the selected setup visible while its model save is pending', async () => {
     let complete!: (value: { success: boolean; created: Model[]; existing: Model[] }) => void;
     const onCreateModels = jest.fn((_models: Model[]) => new Promise<{ success: boolean; created: Model[]; existing: Model[] }>(resolve => { complete = resolve; }));
@@ -200,9 +269,10 @@ describe('ModelConnectionWizard', () => {
   });
 
   beforeEach(() => {
+    global.TextDecoder = TextDecoder as typeof global.TextDecoder;
     global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ platform: 'win32', installMode: 'git', oneClickInstall: true }) } as Response));
   });
-  afterEach(() => { global.fetch = originalFetch; });
+  afterEach(() => { global.fetch = originalFetch; global.TextDecoder = originalTextDecoder; });
 
   it('sends experts directly to manual creation', () => {
     const props = renderWizard();
