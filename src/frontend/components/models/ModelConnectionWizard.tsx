@@ -399,7 +399,9 @@ export default function ModelConnectionWizard({
   const selectSetup = (nextKind: GuidedConnectionKind) => {
     setKind(nextKind);
     setConfirmedLogin(false);
-    if (nextKind === 'antigravity-cli' || nextKind === 'codex-subscription') setApiKey('');
+    // A masked credential from the previous setup must not be saved for a
+    // different provider. Back to the same keyed setup keeps the user's input.
+    if (nextKind !== kind || nextKind === 'antigravity-cli' || nextKind === 'codex-subscription') setApiKey('');
     go('setup');
   };
 
