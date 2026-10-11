@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'githubpages/**'
+      - 'scripts/check-marketing-site.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -30,6 +31,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+
+      - name: Check pages and local links
+        run: python3 scripts/check-marketing-site.py
 
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5

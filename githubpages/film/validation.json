@@ -1,0 +1,412 @@
+{
+  "status": "complete",
+  "updatedAtUtc": "2026-10-11T13:12:47.875Z",
+  "branch": "codex/readme-website-journeys-20261011",
+  "baseRevision": "569079d632a19f100c3bb194e7036aaba5cdc283",
+  "revisionScope": "Uncommitted film files identified by SHA-256 below; parent owns integration and publication.",
+  "durationSeconds": 60,
+  "runtimeDependencies": 0,
+  "audio": false,
+  "timelineScenes": 10,
+  "captureRuntimeVersion": "3.46.2",
+  "captureKeys": 7,
+  "provenance": {
+    "file": "docs/journeys/evidence/capture-manifest.json",
+    "status": "final",
+    "usedAssets": [
+      {
+        "file": "githubpages/assets/journeys/03-github-url.png",
+        "sha256": "a0feffc41915e0319272e08ff1630913709c91d71fad717b720ed5a99189ee3b",
+        "bytes": 333279
+      },
+      {
+        "file": "githubpages/assets/journeys/04-mcp-test.png",
+        "sha256": "fe984efd11c679769f4287151d52863662695a9509afaf02d059dd612d7174b1",
+        "bytes": 249268
+      },
+      {
+        "file": "githubpages/assets/journeys/05-agent-app.png",
+        "sha256": "38042003115cb12de29d8113c2b5f42f98775ca18b4a9b348d2f92d9d8eae299",
+        "bytes": 565982
+      },
+      {
+        "file": "githubpages/assets/journeys/07-verified-checklist.png",
+        "sha256": "bf0a13a22c618f5c0f34068698d501a16443a24fb7e88c20240154e035320b23",
+        "bytes": 514649
+      },
+      {
+        "file": "githubpages/assets/journeys/11-day1-plan.png",
+        "sha256": "3ceaa716773550f4a08520eeaf64bc8fb891066ae921a5314d5b995708b0cb06",
+        "bytes": 359725
+      },
+      {
+        "file": "githubpages/assets/journeys/13-day2-progress.png",
+        "sha256": "1e3193860bd1f0c4e1c83fa87fe396f6396cdeb60916495ea019e8020e9e9ea0",
+        "bytes": 345266
+      },
+      {
+        "file": "githubpages/assets/journeys/14-day3-runsheet.png",
+        "sha256": "1e60b77b2748579a99c3e7e6e70f16a81cee379d008c44a603c722fe670fa82a",
+        "bytes": 420498
+      },
+      {
+        "file": "githubpages/assets/journeys/16-day3-goal-completed.png",
+        "sha256": "06c266bf94e966f39c72f4c039aa2101c65bab54c63d50967192b163bbcdad64",
+        "bytes": 453092
+      }
+    ]
+  },
+  "browserAcceptance": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "capture files match reviewed provenance records",
+        "passed": true
+      },
+      {
+        "name": "exact 60-second timeline; no autoplay; accessible native controls",
+        "passed": true
+      },
+      {
+        "name": "representative desktop scenes render distinctly and deterministically",
+        "passed": true
+      },
+      {
+        "name": "API seek clamps negative, overshoot and nonfinite values",
+        "passed": true
+      },
+      {
+        "name": "native range keyboard and focused player keyboard seek correctly",
+        "passed": true
+      },
+      {
+        "name": "play, pause, exact end, replay, and fullscreen controls",
+        "passed": true
+      },
+      {
+        "name": "timestamp previews clamp and remain paused",
+        "passed": true
+      },
+      {
+        "name": "reduced-motion preference and manual toggle",
+        "passed": true
+      },
+      {
+        "name": "phone canvas reflows in portrait without overflow; controls remain usable",
+        "passed": true
+      },
+      {
+        "name": "no console errors or failed local resources",
+        "passed": true
+      }
+    ],
+    "measuredElapsedSeconds": 8.3,
+    "frames": [
+      {
+        "layout": "desktop",
+        "seconds": 3,
+        "signature": "6fa2bbc919e0",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 6.5,
+        "signature": "3f91f23a035b",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 9,
+        "signature": "b4befbf4d5f9",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 15,
+        "signature": "d6c09e959d22",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 21,
+        "signature": "aae1b503c35a",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 26,
+        "signature": "23d4e3740e80",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 33,
+        "signature": "fd29c18e140d",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 38,
+        "signature": "8e4620c27c75",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 41,
+        "signature": "bfa73fadd316",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 46,
+        "signature": "dccf1d34ac3f",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 52,
+        "signature": "f87e13aed1fb",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop",
+        "seconds": 58,
+        "signature": "6f820c45b355",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "desktop-repeat",
+        "seconds": 33,
+        "signature": "fd29c18e140d",
+        "width": 1358,
+        "height": 764
+      },
+      {
+        "layout": "gentle",
+        "seconds": 33,
+        "signature": "81e9e212e4e7",
+        "width": 1118,
+        "height": 629
+      },
+      {
+        "layout": "gentle-still",
+        "seconds": 33.2,
+        "signature": "81e9e212e4e7",
+        "width": 1118,
+        "height": 629
+      },
+      {
+        "layout": "mobile",
+        "seconds": 6.5,
+        "signature": "a37c57addcf7",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 9,
+        "signature": "82681ee9ae58",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 15,
+        "signature": "28bf4769ce05",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 21,
+        "signature": "b32798c04326",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 26,
+        "signature": "983f15013c49",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 33,
+        "signature": "6e7637865dfb",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 38,
+        "signature": "0fc4bc659a64",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 41,
+        "signature": "be192d4993fb",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 46,
+        "signature": "f1530278135e",
+        "width": 360,
+        "height": 480
+      },
+      {
+        "layout": "mobile",
+        "seconds": 58,
+        "signature": "395884490888",
+        "width": 360,
+        "height": 480
+      }
+    ],
+    "browserErrors": [],
+    "failedResources": []
+  },
+  "visualReview": {
+    "desktop": [
+      3,
+      6.5,
+      9,
+      15,
+      26,
+      33,
+      38,
+      41,
+      58
+    ],
+    "portrait": [
+      6.5,
+      9,
+      15,
+      26,
+      33,
+      38,
+      41,
+      46,
+      58
+    ],
+    "notes": [
+      "Reviewed source crops and primary narrative text on desktop and portrait compositions.",
+      "Exact chapter starts remain readable when paused.",
+      "Day 3 subtitle and day trail do not overlap.",
+      "Phone completed badge is cropped from real UI and remains legible.",
+      "Final Day 2 phone crop and regenerated poster were reviewed."
+    ],
+    "temporaryScreenshotsRetained": false
+  },
+  "sourceFiles": [
+    {
+      "file": "githubpages/film/index.html",
+      "sha256": "95404082a196a9833997151ecdee478953e05802619ec07305086a0db23902c9"
+    },
+    {
+      "file": "githubpages/film/film.css",
+      "sha256": "8d925f7b9f98dbb36420b47099a6da3043781d494c6c509d750c517939c26091"
+    },
+    {
+      "file": "githubpages/film/renderer.js",
+      "sha256": "812a23c501939ab4a0a89c177980d4303930294bd0c7024dd2363a36c8c5112a"
+    },
+    {
+      "file": "githubpages/film/player.js",
+      "sha256": "9c1bbd7bb6b011752f481d9725b647b96e7da29c7068994315144f55ed98e591"
+    },
+    {
+      "file": "githubpages/film/captures.js",
+      "sha256": "6aa91203017be97f3155a98e9400ebe980db1ca86081d902bc488672ae55af3e"
+    },
+    {
+      "file": "githubpages/film/tools/render.mjs",
+      "sha256": "191503f6b90c01264e8be2fb90716dd44b9c9c826c9f76d5d0dd093cbbd2c7db"
+    },
+    {
+      "file": "githubpages/film/tools/verify.mjs",
+      "sha256": "a05b15050afbff6f4cb114f5bb863c033cbadeded13f699cdc759e328c2e8e87"
+    },
+    {
+      "file": "githubpages/film/README.md",
+      "sha256": "ab854e32a28080628631c5d11dd85d175be2f4a2ab3ec9f4c2a1b19243606a5d"
+    }
+  ],
+  "export": {
+    "file": "githubpages/film/flujo-coffee-60s.mp4",
+    "sha256": "a8c1b524b53711eaa9cf18509e2b41bf8f97c01f3ebd98a193ce0185a5f0a1d5",
+    "bytes": 1341528,
+    "codec": "h264",
+    "width": 1280,
+    "height": 720,
+    "frames": 1800,
+    "framesPerSecond": 30,
+    "durationSeconds": 60,
+    "audioStreams": 0,
+    "measuredRenderElapsedSeconds": 56,
+    "downloadHttpStatus": 200,
+    "downloadContentType": "video/mp4",
+    "verification": "ffprobe checked one H.264 video stream, exact duration, dimensions, frame count and frame rate."
+  },
+  "poster": {
+    "file": "githubpages/film/poster.png",
+    "sha256": "e8b56687b9df64e65327f62a0d98d96bd1642d134149969651ac37f02c3acc11",
+    "bytes": 85516
+  },
+  "otherChecks": {
+    "javascriptSyntax": "passed for renderer, player, captures, exporter and verifier",
+    "marketingSite": {
+      "pages": 8,
+      "localReferences": 230,
+      "errors": []
+    },
+    "gitDiffCheck": "passed",
+    "independentCopyReview": "No material factual or accessibility contradictions found.",
+    "smallTextContrastRatios": {
+      "softOnMint": 4.98,
+      "softOnPaper": 6.24,
+      "inkOnCoral": 4.74,
+      "softOnLilac": 4.66
+    }
+  },
+  "limitations": [
+    "Agent-operated live software demonstration; not an independent human usability study.",
+    "Day 1–3 are compressed demo sessions, not elapsed days or unattended reliability evidence.",
+    "The displayed checklist is corrected after reading the complete source.",
+    "Operator-reviewed memories, explicit approval and quantity reconciliation were required. Some older app status wording remained stale.",
+    "Phone layout was checked in headless Chromium touch emulation; no physical-device test is claimed."
+  ],
+  "timingNote": "Browser verification and poster rendering overlapped the export; measured durations must not be added as elapsed wall time.",
+  "currentServices": [],
+  "durableArtifacts": [
+    "githubpages/film/flujo-coffee-60s.mp4",
+    "githubpages/film/poster.png"
+  ],
+  "primaryCheckoutWrites": false,
+  "oldShortFilmChanges": false,
+  "cleanup": {
+    "status": "complete",
+    "method": "flujo-bash MCP run tool through the task MCP client helper",
+    "removedFiles": 60,
+    "reclaimedBytes": 6372426,
+    "freeDiskBytes": 169231372288,
+    "ownedDirectoryAbsent": true,
+    "remainingOwnedTemporaryTargets": [],
+    "notes": "Final MP4, poster and this validation receipt are retained. No shared service or dependency directory was removed."
+  }
+}
