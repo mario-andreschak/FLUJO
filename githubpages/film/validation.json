@@ -1,6 +1,6 @@
 {
   "status": "complete",
-  "updatedAtUtc": "2026-10-11T13:12:47.875Z",
+  "updatedAtUtc": "2026-10-11T13:25:11Z",
   "branch": "codex/readme-website-journeys-20261011",
   "baseRevision": "569079d632a19f100c3bb194e7036aaba5cdc283",
   "revisionScope": "Uncommitted film files identified by SHA-256 below; parent owns integration and publication.",
@@ -100,7 +100,7 @@
         "passed": true
       }
     ],
-    "measuredElapsedSeconds": 8.3,
+    "measuredElapsedSeconds": 6.9,
     "frames": [
       {
         "layout": "desktop",
@@ -340,7 +340,7 @@
     },
     {
       "file": "githubpages/film/tools/verify.mjs",
-      "sha256": "a05b15050afbff6f4cb114f5bb863c033cbadeded13f699cdc759e328c2e8e87"
+      "sha256": "25b9e6c1aa2decbc5bcd5861a38edf735cc8c407379d3f7abf1971b57c57759d"
     },
     {
       "file": "githubpages/film/README.md",
@@ -386,12 +386,12 @@
   },
   "limitations": [
     "Agent-operated live software demonstration; not an independent human usability study.",
-    "Day 1–3 are compressed demo sessions, not elapsed days or unattended reliability evidence.",
+    "Day 1â€“3 are compressed demo sessions, not elapsed days or unattended reliability evidence.",
     "The displayed checklist is corrected after reading the complete source.",
     "Operator-reviewed memories, explicit approval and quantity reconciliation were required. Some older app status wording remained stale.",
     "Phone layout was checked in headless Chromium touch emulation; no physical-device test is claimed."
   ],
-  "timingNote": "Browser verification and poster rendering overlapped the export; measured durations must not be added as elapsed wall time.",
+  "timingNote": "The original poster/render checks overlapped the 56-second export. The current 6.9-second browser verification ran separately after the verifier security fix; the video was not re-rendered because its inputs are unchanged.",
   "currentServices": [],
   "durableArtifacts": [
     "githubpages/film/flujo-coffee-60s.mp4",
@@ -408,5 +408,10 @@
     "ownedDirectoryAbsent": true,
     "remainingOwnedTemporaryTargets": [],
     "notes": "Final MP4, poster and this validation receipt are retained. No shared service or dependency directory was removed."
+  },
+  "securityFollowup": {
+    "rule": "js/file-system-race",
+    "change": "The verifier maps directory URLs to index.html before a single readFile call, removing the separate filesystem stat/read sequence.",
+    "browserAcceptanceRerun": "10 checks passed after the verifier change; player, renderer, screenshots and MP4 bytes are unchanged."
   }
 }

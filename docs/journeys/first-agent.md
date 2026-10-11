@@ -34,7 +34,7 @@ In the recorded **FLUJO 3.46.2** interface, open **Connected Apps → Connect Ap
 https://github.com/zcaceres/fetch-mcp
 ```
 
-Review the repository owner and setup instructions. This is an external server whose install/build commands run on the FLUJO host. Its source build uses **Bun**, an additional prerequisite; have it available on the machine running FLUJO before building. [Fetch server documentation](https://github.com/zcaceres/fetch-mcp).
+Review the repository owner and setup instructions. This is an external server whose install/build commands run on the FLUJO host. Its source build uses **Bun**, an additional prerequisite; [install Bun](https://bun.sh/docs/installation) on the machine running FLUJO before building. [Fetch server documentation](https://github.com/zcaceres/fetch-mcp).
 
 Choose **1) Parse**, then **2) Clone repository**.
 

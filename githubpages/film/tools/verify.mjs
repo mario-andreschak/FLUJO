@@ -3,7 +3,7 @@
 // Set FILM_QA_OUTPUT to retain screenshots for human legibility review.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile, stat, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -26,9 +26,8 @@ const server = createServer(async (req, res) => {
   try {
     if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405).end(); return; }
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    let path = resolve(root, `.${pathname}`);
+    const path = resolve(root, `.${pathname.endsWith('/') ? pathname + 'index.html' : pathname}`);
     if (path !== root && !path.startsWith(root + sep)) { res.writeHead(403).end(); return; }
-    if ((await stat(path)).isDirectory()) path = resolve(path, 'index.html');
     const data = await readFile(path);
     res.writeHead(200, { 'Content-Type': mime[extname(path)] || 'application/octet-stream',
       'Cache-Control': 'no-store' }).end(req.method === 'HEAD' ? undefined : data);
