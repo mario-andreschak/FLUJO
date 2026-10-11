@@ -91,22 +91,11 @@ describe.each(locales)('Quick Chat recovery in $locale', (messages) => {
     expect(await screen.findByRole('alert')).toHaveTextContent(text.loadFailed);
     expect(screen.getByRole('button', { name: text.start })).toBeDisabled();
     expect(screen.queryByText(translate(text.locale, 'chat.quick.noModels'))).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: translate(text.locale, 'models.connectAi') })).not.toBeInTheDocument();
     mockLoadModels.mockResolvedValue([{ id: 'model-1', name: 'Friendly AI', provider: 'openai' }]);
     fireEvent.click(screen.getByRole('button', { name: text.retry }));
     await waitFor(() => expect(screen.getByRole('button', { name: text.start })).toBeEnabled());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('keeps a genuinely empty AI list distinct from a failed request', async () => {
-    mockLoadModels.mockResolvedValue([]);
-    dialog(text.locale);
-    await screen.findByRole('checkbox', { name: 'Calendar' });
-    expect(screen.getByRole('button', { name: text.start })).toBeDisabled();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: text.retry })).not.toBeInTheDocument();
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: translate(text.locale, 'chat.quick.model') }));
-    expect(await screen.findByRole('option', { name: translate(text.locale, 'chat.quick.noModels') }))
-      .toHaveAttribute('aria-disabled', 'true');
   });
 
   it('allows chatting after an app list successfully loads empty', async () => {
@@ -125,6 +114,7 @@ describe.each(locales)('Quick Chat recovery in $locale', (messages) => {
     expect(await screen.findByRole('alert')).toHaveTextContent(text.loadFailed);
     expect(screen.getByRole('button', { name: text.start })).toBeDisabled();
     expect(screen.queryByText(text.noServers)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: translate(text.locale, 'models.connectAi') })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox', { name: text.prompt }), { target: { value: 'Help me plan my day.' } });
 
     mockLoadServers.mockResolvedValue([app]);
@@ -174,6 +164,59 @@ describe.each(locales)('Quick Chat recovery in $locale', (messages) => {
     expect(screen.queryByRole('button', { name: text.retry })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: text.start })).toBeEnabled();
   });
+});
+
+it.each([
+  ['en', 'Connect an AI to start', 'Connect AI'],
+  ['es', 'Conecta una IA para empezar', 'Conectar IA'],
+  ['de', 'Verbinde eine KI, um zu starten', 'KI verbinden'],
+  ['fr', 'Connectez une IA pour commencer', 'Connecter l’IA'],
+  ['it', 'Collega una IA per iniziare', 'Collega IA'],
+  ['pt', 'Conecte uma IA para começar', 'Conectar IA'],
+  ['zh-CN', '连接 AI 即可开始', '连接 AI'],
+] as const)('guides a first-time user to connect AI in %s', async (locale, guidance, connectLabel) => {
+  mockLoadModels.mockResolvedValue([]);
+  const view = dialog(locale);
+
+  expect(await screen.findByText(guidance)).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: connectLabel })).toHaveAttribute('href', '/models?add=1');
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: translate(locale, 'chat.quick.start') })).not.toBeInTheDocument();
+  expect(screen.queryByText(translate(locale, 'chat.quick.help'))).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: translate(locale, 'common.tryAgain') })).not.toBeInTheDocument();
+  expect(view.onStart).not.toHaveBeenCalled();
+});
+
+it('waits for setup before offering to connect AI', async () => {
+  let resolveModels!: (models: unknown[]) => void;
+  mockLoadModels.mockImplementationOnce(() => new Promise(resolve => { resolveModels = resolve; }));
+  dialog('en');
+
+  expect(screen.getByRole('progressbar')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Connect AI' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Connect an AI to start')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Start chat' })).toBeDisabled();
+
+  await act(async () => resolveModels([]));
+  expect(await screen.findByRole('link', { name: 'Connect AI' })).toHaveAttribute('href', '/models?add=1');
+});
+
+it('starts with a configured AI and the chosen instructions and app', async () => {
+  const view = dialog('en');
+  const appCheckbox = await screen.findByRole('checkbox', { name: 'Calendar' });
+  expect(screen.queryByRole('link', { name: 'Connect AI' })).not.toBeInTheDocument();
+  expect(screen.getByRole('combobox')).toHaveTextContent('Friendly AI');
+  fireEvent.change(screen.getByRole('textbox', { name: translate('en', 'chat.quick.systemPrompt') }), {
+    target: { value: 'Help me plan tomorrow.' },
+  });
+  fireEvent.click(appCheckbox);
+  fireEvent.click(screen.getByRole('button', { name: translate('en', 'chat.quick.start') }));
+  await waitFor(() => expect(view.onStart).toHaveBeenCalledWith({
+    modelId: 'model-1', servers: [{ name: 'Calendar' }], systemPrompt: 'Help me plan tomorrow.',
+  }));
 });
 
 it('ignores a slow action response from an earlier opening', async () => {
