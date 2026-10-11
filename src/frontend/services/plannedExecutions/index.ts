@@ -39,6 +39,14 @@ export interface PlannedExecutionListResponse {
   executions: PlannedExecutionListEntry[];
 }
 
+export interface SchedulePreviewResult {
+  valid: boolean;
+  error?: string;
+  nextRuns: string[];
+  /** Preview could not be checked; this does not mean the schedule is invalid. */
+  unavailable?: boolean;
+}
+
 export type PlannedExecutionInput = Omit<
   PlannedExecution,
   'id' | 'createdAt' | 'updatedAt'
@@ -196,20 +204,32 @@ class PlannedExecutionsService {
   async previewSchedule(
     cron: string,
     timezone?: string
-  ): Promise<{ valid: boolean; error?: string; nextRuns: string[] }> {
+  ): Promise<SchedulePreviewResult> {
     try {
-      const response = await fetch('/api/planned-executions/preview-schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cron, timezone }),
+      return await withRequestDeadline(async (signal) => {
+        const response = await fetch('/api/planned-executions/preview-schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cron, timezone }),
+          signal,
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const body = await response.json();
+        if (
+          typeof body?.valid !== 'boolean' || !Array.isArray(body?.nextRuns) ||
+          !body.nextRuns.every((run: unknown) => typeof run === 'string' && Number.isFinite(Date.parse(run))) ||
+          (body.error !== undefined && typeof body.error !== 'string')
+        ) {
+          throw new Error('Invalid schedule preview response');
+        }
+        return body;
       });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
     } catch (error) {
       return {
         valid: false,
+        unavailable: true,
         error: error instanceof Error ? error.message : 'Preview failed',
         nextRuns: [],
       };
