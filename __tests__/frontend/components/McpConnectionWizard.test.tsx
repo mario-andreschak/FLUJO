@@ -11,7 +11,7 @@ jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
 import McpConnectionWizard from '@/frontend/components/mcp/MCPServerManager/McpConnectionWizard';
 
 jest.mock('@/frontend/services/model', () => ({
-  modelService: { loadModels: jest.fn(async () => [{ id: 'model-1', name: 'Research model' }]) },
+  modelService: { tryLoadModels: jest.fn(async () => [{ id: 'model-1', name: 'Research model' }]) },
 }));
 
 const researchMock = jest.fn();
