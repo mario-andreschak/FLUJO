@@ -6,6 +6,22 @@ import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
 const APPLICATION_CHANGED = "steps.application-change.outputs.changed == 'true'";
 const isApplicationSelection = (file, id, condition) => file === 'verify.yml' && id === 'production-build' && condition === APPLICATION_CHANGED;
 
+const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
+
+function assertVerificationRunners(workflow) {
+  for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+    if (['production-build', 'release-safety'].includes(id)) {
+      const matrix = job.strategy?.matrix;
+      if (job['runs-on'] !== VERIFICATION_MATRIX_RUNNER
+          || !matrix || Object.keys(matrix).length !== 1 || !Array.isArray(matrix.os)) {
+        throw new Error(`${id} must pin Linux to Ubuntu 24.04, preserve Windows selection and retain its exact OS matrix.`);
+      }
+    } else if (job['runs-on'] !== 'ubuntu-24.04') {
+      throw new Error(`${id} must run verification on the qualified Ubuntu 24.04 image.`);
+    }
+  }
+}
+
 export function assertNodeRuntimeWorkflowContract(workflows) {
   const profiles = Object.values(CI_NODE_PROFILES);
   for (const [file, workflow] of Object.entries(workflows)) {
@@ -208,6 +224,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
     throw new Error('Selected-release journeys must verify ancestry from the workflow checkout before detaching or installing, without shared caches.');
   }
   const workflow = workflows['verify.yml'];
+  assertVerificationRunners(workflow);
   if (!workflow || !Object.hasOwn(workflow.on, 'workflow_dispatch') || (!mainIntegration && (Object.hasOwn(workflow.on, 'pull_request') || Object.hasOwn(workflow.on, 'push')))) {
     throw new Error('Broad qualification must be explicitly dispatched; it cannot run on every PR or push.');
   }
