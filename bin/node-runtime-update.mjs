@@ -23,15 +23,20 @@ export function nodeDistribution(platform = process.platform, arch = process.arc
 
 export function latestSupportedRelease(releases, major) {
   if (!Array.isArray(releases) || ![22, 24].includes(major)) throw new Error('Invalid Node release index.');
-  const versions = releases.filter(item => item?.lts && isSupportedNodeRuntime(item.version)
-    && Number(item.version.replace(/^v/, '').split('.')[0]) === major);
-  versions.sort((a, b) => {
-    const left = a.version.replace(/^v/, '').split('.').map(Number);
-    const right = b.version.replace(/^v/, '').split('.').map(Number);
-    return right[1] - left[1] || right[2] - left[2];
+  const versions = releases.flatMap(item => {
+    if (!item?.lts || typeof item.version !== 'string') return [];
+    const match = /^v?(22|24)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$(?![\s\S])/.exec(item.version);
+    if (!match || Number(match[1]) !== major) return [];
+    const minor = Number(match[2]);
+    const patch = Number(match[3]);
+    if (!Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)
+        || minor > 2147483647 || patch > 2147483647 || minor < (major === 22 ? 17 : 2)) return [];
+    return [{ minor, patch }];
   });
+  versions.sort((a, b) => b.minor - a.minor || b.patch - a.patch);
   if (!versions.length) throw new Error('No supported Node LTS release was found.');
-  return versions[0].version.replace(/^v/, '');
+  // Build filenames and executable paths from admitted numbers, never index text.
+  return `${major}.${versions[0].minor}.${versions[0].patch}`;
 }
 
 async function download(url, maximumBytes) {
@@ -117,6 +122,8 @@ export async function installManagedNode({
   try {
     const archive = path.join(temporary, filename);
     const extraction = path.join(temporary, 'extract');
+    // Intentional installer payload: fixed official HTTPS origin, no redirects,
+    // bounded size, and matching official SHA-256 before any write or extraction.
     await fs.writeFile(archive, archiveBytes, { mode: 0o600 });
     await fs.mkdir(extraction);
     await extract(archive, extraction, platform);

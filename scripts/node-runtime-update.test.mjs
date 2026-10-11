@@ -115,6 +115,10 @@ test('release selection stays on supported stable LTS lines and sorts numericall
   assert.equal(latestSupportedRelease(releases, 24), '24.21.0');
   assert.throws(() => latestSupportedRelease(releases, 26));
   assert.throws(() => latestSupportedRelease([], 22));
+  for (const version of ['v22.23.3/../../escape', 'v22.23.3;node --eval bad', 'v22.023.3',
+    'v22.23.2147483648', 'v22.9007199254740992.3', 'v24.1.9', 'v22.23.3\n']) {
+    assert.throws(() => latestSupportedRelease([{ version, lts: true }], version.startsWith('v24') ? 24 : 22));
+  }
   assert.equal(nodeDistribution('win32', 'ia32').cpu, 'x86');
   assert.equal(nodeDistribution('linux', 'arm64').binary, 'bin/node');
   assert.throws(() => nodeDistribution('freebsd', 'x64'));
