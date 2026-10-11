@@ -152,6 +152,9 @@ function main() {
     env: {
       ...process.env,
       ...runnerEnv,
+      // Jest preserves an existing NODE_ENV. A production app launching this
+      // runner must still load React's test runtime and Next's test defaults.
+      NODE_ENV: 'test',
       [EXPECTED_TEST_FILES_ENV]: JSON.stringify(selection.expectedFiles),
       // Do not let a caller-provided NODE_PATH or npm-injected ancestor .bin
       // directory reintroduce the dependency leak this wrapper is preventing.
