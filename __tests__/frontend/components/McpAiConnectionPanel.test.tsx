@@ -11,6 +11,7 @@ const installMcpRecommendationMock = jest.fn();
 jest.mock('@/frontend/services/model', () => ({
   modelService: {
     loadModels: jest.fn(async () => [{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }]),
+    tryLoadModels: jest.fn(async () => [{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }]),
   },
 }));
 
@@ -121,7 +122,7 @@ describe('McpAiConnectionPanel', () => {
   });
 
   it('offers manual setup when only agent, media or fallback models exist', async () => {
-    jest.mocked(modelService.loadModels).mockResolvedValueOnce([
+    jest.mocked(modelService.tryLoadModels).mockResolvedValueOnce([
       { id: 'cli', name: 'CLI agent', adapter: 'codex-cli' },
       { id: 'media', name: 'Image route', adapter: 'openai', outputModalities: ['text', 'image'] },
       { id: 'fallback', name: 'Routing policy', adapter: 'openai', fallbackPolicy: { enabled: true } },
@@ -137,7 +138,7 @@ describe('McpAiConnectionPanel', () => {
   });
 
   it('can find and configure bundled options without a model account', async () => {
-    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    jest.mocked(modelService.tryLoadModels).mockResolvedValueOnce([]);
     researchMcpConnectionMock.mockResolvedValue({ ...result, candidates: [{ ...result.candidates[0],
       action: 'configure-existing', existingServerName: 'filesystem', recommendationTier: 'flujo-supported', cost: { kind: 'free' } }] });
     const configure = jest.fn();
@@ -190,7 +191,7 @@ describe('McpAiConnectionPanel', () => {
   });
 
   it('blocks manual navigation and model reload while a model-free handoff is pending', async () => {
-    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    jest.mocked(modelService.tryLoadModels).mockResolvedValueOnce([]);
     researchMcpConnectionMock.mockResolvedValue({ ...result, candidates: [{ ...result.candidates[0],
       action: 'configure-existing', existingServerName: 'filesystem' }] });
     let finish!: () => void;
@@ -211,7 +212,7 @@ describe('McpAiConnectionPanel', () => {
     expect(screen.getByRole('button', { name: /open manual setup/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /retry loading models/i })).toBeDisabled();
     expect(manual).not.toHaveBeenCalled();
-    expect(modelService.loadModels).toHaveBeenCalledTimes(1);
+    expect(modelService.tryLoadModels).toHaveBeenCalledTimes(1);
     await act(async () => { finish(); });
     fireEvent.click(screen.getByRole('button', { name: /open manual setup/i }));
     expect(manual).toHaveBeenCalledTimes(1);
@@ -311,12 +312,12 @@ describe('McpAiConnectionPanel', () => {
   });
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.mocked(modelService.loadModels).mockReset().mockResolvedValue([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never);
+    jest.mocked(modelService.tryLoadModels).mockReset().mockResolvedValue([{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }] as never);
   });
 
   it('waits for the saved model before researching with Enter', async () => {
-    let finishLoading!: (models: Awaited<ReturnType<typeof modelService.loadModels>>) => void;
-    jest.mocked(modelService.loadModels).mockImplementationOnce(() => new Promise(resolve => { finishLoading = resolve; }));
+    let finishLoading!: (models: Awaited<ReturnType<typeof modelService.tryLoadModels>>) => void;
+    jest.mocked(modelService.tryLoadModels).mockImplementationOnce(() => new Promise(resolve => { finishLoading = resolve; }));
     researchMcpConnectionMock.mockResolvedValue(result);
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
@@ -339,8 +340,8 @@ describe('McpAiConnectionPanel', () => {
   });
 
   it.each(['in the same update', 'while loading'])('waits for the model retry before researching with Enter %s', async timing => {
-    let finishLoading!: (models: Awaited<ReturnType<typeof modelService.loadModels>>) => void;
-    jest.mocked(modelService.loadModels)
+    let finishLoading!: (models: Awaited<ReturnType<typeof modelService.tryLoadModels>>) => void;
+    jest.mocked(modelService.tryLoadModels)
       .mockRejectedValueOnce(new Error('Temporary connection failure'))
       .mockImplementationOnce(() => new Promise(resolve => { finishLoading = resolve; }));
     researchMcpConnectionMock.mockResolvedValue(result);
@@ -357,7 +358,7 @@ describe('McpAiConnectionPanel', () => {
       });
     } else {
       fireEvent.click(retry);
-      await waitFor(() => expect(modelService.loadModels).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(modelService.tryLoadModels).toHaveBeenCalledTimes(2));
       fireEvent.keyDown(request, { key: 'Enter' });
     }
     expect(researchMcpConnectionMock).not.toHaveBeenCalled();
@@ -374,7 +375,7 @@ describe('McpAiConnectionPanel', () => {
   });
 
   it('allows Enter to find bundled options after an empty model load completes', async () => {
-    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    jest.mocked(modelService.tryLoadModels).mockResolvedValueOnce([]);
     researchMcpConnectionMock.mockResolvedValue(result);
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
@@ -392,7 +393,7 @@ describe('McpAiConnectionPanel', () => {
   });
 
   it('retries a failed model load without losing the request or remounting', async () => {
-    jest.mocked(modelService.loadModels).mockRejectedValueOnce(new Error('Temporary connection failure'));
+    jest.mocked(modelService.tryLoadModels).mockRejectedValueOnce(new Error('Temporary connection failure'));
     researchMcpConnectionMock.mockResolvedValue(result);
     const onManual = jest.fn();
     render(<ThemeProvider theme={createTheme()}>
@@ -405,7 +406,7 @@ describe('McpAiConnectionPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
     expect(screen.getByLabelText(/one thing to connect/i)).toHaveValue('free web search');
-    expect(modelService.loadModels).toHaveBeenCalledTimes(2);
+    expect(modelService.tryLoadModels).toHaveBeenCalledTimes(2);
     expect(screen.queryByText('Could not load AI models.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /research options/i }));
     await waitFor(() => expect(researchMcpConnectionMock).toHaveBeenCalledWith(
@@ -413,8 +414,102 @@ describe('McpAiConnectionPanel', () => {
     ));
   });
 
+  describe('real model request recovery', () => {
+    const originalFetch = global.fetch;
+
+    function modelResponse(status: number, models: unknown): Response {
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        headers: { get: () => 'application/json' },
+        json: async () => models,
+      } as unknown as Response;
+    }
+
+    beforeEach(() => {
+      // Exercise the actual service's failure-to-null behavior, rather than
+      // teaching the component test a rejection that loadModels never returns.
+      const actual = jest.requireActual<typeof import('@/frontend/services/model')>('@/frontend/services/model');
+      jest.mocked(modelService.tryLoadModels).mockImplementation(actual.modelService.tryLoadModels.bind(actual.modelService));
+      jest.mocked(modelService.loadModels).mockImplementation(actual.modelService.loadModels.bind(actual.modelService));
+    });
+
+    afterEach(() => { global.fetch = originalFetch; });
+
+    it.each(['unavailable', 'invalid response', 'network failure'])('shows a truthful failure and retries an %s model request', async failure => {
+      const fetchMock = jest.fn();
+      if (failure === 'unavailable') {
+        fetchMock.mockResolvedValueOnce(modelResponse(503, { error: 'Temporarily unavailable' }));
+      } else if (failure === 'invalid response') {
+        fetchMock.mockResolvedValueOnce(modelResponse(200, { error: 'Not a model list' }));
+      } else {
+        fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      }
+      fetchMock.mockResolvedValue(modelResponse(200, [{ id: 'model-1', name: 'Research model', ApiKey: 'configured' }]));
+      global.fetch = fetchMock;
+      researchMcpConnectionMock.mockResolvedValue(result);
+      render(<ThemeProvider theme={createTheme()}>
+        <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+      </ThemeProvider>);
+      const request = screen.getByLabelText(/one thing to connect/i);
+      fireEvent.change(request, { target: { value: 'connect my accounting app' } });
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Could not load AI models.');
+      expect(alert).not.toHaveTextContent(/choose a saved text model for research/i);
+      expect(screen.getByRole('button', { name: /find bundled options/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /open manual setup/i })).toBeEnabled();
+      expect(researchMcpConnectionMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith('/api/model', undefined);
+
+      fireEvent.click(screen.getByRole('button', { name: /retry loading models/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+      expect(request).toHaveValue('connect my accounting app');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fireEvent.keyDown(request, { key: 'Enter' });
+      await screen.findByText(result.summary);
+      expect(researchMcpConnectionMock).toHaveBeenCalledTimes(1);
+      expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+        { query: 'connect my accounting app', modelId: 'model-1' }, expect.any(Function), expect.any(AbortSignal),
+      );
+    });
+
+    it('keeps a real empty model response usable for bundled lookup', async () => {
+      global.fetch = jest.fn().mockResolvedValue(modelResponse(200, []));
+      researchMcpConnectionMock.mockResolvedValue(result);
+      render(<ThemeProvider theme={createTheme()}>
+        <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+      </ThemeProvider>);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/choose a saved text model for research/i);
+      expect(screen.queryByText('Could not load AI models.')).not.toBeInTheDocument();
+      const request = screen.getByLabelText(/one thing to connect/i);
+      fireEvent.change(request, { target: { value: 'work with local files' } });
+      fireEvent.keyDown(request, { key: 'Enter' });
+      await screen.findByText(result.summary);
+      expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+        { query: 'work with local files', modelId: '' }, expect.any(Function), expect.any(AbortSignal),
+      );
+    });
+
+    it('keeps bundled lookup usable after a real model request failure', async () => {
+      global.fetch = jest.fn().mockResolvedValue(modelResponse(503, { error: 'Temporarily unavailable' }));
+      researchMcpConnectionMock.mockResolvedValue(result);
+      render(<ThemeProvider theme={createTheme()}>
+        <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+      </ThemeProvider>);
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load AI models.');
+      const request = screen.getByLabelText(/one thing to connect/i);
+      fireEvent.change(request, { target: { value: 'work with local files' } });
+      fireEvent.keyDown(request, { key: 'Enter' });
+      await screen.findByText(result.summary);
+      expect(researchMcpConnectionMock).toHaveBeenCalledWith(
+        { query: 'work with local files', modelId: '' }, expect.any(Function), expect.any(AbortSignal),
+      );
+    });
+  });
+
   it('offers manual setup when no models are configured', async () => {
-    jest.mocked(modelService.loadModels).mockResolvedValueOnce([]);
+    jest.mocked(modelService.tryLoadModels).mockResolvedValueOnce([]);
     const onManual = jest.fn();
     render(<ThemeProvider theme={createTheme()}>
       <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={onManual} />

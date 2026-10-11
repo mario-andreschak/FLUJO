@@ -92,9 +92,13 @@ export default function McpAiConnectionPanel({
     modelsLoadingRef.current = true;
     setModelsLoading(true);
     setModelsFailed(false);
-    modelService.loadModels()
+    modelService.tryLoadModels()
       .then((loaded) => {
         if (cancelled) return;
+        if (loaded === null) {
+          setModelsFailed(true);
+          return;
+        }
         const textModels = loaded.filter(supportsMcpModelRiskAssessment);
         setModels(textModels);
         setModelId((current) => textModels.some((model) => model.id === current) ? current : textModels[0]?.id ?? '');
