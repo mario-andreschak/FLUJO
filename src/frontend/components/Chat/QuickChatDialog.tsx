@@ -71,6 +71,8 @@ interface QuickChatDialogProps {
   submittingLabel?: string;
   /** Saved-agent conversion only permits servers confirmed connected now. */
   connectedServersOnly?: boolean;
+  /** Saved-agent authoring retains explicit app/tool selection. */
+  selectApps?: boolean;
 }
 
 const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
@@ -88,6 +90,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   submitLabel,
   submittingLabel,
   connectedServersOnly = false,
+  selectApps = false,
 }) => {
   const { t, tp } = useI18n();
   const [models, setModels] = useState<Model[]>([]);
@@ -105,7 +108,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
-  // Load models + configured (non-disabled) servers when the dialog opens.
+  // Ordinary chat only needs a model. Saved-agent authoring also loads apps.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -116,7 +119,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       try {
         const [loadedModels, serverConfigs] = await Promise.all([
           modelService.tryLoadModels(),
-          mcpService.loadServerConfigs(),
+          selectApps ? mcpService.loadServerConfigs() : Promise.resolve([]),
         ]);
         if (cancelled) return;
         if (!Array.isArray(loadedModels) || !Array.isArray(serverConfigs)) throw new Error('Chat setup unavailable');
@@ -149,7 +152,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [connectedServersOnly, initialModelId, listAttempt, open, t]);
+  }, [connectedServersOnly, initialModelId, listAttempt, open, selectApps, t]);
 
   // A response from a closed dialog must not replace a later session's choices.
   useEffect(() => () => { toolLoadGeneration.current += 1; }, [open]);
@@ -340,6 +343,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
               sx={{ mb: 2 }}
             />
 
+            {selectApps && <>
             <Divider sx={{ mb: 1 }} />
             <Typography variant="subtitle2" gutterBottom>
               {serversLabel ?? t('chat.quick.servers')}
@@ -427,6 +431,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
                 );
               })
             )}
+            </>}
 
             {startError && <Alert severity="error" sx={{ mt: 2 }}>{startError}</Alert>}
           </>

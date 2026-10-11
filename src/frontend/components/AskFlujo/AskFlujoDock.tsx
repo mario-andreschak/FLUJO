@@ -211,7 +211,8 @@ export default function AskFlujoDock() {
 
   const pageContext = open ? getPageContext() : null;
   const enabledServers = useMemo(
-    () => tools.filter(tool => tool.enabled && tool.serverName).map(tool => ({ name: tool.serverName! })),
+    () => tools.filter(tool => tool.key === 'flujo' && tool.enabled && tool.serverName)
+      .map(tool => ({ name: tool.serverName!, enabledTools: ['propose_ui_action'] })),
     [tools],
   );
   const unavailableTools = tools.filter(tool => !tool.enabled);

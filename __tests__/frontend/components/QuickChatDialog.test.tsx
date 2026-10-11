@@ -48,14 +48,14 @@ const locales = [
 const app = { name: 'Calendar', disabled: false };
 const tools = [{ name: 'read_events', description: 'Read events', inputSchema: { type: 'object' } }];
 
-function dialog(locale: string, initialModelId?: string) {
+function dialog(locale: string, initialModelId?: string, selectApps = true) {
   window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
   const onStart = jest.fn().mockResolvedValue(undefined);
   const onClose = jest.fn();
   const content = (open: boolean) => (
     <I18nProvider>
       <AskFlujoProvider>
-        <QuickChatDialog open={open} onClose={onClose} onStart={onStart} initialModelId={initialModelId} />
+        <QuickChatDialog open={open} onClose={onClose} onStart={onStart} initialModelId={initialModelId} selectApps={selectApps} />
       </AskFlujoProvider>
     </I18nProvider>
   );
@@ -71,6 +71,18 @@ beforeEach(() => {
   mockLoadServers.mockReset().mockResolvedValue([app]);
   mockListTools.mockReset().mockResolvedValue({ tools });
   mockServerStatus.mockReset().mockResolvedValue({ status: 'connected' });
+});
+
+it('starts ordinary Quick Chat without fetching or selecting apps or tool schemas', async () => {
+  mockLoadServers.mockRejectedValue(new Error('An app inventory should not block starting a chat'));
+  const view = dialog('en', undefined, false);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start chat' })).toBeEnabled());
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  expect(mockLoadServers).not.toHaveBeenCalled();
+  expect(mockListTools).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole('textbox', { name: translate('en', 'chat.quick.systemPrompt') }), { target: { value: 'Help me plan tomorrow.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start chat' }));
+  await waitFor(() => expect(view.onStart).toHaveBeenCalledWith({ modelId: 'model-1', servers: [], systemPrompt: 'Help me plan tomorrow.' }));
 });
 
 afterEach(() => window.localStorage.removeItem(LOCALE_STORAGE_KEY));
