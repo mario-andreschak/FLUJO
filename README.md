@@ -216,6 +216,10 @@ Start with the [first successful conversation guide](docs/getting-started/README
 - uv and/or yarn (optional, if you prefer these over npm or pip)
 - ripgrep (optional filesystem-search acceleration; the installer adds it automatically)
 
+If `npm start`, `npm run dev`, or `flujo` detects an unsupported Node version, it reports the active version and executable and offers to install the latest patched release on a supported line. Accepting installs an official, checksum-verified Node distribution under `~/.flujo/node-runtimes` and restarts the original command. FLUJO reuses that verified runtime on subsequent starts with the older system Node. The update applies to FLUJO; other programs continue to use the Node version configured in your shell.
+
+Declining leaves manual installation and PATH activation instructions. Non-interactive starts show those instructions immediately; opt in explicitly with `npm start -- --update-node`, `npm run dev -- --update-node`, or `flujo --update-node`. MCP servers always refuse unsupported runtimes without prompting; activate a supported Node on their host's PATH or configure their command with its executable path.
+
 ### Installation
 
 1. Clone the repository:

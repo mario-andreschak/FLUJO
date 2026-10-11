@@ -118,6 +118,8 @@ for (const required of [
   'bin/flujo.mjs',
   'bin/node-runtime.mjs',
   'bin/node-runtime-preflight.mjs',
+  'bin/app-node-runtime-preflight.mjs',
+  'bin/node-runtime-update.mjs',
   'scripts/launch-next.mjs',
   'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',

@@ -16,6 +16,7 @@ function fixture(t) {
   });
   const app = path.join(root, 'package');
   for (const relative of ['bin/flujo.mjs', 'bin/launcher-port.mjs', 'bin/node-runtime.mjs',
+    'bin/app-node-runtime-preflight.mjs', 'bin/node-runtime-update.mjs',
     'bin/node-runtime-preflight.mjs', 'scripts/bootstrap-directory.mjs', 'scripts/launch-next.mjs',
     'scripts/local-instance.mjs', 'scripts/exposure-mode.mjs', 'scripts/canonical-data-root.mjs']) {
     const destination = path.join(app, relative);
