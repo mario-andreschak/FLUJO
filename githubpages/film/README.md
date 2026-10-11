@@ -1,73 +1,131 @@
-# FLUJO in 60 seconds
+# Build a website with FLUJO
 
-A silent product film showing how FLUJO connects an AI, tools and instructions into
-a reusable agent, then extends work through experimental Personas.
+A silent guided walkthrough of one real workspace: connect an AI model and a
+useful tool, save a reusable Website Builder, then build and improve the First
+Pour coffee-workshop website in its chat. The website payoff comes before the
+brief tour of Meetings, Automations and Personas.
 
-## Watch
+Watch the HTML player or [download the finished video](flujo-guided-walkthrough.mp4)
+(84 MB). The film lasts **19:36.3**, with a silent 1280 × 800, 30 fps MP4 at 1×.
+The player also offers 2× and 5× playback. See [validation.json](validation.json)
+for the final implementation, media checks and measured review scope.
 
-Serve `githubpages/` as a static directory and open `/film/`. The player has
-play/pause, replay, seek, fullscreen, a reduced-motion option, and a seekable
-transcript. It does not autoplay, and pauses when the tab is hidden.
+## Watch or follow the written steps
 
-The page uses a wide desktop composition and a separate portrait composition.
-`?t=26` opens a paused preview; `?render=1&t=26` exposes only the canvas.
+Serve `githubpages/` over HTTP and open `/film/`. For example, from the repository
+root:
 
-## Product story
+```sh
+python -m http.server 8000 --bind 127.0.0.1 --directory githubpages
+```
 
-| Time | What the viewer sees |
+Open `http://127.0.0.1:8000/film/`. Use the chapter buttons or timeline to revisit
+a step. Choose 1×, 2× or 5× with the Speed control; the MP4 plays at 1×.
+Space plays or pauses, the arrow keys move five seconds, Home/End jump to
+either end, and F toggles fullscreen. Gentle motion reduces movement. Fullscreen
+gives small interface text more room; the whole application keeps its 16:10
+shape on narrow screens.
+
+The [Website Builder guide](../guides/website-builder/) provides the setup values,
+reusable instructions and project brief. The player's expandable transcript and
+recording notes explain what was recorded, shortened and checked.
+
+## Story and recording
+
+| Chapter | What the recording demonstrates |
 | --- | --- |
-| 0–5 | FLUJO: build AI assistants with your own AI and tools |
-| 5–12 | Choose and test an AI connection |
-| 12–20 | Import a GitHub tool and verify its MCP connection |
-| 20–32 | Instructions, AI and tools in the same saved agent |
-| 32–43 | Inspect the agent’s tool use and result |
-| 43–54 | A Persona goal, reviewed memory and completion |
-| 54–60 | FLUJO and a direct invitation to try it |
+| Connect the AI | A saved model connection and a successful live model/tool test. |
+| Connect a useful tool | A GitHub clone and build, followed by the manual launch configuration, a test discovering 26 tools and a saved Connected card. |
+| Save Website Builder | Generic instructions, the tested AI and connected app, saved status, Easy and Expert views of the same agent, and its new chat. |
+| Build and review First Pour | The real brief and tool calls, an incomplete first revision, an operator-directed repair, and the resulting local website. |
+| Check the result | Operator signup and reload checks on desktop. The signup is a local demo. |
+| Explore the workspace | Meetings, Automations and Personas after the website result. These views do not establish completed scheduled work. |
 
-Source interface pixels are genuine recordings. Editorial crops, camera moves,
-framing and captions explain the product without reconstructing its UI or
-manufacturing cursor actions. `captures.js` maps images and reviewed clips to the
-film; `renderer.js` defines the camera choreography. `player.js` synchronizes
-recorded video to the same 60-second timeline used by the exporter. Reduced
-motion replaces camera movement and recorded motion with held frames.
+The preserved source frame is 1600 × 1000. Whole-app views establish location;
+target borders and smooth closeups make the real controls and results readable.
+Recorded actions play at normal speed at 1×. Narration and reading holds determine the
+length; there is no one-minute limit. Text cards allow at least 1.5 seconds plus
+one second per 2.5 words, with longer holds for unfamiliar settings or results.
 
-The genuine clips show the Easy/Expert switch, selection of an AI task, and
-inspection of an already completed tool call. They do not show a new model run.
-The [supplementary capture manifest](media/product-capture-manifest.json) records
-source offsets, action times, hashes and the limits of the privacy review.
-Small clips are buffered once as local browser blobs so deterministic seeking
-also works with static servers that do not support HTTP Range requests.
+The editorial pointer follows logged click positions and times. Its travel is
+interpolated between targets, with a neutral initial pose where needed; it is
+not measured native cursor motion. Recorded pastes appear at once. The film does
+not generate typing, clicks or application state. Routine operator pauses and
+clipboard preparation are omitted. Shortened installation or AI waits are
+identified on screen. Private key entry and correction are omitted and disclosed
+in the recording notes.
 
-The example task is demonstration data, not the film's subject. The source
-checklist was corrected after a complete read, but retains imperfect temperature
-wording outside the film's output crops; the Persona required operator
-review, resumption and approval. The demonstration compresses work sessions and
-does not establish unattended reliability. Detailed evidence remains in the
-[journey provenance](../../docs/journeys/evidence/capture-provenance.md) and the
-[reviewed workshop pack](../../docs/journeys/evidence/workshop-pack.md).
+Two approved still images show the original draft's hero and signup before the
+revision. The later preview and signup sequences show the repaired site. The
+closing tour uses brief recorded feature views, with no claim to demonstrate
+their full setup or execution.
 
-## Reproduce
+The first website revision claimed success but failed the operator's source
+check. A follow-up requested a read, one complete `write_file` correction and a
+readback. The agent's response reports its checks; separate operator footage
+demonstrates the final desktop browser behavior. The signup sends no data,
+makes no reservation and delivers no email.
 
-The tooling reuses an installed Playwright. Set `PLAYWRIGHT_MODULE` to an existing
-module path if normal Node resolution cannot find it. FFmpeg and ffprobe must
-already be available.
+## Implementation and evidence
 
-```powershell
+- `timeline.js` defines shots, source intervals, action timing, chapters and the
+  export gate. Duration is derived from the assembled shots.
+- `renderer.js` draws narration, camera movement and guidance over genuine
+  source pixels. `player.js` synchronizes playback and seeking, including source
+  preparation, loading/error states and reduced motion.
+- `media/walkthrough/` contains reviewed public source media. Capture manifests
+  retain exact media hashes, dimensions, provenance and actual action maps.
+- [Build and revision footage](../../docs/journeys/evidence/walkthrough-build-clip.json)
+  distinguishes the initial result, incomplete revision and repaired preview.
+  [Site acceptance footage](../../docs/journeys/evidence/walkthrough-site-clip.json)
+  preserves the final desktop and responsive-browser interactions. The phone-width
+  chapter and Waves are omitted from this film at the user’s request.
+- [validation.json](validation.json) links the setup, tool and agent evidence and
+  records which implementation revision each check covers. Reviewed source
+  footage alone does not establish acceptance of the assembled film.
+
+## Validate and export
+
+Run the player checks from the repository root:
+
+```sh
 node githubpages/film/tools/verify.mjs
-node githubpages/film/tools/render.mjs githubpages/film/flujo-product-60s.mp4
-ffprobe -v error -show_entries format=duration:stream=codec_type,nb_frames,r_frame_rate -of json githubpages/film/flujo-product-60s.mp4
 ```
 
-The exporter renders frames 0–1799 at `frame / 30`, streams them directly to
-FFmpeg, and produces a 60-second H.264 file with no audio track. It creates no
-intermediate frame directory. Its browser and local server close on completion.
+The tool reuses an installed Playwright module. Set `PLAYWRIGHT_MODULE` to its
+existing path if normal Node resolution cannot find it. Checks cover source
+hashes and provenance, playback and seeking, holds, mapped clicks, loading/error
+recovery, controls, playback speeds, silence, reduced motion and
+desktop/narrow/phone player layouts.
+Screenshots are retained only when `FILM_QA_OUTPUT` is set.
 
-For a single frame:
+The assembled player passed all 19 checks in 212.3 seconds, covering 472 frame
+samples. Complete decoding verified all 35,289 frames and continuous timestamps;
+the joined MP4 matches the two rendered parts exactly in decoded frame order.
+Opening, splice, website payoff, edited transitions and ending received visual
+playback checks. Earlier continuous chapter reviews and parent samples retain
+their separate scopes in the receipt; no continuous whole-film review is claimed.
 
-```powershell
-node githubpages/film/tools/render.mjs githubpages/film/poster.png --poster --t=3
-node githubpages/film/tools/render.mjs C:/path/to/phone-frame.png --poster --portrait --t=26
+The subsequent startup recovery fix passed four focused checks in 72.8 seconds.
+A controlled delayed seek reproduced the old failure; bounded preparation and
+one timeout retry recovered all 58 clips. Persistent failures retain a visible
+reload control. Old and new players matched every pixel at 95 timeline positions,
+so the verified MP4 remains unchanged. The receipt separates these follow-up
+checks from the earlier full suite.
+
+To reproduce an accepted export:
+
+```sh
+node githubpages/film/tools/render.mjs
 ```
 
-Use flujo-bash MCP for all cleanup or deletion. Preserve the final poster, MP4,
-reviewed media and provenance. The existing `../short/` experience is unchanged.
+It requires `FILM.stage === 'final'` and `FILM.exportReady === true`, and reuses
+Playwright and FFmpeg (`FFMPEG_PATH` can specify an existing binary). Both gates
+remain required. Bounded review renders require
+`--prototype --start <seconds> --end <seconds>` with endpoints on the film's
+frame grid. Validate any replacement MP4's duration, frame count, full decode and
+visual seams against its frozen timeline before exposing the download.
+
+Use flujo-bash MCP for all cleanup and deletions. Preserve genuine source media,
+provenance, active services and deliverables. Keep current validation and pending
+delivery work in `validation.json` rather than duplicating approval history here.

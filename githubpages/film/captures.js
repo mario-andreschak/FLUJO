@@ -1,22 +1,91 @@
-// Unmodified, reviewed source captures. Framing and camera movement happen in renderer.js.
-export const CAPTURES = {
-  expert: { src: 'media/product-helper-expert.png', provenance: 'media/product-capture-manifest.json' },
-  provider: { src: 'media/product-provider-choices.png', provenance: 'media/product-capture-manifest.json' },
-  easy: { src: 'media/product-helper-easy.png', provenance: 'media/product-capture-manifest.json' },
-  ai: { src: '../assets/journeys/02-ai-test.png' },
-  github: { src: '../assets/journeys/03-github-url.png' },
-  tool: { src: '../assets/journeys/04-mcp-test.png' },
-  fetchResult: { src: 'media/product-fetch-result.png', provenance: 'media/product-capture-manifest.json' },
-  answer: { src: '../assets/journeys/07-verified-checklist.png' },
-  memory: { src: '../assets/journeys/10-day1-memory.png' },
-  goal: { src: '../assets/journeys/13-day2-progress.png' },
-  completed: { src: '../assets/journeys/16-day3-goal-completed.png' },
-};
-// Only genuine, privacy-reviewed action clips may be added here.
-export const CLIPS = {
-  fetchMotion: { src:'media/product-fetch-transition.mp4', provenance:'media/product-capture-manifest.json', start:32, end:39, sourceStart:6, rate:1, stillTime:10 },
-  agentSwitch: { src:'media/product-helper-transition.mp4', provenance:'media/product-capture-manifest.json', start:22, end:27.5, sourceStart:4.5, rate:1, stillTime:8.5 },
-  agentInspect: { src:'media/product-helper-transition.mp4', provenance:'media/product-capture-manifest.json', start:27.5, end:32, sourceStart:30, rate:1, stillTime:33 },
-};
+import { SHOTS } from './timeline.js';
 
+// Capture lane owns media/walkthrough. Add only reviewed, hash-manifested files.
+export const SOURCES = Object.freeze({
+  "opening": {
+    "kind": "video",
+    "src": "media/walkthrough/act1-open-ai-setup.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-opening-clip.json"
+  },
+  "model-setup": {
+    "kind": "video",
+    "src": "media/walkthrough/act1-model-setup.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-model-setup-clip.json"
+  },
+  "model-test": {
+    "kind": "video",
+    "src": "media/walkthrough/act1-model-test.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-model-test-clip.json"
+  },
+  "tool-import": {
+    "kind": "video",
+    "src": "media/walkthrough/act2-github-import.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-tool-clip.json"
+  },
+  "tool-install": {
+    "kind": "video",
+    "src": "media/walkthrough/act2-install-build-test.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-tool-clip.json"
+  },
+  "tool-connected": {
+    "kind": "video",
+    "src": "media/walkthrough/act2-tool-connected.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-tool-clip.json"
+  },
+  "agent-create": {
+    "kind": "video",
+    "src": "media/walkthrough/act3-agent-create.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-agent-clip.json"
+  },
+  "agent-bindings": {
+    "kind": "video",
+    "src": "media/walkthrough/act3-agent-bindings.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-agent-clip.json"
+  },
+  "agent-save": {
+    "kind": "video",
+    "src": "media/walkthrough/act3-agent-save-and-chat.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-agent-clip.json"
+  },
+  "website-first-hero": {
+    "kind": "image",
+    "src": "media/walkthrough/act4-site-desktop-hero.png",
+    "provenance": "../../docs/journeys/evidence/walkthrough-act4-manifest.json"
+  },
+  "website-first-signup": {
+    "kind": "image",
+    "src": "media/walkthrough/act4-site-desktop-signup.png",
+    "provenance": "../../docs/journeys/evidence/walkthrough-act4-manifest.json"
+  },
+  "feature-tour": {
+    "kind": "video",
+    "src": "media/walkthrough/act5-feature-tour.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-tour-clip.json"
+  },
+  "website-build": {
+    "kind": "video",
+    "src": "media/walkthrough/act4-build.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-build-clip.json"
+  },
+  "website-revision": {
+    "kind": "video",
+    "src": "media/walkthrough/act4-revision-and-preview.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-build-clip.json"
+  },
+  "site-acceptance": {
+    "kind": "video",
+    "src": "media/walkthrough/act4-site-acceptance.mp4",
+    "provenance": "../../docs/journeys/evidence/walkthrough-site-clip.json"
+  }
+});
+export const CAPTURES = Object.fromEntries(Object.entries(SOURCES).filter(([, source]) => source.kind === 'image'));
+export const CLIPS = Object.fromEntries(SHOTS.filter(shot => shot.type === 'footage' && SOURCES[shot.source]?.kind === 'video').map(shot => {
+  const source = SOURCES[shot.source];
+  return [shot.id, {
+    ...source, start: shot.start, end: shot.end,
+    sourceStart: shot.sourceStart || 0, sourceEnd: shot.sourceEnd,
+    holdLead: shot.holdLead || 0, holdTail: shot.holdTail || 0,
+    rate: 1, stillTime: shot.stillTime ?? shot.sourceStart ?? 0,
+  }];
+}));
 export const BRAND = { src: 'brand.svg' };
