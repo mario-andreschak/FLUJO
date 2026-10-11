@@ -50,4 +50,7 @@ export function assertScannerWorkflowContract(workflow) {
       throw new Error('CodeQL actions must run unconditionally with extended queries and complete current-source uploads.');
     }
   }
+  if (steps[init[0]].uses.split('@')[1] !== steps[analyze[0]].uses.split('@')[1]) {
+    throw new Error('CodeQL initialization and analysis must use the same immutable action revision.');
+  }
 }
