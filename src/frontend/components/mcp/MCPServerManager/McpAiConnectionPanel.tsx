@@ -300,6 +300,7 @@ export default function McpAiConnectionPanel({
             <Button
               variant="contained"
               size="large"
+              sx={{ minHeight: 48 }}
               startIcon={working ? <CircularProgress size={18} color="inherit" /> : <SearchRoundedIcon />}
               onClick={() => void startResearch()}
               disabled={working || installing || modelsLoading || !query.trim()}
@@ -321,10 +322,10 @@ export default function McpAiConnectionPanel({
               modelsLoadingRef.current = true;
               setModelsLoading(true);
               setModelLoadAttempt((attempt) => attempt + 1);
-            }} disabled={working || installing}>
+            }} disabled={working || installing} sx={{ minHeight: 44 }}>
               {t('mcp.ai.retryModels')}
             </Button>
-            <Button onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
+            <Button onClick={openManual} disabled={working || installing} sx={{ minHeight: 44 }}>{t('mcp.ai.openManual')}</Button>
           </Stack>
         </Alert>
       ) : null}
