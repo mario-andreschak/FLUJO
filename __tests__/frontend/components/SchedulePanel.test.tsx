@@ -12,7 +12,7 @@ const unavailable = { valid: false, unavailable: true, error: 'HTTP 503', nextRu
 const nextRun = '2026-10-12T09:00:00.000Z';
 
 function Editor({ cron = '0 9 * * *', timezone }: { cron?: string; timezone?: string }) {
-  const [value, setValue] = useState({ cron, timezone });
+  const [value, setValue] = useState<{ cron: string; timezone?: string }>({ cron, timezone });
   return <SchedulePanel {...value} onChange={setValue} />;
 }
 
@@ -62,7 +62,7 @@ it('keeps the custom pattern and timezone during an unavailable preview and retr
   expect(screen.getByRole('alert')).toHaveTextContent('Could not check the next runs. Your changes are still here.');
   expect(screen.getByRole('alert')).not.toHaveTextContent('not valid');
   expect(screen.queryByText('HTTP 503')).not.toBeInTheDocument();
-  expect(screen.getByRole('textbox', { name: 'Cron pattern', exact: true })).toHaveValue('0 9 * * 1');
+  expect(screen.getByRole('textbox', { name: 'Cron pattern' })).toHaveValue('0 9 * * 1');
   expect(screen.getByRole('textbox', { name: 'Timezone (optional)' })).toHaveValue('America/Bogota');
 
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
