@@ -314,8 +314,8 @@ export default function McpAiConnectionPanel({
       {!modelsLoading && (modelsFailed || models.length === 0) ? (
         <Alert severity={modelsFailed ? 'error' : 'info'}>
           {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noTextModels')}
-          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button onClick={() => {
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+            <Button variant="outlined" onClick={() => {
               if (modelsLoadingRef.current || installingRef.current || abortRef.current) return;
               // Claim loading before the effect so Enter in the same update
               // cannot submit a missing model while the retry is starting.
