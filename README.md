@@ -535,6 +535,8 @@ For branching, loops, and subflows, see [Orchestration & Subflows](#orchestratio
 3. Pick the agent or flow to run and configure the trigger-specific options
 4. Save — FLUJO runs it in the background while the app is open and keeps the run history on the Triggers page
 
+If the Triggers page cannot refresh, it keeps your last saved schedules and marks their status as out of date. Choose **Try again** to refresh. Pause changes wait for confirmation, and failed deletions stay open for retry. A request that stalls for 30 seconds releases the controls; check the refreshed status before trying the change again.
+
 ### Talking to an Agent
 
 1. Open **Talk**

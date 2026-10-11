@@ -7,6 +7,27 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/plannedExecutions');
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
+async function withRequestDeadline<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error('The request took too long. Please try again.');
+      reject(error);
+      controller.abort(error);
+    }, REQUEST_TIMEOUT_MS);
+  });
+
+  try {
+    // Keep the deadline active while the caller decodes the response body too.
+    return await Promise.race([request(controller.signal), deadline]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 export interface PlannedExecutionListEntry {
   execution: PlannedExecution;
   status: PlannedExecutionStatus;
@@ -41,19 +62,32 @@ export type PlannedExecutionPatch = Omit<
 
 /**
  * Frontend service for the Planned Executions REST API.
- * Follows the flowService singleton pattern: list reads swallow errors and
- * return empty data; mutations return { success, error }.
+ * List reads return empty data on failure unless the caller opts into errors;
+ * mutations return { success, error }.
  */
 class PlannedExecutionsService {
-  async list(): Promise<PlannedExecutionListResponse> {
-    try {
-      const response = await fetch('/api/planned-executions');
+  async list(options: { throwOnError?: boolean } = {}): Promise<PlannedExecutionListResponse> {
+    const read = async (signal?: AbortSignal): Promise<PlannedExecutionListResponse> => {
+      const response = signal
+        ? await fetch('/api/planned-executions', { signal })
+        : await fetch('/api/planned-executions');
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      return await response.json();
+      const body = await response.json();
+      if (options.throwOnError && (
+        typeof body?.paused !== 'boolean' || !Array.isArray(body?.executions)
+      )) {
+        throw new Error('Invalid planned executions response');
+      }
+      return body;
+    };
+
+    try {
+      return options.throwOnError ? await withRequestDeadline(read) : await read();
     } catch (error) {
       log.warn('Failed to list planned executions', error);
+      if (options.throwOnError) throw error;
       return { paused: false, executions: [] };
     }
   }
@@ -99,12 +133,14 @@ class PlannedExecutionsService {
 
   async delete(id: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await fetch(`/api/planned-executions/${id}`, { method: 'DELETE' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        return { success: false, error: body?.error || `HTTP ${response.status}` };
-      }
-      return { success: true };
+      return await withRequestDeadline(async (signal) => {
+        const response = await fetch(`/api/planned-executions/${id}`, { method: 'DELETE', signal });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          return { success: false, error: body?.error || `HTTP ${response.status}` };
+        }
+        return { success: true };
+      });
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Request failed' };
     }
@@ -112,16 +148,19 @@ class PlannedExecutionsService {
 
   async setPaused(paused: boolean): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await fetch('/api/planned-executions', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paused }),
+      return await withRequestDeadline(async (signal) => {
+        const response = await fetch('/api/planned-executions', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paused }),
+          signal,
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          return { success: false, error: body?.error || `HTTP ${response.status}` };
+        }
+        return { success: true };
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        return { success: false, error: body?.error || `HTTP ${response.status}` };
-      }
-      return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Request failed' };
     }

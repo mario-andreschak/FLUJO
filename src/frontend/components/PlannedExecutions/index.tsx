@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -90,6 +90,17 @@ const PlannedExecutionsManager = () => {
   const [entries, setEntries] = useState<PlannedExecutionListEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [changingPause, setChangingPause] = useState(false);
+  const [pauseRetry, setPauseRetry] = useState<boolean | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState(false);
+  const requestId = useRef(0);
+  const refreshingRef = useRef(false);
+  const pausePendingRef = useRef(false);
+  const deletePendingRef = useRef(false);
+  const failedDeleteId = useRef<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PlannedExecution | null>(null);
   const [deleting, setDeleting] = useState<PlannedExecution | null>(null);
@@ -125,14 +136,38 @@ const PlannedExecutionsManager = () => {
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   const refresh = useCallback(async () => {
-    const response = await plannedExecutionsService.list();
-    setEntries(response.executions);
-    setPaused(response.paused);
-    setLoaded(true);
+    if (pausePendingRef.current || deletePendingRef.current) return;
+    const currentRequest = ++requestId.current;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      const response = await plannedExecutionsService.list({ throwOnError: true });
+      if (currentRequest !== requestId.current) return;
+      setEntries(response.executions);
+      setPaused(response.paused);
+      setLoaded(true);
+      setLoadError(false);
+      // The delete may have committed even when its response was lost.
+      if (failedDeleteId.current && !response.executions.some(entry => entry.execution.id === failedDeleteId.current)) {
+        failedDeleteId.current = null;
+        setDeleting(null);
+        setDeleteError(false);
+      }
+    } catch (error) {
+      if (currentRequest !== requestId.current) return;
+      log.warn('Failed to refresh schedules', error);
+      setLoadError(true);
+    } finally {
+      if (currentRequest === requestId.current) {
+        refreshingRef.current = false;
+        setRefreshing(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
     void refresh();
+    return () => { requestId.current += 1; };
   }, [refresh]);
 
   // Triggers fire in the background (schedules, external webhooks, watchers),
@@ -144,7 +179,7 @@ const PlannedExecutionsManager = () => {
   useEffect(() => {
     const intervalMs = anyRunning ? 3_000 : 10_000;
     const timer = setInterval(() => {
-      if (!document.hidden) {
+      if (!document.hidden && !refreshingRef.current) {
         void refresh();
       }
     }, intervalMs);
@@ -152,12 +187,26 @@ const PlannedExecutionsManager = () => {
   }, [refresh, anyRunning]);
 
   const handleTogglePaused = async (nextPaused: boolean) => {
-    setPaused(nextPaused); // optimistic
-    const result = await plannedExecutionsService.setPaused(nextPaused);
-    if (!result.success) {
-      log.warn('Failed to toggle pause', result.error);
+    if (!loaded || pausePendingRef.current || deletePendingRef.current) return;
+    pausePendingRef.current = true;
+    // A read begun before this write must not overwrite its confirmed result.
+    requestId.current += 1;
+    refreshingRef.current = false;
+    setRefreshing(false);
+    setChangingPause(true);
+    setPauseRetry(null);
+    try {
+      const result = await plannedExecutionsService.setPaused(nextPaused);
+      if (!result.success) throw new Error(result.error || 'Pause change failed');
+      setPaused(nextPaused);
+    } catch (error) {
+      log.warn('Failed to toggle pause', error);
+      setPauseRetry(nextPaused);
+    } finally {
+      pausePendingRef.current = false;
+      setChangingPause(false);
+      void refresh();
     }
-    void refresh();
   };
 
   const handleToggleEnabled = async (execution: PlannedExecution, enabled: boolean) => {
@@ -187,10 +236,35 @@ const PlannedExecutionsManager = () => {
   };
 
   const handleDelete = async () => {
-    if (!deleting) return;
-    await plannedExecutionsService.delete(deleting.id);
+    if (!deleting || deletePendingRef.current || pausePendingRef.current) return;
+    deletePendingRef.current = true;
+    requestId.current += 1;
+    refreshingRef.current = false;
+    setRefreshing(false);
+    setDeletePending(true);
+    setDeleteError(false);
+    failedDeleteId.current = null;
+    try {
+      const result = await plannedExecutionsService.delete(deleting.id);
+      if (!result.success) throw new Error(result.error || 'Delete failed');
+      setEntries(current => current.filter(entry => entry.execution.id !== deleting.id));
+      setDeleting(null);
+    } catch (error) {
+      log.warn('Failed to delete schedule', error);
+      failedDeleteId.current = deleting.id;
+      setDeleteError(true);
+    } finally {
+      deletePendingRef.current = false;
+      setDeletePending(false);
+      void refresh();
+    }
+  };
+
+  const closeDelete = () => {
+    if (deletePendingRef.current) return;
     setDeleting(null);
-    void refresh();
+    setDeleteError(false);
+    failedDeleteId.current = null;
   };
 
   const folders = useMemo(
@@ -286,7 +360,7 @@ const PlannedExecutionsManager = () => {
             setEditing(entry.execution);
             setModalOpen(true);
           }}
-          onDelete={() => setDeleting(entry.execution)}
+          onDelete={() => { failedDeleteId.current = null; setDeleteError(false); setDeleting(entry.execution); }}
           onToggleEnabled={(enabled) => handleToggleEnabled(entry.execution, enabled)}
           onRanNow={() => void refresh()}
           paused={paused}
@@ -304,20 +378,32 @@ const PlannedExecutionsManager = () => {
         icon={ScheduleRoundedIcon}
         maxWidth={1200}
         actions={(
-          <>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
           <Tooltip title={t('automations.list.refresh')}>
-            <IconButton onClick={() => void refresh()} aria-label={t('automations.list.refreshAria')}>
+            <span>
+            <IconButton
+              onClick={() => void refresh()}
+              aria-label={t('automations.list.refreshAria')}
+              disabled={refreshing || changingPause || deletePending}
+              sx={{ width: 44, height: 44 }}
+            >
               <RefreshIcon />
             </IconButton>
+            </span>
           </Tooltip>
           <FormControlLabel
             control={
               <Switch
-                checked={!paused}
+                checked={loaded && !paused}
+                disabled={!loaded || changingPause || deletePending}
                 onChange={(e) => handleTogglePaused(!e.target.checked)}
+                inputProps={{ 'aria-label': t('automations.list.runSchedules') }}
+                sx={{ height: 44, '& .MuiSwitch-switchBase': { top: 3 }, '& .MuiSwitch-track': { height: 14, mt: '3px' } }}
               />
             }
-            label={paused ? t('automations.list.paused') : t('automations.list.active')}
+            label={!loaded
+              ? t(loadError ? 'automations.list.statusUnknown' : 'common.loading')
+              : changingPause ? t('automations.modal.saving') : paused ? t('automations.list.paused') : t('automations.list.active')}
           />
           <Button
             variant="contained"
@@ -327,10 +413,11 @@ const PlannedExecutionsManager = () => {
               setModalOpen(true);
             }}
             data-tour="add-execution"
+            sx={{ minHeight: 44 }}
           >
             {t('automations.list.add')}
           </Button>
-          </>
+          </Box>
         )}
       />
 
@@ -338,6 +425,25 @@ const PlannedExecutionsManager = () => {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         {t('automations.list.runningRequirement')}
       </Typography>
+
+      {loadError && (
+        <Alert
+          severity={loaded ? 'warning' : 'error'}
+          sx={{ mb: 2, flexWrap: 'wrap', '& .MuiAlert-message': { flex: '1 1 180px' }, '& .MuiAlert-action': { ml: 0, pl: 0, pt: 0 } }}
+          action={<Button color="inherit" onClick={() => void refresh()} disabled={refreshing || changingPause || deletePending} sx={{ minHeight: 44 }}>{t(refreshing ? 'common.loading' : 'common.tryAgain')}</Button>}
+        >
+          {t(loaded ? 'automations.list.stale' : 'automations.list.loadFailed')}
+        </Alert>
+      )}
+      {pauseRetry !== null && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2, flexWrap: 'wrap', '& .MuiAlert-message': { flex: '1 1 180px' }, '& .MuiAlert-action': { ml: 0, pl: 0, pt: 0 } }}
+          action={<Button color="inherit" onClick={() => void handleTogglePaused(pauseRetry)} disabled={deletePending} sx={{ minHeight: 44 }}>{t('common.tryAgain')}</Button>}
+        >
+          {t('automations.list.pauseFailed')}
+        </Alert>
+      )}
 
       {paused && entries.length > 0 && (
         <Alert severity="info" sx={{ mb: 3 }}>
@@ -366,6 +472,7 @@ const PlannedExecutionsManager = () => {
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 inputRef={searchInputRef}
+                inputProps={{ 'aria-label': t('automations.list.search') }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -483,20 +590,20 @@ const PlannedExecutionsManager = () => {
         </>
       )}
 
-      {!loaded && (
+      {!loaded && !loadError && (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-          <CircularProgress />
+          <CircularProgress aria-label={t('common.loading')} />
         </Box>
       )}
 
-      {loaded && entries.length === 0 && (
+      {loaded && !loadError && entries.length === 0 && (
         <Box
           sx={{
             border: 1,
             borderColor: 'divider',
             borderRadius: 2,
             borderStyle: 'dashed',
-            p: 6,
+            p: { xs: 3, sm: 6 },
             textAlign: 'center',
           }}
         >
@@ -509,6 +616,7 @@ const PlannedExecutionsManager = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
+            sx={{ minHeight: 44 }}
             onClick={() => {
               setEditing(null);
               setModalOpen(true);
@@ -526,7 +634,7 @@ const PlannedExecutionsManager = () => {
             borderColor: 'divider',
             borderRadius: 2,
             borderStyle: 'dashed',
-            p: 6,
+            p: { xs: 3, sm: 6 },
             textAlign: 'center',
           }}
         >
@@ -661,17 +769,18 @@ const PlannedExecutionsManager = () => {
         </Alert>
       </Snackbar>
 
-      <Dialog open={deleting !== null} onClose={() => setDeleting(null)}>
-        <DialogTitle>{t('automations.list.deleteTitle', { name: deleting?.name ?? '' })}</DialogTitle>
+      <Dialog open={deleting !== null} onClose={closeDelete} aria-labelledby="delete-schedule-title" maxWidth="sm" fullWidth>
+        <DialogTitle id="delete-schedule-title" sx={{ overflowWrap: 'anywhere' }}>{t('automations.list.deleteTitle', { name: deleting?.name ?? '' })}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
             {t('automations.list.deleteHelp')}
           </Typography>
+          {deleteError && <Alert severity="error" sx={{ mt: 2 }}>{t('automations.list.deleteFailed')}</Alert>}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleting(null)}>{t('automations.list.cancel')}</Button>
-          <Button color="error" variant="contained" onClick={handleDelete}>
-            {t('automations.list.delete')}
+        <DialogActions sx={{ p: 2, '& .MuiButton-root': { minHeight: 44 } }}>
+          <Button onClick={closeDelete} disabled={deletePending}>{t('automations.list.cancel')}</Button>
+          <Button color="error" variant="contained" onClick={handleDelete} disabled={deletePending || changingPause}>
+            {t(deletePending ? 'automations.list.deleting' : deleteError ? 'common.tryAgain' : 'automations.list.delete')}
           </Button>
         </DialogActions>
       </Dialog>
