@@ -21,6 +21,7 @@ import {
 import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 import { pinnedSubflowDefinition } from '../subflowDependencies';
 import { subflowExecutionAuthority } from '../executionAuthority';
+import { normalizeSessionKey, normalizeSessionTurnCap } from '../sessionManagement';
 
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
@@ -43,10 +44,11 @@ import { subflowExecutionAuthority } from '../executionAuthority';
  *
  * v1 scope is intentionally narrow: one call runs the target's configured
  * `subflowId` ONCE as a single lane (no fan-out/map-over-list/queueing — those
- * remain handoff-only Subflow features). It is also NON-RESUMABLE: no graph
+ * remain handoff-only Subflow features). It has no checkpointed graph join: no graph
  * transition means no durable join record is attached, so a mid-call crash
  * (process restart) simply loses the in-flight call; the model/caller must
- * retry. Full checkpointed resumability is deferred to a future phase.
+ * retry. Saved child conversation memory still applies to repeat calls within
+ * a persisted parent run. Full checkpointed resumability remains deferred.
  */
 
 const log = createLogger('backend/flow/execution/handlers/subflowToolInvocation');
@@ -70,6 +72,7 @@ export function buildSubflowTool(
   target: SubflowToolTargetRef,
   description: string,
   taskMandatory: boolean,
+  sessionScope?: SubflowNodeProperties['sessionScope'],
 ): ToolDefinition {
   return {
     name: toolName,
@@ -78,8 +81,8 @@ export function buildSubflowTool(
       'CALLABLE SUBFLOW TOOL (not a handoff): calling this runs the ' +
       `"${target.label}" subflow right now and returns its result as structured JSON ` +
       '(success/output/error per lane) — you stay on the current step and can keep working ' +
-      'with the answer. This call is NOT resumable; if it is interrupted it must ' +
-      'be retried from scratch.',
+      'with the answer. Saved child conversation memory applies when configured. ' +
+      'An interrupted call has no checkpointed graph join and must be retried.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -89,6 +92,10 @@ export function buildSubflowTool(
             ? 'REQUIRED task/instruction for this subflow call. It has no default input configured.'
             : "Task/instruction for this subflow call. Optional; omitted falls back to the subflow's configured input.",
         },
+        ...(sessionScope === 'per-key' ? { sessionKey: {
+          type: 'string', minLength: 1, maxLength: 128,
+          description: 'Stable child-conversation handle. Equal keys resume the same child; this overrides the saved key template.',
+        } } : {}),
       },
       required: taskMandatory ? ['task'] : [],
     },
@@ -223,6 +230,7 @@ export async function executeSubflowToolCall(
       subflowName,
       ...(isolatedMessage ? { input: { prompt: isolatedMessage } } : {}),
       laneTitle: buildConversationTitle(isolatedMessage ?? subflowName ?? 'Subflow call'),
+      callerSessionKey: normalizeSessionKey(args?.sessionKey),
     };
 
     const depth = (sharedState.runDepth ?? 0) + 1;
@@ -245,10 +253,13 @@ export async function executeSubflowToolCall(
       personaAttribution: sharedState.personaAttribution,
       executionAuthority: subflowExecutionAuthority(sharedState.executionAuthority),
       parentFlowSnapshot: sharedState.flowSnapshot,
-      // Tool-mode invocations attach no durable invocation record (v1 is
-      // non-resumable), so this stays ephemeral regardless of the target
-      // node's own `saveConversation` setting.
+      // Inline calls have no durable graph join. Persist only when the saved
+      // memory policy resolves a reusable child, respecting explicit no-save.
       persistConversation: false,
+      sessionScope: props?.sessionScope,
+      sessionKeyTemplate: props?.sessionKey,
+      sessionInputMode: props?.sessionInputMode ?? 'resume',
+      sessionTurnCap: normalizeSessionTurnCap(props?.sessionTurnCap),
       showSteps: true,
       emit,
       lanes: [lane],
@@ -260,7 +271,13 @@ export async function executeSubflowToolCall(
     // Lazy import breaks the same static cycle SubflowNode.execCore avoids:
     // .../nodes/SubflowNode -> runFlow -> FlowExecutor -> ... -> nodes.
     const { runFlow } = await import('../runFlow');
-    const { runSubflowLanes } = await import('../nodes/SubflowNode');
+    const { runSubflowLanes, resolveSubflowSessionKeys } = await import('../nodes/SubflowNode');
+    if (prepResultLike.sessionScope === 'per-key') {
+      await resolveSubflowSessionKeys(prepResultLike, sharedState, targetNodeId);
+    }
+    prepResultLike.persistConversation = !sharedState.ephemeral && props?.saveConversation !== false
+      && (props?.sessionScope === 'per-run'
+        || (props?.sessionScope === 'per-key' && Boolean(prepResultLike.lanes?.[0]?.sessionKey)));
 
     if (sharedState.logicalRunId) {
       telemetry = {
