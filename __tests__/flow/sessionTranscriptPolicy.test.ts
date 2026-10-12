@@ -75,4 +75,20 @@ describe('Subflow session transcript policy', () => {
     expect(validateSessionTranscript(valid.slice(0, 2))).toContain('missing result');
     expect(validateSessionTranscript([valid[0], valid[2]])).toContain('does not match');
   });
+
+  it('accepts streamed parallel call entries with complete results in either completion order', () => {
+    const parallel = [
+      message('u', 'user', 'task'),
+      message('a1', 'assistant', '', { processNodeId: 'worker', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'read', arguments: '{}' } }] }),
+      message('a2', 'assistant', '', { processNodeId: 'worker', tool_calls: [{ id: 'call-2', type: 'function', function: { name: 'list', arguments: '{}' } }] }),
+      message('t2', 'tool', 'two', { tool_call_id: 'call-2' } as Partial<FlujoChatMessage>),
+      message('t1', 'tool', 'one', { tool_call_id: 'call-1' } as Partial<FlujoChatMessage>),
+      message('done', 'assistant', 'finished'),
+    ];
+    expect(validateSessionTranscript(parallel)).toBeUndefined();
+    expect(validateSessionTranscript(parallel.slice(0, 4))).toContain('missing result');
+    expect(validateSessionTranscript([...parallel.slice(0, 3), message('next', 'user', 'new task')])).toContain('missing result');
+    expect(validateSessionTranscript([parallel[0], parallel[1], { ...parallel[1], id: 'duplicate-call' }, ...parallel.slice(3)])).toBeDefined();
+    expect(validateSessionTranscript([parallel[0], parallel[1], { ...parallel[2], processNodeId: 'other' }, ...parallel.slice(3)])).toBeDefined();
+  });
 });

@@ -1,0 +1,2274 @@
+{
+  "note": "Original saved flow bundle with project root placeholder; map model bindings and existing MCP servers when importing. Credentials excluded.",
+  "flows": [
+    {
+      "id": "ec3457ab-4966-411a-873b-3fa6dad5a5c9",
+      "name": "Website_Promo_Video_Producer",
+      "description": "Create a polished website promotional MP4 through a small research → blueprint → production → practical QC pipeline. Minor timing, frame-rate, frame-count, loudness, and audio-tail drift are normalized or reported as advisories; only material playback, content, or visual defects trigger one repair.",
+      "nodes": [
+        {
+          "id": "8ca1b306-7f0b-4b58-8c97-a93b552d2084",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {
+            "label": "Start",
+            "type": "start",
+            "properties": {
+              "promptTemplate": "Given a public website URL and optional campaign instructions, produce a polished promotional MP4. Keep one PROJECT_ROOT with project-lock.json, production-state.json, assets\\, renders\\, out\\, and qc\\. Keep state current and end each process/subflow response with a short ARTIFACTS block.\n\nThe values in project-lock.json are production targets with explicit tolerances, not reasons to discard an otherwise good video. Safe values such as per-scene frame counts, transition-out choices, and output filenames may be derived when absent. Minor measurable drift must be normalized when easy or recorded as advisory."
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 214
+          }
+        },
+        {
+          "id": "64145a36-c474-42aa-81a3-fad47562640f",
+          "type": "process",
+          "position": {
+            "x": 0,
+            "y": 334
+          },
+          "data": {
+            "label": "Research the website",
+            "type": "process",
+            "description": "Establish the project lock and state files, then delegate all visual/website inspection to Website_Visual_Researcher and validate what it returns.",
+            "properties": {
+              "promptTemplate": "Create PROJECT_ROOT at <PROJECT_ROOT> and create only project-lock.json, production-state.json, assets\\, renders\\, out\\, and qc\\.\n\nWrite project-lock.json with schemaVersion 2, projectRoot, subject {url, domain}, styleProfile \"ad\", video {width:1920,height:1080,fps:30,targetFrames:900,durationSeconds:30}, encode {vcodec:\"libx264\",acodec:\"aac\",sampleRate:48000,channels:2}, audio {mixTargetLufs:-14,truePeakDbtp:-1}, scenes {targetCount:8}, narration {targetWordsMin:55,targetWordsMax:70}, and qc {durationToleranceSeconds:0.5,fpsTolerance:0.15,frameTolerance:2,audioVideoEndToleranceSeconds:0.12,loudnessToleranceLufs:2,maxRepairRounds:1}. These are the shared targets and acceptance tolerances.\n\nInitialize production-state.json. Invoke Website_Visual_Researcher with the URL, PROJECT_ROOT, and campaign instructions. Accept a partial but factual packet when it contains a usable brief plus at least one first-party screenshot or asset with source URL. Block only when the site cannot be accessed at all or evidence would require invented claims. Record the result in production-state.json.\n\nEnd with ARTIFACTS listing absolute paths created or modified.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b"
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 491
+          }
+        },
+        {
+          "id": "1735da6b-e725-40ce-8e3f-aaeabf9045ac",
+          "type": "mcp",
+          "position": {
+            "x": 350,
+            "y": 334
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_dir",
+                "search",
+                "get_file_info",
+                "create_directory",
+                "move",
+                "delete",
+                "get_allowed_directories"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 135
+          }
+        },
+        {
+          "id": "e2381efa-66d8-4734-93c6-3f23fda750a5",
+          "type": "subflow",
+          "position": {
+            "x": 0,
+            "y": 945
+          },
+          "data": {
+            "label": "Website_Visual_Researcher",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "cc0e421c-86f6-48af-8927-06ec34d3d87c",
+              "inputMode": "isolated",
+              "outputMode": "final-only",
+              "promptTemplate": "Perform the website visual-research task supplied by the invoking process, saving the evidence packet under the PROJECT_ROOT it gives you. End your final response with a short ARTIFACTS block listing the absolute paths you created or modified."
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 180
+          }
+        },
+        {
+          "id": "a0b873ca-7ce2-43ae-a02b-f82ba46de62f",
+          "type": "process",
+          "position": {
+            "x": 290,
+            "y": 945
+          },
+          "data": {
+            "label": "Choose the creative direction",
+            "type": "process",
+            "description": "Turn the research packet into a machine-readable production blueprint whose timing is locked to project-lock.json.",
+            "properties": {
+              "promptTemplate": "Read project-lock.json and the research packet. Write PROJECT_ROOT\\blueprint.json for a lively ad: about the target scene count, truthful narration and copy, continuous motion, a few real transitions, music direction, and a clear CTA. Use only claims supported by the research.\n\nUse simple scene records: {id,start,end,duration,sourceKind,assetRef,motionPreset,transitionIn,onscreenCopy}. Generated prompts are optional. Scene timing should land near the program target; tiny decimal or frame-rounding differences are acceptable and may be resolved by the editor. Do not require per-scene frame counts, transitionOut fields, exact narration windows, or locked output paths. Those are safely derivable production details.\n\nUpdate production-state.json and end with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b"
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 469
+          }
+        },
+        {
+          "id": "921552f8-b06f-42ba-87a7-28113ff5b9c1",
+          "type": "mcp",
+          "position": {
+            "x": 640,
+            "y": 945
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "read_file",
+                "write_file",
+                "edit_file",
+                "search",
+                "get_allowed_directories"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 135
+          }
+        },
+        {
+          "id": "549ad457-20c1-414b-aba3-202064b8f0bd",
+          "type": "process",
+          "position": {
+            "x": 0,
+            "y": 1534
+          },
+          "data": {
+            "label": "Produce the 30-second video",
+            "type": "process",
+            "description": "Dispatcher only: verify the lock and blueprint exist, then queue Promo_Media_Producer (and Video Generation Agent for inserts) with pointers to project-lock.json / blueprint.json, never a restated production spec.",
+            "properties": {
+              "promptTemplate": "Verify PROJECT_ROOT\\project-lock.json and blueprint.json exist, update production-state.json, and invoke Promo_Media_Producer once with PROJECT_ROOT. The producer owns narration, music, visuals, normalization, and final editing; do not separately dispatch Video Generation Agent.\n\nOn the single allowed repair round, pass PROJECT_ROOT\\qc\\repair-request.json and ask the producer to change only its release-blocking items while reusing existing media. Missing optional blueprint fields, 29.97-versus-30 style metadata, a few frames of drift, small loudness variance, or an audio tail difference within the lock tolerances are not blockers.\n\nWhen a candidate MP4 is returned, record its path and continue to Validate and deliver. End with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b"
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 532
+          }
+        },
+        {
+          "id": "f880c51c-534f-4cad-9aff-0105cab6c264",
+          "type": "mcp",
+          "position": {
+            "x": 350,
+            "y": 1534
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_dir",
+                "search",
+                "get_file_info",
+                "create_directory",
+                "move",
+                "delete",
+                "get_allowed_directories"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 135
+          }
+        },
+        {
+          "id": "a9c13b5b-29a9-44f3-a7ca-d83569370d7f",
+          "type": "subflow",
+          "position": {
+            "x": 0,
+            "y": 2186
+          },
+          "data": {
+            "label": "Promo_Media_Producer",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "5d90856a-4d5d-4a45-8305-37618ed90bc0",
+              "inputMode": "isolated",
+              "outputMode": "final-only",
+              "promptTemplate": "Perform the promotional-media production task supplied by the invoking process, reading project-lock.json and blueprint.json under the given PROJECT_ROOT for all parameters. End your final response with a short ARTIFACTS block listing the absolute paths you created or modified, and keep production-state.json current."
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 180
+          }
+        },
+        {
+          "id": "a4589c70-b7f8-4b41-98d6-367f9f73272b",
+          "type": "process",
+          "position": {
+            "x": 290,
+            "y": 2186
+          },
+          "data": {
+            "label": "Validate and deliver",
+            "type": "process",
+            "description": "Resolve the explicit PROJECT_ROOT, invoke Promo_Delivery_Inspector for the full QC battery, triage findings by severity, and route repairs or deliver a review master.",
+            "properties": {
+              "promptTemplate": "Resolve the explicit PROJECT_ROOT and invoke Promo_Delivery_Inspector. Use project-lock.json tolerances.\n\nTreat PASS and PASS_WITH_ADVISORIES as deliverable. Request the one allowed repair only for a release-blocking issue that materially affects playback, duration beyond tolerance, missing/inaudible audio, serious sync, clearly broken visuals, or a false/unsupported claim. Do not repair for harmless fps representation, small frame-count drift, codec-profile metadata, minor loudness variance, tiny audio/video end differences, word-count/WPM, scene-count preferences, or missing optional production metadata.\n\nAfter one repair, deliver the best current export as a review master with caveats instead of looping. Update production-state.json and end with ARTIFACTS listing the delivered MP4 and any QC/repair files.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b"
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 512
+          }
+        },
+        {
+          "id": "0d4ed556-f3b3-41e5-a2dc-a8ed7ac1bad1",
+          "type": "mcp",
+          "position": {
+            "x": 640,
+            "y": 2186
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "get_allowed_directories",
+                "search",
+                "read_file",
+                "write_file"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 155
+          }
+        },
+        {
+          "id": "7ea4921f-bb7e-4f35-8fc9-702e07578259",
+          "type": "subflow",
+          "position": {
+            "x": 0,
+            "y": 2818
+          },
+          "data": {
+            "label": "Promo_Delivery_Inspector",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "ba2b47e1-4b35-46b7-8577-4e05af3a0da0",
+              "inputMode": "isolated",
+              "outputMode": "final-only",
+              "promptTemplate": "Independently verify the completed website promotional-video bundle at the explicit PROJECT_ROOT supplied by the invoking process (never search for or guess among candidate bundles). End your final response with a short ARTIFACTS block listing the absolute paths you read, created, or modified."
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 180
+          }
+        },
+        {
+          "id": "d2970c5c-6590-4d19-8c00-84c51afb4a95",
+          "type": "finish",
+          "position": {
+            "x": 290,
+            "y": 2818
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          },
+          "measured": {
+            "width": 210,
+            "height": 65
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "8ca1b306-7f0b-4b58-8c97-a93b552d2084:start-bottom->64145a36-c474-42aa-81a3-fad47562640f:process-top",
+          "source": "8ca1b306-7f0b-4b58-8c97-a93b552d2084",
+          "sourceHandle": "start-bottom",
+          "target": "64145a36-c474-42aa-81a3-fad47562640f",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "64145a36-c474-42aa-81a3-fad47562640f:process-bottom->a0b873ca-7ce2-43ae-a02b-f82ba46de62f:process-top",
+          "source": "64145a36-c474-42aa-81a3-fad47562640f",
+          "sourceHandle": "process-bottom",
+          "target": "a0b873ca-7ce2-43ae-a02b-f82ba46de62f",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "a0b873ca-7ce2-43ae-a02b-f82ba46de62f:process-bottom->549ad457-20c1-414b-aba3-202064b8f0bd:process-top",
+          "source": "a0b873ca-7ce2-43ae-a02b-f82ba46de62f",
+          "sourceHandle": "process-bottom",
+          "target": "549ad457-20c1-414b-aba3-202064b8f0bd",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "549ad457-20c1-414b-aba3-202064b8f0bd:process-bottom->a4589c70-b7f8-4b41-98d6-367f9f73272b:process-top",
+          "source": "549ad457-20c1-414b-aba3-202064b8f0bd",
+          "sourceHandle": "process-bottom",
+          "target": "a4589c70-b7f8-4b41-98d6-367f9f73272b",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "a4589c70-b7f8-4b41-98d6-367f9f73272b:process-bottom->d2970c5c-6590-4d19-8c00-84c51afb4a95:finish-top",
+          "source": "a4589c70-b7f8-4b41-98d6-367f9f73272b",
+          "sourceHandle": "process-bottom",
+          "target": "d2970c5c-6590-4d19-8c00-84c51afb4a95",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "64145a36-c474-42aa-81a3-fad47562640f:process-bottom->e2381efa-66d8-4734-93c6-3f23fda750a5:subflow-top",
+          "source": "64145a36-c474-42aa-81a3-fad47562640f",
+          "sourceHandle": "process-bottom",
+          "target": "e2381efa-66d8-4734-93c6-3f23fda750a5",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "549ad457-20c1-414b-aba3-202064b8f0bd:process-bottom->a9c13b5b-29a9-44f3-a7ca-d83569370d7f:subflow-top",
+          "source": "549ad457-20c1-414b-aba3-202064b8f0bd",
+          "sourceHandle": "process-bottom",
+          "target": "a9c13b5b-29a9-44f3-a7ca-d83569370d7f",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "a4589c70-b7f8-4b41-98d6-367f9f73272b:process-bottom->7ea4921f-bb7e-4f35-8fc9-702e07578259:subflow-top",
+          "source": "a4589c70-b7f8-4b41-98d6-367f9f73272b",
+          "sourceHandle": "process-bottom",
+          "target": "7ea4921f-bb7e-4f35-8fc9-702e07578259",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "64145a36-c474-42aa-81a3-fad47562640f:process-right-mcp->1735da6b-e725-40ce-8e3f-aaeabf9045ac:mcp-left",
+          "source": "64145a36-c474-42aa-81a3-fad47562640f",
+          "sourceHandle": "process-right-mcp",
+          "target": "1735da6b-e725-40ce-8e3f-aaeabf9045ac",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "a0b873ca-7ce2-43ae-a02b-f82ba46de62f:process-right-mcp->921552f8-b06f-42ba-87a7-28113ff5b9c1:mcp-left",
+          "source": "a0b873ca-7ce2-43ae-a02b-f82ba46de62f",
+          "sourceHandle": "process-right-mcp",
+          "target": "921552f8-b06f-42ba-87a7-28113ff5b9c1",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "549ad457-20c1-414b-aba3-202064b8f0bd:process-right-mcp->f880c51c-534f-4cad-9aff-0105cab6c264:mcp-left",
+          "source": "549ad457-20c1-414b-aba3-202064b8f0bd",
+          "sourceHandle": "process-right-mcp",
+          "target": "f880c51c-534f-4cad-9aff-0105cab6c264",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "a4589c70-b7f8-4b41-98d6-367f9f73272b:process-right-mcp->0d4ed556-f3b3-41e5-a2dc-a8ed7ac1bad1:mcp-left",
+          "source": "a4589c70-b7f8-4b41-98d6-367f9f73272b",
+          "sourceHandle": "process-right-mcp",
+          "target": "0d4ed556-f3b3-41e5-a2dc-a8ed7ac1bad1",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785809958052,
+      "updatedAt": 1786485590071
+    },
+    {
+      "id": "cc0e421c-86f6-48af-8927-06ec34d3d87c",
+      "name": "Website_Visual_Researcher",
+      "description": "Quickly capture enough factual first-party website evidence to support a truthful promo, returning a usable partial packet instead of over-investigating.",
+      "nodes": [
+        {
+          "id": "aef0db61-8399-4057-9e06-57b11804233f",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start",
+            "type": "start",
+            "properties": {
+              "promptTemplate": "Use the caller's PROJECT_ROOT and write research under PROJECT_ROOT\\assets\\research\\. If invoked standalone without a project root, create one sensible evidence folder and state it. Never invent claims or permissions."
+            }
+          }
+        },
+        {
+          "id": "8b940025-aa50-4576-9876-34424e090ff7",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Inspect, capture, and document",
+            "type": "process",
+            "description": "Collect a concise factual brief and a few useful first-party visuals.",
+            "properties": {
+              "promptTemplate": "Open the supplied website and inspect the homepage plus at most two useful same-site pages or sections. Capture the core offering, exact supported claims, tone, CTA, visual style, and a few useful screenshots or section captures.\n\nCreate PROJECT_ROOT\\assets\\research\\brief.md and asset-manifest.json, plus saved screenshots/assets when available. Record source URLs and limitations. A usable packet needs a factual brief and at least one first-party visual; do not block because a preferred page, image download, viewport detail, font name, computed style, or reuse permission is unavailable. Label visual judgments as observations and rights as unverified.\n\nIf the site is partially inaccessible, document what was actually visible and return the partial packet. Block only when no meaningful first-party content can be accessed or the existing research folder clearly belongs to a different website. Keep the work compact and end with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b",
+              "inputMode": "full-history",
+              "outputMode": "latest-message",
+              "maxTurns": 30
+            }
+          }
+        },
+        {
+          "id": "56118cba-78d6-4b17-ba42-6d99358e827a",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "get_allowed_directories",
+                "get_file_info",
+                "create_directory",
+                "read_file",
+                "write_file",
+                "list_dir"
+              ]
+            }
+          }
+        },
+        {
+          "id": "24bb722b-41aa-4bdf-822f-9b1027096ab9",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 470
+          },
+          "data": {
+            "label": "browser",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "browser",
+              "enabledTools": [
+                "browser_open",
+                "browser_navigate",
+                "browser_snapshot",
+                "browser_click",
+                "browser_scroll",
+                "browser_screenshot",
+                "browser_close"
+              ]
+            }
+          }
+        },
+        {
+          "id": "d9c57c8c-97b4-46db-8ca1-a09f9c052916",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 620
+          },
+          "data": {
+            "label": "bash",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "bash",
+              "enabledTools": [
+                "run"
+              ]
+            }
+          }
+        },
+        {
+          "id": "3fa9050d-6b4f-472f-bba1-804e75729ab7",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "aef0db61-8399-4057-9e06-57b11804233f:start-bottom->8b940025-aa50-4576-9876-34424e090ff7:process-top",
+          "source": "aef0db61-8399-4057-9e06-57b11804233f",
+          "sourceHandle": "start-bottom",
+          "target": "8b940025-aa50-4576-9876-34424e090ff7",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "8b940025-aa50-4576-9876-34424e090ff7:process-bottom->3fa9050d-6b4f-472f-bba1-804e75729ab7:finish-top",
+          "source": "8b940025-aa50-4576-9876-34424e090ff7",
+          "sourceHandle": "process-bottom",
+          "target": "3fa9050d-6b4f-472f-bba1-804e75729ab7",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "8b940025-aa50-4576-9876-34424e090ff7:process-right-mcp->56118cba-78d6-4b17-ba42-6d99358e827a:mcp-left",
+          "source": "8b940025-aa50-4576-9876-34424e090ff7",
+          "sourceHandle": "process-right-mcp",
+          "target": "56118cba-78d6-4b17-ba42-6d99358e827a",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "8b940025-aa50-4576-9876-34424e090ff7:process-right-mcp->24bb722b-41aa-4bdf-822f-9b1027096ab9:mcp-left",
+          "source": "8b940025-aa50-4576-9876-34424e090ff7",
+          "sourceHandle": "process-right-mcp",
+          "target": "24bb722b-41aa-4bdf-822f-9b1027096ab9",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "8b940025-aa50-4576-9876-34424e090ff7:process-right-mcp->d9c57c8c-97b4-46db-8ca1-a09f9c052916:mcp-left",
+          "source": "8b940025-aa50-4576-9876-34424e090ff7",
+          "sourceHandle": "process-right-mcp",
+          "target": "d9c57c8c-97b4-46db-8ca1-a09f9c052916",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785809958005,
+      "updatedAt": 1786483829339
+    },
+    {
+      "id": "5d90856a-4d5d-4a45-8305-37618ed90bc0",
+      "name": "Promo_Media_Producer",
+      "description": "Coordinate a resilient website-promo production. Derive safe implementation details, use fallbacks for failed scene jobs, and always aim to return a playable candidate; minor conformance drift is handled by the editor and practical QC.",
+      "nodes": [
+        {
+          "id": "45ede38d-8a88-4a35-bd66-58e1981c5fe9",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          }
+        },
+        {
+          "id": "7c469639-2d05-41ef-9a65-e3737ea106f0",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        },
+        {
+          "id": "2be4454e-640b-4f8f-ab3d-9c5676a10bf5",
+          "type": "subflow",
+          "position": {
+            "x": 530,
+            "y": 490
+          },
+          "data": {
+            "label": "Video Generation Agent",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "6ecdc93f-e15c-414c-b421-6e0c656fd7a1"
+            }
+          }
+        },
+        {
+          "id": "eb438de6-de39-4d1d-a464-a03b04d66bad",
+          "type": "subflow",
+          "position": {
+            "x": 810,
+            "y": 490
+          },
+          "data": {
+            "label": "Build_and_render_HTML5_scenes",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "2ec043be-6c09-4279-85b4-b580afd7fb08"
+            }
+          }
+        },
+        {
+          "id": "dfde1ca1-3730-46ed-9044-1a77f9816228",
+          "type": "subflow",
+          "position": {
+            "x": 1090,
+            "y": 490
+          },
+          "data": {
+            "label": "Edit_mix_and_package",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "bc80cf3a-b2e9-495d-af3d-8c9f57648e5c"
+            }
+          }
+        },
+        {
+          "id": "126ce469-8701-435d-8fd5-5839aab515ca",
+          "type": "subflow",
+          "position": {
+            "x": 1370,
+            "y": 490
+          },
+          "data": {
+            "label": "Generate_narration_music_and_inserts",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "e59b9d77-a9bc-439f-85d7-bb3eb573d3de"
+            }
+          }
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Producer Orchestrator",
+            "type": "process",
+            "properties": {
+              "promptTemplate": "Read PROJECT_ROOT\\project-lock.json, blueprint.json, and production-state.json. The lock contains targets and tolerances. Safe missing implementation details may be derived: scene frames = round(duration × target fps), transition-out may follow the next scene's transition-in or be a clean cut, and outputs may use sensible names under renders\\.\n\nUse one handoff kind per turn because the engine honors only one different handoff choice:\n1. If narration/music are absent, invoke Generate_narration_music_and_inserts.\n2. Then create only the visual scenes actually needed. Use the same scene subflow for any fan-out in a turn. Prefer approved website assets and HTML motion; use generated video only where it adds value.\n3. When media is ready, invoke Edit_mix_and_package.\n\nA scene-job failure must not fail the production. After one failed retry, replace it with an approved still/screenshot animated in HTML or in the final edit. Record the substitution. Missing per-scene frame counts, transition-out values, exact output paths, exact VO windows, or analyzer access are not blockers.\n\nNarration must fit the overall program and remain intelligible; it does not need to fit every scene slot exactly. Minor fps/frame/duration/audio drift is normalized in the final edit. On a repair request, reuse all existing media and invoke only the subflow needed for the named material defect.\n\nKeep production-state.json concise and current. Finish when a playable candidate MP4 exists, even if it carries advisories. End with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b",
+              "inputMode": "full-history",
+              "allowCallerPrompt": true,
+              "outputMode": "full-conversation",
+              "maxTurns": 30,
+              "excludeModelPrompt": false,
+              "excludeStartNodePrompt": false,
+              "excludeSystemPrompt": false
+            }
+          }
+        },
+        {
+          "id": "ffbe8ec6-0f5d-4ee7-b745-ed5462ecd4ac",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_dir",
+                "file_browser_ui",
+                "dir_tree",
+                "search",
+                "get_file_info",
+                "create_directory",
+                "move",
+                "delete",
+                "get_allowed_directories"
+              ]
+            }
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "45ede38d-8a88-4a35-bd66-58e1981c5fe9:start-bottom->6a0d450a-8391-47d7-84ca-f1321dbd8784:process-top",
+          "source": "45ede38d-8a88-4a35-bd66-58e1981c5fe9",
+          "sourceHandle": "start-bottom",
+          "target": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784:process-bottom->126ce469-8701-435d-8fd5-5839aab515ca:subflow-top",
+          "source": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "sourceHandle": "process-bottom",
+          "target": "126ce469-8701-435d-8fd5-5839aab515ca",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784:process-bottom->2be4454e-640b-4f8f-ab3d-9c5676a10bf5:subflow-top",
+          "source": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "sourceHandle": "process-bottom",
+          "target": "2be4454e-640b-4f8f-ab3d-9c5676a10bf5",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784:process-bottom->eb438de6-de39-4d1d-a464-a03b04d66bad:subflow-top",
+          "source": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "sourceHandle": "process-bottom",
+          "target": "eb438de6-de39-4d1d-a464-a03b04d66bad",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784:process-bottom->dfde1ca1-3730-46ed-9044-1a77f9816228:subflow-top",
+          "source": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "sourceHandle": "process-bottom",
+          "target": "dfde1ca1-3730-46ed-9044-1a77f9816228",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784:process-bottom->7c469639-2d05-41ef-9a65-e3737ea106f0:finish-top",
+          "source": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "sourceHandle": "process-bottom",
+          "target": "7c469639-2d05-41ef-9a65-e3737ea106f0",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "6a0d450a-8391-47d7-84ca-f1321dbd8784:process-right-mcp->ffbe8ec6-0f5d-4ee7-b745-ed5462ecd4ac:mcp-left",
+          "source": "6a0d450a-8391-47d7-84ca-f1321dbd8784",
+          "sourceHandle": "process-right-mcp",
+          "target": "ffbe8ec6-0f5d-4ee7-b745-ed5462ecd4ac",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785809958032,
+      "updatedAt": 1786483783853
+    },
+    {
+      "id": "ba2b47e1-4b35-46b7-8577-4e05af3a0da0",
+      "name": "Promo_Delivery_Inspector",
+      "description": "Run practical delivery QC that blocks only material viewer-facing or factual failures. Minor technical drift is accepted or advisory and never causes an endless repair loop.",
+      "nodes": [
+        {
+          "id": "888e6e1d-95d6-45d2-877e-571a13684a17",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start",
+            "type": "start",
+            "properties": {
+              "promptTemplate": "Inspect exactly the PROJECT_ROOT or candidate MP4 supplied by the caller. Require a readable candidate MP4. project-lock.json and production-state.json should be used when present; if one is missing, report that as advisory and apply the practical defaults described by the inspection step rather than searching for another project or blocking a playable delivery."
+            }
+          }
+        },
+        {
+          "id": "1b4fbab4-5cef-4d35-8906-e5fd19f11391",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Inspect the explicit delivery",
+            "type": "process",
+            "description": "Perform read-only technical, visual, audio, factual, brand, and provenance QC on one canonical project.",
+            "properties": {
+              "promptTemplate": "Inspect the candidate MP4 in the explicit PROJECT_ROOT. Read project-lock.json, production-state.json, and blueprint.json when present. Do not search for another project.\n\nRun a compact check: ffprobe, decode test, duration/fps/frame count, audio presence and basic level/sync, a small contact sheet or representative frames, and a claims comparison to the research brief.\n\nUse the lock tolerances. Treat 29.97 and 30-style rational frame-rate representations as equivalent when decoded timing is smooth and within tolerance. A few frames of difference, codec profile/level tags, movflags/color metadata, small loudness variance, word-count/WPM, scene-count preferences, exact transition vocabulary, and audio/video end drift within tolerance are PASS or advisory—not release-blocking. Missing optional production metadata is advisory.\n\nRelease-blocking is reserved for: missing/unplayable/corrupt MP4; materially wrong canvas/aspect; total duration beyond tolerance; missing or inaudible audio; material A/V sync error; obvious blank/loading/broken visuals; or a clearly false/unsupported promotional claim. Rights clearance is a caveat, not a producer repair.\n\nReturn PASS, PASS_WITH_ADVISORIES, or FAIL. Write qc\\inspection.json. Write qc\\repair-request.json only for release-blocking producer-correctable findings and only when the one repair round remains. Recheck only changed items after repair. After the cap, return the current export as a review master with caveats.\n\nKeep the report short, update production-state.json, and end with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b",
+              "inputMode": "full-history",
+              "outputMode": "latest-message",
+              "maxTurns": 25
+            }
+          }
+        },
+        {
+          "id": "c556a106-2c12-4b15-8642-ab6fe32e0563",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "get_allowed_directories",
+                "get_file_info",
+                "read_file",
+                "list_dir",
+                "dir_tree",
+                "write_file",
+                "create_directory"
+              ]
+            }
+          }
+        },
+        {
+          "id": "9519c699-2b11-473b-a417-8281632bf1fb",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 470
+          },
+          "data": {
+            "label": "bash",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "bash",
+              "enabledTools": [
+                "run"
+              ]
+            }
+          }
+        },
+        {
+          "id": "d183ad8b-31a3-4f9a-b6f2-54d48fe36ec4",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 620
+          },
+          "data": {
+            "label": "mcp-server-elevenlabs",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "mcp-server-elevenlabs",
+              "enabledTools": [
+                "transcribe_audio"
+              ]
+            }
+          }
+        },
+        {
+          "id": "5a8d0ebe-a345-413f-b527-a2844e2b29a2",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "888e6e1d-95d6-45d2-877e-571a13684a17:start-bottom->1b4fbab4-5cef-4d35-8906-e5fd19f11391:process-top",
+          "source": "888e6e1d-95d6-45d2-877e-571a13684a17",
+          "sourceHandle": "start-bottom",
+          "target": "1b4fbab4-5cef-4d35-8906-e5fd19f11391",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "1b4fbab4-5cef-4d35-8906-e5fd19f11391:process-bottom->5a8d0ebe-a345-413f-b527-a2844e2b29a2:finish-top",
+          "source": "1b4fbab4-5cef-4d35-8906-e5fd19f11391",
+          "sourceHandle": "process-bottom",
+          "target": "5a8d0ebe-a345-413f-b527-a2844e2b29a2",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "1b4fbab4-5cef-4d35-8906-e5fd19f11391:process-right-mcp->c556a106-2c12-4b15-8642-ab6fe32e0563:mcp-left",
+          "source": "1b4fbab4-5cef-4d35-8906-e5fd19f11391",
+          "sourceHandle": "process-right-mcp",
+          "target": "c556a106-2c12-4b15-8642-ab6fe32e0563",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "1b4fbab4-5cef-4d35-8906-e5fd19f11391:process-right-mcp->9519c699-2b11-473b-a417-8281632bf1fb:mcp-left",
+          "source": "1b4fbab4-5cef-4d35-8906-e5fd19f11391",
+          "sourceHandle": "process-right-mcp",
+          "target": "9519c699-2b11-473b-a417-8281632bf1fb",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "1b4fbab4-5cef-4d35-8906-e5fd19f11391:process-right-mcp->d183ad8b-31a3-4f9a-b6f2-54d48fe36ec4:mcp-left",
+          "source": "1b4fbab4-5cef-4d35-8906-e5fd19f11391",
+          "sourceHandle": "process-right-mcp",
+          "target": "d183ad8b-31a3-4f9a-b6f2-54d48fe36ec4",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785809958041,
+      "updatedAt": 1786483789938
+    },
+    {
+      "id": "6ecdc93f-e15c-414c-b421-6e0c656fd7a1",
+      "name": "Video_Generation_Agent",
+      "description": "Generate a useful text-free visual insert and normalize it once; small generator timing/fps drift is expected and handled downstream.",
+      "nodes": [
+        {
+          "id": "de0721ba-18fe-422f-8d27-cd1943b4cd90",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start Node",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          }
+        },
+        {
+          "id": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Process Node",
+            "type": "process",
+            "properties": {
+              "promptTemplate": "Create the caller's requested text-free visual insert. Use supplied duration, raster, fps, and output path; if a detail is omitted, use the caller's project lock or a sensible production default and state it briefly.\n\nUse Video-Generation-5sec for motion and Image Generation only when a still fallback is useful. For longer inserts, compose short clips. Measure the delivered clip, then normalize raster and nominal fps once with ffmpeg. Do not fail because a generator returns 29.97 instead of 30, a few extra/missing frames, or a tiny duration difference; the final editor will trim or pad within project tolerance.\n\nIf motion generation fails once, create a tasteful approved still-image motion fallback (push-in/parallax) and return a usable clip. Stop only if no visual asset can be created at all. No narration, music, or on-screen text.\n\nWrite the final clip to the requested path and end with ARTIFACTS.",
+              "boundModel": "42a596b8-ff78-4d69-b5c7-79dd3ce2bb1e",
+              "inputMode": "full-history",
+              "allowCallerPrompt": true,
+              "outputMode": "full-conversation",
+              "maxTurns": 20,
+              "excludeModelPrompt": false,
+              "excludeStartNodePrompt": false,
+              "excludeSystemPrompt": false
+            }
+          }
+        },
+        {
+          "id": "f498082d-b6b6-4ec7-a587-1360bc5f4d6e",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "bash",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "bash",
+              "enabledTools": [
+                "open_terminal",
+                "run",
+                "start",
+                "status",
+                "wait",
+                "write_stdin",
+                "kill",
+                "list_sessions"
+              ]
+            }
+          }
+        },
+        {
+          "id": "4b2784b1-a85b-459e-bb1e-3f591cd82ab9",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        },
+        {
+          "id": "ef80793e-0891-4226-8076-7b8bed05ac8f",
+          "type": "subflow",
+          "position": {
+            "x": 530,
+            "y": 490
+          },
+          "data": {
+            "label": "Video-Generation-5sec",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "8f6548e8-de59-4b72-909f-8692421e59ea",
+              "inputMode": "isolated",
+              "outputMode": "final-only"
+            }
+          }
+        },
+        {
+          "id": "09a2ee5e-bf42-4f3c-81c7-389a9b8be5d3",
+          "type": "subflow",
+          "position": {
+            "x": 810,
+            "y": 490
+          },
+          "data": {
+            "label": "Image Generation",
+            "type": "subflow",
+            "properties": {
+              "subflowId": "9b1d9bdc-4160-4d9c-98c5-c39e5edfebb6",
+              "inputMode": "isolated",
+              "outputMode": "final-only"
+            }
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "de0721ba-18fe-422f-8d27-cd1943b4cd90:start-bottom->2a812c61-15f2-43c9-8ed5-7d70666c0f5e:process-top",
+          "source": "de0721ba-18fe-422f-8d27-cd1943b4cd90",
+          "sourceHandle": "start-bottom",
+          "target": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e:process-bottom->4b2784b1-a85b-459e-bb1e-3f591cd82ab9:finish-top",
+          "source": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e",
+          "sourceHandle": "process-bottom",
+          "target": "4b2784b1-a85b-459e-bb1e-3f591cd82ab9",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e:process-bottom->ef80793e-0891-4226-8076-7b8bed05ac8f:subflow-top",
+          "source": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e",
+          "sourceHandle": "process-bottom",
+          "target": "ef80793e-0891-4226-8076-7b8bed05ac8f",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e:process-bottom->09a2ee5e-bf42-4f3c-81c7-389a9b8be5d3:subflow-top",
+          "source": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e",
+          "sourceHandle": "process-bottom",
+          "target": "09a2ee5e-bf42-4f3c-81c7-389a9b8be5d3",
+          "targetHandle": "subflow-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard",
+            "bidirectional": true
+          },
+          "animated": true
+        },
+        {
+          "id": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e:process-right-mcp->f498082d-b6b6-4ec7-a587-1360bc5f4d6e:mcp-left",
+          "source": "2a812c61-15f2-43c9-8ed5-7d70666c0f5e",
+          "sourceHandle": "process-right-mcp",
+          "target": "f498082d-b6b6-4ec7-a587-1360bc5f4d6e",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785564139510,
+      "updatedAt": 1786483791418
+    },
+    {
+      "id": "2ec043be-6c09-4279-85b4-b580afd7fb08",
+      "name": "Build_and_render_HTML5_scenes",
+      "description": "Build a practical HTML motion scene from approved assets, deriving safe missing values and returning a usable render or fallback quickly.",
+      "nodes": [
+        {
+          "id": "91a1814a-a2db-4ba8-aba7-5c04d6314834",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start Node",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 89
+          }
+        },
+        {
+          "id": "e4cf6d6f-b4f6-416d-865f-b9c73595197f",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Build and render HTML5 scenes",
+            "type": "process",
+            "description": "Build one deterministic HTML5 motion-graphics scene, then render it to a lossless-intermediate video via a Node/patchright headless-Chrome capture script driven through bash — not through the browser MCP, which has no viewport control, JS evaluation, or per-frame seek.",
+            "properties": {
+              "promptTemplate": "Build one scene under the supplied PROJECT_ROOT. Read project-lock.json and the scene in blueprint.json.\n\nIf frame count is absent, derive it from duration and target fps. If transitionOut is absent, use the next scene's transitionIn or a clean cut. If output path is absent, use PROJECT_ROOT\\renders\\<scene_id>.mkv. These are normal implementation choices, not blockers.\n\nCreate a simple deterministic HTML/CSS/JS scene using approved website assets and copy, with a fixed target canvas and at least one clear motion treatment. Render it through headless Chrome and ffmpeg. Normalize to the target raster/fps once. A result within the lock's frame/fps/duration tolerances is usable; the final editor may trim or pad it.\n\nInspect a few representative frames for blank/loading/broken content. Retry the render once at most. If rendering still fails, return the HTML/source assets and recommend an animated-still fallback; do not consume the run chasing exact metadata.\n\nUpdate production-state.json for the scene and end with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b",
+              "maxTurns": 25
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 511
+          },
+          "selected": true
+        },
+        {
+          "id": "f6f7e4d6-10a2-4308-8241-a699cd284baa",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "get_allowed_directories",
+                "dir_tree",
+                "read_file",
+                "write_file"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 155
+          }
+        },
+        {
+          "id": "42d033f8-1eaf-4647-9da7-e260c20ab804",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 470
+          },
+          "data": {
+            "label": "bash",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "bash",
+              "enabledTools": [
+                "run"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 114
+          }
+        },
+        {
+          "id": "7d353022-1e0f-4a89-b318-69b2c7ca2e3c",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          },
+          "measured": {
+            "width": 210,
+            "height": 65
+          }
+        },
+        {
+          "id": "4bab312b-ccf2-4428-a6e2-ad4360d4e163",
+          "type": "mcp",
+          "position": {
+            "x": 600,
+            "y": 560
+          },
+          "data": {
+            "label": "browser",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "browser",
+              "enabledTools": [
+                "browser_open",
+                "browser_navigate",
+                "browser_back",
+                "browser_forward",
+                "browser_reload",
+                "browser_snapshot",
+                "browser_click",
+                "browser_type",
+                "browser_press",
+                "browser_scroll",
+                "browser_screenshot",
+                "browser_capture_page",
+                "browser_capture_element_metrics",
+                "browser_capture_region",
+                "browser_record_start",
+                "browser_record_stop",
+                "browser_record_status",
+                "browser_diagnostics",
+                "browser_extensions",
+                "browser_close"
+              ]
+            }
+          },
+          "measured": {
+            "width": 210,
+            "height": 155
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "91a1814a-a2db-4ba8-aba7-5c04d6314834:start-bottom->e4cf6d6f-b4f6-416d-865f-b9c73595197f:process-top",
+          "source": "91a1814a-a2db-4ba8-aba7-5c04d6314834",
+          "sourceHandle": "start-bottom",
+          "target": "e4cf6d6f-b4f6-416d-865f-b9c73595197f",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "e4cf6d6f-b4f6-416d-865f-b9c73595197f:process-bottom->7d353022-1e0f-4a89-b318-69b2c7ca2e3c:finish-top",
+          "source": "e4cf6d6f-b4f6-416d-865f-b9c73595197f",
+          "sourceHandle": "process-bottom",
+          "target": "7d353022-1e0f-4a89-b318-69b2c7ca2e3c",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "e4cf6d6f-b4f6-416d-865f-b9c73595197f:process-right-mcp->f6f7e4d6-10a2-4308-8241-a699cd284baa:mcp-left",
+          "source": "e4cf6d6f-b4f6-416d-865f-b9c73595197f",
+          "sourceHandle": "process-right-mcp",
+          "target": "f6f7e4d6-10a2-4308-8241-a699cd284baa",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "e4cf6d6f-b4f6-416d-865f-b9c73595197f:process-right-mcp->42d033f8-1eaf-4647-9da7-e260c20ab804:mcp-left",
+          "source": "e4cf6d6f-b4f6-416d-865f-b9c73595197f",
+          "sourceHandle": "process-right-mcp",
+          "target": "42d033f8-1eaf-4647-9da7-e260c20ab804",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "e4cf6d6f-b4f6-416d-865f-b9c73595197f:process-right-mcp->4bab312b-ccf2-4428-a6e2-ad4360d4e163:mcp-left",
+          "source": "e4cf6d6f-b4f6-416d-865f-b9c73595197f",
+          "sourceHandle": "process-right-mcp",
+          "target": "4bab312b-ccf2-4428-a6e2-ad4360d4e163",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785876498483,
+      "updatedAt": 1786486863204
+    },
+    {
+      "id": "bc80cf3a-b2e9-495d-af3d-8c9f57648e5c",
+      "name": "Edit_mix_and_package",
+      "description": "Assemble the best available approved media into a polished playable MP4, normalizing small timing/fps/audio differences in one pass.",
+      "nodes": [
+        {
+          "id": "73254c97-c691-4fe0-9f23-0c0fa20c5e55",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start Node",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          }
+        },
+        {
+          "id": "55ccabfa-d906-434f-a6bb-1817b6be4aa8",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Edit mix and package",
+            "type": "process",
+            "description": "Assemble the locked-timing edit, mix audio to the lock's loudness targets, and encode the final deliverable MP4 + SRT.",
+            "properties": {
+              "promptTemplate": "Read PROJECT_ROOT\\project-lock.json, blueprint.json, and production-state.json, then inventory available assets once. Build the best complete edit from approved media. If a planned scene render is missing, animate an approved screenshot/still rather than blocking.\n\nNormalize each visual input once to the target raster and nominal fps. Treat common rational representations such as 29.97 and 30 as compatible inputs and let the final CFR encode establish the target. Trim or pad a few frames as needed. Do not reject a source over harmless metadata differences.\n\nMix narration and music for intelligibility. Trim, fade, or pad track ends to the program duration; an audio/video end difference of a few hundredths of a second is routine and should be fixed automatically. Apply one practical loudness-normalization/limiting pass. If precise measurement is unavailable or slightly outside target, record an advisory and continue unless audio is inaudible, clipped, or dangerously loud.\n\nUse a small set of real transitions, but do not make exact beat-grid placement, scene count, WPM, or per-scene narration timing a delivery gate. Encode one final MP4 under PROJECT_ROOT\\out\\. Retry the encode once only for corruption or a material playback failure. Always prefer a playable review master over no output.\n\nWrite a concise QC/production report, update production-state.json, and end with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b",
+              "maxTurns": 30
+            }
+          }
+        },
+        {
+          "id": "6b9ef3c2-9d74-4cbe-bbf1-e8eeb61c3379",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "list_dir",
+                "read_file",
+                "write_file"
+              ]
+            }
+          }
+        },
+        {
+          "id": "ab7b1b20-8d41-4b1b-8734-ddf639299a69",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 470
+          },
+          "data": {
+            "label": "bash",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "bash",
+              "enabledTools": [
+                "run",
+                "start",
+                "wait"
+              ]
+            }
+          }
+        },
+        {
+          "id": "0dfa3ff8-d499-4502-8ab0-5d8202d6dc40",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "73254c97-c691-4fe0-9f23-0c0fa20c5e55:start-bottom->55ccabfa-d906-434f-a6bb-1817b6be4aa8:process-top",
+          "source": "73254c97-c691-4fe0-9f23-0c0fa20c5e55",
+          "sourceHandle": "start-bottom",
+          "target": "55ccabfa-d906-434f-a6bb-1817b6be4aa8",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "55ccabfa-d906-434f-a6bb-1817b6be4aa8:process-bottom->0dfa3ff8-d499-4502-8ab0-5d8202d6dc40:finish-top",
+          "source": "55ccabfa-d906-434f-a6bb-1817b6be4aa8",
+          "sourceHandle": "process-bottom",
+          "target": "0dfa3ff8-d499-4502-8ab0-5d8202d6dc40",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "55ccabfa-d906-434f-a6bb-1817b6be4aa8:process-right-mcp->6b9ef3c2-9d74-4cbe-bbf1-e8eeb61c3379:mcp-left",
+          "source": "55ccabfa-d906-434f-a6bb-1817b6be4aa8",
+          "sourceHandle": "process-right-mcp",
+          "target": "6b9ef3c2-9d74-4cbe-bbf1-e8eeb61c3379",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "55ccabfa-d906-434f-a6bb-1817b6be4aa8:process-right-mcp->ab7b1b20-8d41-4b1b-8734-ddf639299a69:mcp-left",
+          "source": "55ccabfa-d906-434f-a6bb-1817b6be4aa8",
+          "sourceHandle": "process-right-mcp",
+          "target": "ab7b1b20-8d41-4b1b-8734-ddf639299a69",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785876559719,
+      "updatedAt": 1786483788337
+    },
+    {
+      "id": "e59b9d77-a9bc-439f-85d7-bb3eb573d3de",
+      "name": "Generate_narration_music_and_inserts",
+      "description": "Generate a usable narration and music bed for the whole promo, with one practical normalization pass and no brittle per-scene timing gate.",
+      "nodes": [
+        {
+          "id": "14fcf3fd-6e3e-41ea-b368-82c08886c001",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start Node",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          }
+        },
+        {
+          "id": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Generate narration music and inserts",
+            "type": "process",
+            "description": "Generate the narration voiceover and original instrumental music bed for the approved promo, timed to the locked per-scene durations. Insert generation is out of scope here (owned by the parent orchestrator via Video Generation Agent).",
+            "properties": {
+              "promptTemplate": "Read PROJECT_ROOT\\project-lock.json and blueprint.json. Generate narration and music only.\n\nChoose a suitable available voice and synthesize the truthful script once. Judge narration on overall intelligibility and whether it fits the full program. Per-scene VO windows, exact WPM, and exact word count are creative targets, not release gates. If the narration overruns the full program, first shorten phrasing once or apply one gentle whole-track atempo adjustment. Do not reject a usable track because individual scene phrases cross a cut.\n\nGenerate one music bed in a compatible style. If loudness analysis is unavailable, continue; the editor will normalize the final mix. Forced alignment and SRT are helpful when available, but their absence must not block audio delivery.\n\nMove or copy generated binary files from tool temporary paths into PROJECT_ROOT\\assets\\ using filesystem move or bash. A few hundredths of a second of end drift is normal and will be trimmed or padded by the editor. Retry generation at most once only if audio is corrupt, unintelligible, or grossly too long.\n\nWrite a compact manifest, update production-state.json, and return the best usable narration/music assets with ARTIFACTS.",
+              "boundModel": "daa94d4a-afe7-4a49-9186-29eaf39d143b",
+              "maxTurns": 20
+            }
+          }
+        },
+        {
+          "id": "4e5e3d95-0382-4746-b408-2ce3ba6b160a",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 320
+          },
+          "data": {
+            "label": "filesystem",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "filesystem",
+              "enabledTools": [
+                "get_allowed_directories",
+                "read_file",
+                "write_file",
+                "move"
+              ]
+            }
+          }
+        },
+        {
+          "id": "132c4edb-a2ad-49d3-a92c-a3e6b51d5e57",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 470
+          },
+          "data": {
+            "label": "mcp-server-elevenlabs",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "mcp-server-elevenlabs",
+              "enabledTools": [
+                "check_subscription",
+                "list_voices",
+                "generate_speech",
+                "create_music_plan",
+                "generate_music_from_plan",
+                "forced_alignment"
+              ]
+            }
+          }
+        },
+        {
+          "id": "0ae2385b-c4ed-4096-b672-fcc77d7e69a1",
+          "type": "mcp",
+          "position": {
+            "x": 570,
+            "y": 620
+          },
+          "data": {
+            "label": "bash",
+            "type": "mcp",
+            "properties": {
+              "boundServer": "bash",
+              "enabledTools": [
+                "run"
+              ]
+            }
+          }
+        },
+        {
+          "id": "79f26555-e89f-4277-ae55-83b2c4562d0b",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "14fcf3fd-6e3e-41ea-b368-82c08886c001:start-bottom->2c289686-6b7a-4f66-9af0-6a8eb48f0ed2:process-top",
+          "source": "14fcf3fd-6e3e-41ea-b368-82c08886c001",
+          "sourceHandle": "start-bottom",
+          "target": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2:process-bottom->79f26555-e89f-4277-ae55-83b2c4562d0b:finish-top",
+          "source": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2",
+          "sourceHandle": "process-bottom",
+          "target": "79f26555-e89f-4277-ae55-83b2c4562d0b",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2:process-right-mcp->4e5e3d95-0382-4746-b408-2ce3ba6b160a:mcp-left",
+          "source": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2",
+          "sourceHandle": "process-right-mcp",
+          "target": "4e5e3d95-0382-4746-b408-2ce3ba6b160a",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2:process-right-mcp->132c4edb-a2ad-49d3-a92c-a3e6b51d5e57:mcp-left",
+          "source": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2",
+          "sourceHandle": "process-right-mcp",
+          "target": "132c4edb-a2ad-49d3-a92c-a3e6b51d5e57",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        },
+        {
+          "id": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2:process-right-mcp->0ae2385b-c4ed-4096-b672-fcc77d7e69a1:mcp-left",
+          "source": "2c289686-6b7a-4f66-9af0-6a8eb48f0ed2",
+          "sourceHandle": "process-right-mcp",
+          "target": "0ae2385b-c4ed-4096-b672-fcc77d7e69a1",
+          "targetHandle": "mcp-left",
+          "type": "mcpEdge",
+          "data": {
+            "edgeType": "mcp"
+          },
+          "animated": false,
+          "markerEnd": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "markerStart": {
+            "type": "arrowclosed",
+            "width": 20,
+            "height": 20,
+            "color": "#1976d2"
+          },
+          "style": {
+            "stroke": "#1976d2",
+            "strokeWidth": 2
+          }
+        }
+      ],
+      "createdAt": 1785876615801,
+      "updatedAt": 1786483785419
+    },
+    {
+      "id": "8f6548e8-de59-4b72-909f-8692421e59ea",
+      "name": "Video-Generation-5sec",
+      "nodes": [
+        {
+          "id": "3d0d58ac-0a60-4f99-bfbe-9e13f5a49ad4",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start Node",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          }
+        },
+        {
+          "id": "b5c57a6f-f5bb-4cc3-a8fb-a80384833996",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "AI task",
+            "type": "process",
+            "properties": {
+              "promptTemplate": "Generate one video clip of at most 5 seconds using the model's native video-generation capability. This node enforces the 5-second cap; nothing upstream of it does.\n\nPass the caller's creative description through verbatim as the core of the generation prompt. Append these technical constraints on top of it:\n- Duration: 5 seconds or less (this model's native range is 3-5s clips). If the caller asked for more than 5s, generate the longest clip up to 5s and say so plainly -- do not silently truncate without saying it.\n- Aspect ratio / raster: whatever the caller specifies; default to 1920x1080 if unspecified.\n- No on-screen text, no watermarks or UI chrome, no legible logos or brand marks unless the caller supplied a specific logo/brand asset to reproduce.\n\nReport in your final response what was actually produced: the delivered duration, raster, and fps of the clip, and where it is (file path or handle). Do not assume the request was honoured -- verify and state the actual result.",
+              "boundModel": "abb4f0af-f1cd-4084-95cd-5d719de31dd7",
+              "inputMode": "full-history",
+              "allowCallerPrompt": true,
+              "outputMode": "latest-message",
+              "excludeModelPrompt": false,
+              "excludeStartNodePrompt": false,
+              "excludeSystemPrompt": false
+            }
+          }
+        },
+        {
+          "id": "acb27c1d-7fca-4211-8814-fbcf08f50a60",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "3d0d58ac-0a60-4f99-bfbe-9e13f5a49ad4:start-bottom->b5c57a6f-f5bb-4cc3-a8fb-a80384833996:process-top",
+          "source": "3d0d58ac-0a60-4f99-bfbe-9e13f5a49ad4",
+          "sourceHandle": "start-bottom",
+          "target": "b5c57a6f-f5bb-4cc3-a8fb-a80384833996",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "b5c57a6f-f5bb-4cc3-a8fb-a80384833996:process-bottom->acb27c1d-7fca-4211-8814-fbcf08f50a60:finish-top",
+          "source": "b5c57a6f-f5bb-4cc3-a8fb-a80384833996",
+          "sourceHandle": "process-bottom",
+          "target": "acb27c1d-7fca-4211-8814-fbcf08f50a60",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        }
+      ],
+      "createdAt": 1785774122847,
+      "updatedAt": 1785965352518
+    },
+    {
+      "id": "9b1d9bdc-4160-4d9c-98c5-c39e5edfebb6",
+      "name": "Image_Generation",
+      "nodes": [
+        {
+          "id": "3d503059-dec6-48dc-86f7-06ae8f17642f",
+          "type": "start",
+          "position": {
+            "x": 250,
+            "y": 150
+          },
+          "data": {
+            "label": "Start Node",
+            "type": "start",
+            "properties": {
+              "promptTemplate": ""
+            }
+          }
+        },
+        {
+          "id": "9cde9107-816d-40c9-84db-8f770b28fcb2",
+          "type": "process",
+          "position": {
+            "x": 250,
+            "y": 320
+          },
+          "data": {
+            "label": "Image Generation",
+            "type": "process",
+            "properties": {
+              "promptTemplate": "Generate one still image using the model's native image-generation capability.\n\nPass the caller's description through as the creative brief, preserving its intent. Then apply these technical constraints on top of it:\n- Raster / aspect ratio: whatever the caller specifies; default to 1920x1080 if unspecified.\n- No text in the image unless the caller explicitly asked for on-screen text, a caption, or a specific logo/wordmark.\n- Output: write the image to the absolute path the caller specifies; if none is given, choose a sensible absolute path and state it.\n\nReport in your final response the actual produced image dimensions and the actual absolute file path. Do not assume the request was honoured -- verify and state what was actually produced.",
+              "boundModel": "7e5e2dc3-2681-4330-bd4a-e437605cb68d",
+              "inputMode": "full-history",
+              "outputMode": "latest-message"
+            }
+          }
+        },
+        {
+          "id": "511c7665-acc3-4214-ad31-126e737c59b9",
+          "type": "finish",
+          "position": {
+            "x": 250,
+            "y": 490
+          },
+          "data": {
+            "label": "Finish Node",
+            "type": "finish",
+            "properties": {}
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "3d503059-dec6-48dc-86f7-06ae8f17642f:start-bottom->9cde9107-816d-40c9-84db-8f770b28fcb2:process-top",
+          "source": "3d503059-dec6-48dc-86f7-06ae8f17642f",
+          "sourceHandle": "start-bottom",
+          "target": "9cde9107-816d-40c9-84db-8f770b28fcb2",
+          "targetHandle": "process-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        },
+        {
+          "id": "9cde9107-816d-40c9-84db-8f770b28fcb2:process-bottom->511c7665-acc3-4214-ad31-126e737c59b9:finish-top",
+          "source": "9cde9107-816d-40c9-84db-8f770b28fcb2",
+          "sourceHandle": "process-bottom",
+          "target": "511c7665-acc3-4214-ad31-126e737c59b9",
+          "targetHandle": "finish-top",
+          "type": "custom",
+          "data": {
+            "edgeType": "standard"
+          },
+          "animated": true
+        }
+      ],
+      "createdAt": 1785564749027,
+      "updatedAt": 1785965361371
+    }
+  ]
+}

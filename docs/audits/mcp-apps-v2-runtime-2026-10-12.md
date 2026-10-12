@@ -24,8 +24,8 @@ chat assertions.
   record; the changed TypeScript test setup was checked again.
 - Final qualified source tree before this record:
   `1ed44fd98be1a36cc4466edfe2a4c08bf191c57c`.
-- 85 assertions passed across the frame compliance, owner handshake, app tool
-  route, MCP Apps and chat markdown-link suites. The previously failed chat
+- 105 assertions passed across the frame compliance, owner handshake, app tool
+  route, MCP Apps, capabilities/consent and chat markdown-link suites. The previously failed chat
   suite ran its three assertions successfully.
 - Five real-package wire cases passed using the production client shim with
   actual App and AppBridge: tool/resource forwarding, JSON result
@@ -49,6 +49,18 @@ preview, a real root-confinement denial followed by refresh and preview
 recovery, fullscreen with preserved preview, and close. Both had zero page
 errors and zero document-width overflow. The owned application exited
 gracefully, including observed pipe closure, without forced termination.
+
+## Integration with updated main
+
+Main advanced through independently qualified PR #1114 while this batch was
+running. The candidate includes main
+`a7207ad34729070e4a2e18bf295ed0da166f7a1d`; application typecheck (66.059s),
+lint (144.285s) and the non-container build (311.863s) all passed again on
+integrated source tree `3cc08bd01ca13ba89d0614709f02cc8f8ef35e6e` before this
+record was updated. The production filesystem journey then repeated all nine
+steps successfully at both viewports. Its owned app exited gracefully without
+forced termination. MCP workspace inputs and the focused Apps/wire regression
+inputs were unchanged, so their valid results were reused.
 
 This qualifies the existing Apps host upgrade, rather than the broader
 first-user/provider matrix. No full suite, online CI, container build or release

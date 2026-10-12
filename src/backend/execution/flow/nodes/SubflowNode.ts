@@ -581,6 +581,31 @@ function laneTemplateValues(lane: SubflowLanePlan): Record<string, unknown> {
   return { item: text ?? '', laneIndex: lane.itemIndex };
 }
 
+/** Graph handoffs and inline calls resolve the same saved child-memory key. */
+export async function resolveSubflowSessionKeys(
+  preparation: SubflowNodePrepResult,
+  sharedState: SharedState,
+  nodeId: string | undefined,
+): Promise<void> {
+  if (preparation.sessionScope !== 'per-key' || !preparation.lanes?.length) return;
+  preparation.lanes = await Promise.all(preparation.lanes.map(async (lane, laneIndex) => {
+    const callerKey = normalizeSessionKey(lane.callerSessionKey);
+    const template = preparation.sessionKeyTemplate?.trim();
+    const templateKey = !callerKey && template
+      ? normalizeSessionKey(await resolveSubflowTemplate(template, sharedState, nodeId, laneTemplateValues(lane)))
+      : undefined;
+    const resolvedKey = callerKey ?? templateKey;
+    const { sessionKey: _previousKey, ...baseLane } = lane;
+    if (!resolvedKey) {
+      log.debug('Per-key Subflow lane has no concrete session key; using per-visit execution', {
+        nodeId, laneIndex, callerKeyProvided: Boolean(lane.callerSessionKey), templateConfigured: Boolean(template),
+      });
+      return baseLane;
+    }
+    return { ...baseLane, sessionKey: resolvedKey };
+  }));
+}
+
 /**
  * Build the per-child `emit` wrapper that folds a subflow run's events onto the
  * PARENT conversation's channel.
@@ -1055,32 +1080,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     // authored template; templates see run variables, dynamic references, and
     // lane-local JSON fields such as `{{scene_id}}`. Missing/unresolved values
     // deliberately remain per-visit and never collapse into an empty session.
-    if (prepResult.sessionScope === 'per-key' && prepResult.lanes?.length) {
-      prepResult.lanes = await Promise.all(prepResult.lanes.map(async (lane, laneIndex) => {
-        const callerKey = normalizeSessionKey(lane.callerSessionKey);
-        const template = prepResult.sessionKeyTemplate?.trim();
-        const templateKey = !callerKey && template
-          ? normalizeSessionKey(await resolveSubflowTemplate(
-              template,
-              sharedState,
-              node_params?.id,
-              laneTemplateValues(lane),
-            ))
-          : undefined;
-        const resolvedKey = callerKey ?? templateKey;
-        const { sessionKey: _previousKey, ...baseLane } = lane;
-        if (!resolvedKey) {
-          log.debug('Per-key Subflow lane has no concrete session key; using per-visit execution', {
-            nodeId: node_params?.id,
-            laneIndex,
-            callerKeyProvided: Boolean(lane.callerSessionKey),
-            templateConfigured: Boolean(template),
-          });
-          return baseLane;
-        }
-        return { ...baseLane, sessionKey: resolvedKey };
-      }));
-    }
+    await resolveSubflowSessionKeys(prepResult, sharedState, node_params?.id);
 
     // Validate the complete resolved plan before durable child admission. In a
     // Persona run a dynamic ID outside this node's authored set fails loudly.
