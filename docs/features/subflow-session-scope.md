@@ -147,11 +147,16 @@ the result, and — on failure — hands back to "Produce" for another attempt.
   command, and prior decision from its own transcript, so the parent only needs to send
   the QC findings ("scene 3's audio is out of sync") rather than the entire task again.
 
-On one reference flow (`Website_Promo_Video_Producer`), this pattern was **observed** to
-eliminate several expensive 900-frame recaptures per retry loop and save roughly
-700K prompt tokens across a run. This is a single observed data point on one flow, not a
-guarantee for every use case — actual savings depend on how much of the retry work is
-genuinely redundant.
+The [2026-10-12 reference-flow acceptance](../audits/reference-subflow-sessions-2026-10-12.md)
+completed two real `Website_Promo_Video_Producer` delivery reruns with identical
+verified media. The repeated researcher retained one child conversation, while the
+fresh-child baseline created two. The reuse run used 313,854 fewer prompt tokens
+(9.9%) in that one paired warm rerun. This is an observation, not a general savings
+guarantee or a measurement of cold 900-frame recaptures.
+
+Earlier notes reported roughly 700K prompt-token savings from avoided recaptures,
+but no recoverable paired receipt supports that historical anecdote. The recorded
+comparison above does not verify that value or its reported workload.
 
 ## Trade-offs and troubleshooting
 

@@ -1,0 +1,390 @@
+{
+  "collectedUtc": "2026-10-12T16:46:04.332Z",
+  "issue": 391,
+  "sourceRevision": "1f2f5bc5a1cbe6eaec40c785d3fe0767cf2f477f",
+  "sourceTree": "7a9b9934e489b80c99e46cb46c3aa66fcafb3925",
+  "applicationBuildId": "hdCEw8W6XANOg97FrC-Ar",
+  "referenceFlowId": "ec3457ab-4966-411a-873b-3fa6dad5a5c9",
+  "sourceFlowHashes": [
+    {
+      "id": "ec3457ab-4966-411a-873b-3fa6dad5a5c9",
+      "name": "Website_Promo_Video_Producer",
+      "sha256": "998eba55ac28e248c839b6b6815d1cf5055df8b2e8b7ddf94c0b02a72e47d2cf"
+    },
+    {
+      "id": "cc0e421c-86f6-48af-8927-06ec34d3d87c",
+      "name": "Website_Visual_Researcher",
+      "sha256": "b9342db9fcf31ceb7f1a80806bdf4b18e2cc979dacc8c1c71f48bec1ebbb9309"
+    },
+    {
+      "id": "5d90856a-4d5d-4a45-8305-37618ed90bc0",
+      "name": "Promo_Media_Producer",
+      "sha256": "b9f2a4aaf7199c15acac5d51bfc7ac28e75699551ffc0e2d04be1ced7172fbfc"
+    },
+    {
+      "id": "ba2b47e1-4b35-46b7-8577-4e05af3a0da0",
+      "name": "Promo_Delivery_Inspector",
+      "sha256": "b7e5600d53a8873cc2b1a3dfadc77c98c3cde4a574595989ecb40980ee70cdb8"
+    },
+    {
+      "id": "6ecdc93f-e15c-414c-b421-6e0c656fd7a1",
+      "name": "Video_Generation_Agent",
+      "sha256": "e9cad2fca96cfdede813c0486ecb52f994af331c24fb6a848a33775fe32a06ae"
+    },
+    {
+      "id": "2ec043be-6c09-4279-85b4-b580afd7fb08",
+      "name": "Build_and_render_HTML5_scenes",
+      "sha256": "4c0e766ffd24b576aaf42097f4364147ce6d9b50422718843a1f890704a25ede"
+    },
+    {
+      "id": "bc80cf3a-b2e9-495d-af3d-8c9f57648e5c",
+      "name": "Edit_mix_and_package",
+      "sha256": "d35f0fd843318a6dc89c789e31bce950c666e7dfe5aec32ac2b1c31a5afa0ab5"
+    },
+    {
+      "id": "e59b9d77-a9bc-439f-85d7-bb3eb573d3de",
+      "name": "Generate_narration_music_and_inserts",
+      "sha256": "d4613c37d963601f0748c94ba75ef63cc9d79c353495610d1d4f1e27372261cc"
+    },
+    {
+      "id": "8f6548e8-de59-4b72-909f-8692421e59ea",
+      "name": "Video-Generation-5sec",
+      "sha256": "20e4333565cff23ad6564b27c5e2023793f132e628a36e484ce65d8196bb838c"
+    },
+    {
+      "id": "9b1d9bdc-4160-4d9c-98c5-c39e5edfebb6",
+      "name": "Image_Generation",
+      "sha256": "f4c052d405e0c2549039b0016ec37cf8cb69766a9abeb26867b215b370458e89"
+    }
+  ],
+  "task": "Complete the existing Website_Promo_Video_Producer delivery for https://flujo.com.co. This project is already seeded with its verified 30-second 1080p MP4, approved first-party screenshots, narration, music, scene renders and blueprint. Keep the current campaign and reuse all valid media; do not regenerate or recapture assets that remain valid. Carry out two research visits inside this same parent run using call_subflow_website_visual_researcher synchronously: first verify the existing factual packet; then call the same researcher to confirm the exact homepage CTA and update the brief. Both visits must use the configured PROJECT_ROOT and its existing screenshots. Continue the existing creative, media-production and practical delivery-QC steps to a deliverable result, retaining valid exports. Never print credential values. Any deletion or cleanup must go through flujo-bash MCP. Return the actual final MP4 path and QC verdict.",
+  "provider": "Codex subscription",
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "comparison": {
+    "kind": "one paired warm reference rerun",
+    "seedVersion": "c1e711a08d35bb1db34d1a2ae715f84f2b89978a",
+    "initialMedia": "Same verified completed 30-second project copied into both empty-conversation workspaces",
+    "memory": "Only the repeated Website_Visual_Researcher node opts into per-run on reuse; baseline retains the absent scope",
+    "promptTokensSaved": 313854,
+    "observedPercentLess": 9.926396635853113,
+    "uncachedPromptTokensSaved": 39294,
+    "limitations": [
+      "One stochastic pair; wall times overlap and are not additive",
+      "Both cases retain existing verified media; no measured 900-frame recapture savings",
+      "Original ~700K claim remains an unverified historical anecdote",
+      "A stable FLUJO child conversation is demonstrated; no claim of fewer native provider threads",
+      "No provider dollar charge or dollar-savings estimate was returned",
+      "Source-built acceptance; published install/full-provider/novice acceptance is separate"
+    ]
+  },
+  "sessionProof": {
+    "utc": "2026-10-12T16:44:23.958Z",
+    "sourceRevision": "1f2f5bc5a1cbe6eaec40c785d3fe0767cf2f477f",
+    "rows": [
+      {
+        "workspace": "session-reuse",
+        "parentConversationId": "a24df91f-d2a5-43d9-be26-64f32b4a913b",
+        "visits": [
+          {
+            "toolCallId": "call_c083d445-561a-44b5-af97-13a6bfa0a5c6",
+            "success": true,
+            "childConversationId": "97b7dfdc-f54c-4c15-9112-15f5472778c5"
+          },
+          {
+            "toolCallId": "call_6d4da6b1-450a-46a6-96b7-a6822b7de4ef",
+            "success": true,
+            "childConversationId": "97b7dfdc-f54c-4c15-9112-15f5472778c5"
+          }
+        ],
+        "sameConversation": true
+      },
+      {
+        "workspace": "session-fresh",
+        "parentConversationId": "af933af0-f84a-4f2d-ab3d-295b76f05ebf",
+        "visits": [
+          {
+            "toolCallId": "call_467ad3f8-de53-49cd-88bc-d8857a8660d6",
+            "success": true,
+            "childConversationId": "a3850814-f668-4a7d-b8e6-9b59f20c16f5"
+          },
+          {
+            "toolCallId": "call_8b4688cd-7fed-4d87-8ce3-9c6aef86bc2e",
+            "success": true,
+            "childConversationId": "e3b22128-7369-452a-9bde-a826e270cce0"
+          }
+        ],
+        "sameConversation": false
+      }
+    ],
+    "registry": {
+      "2d51359e-3a03-4331-a8da-a887ad48b06c::e2381efa-66d8-4734-93c6-3f23fda750a5::": {
+        "version": 1,
+        "conversationId": "97b7dfdc-f54c-4c15-9112-15f5472778c5",
+        "nodeId": "e2381efa-66d8-4734-93c6-3f23fda750a5",
+        "visits": 2,
+        "lastUsedAt": 1791823225525,
+        "status": "idle"
+      }
+    },
+    "child": {
+      "id": "97b7dfdc-f54c-4c15-9112-15f5472778c5",
+      "status": "completed",
+      "messageCount": 48,
+      "topLevelUserTurns": 2,
+      "flowId": "cc0e421c-86f6-48af-8927-06ec34d3d87c"
+    }
+  },
+  "cases": [
+    {
+      "workspace": "session-fresh",
+      "parentConversationId": "af933af0-f84a-4f2d-ab3d-295b76f05ebf",
+      "status": "completed",
+      "startedUtc": "2026-10-12T16:35:20.495Z",
+      "finishedUtc": "2026-10-12T16:43:55.835Z",
+      "wallSeconds": 515.339,
+      "verdict": "PASS_WITH_ADVISORIES",
+      "promptTokens": 3161812,
+      "cachedPromptTokens": 2823424,
+      "uncachedPromptTokens": 338388,
+      "completionTokens": 11229,
+      "nativeThreads": [
+        {
+          "threadId": "01a130f8-0b14-7863-98cf-a39ed9229ec8",
+          "startedUtc": "2026-10-12T16:35:25.836Z",
+          "lastUsageUtc": "2026-10-12T16:38:43.649Z",
+          "usage": {
+            "inputTokens": 725141,
+            "outputTokens": 1704,
+            "totalTokens": 726845,
+            "cachedInputTokens": 660864,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130f8-a1a7-76f0-b564-808f7de9de5a",
+          "startedUtc": "2026-10-12T16:36:03.176Z",
+          "lastUsageUtc": "2026-10-12T16:37:00.767Z",
+          "usage": {
+            "inputTokens": 188722,
+            "outputTokens": 1385,
+            "totalTokens": 190107,
+            "cachedInputTokens": 156032,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130f9-b778-7191-a7c6-b286ba0d541c",
+          "startedUtc": "2026-10-12T16:37:14.301Z",
+          "lastUsageUtc": "2026-10-12T16:38:41.715Z",
+          "usage": {
+            "inputTokens": 405190,
+            "outputTokens": 1789,
+            "totalTokens": 406979,
+            "cachedInputTokens": 363520,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fb-5c83-7832-b117-9d2ebc7d0148",
+          "startedUtc": "2026-10-12T16:39:02.099Z",
+          "lastUsageUtc": "2026-10-12T16:39:23.502Z",
+          "usage": {
+            "inputTokens": 87354,
+            "outputTokens": 359,
+            "totalTokens": 87713,
+            "cachedInputTokens": 63232,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fb-e25c-7723-b135-9fc1246a0bca",
+          "startedUtc": "2026-10-12T16:39:36.384Z",
+          "lastUsageUtc": "2026-10-12T16:41:19.461Z",
+          "usage": {
+            "inputTokens": 341238,
+            "outputTokens": 911,
+            "totalTokens": 342149,
+            "cachedInputTokens": 311680,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fc-5d04-7ed2-bed2-2a5661d93519",
+          "startedUtc": "2026-10-12T16:40:07.790Z",
+          "lastUsageUtc": "2026-10-12T16:41:13.107Z",
+          "usage": {
+            "inputTokens": 366404,
+            "outputTokens": 1340,
+            "totalTokens": 367744,
+            "cachedInputTokens": 312448,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fd-a52f-7301-836f-8b787523e3e0",
+          "startedUtc": "2026-10-12T16:41:31.792Z",
+          "lastUsageUtc": "2026-10-12T16:43:53.102Z",
+          "usage": {
+            "inputTokens": 598817,
+            "outputTokens": 1168,
+            "totalTokens": 599985,
+            "cachedInputTokens": 562816,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fe-030b-7b40-b081-e67ca8703a31",
+          "startedUtc": "2026-10-12T16:41:55.826Z",
+          "lastUsageUtc": "2026-10-12T16:43:40.884Z",
+          "usage": {
+            "inputTokens": 448946,
+            "outputTokens": 2573,
+            "totalTokens": 451519,
+            "cachedInputTokens": 392832,
+            "cacheWriteTokens": 0
+          }
+        }
+      ],
+      "media": {
+        "path": "out/flujo-promo-candidate.mp4",
+        "bytes": 6520625,
+        "sha256": "e56fa1c5c4dcb5ad70bb16958b152b98f6bd0c3cbf7827753a52501ee524b7f4"
+      }
+    },
+    {
+      "workspace": "session-reuse",
+      "parentConversationId": "a24df91f-d2a5-43d9-be26-64f32b4a913b",
+      "status": "completed",
+      "startedUtc": "2026-10-12T16:37:10.603Z",
+      "finishedUtc": "2026-10-12T16:45:10.502Z",
+      "wallSeconds": 479.895,
+      "verdict": "PASS_WITH_ADVISORIES",
+      "promptTokens": 2847958,
+      "cachedPromptTokens": 2548864,
+      "uncachedPromptTokens": 299094,
+      "completionTokens": 11025,
+      "nativeThreads": [
+        {
+          "threadId": "01a130f9-ac5c-70a1-a39d-1ef727738539",
+          "startedUtc": "2026-10-12T16:37:13.395Z",
+          "lastUsageUtc": "2026-10-12T16:40:25.557Z",
+          "usage": {
+            "inputTokens": 586824,
+            "outputTokens": 1199,
+            "totalTokens": 588023,
+            "cachedInputTokens": 552704,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fa-32eb-7fd2-ad7d-89a195dec131",
+          "startedUtc": "2026-10-12T16:37:45.905Z",
+          "lastUsageUtc": "2026-10-12T16:39:06.847Z",
+          "usage": {
+            "inputTokens": 259415,
+            "outputTokens": 1747,
+            "totalTokens": 261162,
+            "cachedInputTokens": 224000,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fb-9198-7fc2-aa3f-4aa69f5c8630",
+          "startedUtc": "2026-10-12T16:39:15.687Z",
+          "lastUsageUtc": "2026-10-12T16:40:23.979Z",
+          "usage": {
+            "inputTokens": 327918,
+            "outputTokens": 1501,
+            "totalTokens": 329419,
+            "cachedInputTokens": 287488,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fc-ca80-7a23-9718-25d76fc5a7c1",
+          "startedUtc": "2026-10-12T16:40:35.803Z",
+          "lastUsageUtc": "2026-10-12T16:41:06.595Z",
+          "usage": {
+            "inputTokens": 106359,
+            "outputTokens": 712,
+            "totalTokens": 107071,
+            "cachedInputTokens": 84608,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fd-65b2-7b40-a61c-41265a43d291",
+          "startedUtc": "2026-10-12T16:41:15.527Z",
+          "lastUsageUtc": "2026-10-12T16:42:45.705Z",
+          "usage": {
+            "inputTokens": 446983,
+            "outputTokens": 1092,
+            "totalTokens": 448075,
+            "cachedInputTokens": 415360,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fd-d72e-7491-b285-eed6d81d7800",
+          "startedUtc": "2026-10-12T16:41:44.577Z",
+          "lastUsageUtc": "2026-10-12T16:42:27.125Z",
+          "usage": {
+            "inputTokens": 294852,
+            "outputTokens": 1137,
+            "totalTokens": 295989,
+            "cachedInputTokens": 245120,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130fe-f1ec-75f2-b561-49362e286d04",
+          "startedUtc": "2026-10-12T16:42:56.966Z",
+          "lastUsageUtc": "2026-10-12T16:45:09.132Z",
+          "usage": {
+            "inputTokens": 420679,
+            "outputTokens": 1033,
+            "totalTokens": 421712,
+            "cachedInputTokens": 393984,
+            "cacheWriteTokens": 0
+          }
+        },
+        {
+          "threadId": "01a130ff-43fc-7460-8570-146873e384b9",
+          "startedUtc": "2026-10-12T16:43:17.968Z",
+          "lastUsageUtc": "2026-10-12T16:45:00.633Z",
+          "usage": {
+            "inputTokens": 404928,
+            "outputTokens": 2604,
+            "totalTokens": 407532,
+            "cachedInputTokens": 345600,
+            "cacheWriteTokens": 0
+          }
+        }
+      ],
+      "media": {
+        "path": "out/flujo-promo-candidate.mp4",
+        "bytes": 6520625,
+        "sha256": "e56fa1c5c4dcb5ad70bb16958b152b98f6bd0c3cbf7827753a52501ee524b7f4"
+      }
+    }
+  ],
+  "validation": {
+    "focusedTests": 38,
+    "typecheck": "passed",
+    "lint": "passed",
+    "applicationBuild": "passed",
+    "mcpChecks": "passed; unchanged results reused",
+    "remoteCI": "not dispatched under global pause",
+    "media": "900 frames,1920x1080,30fps,30s,48kHz stereo; unchanged SHA matches full decode proof",
+    "phone": {
+      "width": 390,
+      "height": 844,
+      "horizontalOverflow": false
+    },
+    "uiLimits": [
+      "Local C:/ media links in the FLUJO transcript were blank; a recoverable local deliverable is provided outside the transcript",
+      "MCP Apps sandbox is unavailable in this isolated source-built profile; no published-App acceptance claim"
+    ]
+  }
+}
