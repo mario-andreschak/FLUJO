@@ -7,8 +7,8 @@ Audited FLUJO revision: `a3612f93dcb83ac3d909698bdeae34c26ee31ef8` on `main`. Th
 October 12 reconciliation: the current outer iframe uses `allow-scripts
 allow-same-origin` on a distinct sandbox origin. The inner View receives the
 intersection of requested and owner-granted permissions; CSP continues to restrict
-network/frame/resource domains. Apps1.7.5 speaks the current 2026-01-26 wire protocol;
-Apps2.x is an optional coordinated SDK API migration. Historical automated results
+network/frame/resource domains. The current candidate pins Apps 2.0.3 and uses the 2026-01-26 wire protocol.
+This package version does not replace candidate browser acceptance. Historical automated results
 below are not a current browser/deployment certification. Current consent/origin/CSP/
 teardown browser acceptance remains release pre-flight under #1093.
 
