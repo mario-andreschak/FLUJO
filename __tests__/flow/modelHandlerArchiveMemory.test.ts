@@ -10,6 +10,7 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
+import { cancelAllToolCalls, listInFlightToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
 
 const getModelMock = jest.fn();
 let writeOpenControl: ((handle: FileHandle, file: string) => FileHandle) | undefined;
@@ -116,6 +117,24 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
       provider: 'openai', adapter: 'openai', ApiKey: 'offline-not-a-secret',
       baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
       inputModalities: ['text'], outputModalities: ['text'] });
+  });
+
+  it('refuses an impossible configured context budget before provider I/O', async () => {
+    const configured = await getModelMock();
+    getModelMock.mockResolvedValue({ ...configured, contextWindow: 100000, maxTokens: 100000 });
+    const result = await invoke([message], [message], { maxTokens: 100000 });
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain('leaves no room for input');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('directly cancels an admitted provider call and releases its registered controller', async () => {
+    sdkRequestObserved = () => { expect(cancelAllToolCalls('memory-conversation')).toBe(1); };
+    const result = await invoke([message]);
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain('cancelled');
+    expect(requests).toHaveLength(0);
+    expect(listInFlightToolCalls('memory-conversation')).toHaveLength(0);
   });
 
   afterEach(async () => {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Workspace startup
+
+- Flush runtime lock records before publishing them, report the damaged lock path when owner data is unreadable, and retain the original startup failure for later requests. Preserve the bundled MCP runtime build helper when migrating legacy workspace data.
+
 ### Schedule recovery
 
 - Keep saved schedules and pause status visible when a refresh fails, with a clear retry action. Confirm pause and delete changes before updating the display, recover from lost deletion responses, and release stalled requests after 30 seconds. Improve phone controls and localized recovery messages while retaining the calendar/day entry.
