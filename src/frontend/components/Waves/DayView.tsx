@@ -207,7 +207,7 @@ function AlwaysListeningRow({ items, packageColor, onActivate, t }: AlwaysListen
   return (
     <Box
       sx={{
-        display: 'grid',
+        display: { xs: items.length === 0 ? 'none' : 'grid', sm: 'grid' },
         gridTemplateColumns: { xs: '1fr', sm: '132px minmax(0, 1fr)' },
         gap: 1,
         alignItems: 'center',
