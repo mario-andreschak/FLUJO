@@ -8,6 +8,8 @@ import {
 } from '@/backend/execution/extensions';
 import { modelService } from '@/backend/services/model';
 import type { Model } from '@/shared/types/model';
+import { bindExecutionModelStepOrdinals, takeExecutionModelStepOrdinal } from '@/backend/execution/flow/modelStepOrdinals';
+import type { SharedState } from '@/backend/execution/flow/types';
 import { fixtureAdapter, mintFixture } from './fixtureAdapter';
 
 const mockAdapterCalled = jest.fn((..._args: unknown[]) => { throw new Error('provider adapter must not be selected'); });
@@ -143,4 +145,30 @@ it('does not consume a Process ordinal for an ordinary model', async () => {
   expect(result.success).toBe(false); // The mocked provider adapter is a hard HOLD.
   expect(takeModelStepOrdinal).not.toHaveBeenCalled();
   expect(mockAdapterCalled).toHaveBeenCalledTimes(1);
+});
+
+it('refuses a reusable cursor before owner issuance or provider selection', async () => {
+  const issueModelStep = jest.fn(async () => { throw new Error('owner must not be called'); });
+  const owner = fixtureAdapter({ issueModelStep });
+  restore = registerExecutionExtension(owner);
+  jest.spyOn(modelService, 'getModel').mockResolvedValue(bound);
+  const state = { logicalRunId: 'run-a' } as SharedState;
+  bindExecutionModelStepOrdinals(state, undefined);
+  const get = jest.fn(() => 0);
+  Object.defineProperty(state.executionModelStepOrdinals!.nextByNode, 'process-a', {
+    get, set: () => undefined, enumerable: true,
+  });
+
+  const result = await ModelHandler.callModel({
+    modelId: bound.id, prompt: 'offline fixture',
+    messages: [{ id: 'u', role: 'user', content: 'offline fixture', timestamp: 1 }],
+    iteration: 1, maxIterations: 1, nodeId: 'process-a', nodeName: 'Process',
+    executionExtensionContext: mintFixture(owner),
+    takeModelStepOrdinal: () => takeExecutionModelStepOrdinal(state, 'process-a', 'run-a'),
+  });
+
+  expect(result.success).toBe(false);
+  expect(get).not.toHaveBeenCalled();
+  expect(issueModelStep).not.toHaveBeenCalled();
+  expect(mockAdapterCalled).not.toHaveBeenCalled();
 });

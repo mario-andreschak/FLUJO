@@ -1,3 +1,4 @@
+import { types } from 'node:util';
 import {
   assertExecutionModelStepNodeId,
   ExecutionExtensionError,
@@ -13,26 +14,41 @@ function requireRunId(value: unknown): string {
 }
 
 function checkedOrdinals(state: SharedState, runId: string): NonNullable<SharedState['executionModelStepOrdinals']> {
-  const record = state.executionModelStepOrdinals;
-  const nextByNode = record?.nextByNode;
-  if (!record || typeof record !== 'object' || Array.isArray(record) ||
-      ![Object.prototype, null].includes(Object.getPrototypeOf(record)) ||
-      record.logicalRunId !== runId || !nextByNode ||
-      typeof nextByNode !== 'object' || Array.isArray(nextByNode) ||
-      ![Object.prototype, null].includes(Object.getPrototypeOf(nextByNode))) {
+  const recordProperty = Object.getOwnPropertyDescriptor(state, 'executionModelStepOrdinals');
+  const record = recordProperty && Object.hasOwn(recordProperty, 'value') && recordProperty.enumerable
+    ? recordProperty.value : undefined;
+  if (!isPlainRecord(record)) {
     throw new ExecutionExtensionError('execution_model_step_run_state_invalid');
   }
-  for (const [nodeId, next] of Object.entries(nextByNode)) {
+  const fields = Object.getOwnPropertyDescriptors(record);
+  if (Reflect.ownKeys(fields).length !== 2 || !['logicalRunId', 'nextByNode'].every(key =>
+      Object.hasOwn(fields, key) && Object.hasOwn(fields[key], 'value') && fields[key].enumerable)
+      || fields.logicalRunId.value !== runId || !isPlainRecord(fields.nextByNode.value)) {
+    throw new ExecutionExtensionError('execution_model_step_run_state_invalid');
+  }
+  // A getter or proxy can ignore the reservation and return the same ordinal
+  // twice. Hidden keys disappear from JSON snapshots and replay after resume.
+  // Inspect data descriptors before reading or mutating any cursor.
+  const cursors = Object.getOwnPropertyDescriptors(fields.nextByNode.value);
+  for (const nodeId of Reflect.ownKeys(cursors)) {
     try {
       assertExecutionModelStepNodeId(nodeId);
     } catch {
       throw new ExecutionExtensionError('execution_model_step_run_state_invalid');
     }
-    if (!Number.isSafeInteger(next) || next < 0 || next > MAX_EXECUTION_MODEL_STEP_ORDINAL + 1) {
+    const cursor = cursors[nodeId];
+    const next = cursor.value;
+    if (!Object.hasOwn(cursor, 'value') || !cursor.enumerable || !cursor.writable ||
+        !Number.isSafeInteger(next) || next < 0 || next > MAX_EXECUTION_MODEL_STEP_ORDINAL + 1) {
       throw new ExecutionExtensionError('execution_model_step_run_state_invalid');
     }
   }
-  return record;
+  return record as NonNullable<SharedState['executionModelStepOrdinals']>;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !types.isProxy(value) &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
 /** Bind a durable counter to the logical run. A same-id resume must bring its
