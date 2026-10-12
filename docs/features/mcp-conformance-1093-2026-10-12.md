@@ -3,7 +3,7 @@
 Scope: existing [#1093](https://github.com/mario-andreschak/FLUJO/issues/1093) and
 [#1050](https://github.com/mario-andreschak/FLUJO/issues/1050). Base faaf86c54cc1bec42d8b614f886e7c4a6a6b242b,
 FLUJO 3.46.3, Windows x64, Node 22.23.3, SDK 1.32.1 / split SDK 2.3.1,
-Tasks 0.2.2 / Apps 1.7.5. No dependency or protocol-wire upgrade is part of this batch.
+Tasks 0.2.2 / Apps 2.0.3. No dependency or protocol-wire upgrade is part of this batch.
 Local command results and exact candidate revision are recorded in the delivery PR
 and lane08 handover. Source/fixture evidence is distinct from release qualification.
 
@@ -32,7 +32,7 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 | Flows ingress | Legacy synchronous route; strict modern HTTP when protocol-beta or Tasks serving is enabled | Modern routing headers are mandatory. Core serving does not require optional Tasks. Explicit owner bearer/workspace admission and per-task policy remain. |
 | Per-server proxy | Legacy sessionless HTTP | Tools/resources/templates/Apps/Skills forwarding, complete default inventories and explicit catalog cursors. No advertised modern/Tasks serving; no blanket modern conformance. |
 | Skills | Final SEP-2640 transport shapes under local opt-in, both client generations | Direct URI retrieval, SHA256/frontmatter verification, 512 files/16MiB, scoped consent retained. Dynamic skills and unsupported URI shapes remain explicit host restrictions. Nested supporting files do not inherit activation authority. |
-| Apps | 2026-01-26 wire on Apps 1.7.5 | Outer separate-origin iframe has `allow-scripts allow-same-origin`; inner permissions/CSP remain consented. Apps 2.x API migration is deferred optional maintenance. |
+| Apps | 2026-01-26 wire on Apps 2.0.3 | Outer separate-origin iframe has `allow-scripts allow-same-origin`; inner permissions/CSP remain consented. The SDK version alone does not qualify the integrated browser journey; candidate browser acceptance remains release pre-flight. |
 
 ## Remaining release acceptance
 
