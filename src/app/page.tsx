@@ -364,8 +364,7 @@ export default function HomePage() {
         <Box component="section" sx={{ pt: { xs: 5, md: 7 }, pb: { xs: 4, md: 5 } }}>
           <Stack
             direction={{ xs: 'column', md: 'row' }}
-            justifyContent="space-between"
-            alignItems={{ xs: 'flex-start', md: 'flex-end' }}
+            sx={{ justifyContent: "space-between", alignItems: { xs: 'flex-start', md: 'flex-end' } }}
             spacing={2.5}
           >
             <Box sx={{ maxWidth: 760 }}>
@@ -377,7 +376,7 @@ export default function HomePage() {
                 {t('home.intro')}
               </Typography>
             </Box>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: "stretch" }}>
               <Button variant="outlined" onClick={startTour} disabled={!canStartTour} startIcon={<AutoAwesomeRounded />}>
                 {t('home.openGuide')}
               </Button>
@@ -438,7 +437,7 @@ export default function HomePage() {
                   },
                 }}
               >
-                <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }} spacing={1}>
                   <Box
                     sx={{
                       display: 'grid',
@@ -452,7 +451,7 @@ export default function HomePage() {
                   >
                     <Icon />
                   </Box>
-                  <Stack direction="row" alignItems="center" spacing={0.5}>
+                  <Stack direction="row" sx={{ alignItems: "center" }} spacing={0.5}>
                     <Chip
                       size="small"
                       color={highlighted ? 'primary' : 'default'}
@@ -547,12 +546,12 @@ export default function HomePage() {
             <HubRounded />
           </Box>
           <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle1" fontWeight={760}>{t('home.apps.title')}</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 760 }}>{t('home.apps.title')}</Typography>
             <Typography variant="body2" color="text.secondary">
               {t('home.apps.description')}
             </Typography>
           </Box>
-          <Stack direction="row" alignItems="center" spacing={0.5}>
+          <Stack direction="row" sx={{ alignItems: "center" }} spacing={0.5}>
             <Button component={Link} href="/mcp" variant="text" endIcon={<ArrowForwardRounded />}>
               {t('nav.connectedApps')}
             </Button>
@@ -575,15 +574,15 @@ export default function HomePage() {
           spacing={{ xs: 1, sm: 3 }}
           sx={{ mt: 3.5, color: 'text.secondary' }}
         >
-          <Stack direction="row" spacing={0.8} alignItems="center">
+          <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
             <LockRounded sx={{ fontSize: 17, color: 'primary.main' }} />
             <Typography variant="caption">{t('home.trait.private')}</Typography>
           </Stack>
-          <Stack direction="row" spacing={0.8} alignItems="center">
+          <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
             <AccountTreeRounded sx={{ fontSize: 17, color: 'primary.main' }} />
             <Typography variant="caption">{t('home.trait.simple')}</Typography>
           </Stack>
-          <Stack direction="row" spacing={0.8} alignItems="center">
+          <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
             <ShieldRounded sx={{ fontSize: 17, color: 'primary.main' }} />
             <Typography variant="caption">{t('home.trait.expert')}</Typography>
           </Stack>

@@ -55,7 +55,7 @@ export default function FactoryObservatoryPanel() {
 
   return (
     <Paper variant="outlined" data-testid="factory-observatory" sx={{ flex: 1, minHeight: 0, overflow: 'auto', borderRadius: 4, p: 2 }}>
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" mb={1}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", mb: 1 }}>
         <Typography variant="h6">FACTORY swarm</Typography>
         {snapshot && <Chip size="small" label={snapshot.factoryId} />}
         {snapshot && <Chip size="small" color={snapshot.status === 'paused' ? 'warning' : 'success'} label={snapshot.status} />}
@@ -66,17 +66,17 @@ export default function FactoryObservatoryPanel() {
       {!snapshot && !error && <Typography color="text.secondary">Connecting to FACTORY…</Typography>}
       {snapshot && (
         <>
-          <Typography variant="body2" color="text.secondary" mb={1}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             {snapshot.mission} · {snapshot.cells.length} {snapshot.cells.length === 1 ? 'cell' : 'cells'} · {snapshot.tasks.length} {snapshot.tasks.length === 1 ? 'task' : 'tasks'} · {snapshot.unresolvedEffects} unresolved effects
           </Typography>
-          <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
             Observed {new Date(snapshot.observedAt).toLocaleString()} · revision {snapshot.revision} · read only
           </Typography>
           <Stack spacing={0.75}>
             {cells.map((cell) => (
               <Paper key={cell.id} variant="outlined" sx={{ ml: Math.min(cell.depth, 12) * 2, px: 1.5, py: 0.75 }}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                  <Typography variant="body2" fontWeight={700}>{cell.id}</Typography>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{cell.id}</Typography>
                   <Chip size="small" variant="outlined" label={cell.role} />
                   <Chip size="small" color={cell.status === 'ready' ? 'success' : 'default'} label={cell.status} />
                   {(taskCounts.get(cell.id) ?? 0) > 0 && <Chip size="small" label={`${taskCounts.get(cell.id)} ${taskCounts.get(cell.id) === 1 ? 'task' : 'tasks'}`} />}

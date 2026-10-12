@@ -137,11 +137,11 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
             type="number"
             label={property.label}
             value={typeof value === 'number' || typeof value === 'string' ? value : ''}
-            inputProps={{
+            slotProps={{ htmlInput: {
               min: property.min,
               max: property.max,
               step: property.step,
-            }}
+            } }}
             onChange={(e) => handlePropertyChange(property.key, Number(e.target.value))}
             margin="normal"
           />
@@ -193,14 +193,14 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
       onClose={onClose}
       maxWidth="xl"
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: { 
           borderTop: 5, 
           borderColor: 'primary.main',
           height: '90vh',
           maxHeight: '90vh'
         }
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={`${nodeData.label || `${nodeTypeLabel} Node`} Properties`}

@@ -360,7 +360,7 @@ export default function McpConnectionWizard({
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('mcp.wizard.progressAria')} />
             </Box>
-            <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
               <AskFlujoButton />
               <BugReportButton variant="icon" />
               <IconButton onClick={close} disabled={installing} aria-label={t('mcp.modal.close')}>

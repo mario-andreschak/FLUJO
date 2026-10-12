@@ -1,0 +1,70 @@
+{
+  "sourceTree": "149a776fe22895b856e05c0b27035f71ee1109a7",
+  "runtimeTree": "7272bc39bb7123e5fef7bbce8f21ecd9505ccb1e",
+  "baseMain": "0be39bc96bbe65cdc10c0ac6274489ee5d123ee3",
+  "buildId": "JFwsulG2ngx9uwvba1_Xk",
+  "typecheck": {
+    "passed": true,
+    "seconds": 12.9631666
+  },
+  "lint": {
+    "passed": true,
+    "seconds": 98.7493211
+  },
+  "applicationBuild": {
+    "passed": true,
+    "seconds": 306.9317623,
+    "container": false
+  },
+  "focused": {
+    "passed": true,
+    "suites": 6,
+    "tests": 59,
+    "cliTests": 11,
+    "seconds": 9.1189519
+  },
+  "browser": {
+    "method": "CUA on actual production app",
+    "desktop": "1280x720",
+    "phone": "390x844",
+    "passed": [
+      "fresh empty allowance state",
+      "real native discovery and seven-model guided save",
+      "immediate shared account meter without reload",
+      "keyboard details expansion",
+      "relative observation/reset labels",
+      "live refresh loading/completion on desktop",
+      "phone keyboard collapse and pointer expansion",
+      "accessible icon refresh loading/completion on phone",
+      "consistent overview and seven card readings",
+      "no horizontal overflow at both widths"
+    ],
+    "fixtures": "No provider or catalogue fixtures were used in successful CUA acceptance",
+    "screenshots": "Private account screenshots retained locally; no percentages or account identity committed"
+  },
+  "providers": {
+    "codex": {
+      "passed": true,
+      "source": "codex-app-server",
+      "windows": 1,
+      "seconds": 5.18,
+      "inference": false
+    },
+    "claude": {
+      "passed": false,
+      "lastRecordedAt": "2026-10-12T14:49:07.027Z",
+      "reason": "usage-permission",
+      "probeRepeated": false,
+      "acceptance": "Live percentage requires a valid usage-enabled credential for the selected subscription"
+    }
+  },
+  "regressions": {
+    "firstConnection": "Two cases failed before repair, passed after",
+    "bundleCollection": "Failed before repair, passed after; original collection remains active",
+    "preservedAssertions": "Numeric window and shared-model count verified"
+  },
+  "independentReview": "No concrete remaining defect in candidate149a776f",
+  "remoteCI": "Paused; no dispatch, rerun, container build or release check",
+  "timings": "Measured separately; overlapping work is not summed",
+  "recordedAt": "2026-10-12T20:04:48.7156005Z"
+}

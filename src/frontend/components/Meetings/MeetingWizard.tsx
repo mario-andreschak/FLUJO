@@ -425,20 +425,20 @@ export default function MeetingWizard({
       fullScreen={fullScreen}
       fullWidth
       maxWidth="md"
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           minHeight: { sm: 680 },
           overflow: 'hidden',
           border: { sm: `1px solid ${alpha(theme.palette.primary.main, 0.2)}` },
           backgroundImage: `linear-gradient(145deg, ${alpha(theme.palette.primary.main, 0.045)}, transparent 34%)`,
         },
-      }}
+      } }}
     >
       <DialogHeaderActions
         onClose={handleClose}
         showAskFlujo={false}
         showBugReport={false}
-        title={<Stack direction="row" alignItems="center" spacing={1.4}><Avatar sx={{ width: 42, height: 42, bgcolor: alpha(theme.palette.primary.main, 0.14), color: 'primary.light' }}><GroupsRounded /></Avatar><Box><Typography variant="overline" color="primary.light" sx={{ letterSpacing: '0.12em' }}>{initialInput?.parentMeetingId ? t('meetings.followup') : t('meetings.experimental')}</Typography><Typography variant="h6" component="div" sx={{ fontWeight: 750 }}>{t('meetings.wizard.title')}</Typography></Box></Stack>}
+        title={<Stack direction="row" sx={{ alignItems: "center" }} spacing={1.4}><Avatar sx={{ width: 42, height: 42, bgcolor: alpha(theme.palette.primary.main, 0.14), color: 'primary.light' }}><GroupsRounded /></Avatar><Box><Typography variant="overline" color="primary.light" sx={{ letterSpacing: '0.12em' }}>{initialInput?.parentMeetingId ? t('meetings.followup') : t('meetings.experimental')}</Typography><Typography variant="h6" component="div" sx={{ fontWeight: 750 }}>{t('meetings.wizard.title')}</Typography></Box></Stack>}
       />
 
       <Box sx={{ px: { xs: 2, sm: 3 }, pb: 2 }}>
@@ -464,7 +464,7 @@ export default function MeetingWizard({
         {step === 0 && (
           <Stack spacing={2.6} sx={{ maxWidth: 680, mx: 'auto' }}>
             <Paper variant="outlined" sx={{ p: 2.25, background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.1)}, ${alpha(theme.palette.secondary.main, 0.04)})` }}>
-              <Stack direction="row" spacing={1.5} alignItems="flex-start">
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
                 <Avatar sx={{ bgcolor: 'primary.main' }}><AutoAwesomeRounded /></Avatar>
                 <Box>
               <Typography variant="h5" sx={{ fontWeight: 760, letterSpacing: '-0.025em' }}>
@@ -483,7 +483,7 @@ export default function MeetingWizard({
               placeholder={t('meetings.topic.namePlaceholder')}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              inputProps={{ maxLength: 120 }}
+              slotProps={{ htmlInput: { maxLength: 120 } }}
               helperText={title.length > 0 && title.trim().length < 3 ? t('meetings.topic.nameHelp') : ' '}
             />
             <TextField
@@ -494,7 +494,7 @@ export default function MeetingWizard({
               placeholder={t('meetings.topic.promptPlaceholder')}
               value={openingPrompt}
               onChange={(event) => setOpeningPrompt(event.target.value)}
-              inputProps={{ maxLength: 12_000 }}
+              slotProps={{ htmlInput: { maxLength: 12_000 } }}
               helperText={t('meetings.topic.promptHelp')}
             />
             <Box>
@@ -504,7 +504,7 @@ export default function MeetingWizard({
               </Button>
               <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{t('meetings.attachments.help')}</Typography>
               {openingMedia.length > 0 && (
-                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
                   {openingMedia.map((part, index) => (
                     <Chip key={`${part.name}-${index}`} icon={<DescriptionRounded />} label={part.name ?? t('meetings.attachments.file')} onDelete={() => setOpeningMedia((current) => current.filter((_, itemIndex) => itemIndex !== index))} />
                   ))}
@@ -527,7 +527,7 @@ export default function MeetingWizard({
         {step === 1 && (
           <Stack spacing={2.4}>
             <Box>
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                 <Typography variant="h5" sx={{ fontWeight: 760, letterSpacing: '-0.025em' }}>
                   {t('meetings.participants.title')}
                 </Typography>
@@ -555,8 +555,8 @@ export default function MeetingWizard({
                     control={<Radio />}
                     label={(
                       <Box sx={{ py: 0.5 }}>
-                        <Stack direction="row" spacing={0.75} alignItems="center">
-                          <Typography fontWeight={700}>{t('meetings.participants.source.persona')}</Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                          <Typography sx={{ fontWeight: 700 }}>{t('meetings.participants.source.persona')}</Typography>
                           <Chip size="small" color="primary" label={t('meetings.participants.source.recommended')} />
                         </Stack>
                         <Typography variant="caption" color="text.secondary">
@@ -570,8 +570,8 @@ export default function MeetingWizard({
                     control={<Radio />}
                     label={(
                       <Box sx={{ py: 0.5 }}>
-                        <Typography fontWeight={700}>{t('meetings.participants.source.flow')}</Typography>
-                        <Typography variant="caption" color="text.secondary" display="block">
+                        <Typography sx={{ fontWeight: 700 }}>{t('meetings.participants.source.flow')}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                           {t('meetings.participants.source.flowHelp')}
                         </Typography>
                       </Box>
@@ -583,7 +583,7 @@ export default function MeetingWizard({
 
             {participantSource === 'persona' ? (
               personasLoading ? (
-                <Stack alignItems="center" spacing={1.5} sx={{ py: 8 }}>
+                <Stack spacing={1.5} sx={{ alignItems: "center",  py: 8 }}>
                   <CircularProgress size={30} />
                   <Typography color="text.secondary">{t('meetings.participants.personasLoading')}</Typography>
                 </Stack>
@@ -623,13 +623,13 @@ export default function MeetingWizard({
                               bgcolor: selected ? alpha(theme.palette.primary.main, 0.07) : undefined,
                             }}
                           >
-                            <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                            <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
                               <Avatar src={persona.presentation?.avatarUrl} alt={persona.name}>
                                 {persona.name.slice(0, 2).toUpperCase()}
                               </Avatar>
                               <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-                                  <Typography fontWeight={750}>{persona.name}</Typography>
+                                <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
+                                  <Typography sx={{ fontWeight: 750 }}>{persona.name}</Typography>
                                   <Chip size="small" label={t('meetings.participants.persona')} />
                                   {unavailable && (
                                     <Chip size="small" color="warning" label={t('meetings.participants.personaUnavailable')} />
@@ -650,7 +650,7 @@ export default function MeetingWizard({
                 </Box>
               )
             ) : flowsLoading ? (
-              <Stack alignItems="center" spacing={1.5} sx={{ py: 8 }}>
+              <Stack spacing={1.5} sx={{ alignItems: "center",  py: 8 }}>
                 <CircularProgress size={30} />
                 <Typography color="text.secondary">{t('meetings.participants.flowsLoading')}</Typography>
               </Stack>
@@ -708,7 +708,7 @@ export default function MeetingWizard({
                       : undefined;
                     return (
                       <Paper key={participant.id} variant="outlined" sx={{ p: 1.25 }}>
-                        <Stack direction="row" spacing={1.2} alignItems="flex-start">
+                        <Stack direction="row" spacing={1.2} sx={{ alignItems: "flex-start" }}>
                           <Avatar sx={{ width: 34, height: 34, fontSize: '0.85rem', bgcolor: 'primary.dark' }}>
                             {index + 1}
                           </Avatar>
@@ -727,7 +727,7 @@ export default function MeetingWizard({
                               )))}
                             />
                             {participant.personaId && skills?.loading && (
-                              <Stack direction="row" spacing={1} alignItems="center">
+                              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                                 <CircularProgress size={16} />
                                 <Typography variant="body2" color="text.secondary">
                                   {t('meetings.participants.behaviorLoading')}
@@ -839,7 +839,7 @@ export default function MeetingWizard({
                     >
                       <Stack spacing={1}>
                         <Icon color={selected ? 'primary' : 'action'} />
-                        <Typography fontWeight={720}>{t(`meetings.facilitation.mode.${mode}`)}</Typography>
+                        <Typography sx={{ fontWeight: 720 }}>{t(`meetings.facilitation.mode.${mode}`)}</Typography>
                         <Typography variant="body2" color="text.secondary">
                           {t(`meetings.facilitation.mode.${mode}Help`)}
                         </Typography>
@@ -869,9 +869,9 @@ export default function MeetingWizard({
             <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
               <Stack spacing={3}>
                 <Box>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
                     <Box>
-                      <Typography fontWeight={700}>{t('meetings.facilitation.rounds')}</Typography>
+                      <Typography sx={{ fontWeight: 700 }}>{t('meetings.facilitation.rounds')}</Typography>
                       <Typography variant="body2" color="text.secondary">{t('meetings.facilitation.roundsHelp')}</Typography>
                     </Box>
                     <Chip label={t('meetings.facilitation.roundCount', { count: maxRounds })} color="primary" variant="outlined" />
@@ -880,9 +880,9 @@ export default function MeetingWizard({
                 </Box>
                 <Divider />
                 <Box>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
                     <Box>
-                      <Typography fontWeight={700}>{t('meetings.facilitation.concurrency')}</Typography>
+                      <Typography sx={{ fontWeight: 700 }}>{t('meetings.facilitation.concurrency')}</Typography>
                       <Typography variant="body2" color="text.secondary">{t('meetings.facilitation.concurrencyHelp')}</Typography>
                     </Box>
                     <Chip label={concurrencyLimit} variant="outlined" />
@@ -900,14 +900,14 @@ export default function MeetingWizard({
 
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
               <FormControl>
-                <FormLabel><Stack direction="row" spacing={0.7} alignItems="center"><HowToVoteRounded fontSize="small" /><span>{t('meetings.facilitation.finishRule')}</span></Stack></FormLabel>
+                <FormLabel><Stack direction="row" spacing={0.7} sx={{ alignItems: "center" }}><HowToVoteRounded fontSize="small" /><span>{t('meetings.facilitation.finishRule')}</span></Stack></FormLabel>
                 <RadioGroup value={finishThreshold} onChange={(event) => setFinishThreshold(event.target.value as MeetingPolicy['finishThreshold'])}>
                   <FormControlLabel value="majority" control={<Radio />} label={t('meetings.facilitation.majority')} />
                   <FormControlLabel value="unanimous" control={<Radio />} label={t('meetings.facilitation.unanimous')} />
                 </RadioGroup>
               </FormControl>
               <FormControl>
-                <FormLabel><Stack direction="row" spacing={0.7} alignItems="center"><ShieldRounded fontSize="small" /><span>{t('meetings.facilitation.errors')}</span></Stack></FormLabel>
+                <FormLabel><Stack direction="row" spacing={0.7} sx={{ alignItems: "center" }}><ShieldRounded fontSize="small" /><span>{t('meetings.facilitation.errors')}</span></Stack></FormLabel>
                 <RadioGroup value={errorStrategy} onChange={(event) => setErrorStrategy(event.target.value as MeetingPolicy['errorStrategy'])}>
                   <FormControlLabel value="collect-all" control={<Radio />} label={t('meetings.facilitation.keepGoing')} />
                   <FormControlLabel value="fail-fast" control={<Radio />} label={t('meetings.facilitation.stopOnError')} />
@@ -929,17 +929,17 @@ export default function MeetingWizard({
               <Typography variant="overline" color="primary.light">{t('meetings.review.topic')}</Typography>
               <Typography variant="h6" sx={{ fontWeight: 740 }}>{title}</Typography>
               <Typography sx={{ mt: 1, whiteSpace: 'pre-wrap' }} color="text.secondary">{openingPrompt}</Typography>
-              {openingMedia.length > 0 && <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>{openingMedia.map((part, index) => <Chip key={`${part.name}-${index}`} size="small" icon={<DescriptionRounded />} label={part.name ?? t('meetings.attachments.file')} />)}</Stack>}
+              {openingMedia.length > 0 && <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap",  mt: 1.5 }}>{openingMedia.map((part, index) => <Chip key={`${part.name}-${index}`} size="small" icon={<DescriptionRounded />} label={part.name ?? t('meetings.attachments.file')} />)}</Stack>}
             </Paper>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
               <Paper variant="outlined" sx={{ p: 2 }}>
                 <Typography variant="overline" color="text.secondary">{t('meetings.review.team')}</Typography>
                 <Stack spacing={1} sx={{ mt: 0.5 }}>
                   {participants.map((participant) => (
-                    <Stack key={participant.id} direction="row" spacing={1} alignItems="center">
+                    <Stack key={participant.id} direction="row" spacing={1} sx={{ alignItems: "center" }}>
                       <Avatar sx={{ width: 30, height: 30, fontSize: '0.75rem' }}>{participant.name.slice(0, 2).toUpperCase()}</Avatar>
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" fontWeight={700} noWrap>{participant.name}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>{participant.name}</Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
                           {participant.sourceName} · {meetingParticipantSourceLabel(participant, t)}
                         </Typography>

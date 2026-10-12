@@ -367,7 +367,7 @@ async function GET_handler(request: NextRequest) {
       }
     }
 
-    const conversationPromises = jsonFiles.map(async (file): Promise<ConversationListItem | null> => {
+    const readConversation = async (file: string): Promise<ConversationListItem | null> => {
       const filePath = path.join(conversationsDir, file);
       const conversationIdFromFile = file.replace('.json', ''); // Extract ID from filename
 
@@ -545,9 +545,16 @@ async function GET_handler(request: NextRequest) {
            return null; // Skip this file entirely if stats fail too
         }
       }
-    });
+    };
 
-    const results = await Promise.all(conversationPromises);
+    const results: Array<ConversationListItem | null> = Array(jsonFiles.length).fill(null);
+    let nextFile = 0;
+    await Promise.all(Array.from({ length: Math.min(CONVERSATION_LOG_READ_CONCURRENCY, jsonFiles.length) }, async () => {
+      while (nextFile < jsonFiles.length && !request.signal.aborted) {
+        const index = nextFile++;
+        results[index] = await readConversation(jsonFiles[index]);
+      }
+    }));
     // Drop cache entries for files that no longer exist (deleted conversations).
     const workspacePrefix = `${listSummaryCachePrefix()}\0`;
     const workspaceCacheEntries = Array.from(listSummaryCache.keys())

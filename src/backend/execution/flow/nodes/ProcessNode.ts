@@ -202,7 +202,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
         handoffTools.push(
-          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory),
+          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory, subflowToolProps?.sessionScope),
         );
         log.debug('Created subflow tool-invocation tool', { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
       }

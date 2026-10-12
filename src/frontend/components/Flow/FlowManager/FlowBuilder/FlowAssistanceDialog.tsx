@@ -474,14 +474,14 @@ export default function FlowAssistanceDialog({
                 ? t('flows.assistance.improvePromptTitle')
                 : t('flows.assistance.toolsTitle')}
         </Box>
-        <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
           <AskFlujoButton />
           <BugReportButton variant="icon" />
         </Box>
       </DialogTitle>
       <DialogContent dividers>
         {busy && (
-          <Stack alignItems="center" spacing={1.5} sx={{ py: 5 }}>
+          <Stack spacing={1.5} sx={{ alignItems: "center",  py: 5 }}>
             <CircularProgress />
             <Typography color="text.secondary">
               {stage === 'suggesting'
@@ -544,9 +544,9 @@ export default function FlowAssistanceDialog({
                     }} />}
                     label={
                       <Box>
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                           <Chip size="small" label={item.server} />
-                          <Typography fontWeight={800}>{item.tool}</Typography>
+                          <Typography sx={{ fontWeight: 800 }}>{item.tool}</Typography>
                         </Stack>
                         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{item.reason}</Typography>
                       </Box>
@@ -603,7 +603,7 @@ export default function FlowAssistanceDialog({
                       }
                     }}
                   />
-                  <Stack direction="row" justifyContent="flex-end">
+                  <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
                     <Button
                       variant="contained"
                       startIcon={<AutoAwesomeRoundedIcon />}
@@ -638,9 +638,9 @@ export default function FlowAssistanceDialog({
                   }} />}
                   label={
                     <Box>
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                         <AccountTreeOutlinedIcon color="primary" fontSize="small" />
-                        <Typography fontWeight={800}>{item.flowName}</Typography>
+                        <Typography sx={{ fontWeight: 800 }}>{item.flowName}</Typography>
                       </Stack>
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{item.reason}</Typography>
                     </Box>
@@ -653,7 +653,7 @@ export default function FlowAssistanceDialog({
 
         {stage === 'plausibility' && plausibility && (
           <Stack spacing={1.5}>
-            <Stack direction="row" gap={1} flexWrap="wrap">
+            <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
               {plausibility.contexts.map((context) => <Chip key={`${context.kind}-${context.sourceId ?? ''}`} label={context.label} />)}
             </Stack>
             {plausibility.issues.length === 0 ? (
@@ -694,7 +694,7 @@ export default function FlowAssistanceDialog({
                           checked={selectedIssueKeys.has(entry.key)}
                           disabled={!entry.selectable}
                           title={!entry.selectable ? t('flows.assistance.cannotFix') : undefined}
-                          inputProps={{ 'aria-label': t('flows.assistance.selectIssue', { issue: message }) }}
+                          slotProps={{ input: { 'aria-label': t('flows.assistance.selectIssue', { issue: message }) } }}
                           onChange={(event) => {
                             setSelectedIssueKeys((current) => {
                               const next = new Set(current);

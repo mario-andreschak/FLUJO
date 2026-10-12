@@ -158,7 +158,7 @@ const SchedulePanel = ({
             type="number"
             value={n}
             onChange={(e) => setN(Number(e.target.value))}
-            inputProps={{ min: 1, max: mode === 'hours' ? 23 : 59 }}
+            slotProps={{ htmlInput: { min: 1, max: mode === 'hours' ? 23 : 59 } }}
             sx={{ width: { xs: '100%', sm: 120 } }}
           />
         )}
@@ -170,7 +170,7 @@ const SchedulePanel = ({
             value={time}
             onChange={(e) => setTime(e.target.value)}
             sx={{ width: { xs: '100%', sm: 150 } }}
-            InputLabelProps={{ shrink: true }}
+            slotProps={{ inputLabel: { shrink: true } }}
           />
         )}
 
@@ -247,7 +247,7 @@ const SchedulePanel = ({
             <TextField
               label={t('automations.schedule.generatedCron')}
               value={cron}
-              InputProps={{ readOnly: mode !== 'custom' }}
+              slotProps={{ input: { readOnly: mode !== 'custom' } }}
               onChange={(e) => {
                 setMode('custom');
                 setCustomCron(e.target.value);

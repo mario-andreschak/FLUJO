@@ -62,7 +62,7 @@ export default function ToolParameterPresetsEditor({
 
   return (
     <Box>
-      <Typography variant="subtitle1" component="h3" fontWeight={700}>{title ?? t('mcp.presets.title')}</Typography>
+      <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 700 }}>{title ?? t('mcp.presets.title')}</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
         {description ?? t('mcp.presets.description')}
       </Typography>
@@ -102,7 +102,7 @@ export default function ToolParameterPresetsEditor({
                         control={<Checkbox checked={enabled} onChange={(event) => setParameter(tool.name, parameter, '', event.target.checked)} />}
                         label={(
                           <Box>
-                            <Typography variant="body2" fontFamily="monospace">{parameter}</Typography>
+                            <Typography variant="body2" sx={{ fontFamily: "monospace" }}>{parameter}</Typography>
                             <Typography variant="caption" color="text.secondary">{schemaType}</Typography>
                           </Box>
                         )}

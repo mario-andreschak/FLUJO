@@ -111,7 +111,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
       maxWidth="xl"
       fullWidth
       fullScreen={isPhoneLayout}
-      PaperProps={{
+      slotProps={{ paper: {
         // The desktop sizing must not fight `fullScreen`, so it is only applied
         // above the phone breakpoint.
         sx: isPhoneLayout
@@ -128,7 +128,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               maxHeight: '95vh',
               height: 'auto',
             }
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={initialConfig

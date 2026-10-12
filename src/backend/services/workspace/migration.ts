@@ -36,6 +36,7 @@ const TRANSACTIONS_DIR = '.workspace-migrations';
 const APP_OWNED_MCP_ENTRIES = new Set([
   'readme.md',
   'embed-shared.mjs',
+  'embed-runtime.mjs',
   'bash',
   'browser',
   'filesystem',

@@ -197,7 +197,7 @@ export default function PersonaDetailShell({
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={2.5}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
+          sx={{ alignItems: { xs: 'flex-start', sm: 'center' } }}
         >
           <Avatar
             src={detail.persona.presentation?.avatarUrl}
@@ -213,20 +213,18 @@ export default function PersonaDetailShell({
           >
             {detail.persona.name.slice(0, 2).toUpperCase()}
           </Avatar>
-          <Box flex={1} minWidth={0} sx={{ maxWidth: '100%' }}>
+          <Box sx={{ flex: 1, minWidth: 0,  maxWidth: '100%' }}>
             <PersonaStatusUpdates
               persona={detail.persona}
               tasks={detail.presentation.tasks}
               workItems={detail.workItems}
               lifecycleLabel={lifecycleLabel}
             />
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
               <Typography
                 variant="h3"
                 component="h1"
-                fontWeight={790}
-                letterSpacing="-0.045em"
-                sx={{ maxWidth: '100%' }}
+                sx={{ fontWeight: 790, letterSpacing: "-0.045em",  maxWidth: '100%' }}
               >
                 {detail.persona.name}
               </Typography>
@@ -235,7 +233,7 @@ export default function PersonaDetailShell({
                 label={lifecycleLabel}
               />
             </Stack>
-            <Typography color="text.secondary" fontWeight={650}>
+            <Typography color="text.secondary" sx={{ fontWeight: 650 }}>
               {t('personas.role', {
                 role: detail.roleVersion.name,
                 version: detail.roleVersion.version,

@@ -180,6 +180,19 @@ describe('MCPService restart-loop protection', () => {
       .toMatchObject({ status: 'requires_approval', errorCode: 'HOST_CONSENT_REQUIRED' });
   });
 
+  it('stops reconnect timers and exposes approval failures as user action', async () => {
+    await service.connectServer('srv');
+    transports[0].onclose?.();
+    mockCreateTransport.mockImplementation(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
+    await jest.advanceTimersByTimeAsync(5000);
+    const attempts = mockCreateTransport.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(300000);
+    expect(mockCreateTransport).toHaveBeenCalledTimes(attempts);
+    expect(await service.getServerStatus('srv')).toMatchObject({
+      status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED',
+    });
+  });
+
   it('ignores a late close event from a replaced (zombie) transport', async () => {
     // Connect, then force a recreate so transport[0] becomes a "zombie" replaced by [1].
     await service.connectServer('srv');

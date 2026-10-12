@@ -243,13 +243,13 @@ export default function Docs() {
           placeholder={t('docs.search')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          InputProps={{
+          slotProps={{ input: {
             startAdornment: (
               <InputAdornment position="start">
                 <SearchIcon fontSize="small" />
               </InputAdornment>
             ),
-          }}
+          } }}
         />
       </StickySearchBar>
 

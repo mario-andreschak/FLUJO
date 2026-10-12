@@ -95,7 +95,7 @@ export default function FeedbackBanner() {
         }}
       >
         <Box sx={{ flex: '0 0 auto' }}>
-          <Typography id="feedback-banner-title" variant="subtitle1" fontWeight={600}>
+          <Typography id="feedback-banner-title" variant="subtitle1" sx={{ fontWeight: 600 }}>
             {t('feedback.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
@@ -129,7 +129,7 @@ export default function FeedbackBanner() {
           size="small"
           multiline
           maxRows={3}
-          inputProps={{ maxLength: 255, 'aria-label': t('feedback.inputAria') }}
+          slotProps={{ htmlInput: { maxLength: 255, 'aria-label': t('feedback.inputAria') } }}
           helperText={`${characterCount}/255`}
           sx={{ flex: '1 1 280px' }}
         />

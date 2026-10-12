@@ -56,7 +56,7 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
   const accounts = groupAllowances(rows.filter(isSubscriptionAllowance), now);
   const hasAccounts = accounts.length > 0;
   const paused = hasAccounts && accounts.every(row => row.retryAt && Date.parse(row.retryAt) > now);
-  useEffect(() => hasAccounts ? observe() : undefined, [hasAccounts, observe]);
+  useEffect(() => observe(), [observe]);
   useEffect(() => { if (hasAccounts) void ensureFresh(rows.map(row => row.modelId)); }, [hasAccounts, rows, snapshot, now, ensureFresh]);
   if (!hasAccounts && !(overview && failed)) return null;
 
@@ -86,8 +86,8 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
   return <Box data-testid={overview ? 'allowance-overview' : 'allowance-summary'}
     sx={{ minWidth: 0, ...(overview ? { mb: 2.5, bgcolor: 'background.paper', border: 1, borderColor: 'divider', borderRadius: 3, overflow: 'hidden' } : { px: 1.5, py: 1.25, borderTop: 1, borderColor: 'divider' }) }}
     onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}>
-    {overview && <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ px: 2, pt: 1.75, pb: 1.25 }}>
-      <Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="subtitle2" fontWeight={700}>{t('models.allowance.title')}</Typography>
+    {overview && <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', px: 2, pt: 1.75, pb: 1.25 }}>
+      <Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{t('models.allowance.title')}</Typography>
         <Typography variant="body2" color="text.secondary">{t('models.allowance.accountsNote')}</Typography></Box>
       <Button size="small" onClick={check} disabled={loading || paused} aria-label={t(loading ? 'models.allowance.checking' : 'models.allowance.refresh')} startIcon={<RefreshRoundedIcon />}
         sx={{ flexShrink: 0, minWidth: { xs: 36, sm: 64 }, textTransform: 'none', '& .MuiButton-startIcon': { mr: { xs: 0, sm: 1 }, ml: { xs: 0, sm: -0.5 } } }}>
@@ -106,11 +106,11 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
           : incomplete && row.status === 'available' ? t('models.allowance.partialSummary')
           : t(row.status === 'stale' ? 'models.allowance.stale' : 'models.allowance.unknown');
         return <Box key={accountKey(row)} sx={{ flex: '1 1 240px', minWidth: 0, ...(overview ? { px: 2, pb: 1.5 } : {}) }}>
-          <Stack direction="row" alignItems="center" spacing={0.5}>
+          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
             <Button onClick={toggle} aria-expanded={expanded} aria-controls={detailsId} aria-label={accountName(row) + ' · ' + t('models.allowance.title')}
               sx={{ flex: 1, minWidth: 0, p: 0, justifyContent: 'space-between', color: 'text.primary', textTransform: 'none', gap: 1, '&:hover': { bgcolor: 'action.hover' } }}>
-              <Typography variant="body2" fontWeight={700} sx={{ textAlign: 'left' }}>{accountName(row)}</Typography>
-              <Stack direction="row" spacing={0.5} alignItems="center">
+              <Typography variant="body2" sx={{ textAlign: 'left', fontWeight: 700 }}>{accountName(row)}</Typography>
+              <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                 <Typography component="span" sx={{ fontSize: overview ? '1.3rem' : '0.875rem', fontWeight: percent === null ? 500 : 750 }}>
                   {percent === null ? (loading ? t('models.allowance.checking') : state) : t('models.allowance.remaining', { percent: formatNumber(percent, { maximumFractionDigits: 0 }) })}
                 </Typography>
@@ -123,7 +123,7 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
             aria-label={accountName(row) + ': ' + t('models.allowance.remaining', { percent: formatNumber(percent) })}
             sx={{ height: overview ? 8 : 6, borderRadius: 4, my: 0.75, bgcolor: 'action.hover', '& .MuiLinearProgress-bar': { backgroundImage: 'none', bgcolor: percent <= 10 ? 'error.main' : percent <= 25 ? 'warning.main' : 'success.main' } }} />}
           {limiting && <Typography variant="caption" component="div" color="text.secondary">{windowName(limiting.label)}{limiting.resetAt ? ' · ' + t('models.allowance.resetIn', { time: relativeTime(limiting.resetAt) }) : ''}</Typography>}
-          {overview && sharing > 1 && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.shared', { count: sharing })}</Typography>}
+          {sharing > 1 && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.shared', { count: sharing })}</Typography>}
           {row.retryAt && Date.parse(row.retryAt) > now && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.retryIn', { time: relativeTime(row.retryAt) })}</Typography>}
           {(row.reason === 'usage-permission' || row.reason === 'rate-limited') && <Button component="a" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer" size="small" endIcon={<OpenInNewRoundedIcon fontSize="small" />} sx={{ p: 0, mt: 0.5, textTransform: 'none' }}>{t('models.allowance.providerUsage')}</Button>}
         </Box>;
@@ -134,16 +134,16 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
       <Stack spacing={1.5} sx={{ p: overview ? 2 : 0, pt: 1.5, mt: 1, borderTop: 1, borderColor: 'divider' }}>
         <Typography variant="caption" color="text.secondary">{t('models.allowance.summaryNote')}</Typography>
         {accounts.map(row => <Box key={accountKey(row)}>
-          <Stack direction="row" justifyContent="space-between" alignItems="baseline" gap={1} flexWrap="wrap">
-            <Typography variant="body2" fontWeight={700}>{accountName(row)}</Typography>
+          <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>{accountName(row)}</Typography>
             {row.observedAt && <Typography variant="caption" color="text.secondary" title={formatDate(row.observedAt, { dateStyle: 'medium', timeStyle: 'short' })}>{t('models.allowance.lastChecked', { time: relativeTime(row.observedAt) })}</Typography>}
           </Stack>
           {row.reason === 'usage-permission' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t('models.allowance.setupTokenHelp')}</Typography>}
           {row.reason === 'rate-limited' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t('models.allowance.rateLimitHelp')}</Typography>}
           {row.refreshFailed && row.reason !== 'usage-permission' && row.reason !== 'rate-limited' && <Typography role="status" variant="body2" color="error" sx={{ mt: 0.5 }}>{t('models.allowance.failed')}</Typography>}
-          {row.windows.map(window => <Stack key={window.id + ':' + (window.modelFamily ?? '')} direction="row" justifyContent="space-between" alignItems="baseline" gap={1} flexWrap="wrap" sx={{ mt: 0.75 }}>
+          {row.windows.map(window => <Stack key={window.id + ':' + (window.modelFamily ?? '')} direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1, flexWrap: 'wrap', mt: 0.75 }}>
             <Typography variant="body2">{windowName(window.label)}{window.modelFamily ? ' (' + window.modelFamily + ')' : ''}</Typography>
-            <Box sx={{ textAlign: 'right' }}><Typography variant="body2" fontWeight={600}>{row.status !== 'available' || window.remainingPercent === null ? t('models.allowance.unknown') : t('models.allowance.remaining', { percent: formatNumber(window.remainingPercent) })}</Typography>
+            <Box sx={{ textAlign: 'right' }}><Typography variant="body2" sx={{ fontWeight: 600 }}>{row.status !== 'available' || window.remainingPercent === null ? t('models.allowance.unknown') : t('models.allowance.remaining', { percent: formatNumber(window.remainingPercent) })}</Typography>
               {window.resetAt && <Typography variant="caption" color="text.secondary" title={formatDate(window.resetAt, { dateStyle: 'medium', timeStyle: 'short' })}>{t('models.allowance.resetIn', { time: relativeTime(window.resetAt) })}</Typography>}</Box>
           </Stack>)}
         </Box>)}

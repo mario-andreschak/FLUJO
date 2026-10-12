@@ -6,6 +6,8 @@ import { modelAllowancePercent, type ModelAllowance, type WorkspaceAllowance } f
 import { translate } from '@/frontend/i18n/core';
 import { WORKSPACE_CHANGED_EVENT } from '@/frontend/utils/workspaceSelection';
 import { ENCRYPTION_UNLOCKED_EVENT } from '@/frontend/utils/encryptionLock';
+import { getModelService } from '@/frontend/services/model';
+import type { Model } from '@/shared/types';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -31,6 +33,81 @@ const originalFetch = global.fetch;
 beforeEach(() => { fetchMock.mockReset(); global.fetch = fetchMock; window.localStorage.clear(); });
 afterEach(() => { global.fetch = originalFetch; jest.useRealTimers(); });
 const respond = (data: WorkspaceAllowance) => ({ ok: true, json: async () => data });
+
+test.each(['codex', 'claude'] as const)('saving the first %s subscription reveals its allowance without a page reload', async provider => {
+  const model: Model = { id: 'first', name: 'first', provider: provider === 'claude' ? 'claude-subscription' : 'codex', adapter: provider === 'claude' ? 'claude-cli' : 'codex-cli', ApiKey: '' };
+  const first = row('first', provider === 'claude' ? { provider, status: 'unknown', reason: 'usage-permission', observedAt: null, windows: [] } : {});
+  let saved = false;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.startsWith('/api/model/allowance')) return respond(snapshot(saved ? [first] : []));
+    saved = true;
+    return { ok: true, status: 200, headers: new Headers({ 'Content-Type': 'application/json' }), json: async () => model };
+  });
+  render(<AllowanceProvider><AllowanceBar overview /></AllowanceProvider>);
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(screen.queryByText('Subscription allowance')).not.toBeInTheDocument();
+  await act(async () => { expect((await getModelService().addModel(model)).success).toBe(true); });
+  await screen.findByText('Subscription allowance');
+  if (provider === 'codex') expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '30');
+  else expect(screen.getByText('Usage not exposed')).toBeInTheDocument();
+  expect(fetchMock.mock.calls.filter(call => call[0].startsWith('/api/model/allowance')).map(call => call[1].method)).toEqual(['GET', 'GET']);
+});
+
+test.each(['update', 'delete'] as const)('%s of the last subscription removes the previous account reading', async mutation => {
+  const model: Model = { id: 'one', name: 'one', provider: 'codex', adapter: 'codex-cli', ApiKey: '' };
+  let present = true;
+  fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+    if (url.startsWith('/api/model/allowance')) return respond(snapshot(present ? [row()] : []));
+    if (options?.method === 'PUT' || options?.method === 'DELETE') present = false;
+    return { ok: true, status: options?.method === 'DELETE' ? 204 : 200,
+      headers: new Headers({ 'Content-Type': 'application/json' }), json: async () => model };
+  });
+  render(<AllowanceProvider><AllowanceBar overview /></AllowanceProvider>);
+  await screen.findByRole('progressbar');
+  await act(async () => {
+    const service = getModelService();
+    const result = mutation === 'update' ? await service.updateModel({ ...model, ApiKey: 'fixture-api-billing' }) : await service.deleteModel('one');
+    expect(result.success).toBe(true);
+  });
+  await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
+  expect(fetchMock.mock.calls.filter(call => call[0].startsWith('/api/model/allowance')).map(call => call[1].method)).toEqual(['GET', 'GET']);
+});
+
+test('failed model save retains the existing reading without another usage request', async () => {
+  fetchMock.mockImplementation(async (url: string) => url.startsWith('/api/model/allowance') ? respond(snapshot([row()]))
+    : { ok: false, status: 409, headers: new Headers({ 'Content-Type': 'application/json' }), json: async () => ({ error: 'MODEL_CATALOG_BUSY' }) });
+  render(<AllowanceProvider><AllowanceBar overview /></AllowanceProvider>);
+  await screen.findByRole('progressbar');
+  await act(async () => { expect((await getModelService().addModel({ id: 'new', name: 'new', provider: 'codex', ApiKey: '' })).success).toBe(false); });
+  expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '30');
+  expect(fetchMock.mock.calls.filter(call => call[0].startsWith('/api/model/allowance'))).toHaveLength(1);
+});
+
+test('saving another shared model preserves the in-flight account collection', async () => {
+  let finishCollection!: (value: unknown) => void;
+  let collectionSignal: AbortSignal | undefined;
+  let collected = false;
+  fetchMock.mockImplementation(async (url: string, options: RequestInit) => {
+    if (url.startsWith('/api/model/allowance')) {
+      if (options.method === 'POST') {
+        collectionSignal = options.signal as AbortSignal;
+        return new Promise(resolve => { finishCollection = resolve; });
+      }
+      return respond(snapshot(collected ? [row(), row('two')] : [row('one', { status: 'unknown', observedAt: null, windows: [] })]));
+    }
+    return { ok: true, status: 200, headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => ({ id: 'two', name: 'two', provider: 'codex', adapter: 'codex-cli', ApiKey: '' }) };
+  });
+  render(<AllowanceProvider><AllowanceBar overview /></AllowanceProvider>);
+  await waitFor(() => expect(collectionSignal).toBeDefined());
+  const originalCollectionSignal = collectionSignal;
+  await act(async () => { expect((await getModelService().addModel({ id: 'two', name: 'two', provider: 'codex', ApiKey: '' })).success).toBe(true); });
+  expect(originalCollectionSignal?.aborted).toBe(false);
+  await act(async () => { collected = true; finishCollection(respond(snapshot([row(), row('two')]))); });
+  await screen.findByRole('progressbar');
+  await waitFor(() => expect(screen.getByText('Shared account: 2 models')).toBeInTheDocument());
+  expect(fetchMock.mock.calls.filter(call => call[0].startsWith('/api/model/allowance')).map(call => call[1].method)).toEqual(['GET', 'POST', 'GET']);
+});
 
 test('local inference and API billing never acquire subscription meters', async () => {
   fetchMock.mockResolvedValue(respond(snapshot([
@@ -104,6 +181,7 @@ test('one workspace GET serves model, agent, Persona and provider bars; expansio
   expect(fetchMock).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getAllByRole('button', { name: /Subscription allowance/ })[0]);
   expect(screen.getByText('Weekly', { exact: true })).toBeInTheDocument();
+  expect(screen.getByText('Weekly', { exact: true }).closest('.MuiStack-root')).toHaveTextContent('30% left');
   expect(fetchMock).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0]);
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -182,6 +260,7 @@ test('renders an offline expanded policy fixture with shared, unknown and stale 
   expect(screen.getByText(/Claude fallback/)).toBeInTheDocument();
   expect(screen.getByText(/Stale account fallback/)).toBeInTheDocument();
   expect(screen.getByText(/Separate accounts are alternatives/)).toBeInTheDocument();
+  expect(screen.getAllByText(/Shared account: 2 models/)).toHaveLength(1);
   await waitFor(() => expect(screen.getByText(/Codex primary/).closest('.MuiCollapse-root')).toHaveClass('MuiCollapse-entered'));
   const output = process.env.FLUJO_ALLOWANCE_PREVIEW_HTML;
   if (output) {

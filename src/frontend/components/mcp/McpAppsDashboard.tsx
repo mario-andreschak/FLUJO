@@ -142,7 +142,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
     >
       <DialogHeaderActions
         title={(
-          <Box display="flex" alignItems="center" gap={1} minWidth={0}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
             <AppsIcon color="primary" />
             <Typography id="mcp-apps-dashboard-title" variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
               {t('mcp.apps.title')}
@@ -169,17 +169,17 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
       <DialogContent sx={{ p: 0, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {loading ? (
-          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ flex: 1 }}>
+          <Stack spacing={2} sx={{ alignItems: "center", justifyContent: "center",  flex: 1 }}>
             <CircularProgress />
             <Typography color="text.secondary">{t('mcp.apps.discovering')}</Typography>
           </Stack>
         ) : loadError ? (
           <Alert severity="error" sx={{ m: 3 }}>{loadError}</Alert>
         ) : eligibleServerCount === 0 ? (
-          <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, p: 3 }}>
+          <Stack spacing={1} sx={{ alignItems: "center", justifyContent: "center",  flex: 1, p: 3 }}>
             <AppsIcon color="disabled" sx={{ fontSize: 48 }} />
             <Typography variant="h6">{t('mcp.apps.noServers')}</Typography>
-            <Typography color="text.secondary" textAlign="center">
+            <Typography color="text.secondary" sx={{ textAlign: "center" }}>
               {t('mcp.apps.noServersHelp')}
             </Typography>
           </Stack>
@@ -195,12 +195,12 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
               {servers.map((server) => (
                 <Box key={server.name} sx={{ mb: 2.5 }}>
-                  <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600,  mb: 1 }}>
                     {server.name}
                   </Typography>
                   {server.error ? (
                     <Alert severity="warning">
-                      <Typography variant="body2" fontWeight={600}>{t('mcp.apps.unavailable')}</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{t('mcp.apps.unavailable')}</Typography>
                       <Typography variant="body2">{server.error}</Typography>
                     </Alert>
                   ) : server.apps.length === 0 ? (
@@ -245,10 +245,10 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
             <Box sx={{ p: { xs: 2, md: 3 }, minWidth: 0, overflow: 'auto', minHeight: 0 }}>
               {!selectedApp ? (
-                <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: '100%' }}>
+                <Stack spacing={1} sx={{ alignItems: "center", justifyContent: "center",  minHeight: '100%' }}>
                   <AppsIcon color="disabled" sx={{ fontSize: 44 }} />
                   <Typography variant="h6">{t('mcp.apps.select')}</Typography>
-                  <Typography color="text.secondary" textAlign="center">
+                  <Typography color="text.secondary" sx={{ textAlign: "center" }}>
                     {t('mcp.apps.sandbox')}
                   </Typography>
                 </Stack>
@@ -258,7 +258,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                   {selectedApp.description && (
                     <Typography color="text.secondary" sx={{ mt: 0.5 }}>{selectedApp.description}</Typography>
                   )}
-                  <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                  <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap",  mt: 1 }}>
                     <Chip label={selectedApp.serverName} size="small" />
                     <Chip label={selectedApp.mimeType} size="small" variant="outlined" />
                   </Stack>
@@ -268,7 +268,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                       <Typography variant="body2" sx={{ mb: 1 }}>
                         {t('mcp.apps.linkedHelp')}
                       </Typography>
-                      <Stack direction="row" gap={1} flexWrap="wrap">
+                      <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
                         {selectedApp.toolNames.map((toolName) => (
                           <Button
                             key={toolName}

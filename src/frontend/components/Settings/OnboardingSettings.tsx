@@ -24,7 +24,7 @@ export default function OnboardingSettings() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {t('settings.onboarding.description')}
       </Typography>
-      <Stack spacing={2} alignItems="flex-start">
+      <Stack spacing={2} sx={{ alignItems: "flex-start" }}>
         <Button variant="outlined" startIcon={<SchoolIcon />} onClick={startTour} disabled={!canStartTour}>
           {t('settings.onboarding.replay')}
         </Button>
@@ -32,13 +32,13 @@ export default function OnboardingSettings() {
         <Divider flexItem />
 
         <Box>
-          <Typography variant="subtitle2" fontWeight={800} gutterBottom>
+          <Typography variant="subtitle2" sx={{ fontWeight: 800 }} gutterBottom>
             Big tutorial · Stage 1
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             Improve your Chat agent by connecting an app that can search the internet. Your place is saved after every step.
           </Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="flex-start">
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: "flex-start" }}>
             <Button
               variant="contained"
               startIcon={<PublicRoundedIcon />}

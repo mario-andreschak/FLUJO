@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { ALLOWANCE_MAX_AGE_MS, isSubscriptionAllowance, type WorkspaceAllowance } from '@/shared/types/model/allowance';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { ENCRYPTION_UNLOCKED_EVENT } from '@/frontend/utils/encryptionLock';
+import { MODEL_CATALOG_CHANGED_EVENT } from '@/frontend/services/model';
 
 type Snapshot = WorkspaceAllowance & { entities?: { flows: Record<string, string[]>; personas: Record<string, string[]> } };
 interface AllowanceContextValue {
@@ -57,8 +58,23 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
     void load(getSelectedWorkspace());
     const unsubscribe = onWorkspaceChanged(workspace => { current.current?.controller.abort(); setSnapshot(null); void load(workspace); });
     const unlocked = () => { void load(getSelectedWorkspace()); };
+    const modelsChanged = () => {
+      const workspace = getSelectedWorkspace();
+      const active = current.current;
+      lastCollection.current.clear();
+      // Native collection owns a child until its pipes close. A bundle save
+      // must not cancel it and immediately share the same draining task.
+      if (active?.workspace === workspace && active.refresh && !active.controller.signal.aborted) {
+        void active.pending.then(() => getSelectedWorkspace() === workspace ? load(workspace) : undefined);
+        return;
+      }
+      active?.controller.abort();
+      setSnapshot(null);
+      void load(workspace);
+    };
     window.addEventListener(ENCRYPTION_UNLOCKED_EVENT, unlocked);
-    return () => { unsubscribe(); window.removeEventListener(ENCRYPTION_UNLOCKED_EVENT, unlocked); current.current?.controller.abort(); };
+    window.addEventListener(MODEL_CATALOG_CHANGED_EVENT, modelsChanged);
+    return () => { unsubscribe(); window.removeEventListener(ENCRYPTION_UNLOCKED_EVENT, unlocked); window.removeEventListener(MODEL_CATALOG_CHANGED_EVENT, modelsChanged); current.current?.controller.abort(); };
   }, [load]);
   const observe = useCallback(() => {
     observers.current += 1;

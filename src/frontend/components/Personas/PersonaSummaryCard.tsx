@@ -63,7 +63,7 @@ export default function PersonaSummaryCard({
       }}
     >
       <CardContent sx={{ flex: 1 }}>
-        <Stack direction="row" spacing={2} alignItems="flex-start">
+        <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
           <Avatar
             src={summary.presentation?.avatarUrl}
             alt={summary.name}
@@ -77,8 +77,8 @@ export default function PersonaSummaryCard({
           >
             {summary.name.slice(0, 2).toUpperCase()}
           </Avatar>
-          <Box minWidth={0} flex={1}>
-            <Typography variant="h5" component="h2" fontWeight={760} sx={{ overflowWrap: 'anywhere' }}>{summary.name}</Typography>
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography variant="h5" component="h2" sx={{ fontWeight: 760,  overflowWrap: 'anywhere' }}>{summary.name}</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
               {t('personas.role', {
                 role: summary.role.name,
@@ -109,7 +109,7 @@ export default function PersonaSummaryCard({
         <Stack spacing={1.25}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <BoltRounded fontSize="small" color={summary.currentWork ? 'primary' : 'disabled'} />
-            <Typography variant="body2" fontWeight={650} noWrap>
+            <Typography variant="body2" sx={{ fontWeight: 650 }} noWrap>
               {summary.currentWork
                 ? summary.currentWork.kind === 'interactive_chat'
                   ? t('personas.history.type.interactive_chat')
@@ -117,7 +117,7 @@ export default function PersonaSummaryCard({
                 : t('personas.noActivity')}
             </Typography>
           </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
             <Chip
               size="small"
               icon={<AssignmentRounded />}

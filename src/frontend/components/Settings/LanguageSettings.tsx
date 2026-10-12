@@ -64,8 +64,8 @@ export default function LanguageSettings() {
             >
               <TranslateRounded sx={{ mr: 1.5, color: selected ? 'primary.main' : 'text.secondary' }} />
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Stack direction="row" alignItems="center" spacing={1} useFlexGap flexWrap="wrap">
-                  <Typography variant="subtitle1" fontWeight={700}>{option.nativeName}</Typography>
+                <Stack direction="row" sx={{ alignItems: "center", flexWrap: "wrap" }} spacing={1} useFlexGap>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{option.nativeName}</Typography>
                   {selected && (
                     <Chip
                       size="small"

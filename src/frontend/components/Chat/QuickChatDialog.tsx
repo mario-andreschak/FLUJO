@@ -331,7 +331,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
                 label={flowNameLabel}
                 value={flowName}
                 onChange={e => setFlowName(e.target.value)}
-                inputProps={{ maxLength: 160 }}
+                slotProps={{ htmlInput: { maxLength: 160 } }}
                 required
                 sx={{ mb: 2 }}
               />
@@ -347,7 +347,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
               placeholder={t('chat.quick.systemPlaceholder')}
               value={systemPrompt}
               onChange={e => setSystemPrompt(e.target.value)}
-              inputProps={{ maxLength: 20_000 }}
+              slotProps={{ htmlInput: { maxLength: 20_000 } }}
               sx={{ mb: 2 }}
             />
 

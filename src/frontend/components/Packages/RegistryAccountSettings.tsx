@@ -217,7 +217,7 @@ export default function RegistryAccountSettings() {
 
       {signedIn ? (
         <Stack spacing={2}>
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
             <Typography variant="subtitle1">{status?.email}</Typography>
             {status?.publisherHandle && <Chip size="small" label={`@${status.publisherHandle}`} />}
             {status?.isConfirmed ? (
@@ -304,7 +304,7 @@ export default function RegistryAccountSettings() {
             </Box>
           )}
           <Divider>{t('packages.account.or')}</Divider>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
             <Button variant="outlined" onClick={() => handleOAuth('github')} disabled={busy}>
               {t('packages.account.github')}
             </Button>
@@ -320,7 +320,7 @@ export default function RegistryAccountSettings() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         {t('packages.account.defaultUrl', { url: defaultUrl })}
       </Typography>
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
         <TextField
           size="small"
           placeholder={defaultUrl}

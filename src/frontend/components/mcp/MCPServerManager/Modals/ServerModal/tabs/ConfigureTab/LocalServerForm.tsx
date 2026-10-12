@@ -59,7 +59,7 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
           onChange={e => setRootPath(e.target.value)}
           placeholder="/path/to/server/root"
           variant="outlined"
-          InputProps={{
+          slotProps={{ input: {
             endAdornment: (
               <InputAdornment position="end">
                 <IconButton
@@ -71,7 +71,7 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
                 </IconButton>
               </InputAdornment>
             ),
-          }}
+          } }}
         />
       </Box>
     </Stack>

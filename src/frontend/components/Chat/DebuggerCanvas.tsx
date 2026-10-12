@@ -15,7 +15,7 @@ import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
-import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlined';
 import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import { styled, useTheme } from '@mui/material/styles';
@@ -1221,7 +1221,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
       <Header sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <Box>
           <Typography variant="h6">{t('chat.debug.title')}</Typography>
-          <Typography variant="caption" color="textSecondary" display="block">
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
             {t('chat.debug.breakpointHelp')}
             {activeBreakpoints.length > 0 ? ` · ${tp('chat.debug.activeBreakpoints', activeBreakpoints.length)}` : ''}
           </Typography>

@@ -5,7 +5,10 @@ import path from 'node:path';
 let workspaceDir: string;
 const warnings = jest.fn();
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ warn: (...args: unknown[]) => warnings(...args) }) }));
-jest.mock('@/utils/workspace', () => ({ getWorkspaceDataDir: () => workspaceDir }));
+jest.mock('@/utils/workspace', () => ({
+  getWorkspaceDataDir: () => workspaceDir,
+  workspaceCacheKey: (...parts: string[]) => JSON.stringify([workspaceDir, ...parts]),
+}));
 jest.mock('@/utils/storage/backend', () => ({
   assertSafeCollectionId: (id: string) => {
     if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('unsafe id');

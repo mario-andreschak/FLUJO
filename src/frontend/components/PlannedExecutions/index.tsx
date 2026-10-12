@@ -405,7 +405,7 @@ const PlannedExecutionsManager = () => {
                 checked={loaded && !paused}
                 disabled={!loaded || changingPause || deletePending}
                 onChange={(e) => handleTogglePaused(!e.target.checked)}
-                inputProps={{ 'aria-label': t('automations.list.runSchedules') }}
+                slotProps={{ input: { 'aria-label': t('automations.list.runSchedules') } }}
                 sx={{ height: 44, '& .MuiSwitch-switchBase': { top: 3 }, '& .MuiSwitch-track': { height: 14, mt: '3px' } }}
               />
             }
@@ -480,14 +480,13 @@ const PlannedExecutionsManager = () => {
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 inputRef={searchInputRef}
-                inputProps={{ 'aria-label': t('automations.list.search') }}
-                InputProps={{
+                slotProps={{ htmlInput: { 'aria-label': t('automations.list.search') }, input: {
                   startAdornment: (
                     <InputAdornment position="start">
                       <SearchIcon fontSize="small" />
                     </InputAdornment>
                   ),
-                }}
+                } }}
                 sx={{ maxWidth: { md: 360 } }}
               />
 

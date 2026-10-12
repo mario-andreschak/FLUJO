@@ -1,7 +1,8 @@
 import path from 'path';
 import { constants, promises as fs } from 'fs';
 import { createLogger } from '@/utils/logger';
-import { getWorkspaceDataDir } from '@/utils/workspace';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
+import { ConversationLogReadPressureError, withConversationLogReadAdmission } from './conversationLogReadAdmission';
 import {
   assertSafeCollectionId,
   runInWriteChain,
@@ -20,6 +21,20 @@ const log = createLogger('backend/execution/flow/conversationSummaryStore');
 // rows stop exposing the appended run-info block too.
 const SUMMARY_VERSION = 10;
 const SUMMARY_READ_CONCURRENCY = 32;
+const summaryRuntime = globalThis as typeof globalThis & {
+  __flujoSummaryReads?: Map<string, Promise<ConversationSummary[]>>;
+  __flujoSummaryRebuildTail?: Promise<void>;
+};
+
+/** Concurrent cache misses must not decode several large histories at once. */
+async function rebuildWithAdmission<T>(size: number, read: () => Promise<T>): Promise<T> {
+  const previous = summaryRuntime.__flujoSummaryRebuildTail ?? Promise.resolve();
+  let release!: () => void;
+  summaryRuntime.__flujoSummaryRebuildTail = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try { return await withConversationLogReadAdmission(size, read); }
+  finally { release(); }
+}
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
 
@@ -286,7 +301,7 @@ function withoutIndexFields(indexed: IndexedConversationSummary): ConversationSu
  * their full snapshot once and are then persisted as tiny sidecars; unchanged
  * snapshots on later calls and process restarts never need their messages parsed.
  */
-export async function listConversationSummaries(): Promise<ConversationSummary[]> {
+async function scanConversationSummaries(): Promise<ConversationSummary[]> {
   let files: string[];
   try {
     files = (await fs.readdir(conversationsDir())).filter((file) => file.endsWith('.json'));
@@ -323,13 +338,16 @@ export async function listConversationSummaries(): Promise<ConversationSummary[]
             continue;
           }
 
-          const state = JSON.parse(await snapshot.readFile('utf8')) as SharedState;
-          results[index] = summarizeConversation(state, fallbackId);
-          await writeSummary(fallbackId, state, stats);
+          await rebuildWithAdmission(stats.size, async () => {
+            const state = JSON.parse(await snapshot.readFile('utf8')) as SharedState;
+            results[index] = summarizeConversation(state, fallbackId);
+            await writeSummary(fallbackId, state, stats);
+          });
         } finally {
           await snapshot.close();
         }
       } catch (error) {
+        if (error instanceof ConversationLogReadPressureError) throw error;
         log.warn(`Skipping unreadable conversation snapshot ${file}.`, error);
       }
     }
@@ -339,4 +357,15 @@ export async function listConversationSummaries(): Promise<ConversationSummary[]
     () => worker(),
   ));
   return results.filter((item): item is ConversationSummary => item !== null);
+}
+
+/** Share one metadata scan per workspace; retain no completed scan or history bodies. */
+export function listConversationSummaries(): Promise<ConversationSummary[]> {
+  const key = workspaceCacheKey('conversation-summary-read');
+  const reads = summaryRuntime.__flujoSummaryReads ??= new Map();
+  const existing = reads.get(key);
+  if (existing) return existing;
+  const pending = scanConversationSummaries().finally(() => { reads.delete(key); });
+  reads.set(key, pending);
+  return pending;
 }

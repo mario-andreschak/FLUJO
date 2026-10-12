@@ -516,7 +516,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             </span>
           </Tooltip>
         )}
-        <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
           <AskFlujoButton />
           <BugReportButton variant="icon" />
         </Box>
@@ -587,13 +587,13 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
               }
               label={t('flows.generator.allowTools')}
             />
-            <Typography variant="caption" color="text.secondary" display="block">
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
               {t('flows.generator.allowToolsHelp')}
             </Typography>
             {!flowBasedExperimental && (
               <Box sx={{ mt: 2, px: 0.5 }}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" fontWeight={750}>
+                <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                  <Typography variant="body2" sx={{ fontWeight: 750 }}>
                     {t('flows.generator.maxDepth')}
                   </Typography>
                   <Chip

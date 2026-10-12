@@ -237,7 +237,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
         )}
         {view !== 'factory' && loading && !data && (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
-            <Stack role="status" aria-live="polite" aria-busy="true" spacing={1.25} alignItems="center">
+            <Stack role="status" aria-live="polite" aria-busy="true" spacing={1.25} sx={{ alignItems: "center" }}>
               <CircularProgress size={34} aria-hidden="true" />
               <Typography variant="body2" color="text.secondary">{t(view === 'day' ? 'waves.loadingDay' : 'waves.buildingMap')}</Typography>
             </Stack>

@@ -256,16 +256,16 @@ function PlaygroundCanvasInner({
                 backdropFilter: 'blur(10px)',
               }}
             >
-              <Stack direction="row" spacing={1.25} alignItems="center">
-                <Stack direction="row" spacing={0.35} alignItems="center">
+              <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                <Stack direction="row" spacing={0.35} sx={{ alignItems: "center" }}>
                   <BoltRoundedIcon sx={{ fontSize: 15, color: '#8b5cf6' }} />
                   <Typography variant="caption">{t('waves.legendSignal')}</Typography>
                 </Stack>
-                <Stack direction="row" spacing={0.35} alignItems="center">
+                <Stack direction="row" spacing={0.35} sx={{ alignItems: "center" }}>
                   <CallSplitRoundedIcon sx={{ fontSize: 15, color: '#0891b2' }} />
                   <Typography variant="caption">{t('waves.legendSubflow')}</Typography>
                 </Stack>
-                <Stack direction="row" spacing={0.35} alignItems="center">
+                <Stack direction="row" spacing={0.35} sx={{ alignItems: "center" }}>
                   <CheckCircleOutlineRoundedIcon sx={{ fontSize: 15, color: '#16a34a' }} />
                   <Typography variant="caption">{t('waves.legendCompletion')}</Typography>
                 </Stack>
@@ -296,7 +296,7 @@ export default function PlaygroundCanvas(props: PlaygroundCanvasProps) {
   if (props.data.flows.length === 0) {
     return (
       <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 4 }}>
-        <Stack spacing={1} alignItems="center" sx={{ maxWidth: 380, textAlign: 'center' }}>
+        <Stack spacing={1} sx={{ alignItems: "center",  maxWidth: 380, textAlign: 'center' }}>
           <HubRoundedIcon color="primary" sx={{ fontSize: 42, opacity: 0.7 }} />
           <Typography variant="subtitle1" sx={{ fontWeight: 750 }}>{t('waves.emptyPlaygroundTitle')}</Typography>
           <Typography variant="body2" color="text.secondary">
