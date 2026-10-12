@@ -324,6 +324,8 @@ export interface MCPServiceResponse<T = unknown> {
   statusCode?: number;
   progressToken?: string;
   errorType?: string;
+  errorCode?: string;
+  requiresApproval?: boolean;
   toolName?: string;
   timeout?: number;
   requiresAuthentication?: boolean;
@@ -376,7 +378,7 @@ export interface MCPStdioOAuthStatus {
 }
 
 type WithMCPServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
-  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
+  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication' | 'requires_approval';
   tools: Array<{
     name: string;
     description: string;

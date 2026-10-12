@@ -1,6 +1,6 @@
 /**
  * Quick-Chats (issue #61): synthesize an ephemeral in-memory Flow from a set of
- * SELECTIONS (one model + zero or more MCP servers / tool subsets), so a user
+ * SELECTIONS (one model + default discovery + optional extra integrations), so a user
  * can chat with a model and its tools without building and saving a flow.
  *
  * The synthesized flow travels WITH the conversation state (`flowSnapshot`, see
@@ -27,6 +27,25 @@ import {
   compileFlowSpec,
   CompileContext,
 } from './flowSpecCompiler';
+
+/** Small bootstrap catalog; downstream tool schemas are discovered on demand. */
+export const QUICK_CHAT_DISCOVERY_TOOLS = [
+  'discover_capabilities',
+  'list_mcp_servers',
+  'list_mcp_server_tools',
+  'call_mcp_tool',
+  'list_flows',
+  'explain_flow',
+  'read_flow',
+  'execute_flow',
+] as const;
+
+const DISCOVERY_PROMPT = `Use FLUJO's configured tools and saved flows when they help fulfill the user's request.
+Start with discover_capabilities for a goal, or list_mcp_servers / list_flows to browse.
+Inspect a tool's input schema with list_mcp_server_tools before calling call_mcp_tool with the exact server, tool, and arguments.
+Use explain_flow or read_flow to understand a flow before execute_flow. Follow pagination when more results are needed.
+Discover capabilities when needed; ordinary conversation does not require a tool call.
+Never invent tool or flow names, claim execution without its result, or treat discovery as execution approval.`;
 
 export interface QuickChatServerSelection {
   /** MCP server name as configured in FLUJO. */
@@ -98,9 +117,11 @@ function resolveModelId(
 export function synthesizeQuickChatFlow(
   selection: QuickChatSelection,
   context: {
-    models: NonNullable<CompileContext['models']>;
+    models: Array<NonNullable<CompileContext['models']>[number] & { supportsTools?: boolean }>;
     servers: Array<{ name: string }>;
     serverTools?: Record<string, string[]>;
+    /** Backend-resolved bundled FLUJO connection; never a caller-selected identity. */
+    discoveryServer?: string;
   },
   identity?: QuickChatFlowIdentity
 ): QuickChatSynthesisResult {
@@ -120,6 +141,10 @@ export function synthesizeQuickChatFlow(
   const resolvedModelId = resolveModelId(selection.modelId, context.models);
   if (!resolvedModelId) {
     return { flow: null, error: `Unknown model "${selection.modelId}".` };
+  }
+  if (!identity && context.discoveryServer
+    && context.models.find(model => model.id === resolvedModelId)?.supportsTools === false) {
+    return { flow: null, error: 'Choose an AI that can use connected apps, or connect one on the AI page.' };
   }
 
   const knownServers = new Set(context.servers.map((s) => s.name));
@@ -151,6 +176,20 @@ export function synthesizeQuickChatFlow(
     serverRefs.push({ name, ...(tools ? { tools } : {}) });
   }
 
+  // Saved-model conversion shares this builder but keeps its authored selection.
+  const discoveryServer = identity ? undefined : context.discoveryServer;
+  if (discoveryServer) {
+    if (!knownServers.has(discoveryServer)) {
+      return { flow: null, error: 'The FLUJO discovery connection is unavailable.' };
+    }
+    const existing = serverRefs.find((server) => server.name === discoveryServer);
+    if (existing) {
+      existing.tools = [...new Set([...(existing.tools ?? serverTools[discoveryServer] ?? []), ...QUICK_CHAT_DISCOVERY_TOOLS])];
+    } else {
+      serverRefs.push({ name: discoveryServer, tools: [...QUICK_CHAT_DISCOVERY_TOOLS] });
+    }
+  }
+
   const spec: FlowSpec = {
     name: identity?.flowName ?? 'Quick Chat',
     nodes: [
@@ -165,6 +204,7 @@ export function synthesizeQuickChatFlow(
         type: 'process',
         label: 'Chat',
         model: resolvedModelId,
+        ...(discoveryServer ? { prompt: DISCOVERY_PROMPT } : {}),
         ...(serverRefs.length > 0 ? { servers: serverRefs } : {}),
       },
       { key: 'finish', type: 'finish', label: 'Finish' },

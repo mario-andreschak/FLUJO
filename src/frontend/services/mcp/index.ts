@@ -421,10 +421,11 @@ class MCPService {
    * live enableMcpApps authorization gate; ordinary host resource browsing is
    * intentionally kept on readResource().
    */
-  async readResourceFromApp(serverName: string, uri: string) {
+  async readResourceFromApp(serverName: string, uri: string, signal?: AbortSignal) {
     try {
       const response = await fetch(
-        `/api/mcp/servers/${encodeURIComponent(serverName)}/resources/read?uri=${encodeURIComponent(uri)}&source=app`
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/resources/read?uri=${encodeURIComponent(uri)}&source=app`,
+        { signal },
       );
       const data = await response.json();
       return { ...data, httpStatus: response.status };

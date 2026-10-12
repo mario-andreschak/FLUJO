@@ -5,13 +5,13 @@ const log = createLogger('frontend/services/automationMap');
 
 /** Read-only client for the unified Automation Playground graph. */
 class AutomationMapService {
-  async load(): Promise<AutomationMapResponse> {
+  async load(signal?: AbortSignal): Promise<AutomationMapResponse> {
     try {
-      const response = await fetch('/api/automation-map');
+      const response = await fetch('/api/automation-map', { signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json() as AutomationMapResponse;
     } catch (error) {
-      log.warn('Failed to load automation map', error);
+      if (!signal?.aborted) log.warn('Failed to load automation map', error);
       throw error;
     }
   }

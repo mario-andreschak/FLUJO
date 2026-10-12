@@ -588,6 +588,7 @@ export default function ModelClient() {
           submitLabel={t('models.agent.saveAndOpen')}
           submittingLabel={t('models.agent.saving')}
           connectedServersOnly
+          selectApps
         />
       )}
 

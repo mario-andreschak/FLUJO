@@ -31,6 +31,7 @@ import {
   retireMcpRuntimeAuthority,
   stdioConfigKey,
   capabilityKey,
+  attachShippedWorkspaceReadiness,
   ClientWithBetaMarker,
   TransportWithConfigKey,
   type TransportCreationOptions,
@@ -39,6 +40,7 @@ import { createOAuthClientProvider } from "./oauth";
 import { McpIsolationError } from '../security/isolatedMcp';
 import { attachMcpIsolation } from './isolation';
 import { attachTrustedHost, trustedHostBrokerEnvironment } from './trustedHost';
+import { attachLocalHostLaunch } from './localHost';
 import { createRootsListHandler } from "./roots";
 import { samplingEnabled, createSamplingHandler } from "./sampling";
 import { elicitationEnabled, createElicitationHandler } from "./elicitation";
@@ -350,7 +352,7 @@ export function createBetaTransport(
     const parameters = {
       command,
       args,
-      env: { ...env, ...(runtimeBroker ? (isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) : {}), ...workloadEnv },
+      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
       cwd,
       stderr: isolation ? 'ignore' as const : 'pipe' as const,
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -362,7 +364,13 @@ export function createBetaTransport(
     }
     transport = new BetaStdioClientTransport(parameters);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
-    else attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else {
+      attachShippedWorkspaceReadiness(transport, config, cwd);
+      attachLocalHostLaunch(transport, config, current => JSON.stringify([
+        stdioConfigKey(current, options?.isolateRuntimeHome === true), capabilityKey(current),
+      ]));
+    }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }

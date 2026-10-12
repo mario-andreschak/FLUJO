@@ -166,8 +166,8 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
       const loaded: unknown = await mcpService.loadServerConfigs();
       if (!Array.isArray(loaded)) throw new Error(worldCopy(locale).unavailable);
       const configs = loaded as MCPServerConfig[];
-      const packages = ['@mario.andreschak/mcp-flujo', '@mario.andreschak/mcp-filesystem', '@mario.andreschak/mcp-bash', '@mario.andreschak/mcp-browser'];
-      const servers = configs.filter(server => !server.disabled && server.source && 'id' in server.source && packages.includes(server.source.id)).map(server => ({ name: server.name }));
+      const servers = configs.filter(server => !server.disabled && server.source && 'id' in server.source && server.source.id === '@mario.andreschak/mcp-flujo')
+        .map(server => ({ name: server.name, enabledTools: ['propose_ui_action'] }));
       const { flow } = await chatService.synthesizeQuickChat({ conversationId: id, modelId: modelId!, servers, systemPrompt: SYSTEM_PROMPT, runArtifactName: 'world-result' });
       await chatService.createConversation({ id, title: 'Flujo · world', flowId: flow.id, flowSnapshot: flow, createdAt: now, updatedAt: now });
     }

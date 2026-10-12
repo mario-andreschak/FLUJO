@@ -68,7 +68,8 @@ interface ServerCardProps {
     | "error"
     | "connecting"
     | "initialization"
-    | "requires_authentication";
+    | "requires_authentication"
+    | "requires_approval";
   path: string;
   enabled: boolean;
   transport: "stdio" | "websocket" | "sse" | "streamable";
@@ -318,6 +319,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
     connecting: "info.main",
     initialization: "info.main",
     requires_authentication: "warning.main",
+    requires_approval: "warning.main",
   }[status];
 
   // Poll for status updates when server is connecting or initializing
@@ -644,6 +646,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         return t("mcp.status.initialization");
       case "requires_authentication":
         return t("mcp.card.requiresAuth");
+      case "requires_approval":
+        return t("mcp.status.requiresApproval");
     }
   };
 
@@ -672,7 +676,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
     if (status === "error") {
       return <ErrorIcon color="error" fontSize="small" />;
     }
-    if (status === "requires_authentication") {
+    if (status === "requires_authentication" || status === "requires_approval") {
       return <LockIcon color="warning" fontSize="small" />;
     }
     return <Spinner size="small" color="primary" />;
@@ -1332,6 +1336,11 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </>
         ))}
 
+        {status === "requires_approval" && (
+          <Alert severity="warning" sx={{ mt: 1, overflowWrap: "anywhere" }}>
+            {error || t("mcp.status.requiresApproval")}
+          </Alert>
+        )}
         {status === "error" && modern && (
           <Box
             sx={{

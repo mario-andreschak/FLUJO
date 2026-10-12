@@ -4,6 +4,7 @@ import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
 import { trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
+import { attachLocalHostLaunch } from './localHost';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
   type ManagedMcpIsolation,
@@ -1113,7 +1114,7 @@ export function createStdioTransport(
     const transportoptions: StdioServerParameters = {
       command: command,
       args: args,
-      env: { ...env, ...(runtimeBroker ? (isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) : {}), ...workloadEnv },
+      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
       cwd: cwd,
       stderr: isolation ? 'ignore' : 'pipe',
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -1126,7 +1127,13 @@ export function createStdioTransport(
 
     transport = new StdioClientTransport(transportoptions);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
-    else attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else {
+      attachShippedWorkspaceReadiness(transport, config, cwd);
+      attachLocalHostLaunch(transport, config, current => JSON.stringify([
+        stdioConfigKey(current, options?.isolateRuntimeHome === true), capabilityKey(current),
+      ]));
+    }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
