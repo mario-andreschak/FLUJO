@@ -22,21 +22,19 @@ import type {
   McpUiResourcePermissions,
   McpUiUpdateModelContextRequest,
 } from '@modelcontextprotocol/ext-apps/app-bridge';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import {
-  CallToolResultSchema,
-  type CallToolResult,
-  JSONRPCMessage,
-  type MessageExtraInfo,
-  type Tool,
-} from '@modelcontextprotocol/sdk/types.js';
-import { useI18n } from '@/frontend/contexts/I18nContext';
-import { useStorage } from '@/frontend/contexts/StorageContext';
+import { CallToolResultSchema } from '@modelcontextprotocol/core';
 import type {
+  CallToolResult,
+  JSONRPCMessage,
+  MessageExtraInfo,
+  Tool,
   Transport,
   TransportSendOptions,
-} from '@modelcontextprotocol/sdk/shared/transport.js';
+} from '@modelcontextprotocol/client';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 import { mcpService } from '@/frontend/services/mcp';
+import { makeMcpAppClient } from './mcpAppClient';
 import {
   MAX_UI_RESOURCE_BYTES,
   canonicalizeLoopbackCspOrigin,
@@ -282,7 +280,7 @@ export function validateModelContext(
 }
 
 /**
- * Stable SEP-1865 uses one ContentBlock for ui/message while ext-apps 1.x
+ * Stable SEP-1865 uses one ContentBlock for ui/message while ext-apps 1.x/2.x
  * validates its compatibility array shape. Normalize at the transport boundary
  * before AppBridge schema validation so conforming Views reach the handler.
  */
@@ -651,75 +649,6 @@ export function getSafeOpenLinkUrl(rawUrl: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * A minimal browser stand-in for the MCP SDK `Client` that AppBridge drives.
- * AppBridge only ever calls `getServerCapabilities()` and
- * `request({method, params}, schema, {signal})` on it (plus a
- * `setNotificationHandler` we do not use because we never advertise
- * listChanged). We proxy the two request methods that matter — `tools/call`
- * and `resources/read` — through FLUJO's existing backend API, which keeps the
- * app calls subject to the same server the app came from.
- */
-function makeClientShim(
-  serverName: string,
-  ownerScope: string,
-  onAccessRevoked: (message: string) => void,
-): Client {
-  const shim = {
-    getServerCapabilities: () => ({ tools: {}, resources: {} }),
-    setNotificationHandler: () => { /* no listChanged advertised */ },
-    request: async (
-      req: { method: string; params?: unknown },
-      _resultSchema?: unknown,
-      options?: { signal?: AbortSignal },
-    ) => {
-      const { method, params } = req;
-      if (method === 'tools/call') {
-        // App-initiated tool call. Scoped to the app's own server (the shim is
-        // bound to serverName). The dedicated backend path additionally checks
-        // `_meta.ui.visibility` before dispatch, so model-only tools cannot be
-        // reached through the app bridge.
-        const callParams = asRecord(params);
-        const requestedToolName = typeof callParams?.name === 'string' ? callParams.name : undefined;
-        if (!requestedToolName) throw new Error('MCP App tool call is missing a tool name');
-        log.info(`MCP App tools/call: ${serverName}/${requestedToolName}`);
-        const r = await mcpService.callToolFromApp(
-          serverName,
-          requestedToolName,
-          asRecord(callParams?.arguments) ?? {},
-          undefined,
-          options?.signal,
-          ownerScope,
-        );
-        if (r?.httpStatus === 403) {
-          const message = r?.error || 'MCP Apps access was disabled for this server';
-          onAccessRevoked(message);
-          throw new Error(message);
-        }
-        if (!r || r.success === false) throw new Error(r?.error || `Tool call failed: ${requestedToolName}`);
-        return r.data;
-      }
-      if (method === 'resources/read') {
-        const readParams = asRecord(params);
-        const requestedUri = typeof readParams?.uri === 'string' ? readParams.uri : undefined;
-        if (!requestedUri) throw new Error('MCP App resource read is missing a URI');
-        const r = await mcpService.readResourceFromApp(serverName, requestedUri);
-        if (r?.httpStatus === 403) {
-          const message = r?.error || 'MCP Apps access was disabled for this server';
-          onAccessRevoked(message);
-          throw new Error(message);
-        }
-        if (!r || r.success === false) throw new Error(r?.error || `Resource read failed: ${requestedUri}`);
-        return r.data;
-      }
-      if (method === 'resources/list') return { resources: [] };
-      if (method === 'resources/templates/list') return { resourceTemplates: [] };
-      throw new Error(`MCP App requested unsupported method: ${method}`);
-    },
-  };
-  return shim as unknown as Client;
 }
 
 function safeParse(raw: string | undefined): unknown {
@@ -1397,7 +1326,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         });
       };
       const bridge = new AppBridge(
-        makeClientShim(serverName, ownerScopeRef.current, revokeAccess),
+        makeMcpAppClient(serverName, ownerScopeRef.current, revokeAccess, mcpService,
+          tool => log.info(`MCP App tools/call: ${serverName}/${tool}`)),
         HOST_INFO,
         {
           openLinks: {},
