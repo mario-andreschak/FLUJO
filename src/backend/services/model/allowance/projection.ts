@@ -8,8 +8,14 @@ export function projectModelAllowance(model: Model, accountGroup: string | undef
   const adapter = resolveModelAdapter(model.provider, model.adapter);
   const provider = adapter === 'claude-cli' ? 'claude' : adapter === 'codex-cli' ? 'codex' : model.provider ?? 'unknown';
   const supported = !model.fallbackPolicy && (provider === 'claude' || (provider === 'codex' && !model.ApiKey));
+  let localInference = false;
+  if (model.provider === 'ollama') {
+    try { localInference = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(new URL(model.baseUrl || 'http://localhost:11434').hostname.toLowerCase()); }
+    catch { /* An unrecognized endpoint must not imply local inference. */ }
+  }
   const base: ModelAllowance = {
     modelId: model.id, modelName: model.displayName || model.name, provider,
+    billing: supported ? 'subscription' : localInference ? 'local' : 'api',
     ...(model.fallbackPolicy ? { policyModelIds: [...model.fallbackPolicy.modelIds] } : {}),
     accountGroup, status: supported ? 'unknown' : 'unavailable',
     observedAt: snapshot?.observedAt ?? null, source: snapshot?.source ?? null,

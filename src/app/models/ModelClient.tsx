@@ -480,7 +480,7 @@ export default function ModelClient() {
   return (
     <>
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
-      <StickySearchBar mode="page">
+      <StickySearchBar mode="container">
       <Paper
         elevation={0}
         variant="outlined"

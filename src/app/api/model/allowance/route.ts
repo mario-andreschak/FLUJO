@@ -13,7 +13,16 @@ async function response(request: NextRequest, refresh: boolean) {
   const locked = await assertUnlocked(); if (locked) return locked;
   if (hasExecutionExtensionContext()) return NextResponse.json({ error: 'allowance_unavailable' }, { status: 403, headers });
   try {
-    const snapshot = refresh ? await refreshWorkspaceAllowance(request.signal) : await workspaceAllowance();
+    let modelIds: string[] | undefined;
+    if (refresh && request.headers.get('content-type')?.includes('application/json')) {
+      const body = await request.json().catch(() => null);
+      if (!body || !Array.isArray(body.modelIds) || body.modelIds.length > 512
+        || !body.modelIds.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+        return NextResponse.json({ error: 'invalid_allowance_selection' }, { status: 400, headers });
+      }
+      modelIds = body.modelIds;
+    }
+    const snapshot = refresh ? await refreshWorkspaceAllowance(request.signal, modelIds) : await workspaceAllowance();
     return NextResponse.json(snapshot, { headers });
   } catch {
     // Native stderr and account details must never become HTTP error payloads.

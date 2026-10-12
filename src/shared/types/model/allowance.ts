@@ -1,5 +1,6 @@
 /** Account allowance is independent of token consumption and context capacity. */
 export type AllowanceProvider = 'claude' | 'codex';
+export type AllowanceFailureReason = 'collection-failed' | 'usage-permission' | 'rate-limited';
 export interface AllowanceWindow {
   id: string;
   label: string;
@@ -10,7 +11,7 @@ export interface AllowanceWindow {
 }
 export interface AllowanceSnapshot {
   provider: AllowanceProvider;
-  source: 'claude-sdk-usage' | 'codex-app-server';
+  source: 'claude-sdk-usage' | 'claude-oauth-usage' | 'codex-app-server';
   observedAt: string;
   windows: AllowanceWindow[];
 }
@@ -19,13 +20,17 @@ export interface ModelAllowance {
   modelName?: string;
   policyModelIds?: string[];
   provider: string;
+  /** Subscription meters apply to account plans, never local inference or API credit. */
+  billing?: 'subscription' | 'api' | 'local';
   /** Ephemeral opaque group: models with this value share an account allowance. */
   accountGroup?: string;
   status: 'available' | 'unknown' | 'unavailable' | 'stale';
   observedAt: string | null;
   source: AllowanceSnapshot['source'] | null;
   windows: AllowanceWindow[];
-  reason?: 'not-observed' | 'unsupported' | 'expired' | 'collection-failed';
+  reason?: 'not-observed' | 'unsupported' | 'expired' | AllowanceFailureReason;
+  refreshFailed?: boolean;
+  retryAt?: string;
 }
 export interface WorkspaceAllowance {
   models: ModelAllowance[];
@@ -34,6 +39,11 @@ export interface WorkspaceAllowance {
 }
 
 export const ALLOWANCE_MAX_AGE_MS = 5 * 60 * 1000;
+
+export function isSubscriptionAllowance(row: ModelAllowance): boolean {
+  return row.billing === 'subscription' || (row.billing === undefined
+    && (row.provider === 'claude' || row.provider === 'codex') && row.reason !== 'unsupported');
+}
 
 /** Expired observations never imply that a reset has restored 100% allowance. */
 export function currentAllowanceWindows(snapshot: AllowanceSnapshot, now = Date.now()): AllowanceWindow[] {

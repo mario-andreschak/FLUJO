@@ -31,7 +31,7 @@ test('GET reads cache only and prevents HTTP response caching', async () => {
 test('POST supplies request cancellation to the telemetry refresh', async () => {
   const request = new NextRequest('http://localhost/api/model/allowance', { method: 'POST' });
   expect((await POST(request)).status).toBe(200);
-  expect(refreshWorkspaceAllowance).toHaveBeenCalledWith(request.signal);
+  expect(refreshWorkspaceAllowance).toHaveBeenCalledWith(request.signal, undefined);
 });
 
 test.each([GET, POST])('locked requests never access allowance services', async handler => {
@@ -52,4 +52,16 @@ test('provider/native diagnostics cannot leak through HTTP errors', async () => 
   const response = await POST(new NextRequest('http://localhost/api/model/allowance', { method: 'POST' }));
   expect(response.status).toBe(503);
   expect(await response.json()).toEqual({ error: 'allowance_unavailable' });
+});
+
+test('POST checks only the requested connections, with a bounded validated selection', async () => {
+  const request = new NextRequest('http://localhost/api/model/allowance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelIds: ['claude'] }) });
+  expect((await POST(request)).status).toBe(200);
+  expect(refreshWorkspaceAllowance).toHaveBeenCalledWith(request.signal, ['claude']);
+});
+
+test.each([null, { modelIds: [''] }, { modelIds: [42] }, { modelIds: Array(513).fill('model') }])('invalid selections do not start account collection', async body => {
+  const request = new NextRequest('http://localhost/api/model/allowance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  expect((await POST(request)).status).toBe(400);
+  expect(refreshWorkspaceAllowance).not.toHaveBeenCalled();
 });
