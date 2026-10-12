@@ -117,7 +117,7 @@ function resolveModelId(
 export function synthesizeQuickChatFlow(
   selection: QuickChatSelection,
   context: {
-    models: NonNullable<CompileContext['models']>;
+    models: Array<NonNullable<CompileContext['models']>[number] & { supportsTools?: boolean }>;
     servers: Array<{ name: string }>;
     serverTools?: Record<string, string[]>;
     /** Backend-resolved bundled FLUJO connection; never a caller-selected identity. */
@@ -141,6 +141,10 @@ export function synthesizeQuickChatFlow(
   const resolvedModelId = resolveModelId(selection.modelId, context.models);
   if (!resolvedModelId) {
     return { flow: null, error: `Unknown model "${selection.modelId}".` };
+  }
+  if (!identity && context.discoveryServer
+    && context.models.find(model => model.id === resolvedModelId)?.supportsTools === false) {
+    return { flow: null, error: 'Choose an AI that can use connected apps, or connect one on the AI page.' };
   }
 
   const knownServers = new Set(context.servers.map((s) => s.name));

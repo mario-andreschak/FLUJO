@@ -56,7 +56,7 @@ describe('Quick Chat discovery bootstrap', () => {
   it('keeps saved-agent conversion scoped to its explicit selection', () => {
     const { flow } = synthesizeQuickChatFlow({ modelId: 'model-1', servers: [{ name: 'github', enabledTools: ['search'] }] }, discoveryContext, { flowId: 'saved-agent', flowName: 'Saved agent' });
     expect(mcpNodes(flow!).map(node => node.data.properties?.boundServer)).toEqual(['github']);
-    expect(chatNode(flow!).data.properties?.promptTemplate).toBeUndefined();
+    expect(chatNode(flow!).data.properties?.promptTemplate).toBe('');
   });
 });
 

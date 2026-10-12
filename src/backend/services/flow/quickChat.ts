@@ -10,6 +10,7 @@
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { modelService } from '@/backend/services/model';
+import { materializeFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { mcpService } from '@/backend/services/mcp';
 import { shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
 import {
@@ -73,7 +74,7 @@ export async function buildQuickChatFlow(
     serverTools[selected.name] = listed.tools.map((tool) => tool.name);
   }
   const result = synthesizeQuickChatFlow(selection, {
-    models,
+    models: models.map(model => materializeFallbackPolicy(model, models)),
     servers: enabled.map((config) => ({ name: config.name })),
     serverTools,
     discoveryServer: discovery.name,

@@ -1,4 +1,5 @@
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
+import { executionApprovalFailure } from './executionApproval';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
@@ -46,6 +47,9 @@ declare global {
   // able to see that a startup is in progress so it can report "connecting"
   // instead of a misleading "configured but not connected" error.
   var __mcp_connecting: Set<string> | undefined;
+  // Startup and status routes may use different service instances. Keep expected
+  // execution-approval failures visible and warning deduplication shared by both.
+  var __mcp_approval_failures: Map<string, MCPServiceResponse> | undefined;
   // True from process boot until startEnabledServers() finishes its first sweep.
   var __mcp_starting_up: boolean | undefined;
   var __mcp_starting_up_by_workspace: Map<string, boolean> | undefined;
@@ -76,6 +80,9 @@ if (typeof global.__mcp_clients === "undefined") {
 }
 if (typeof global.__mcp_connecting === "undefined") {
   global.__mcp_connecting = new Set<string>();
+}
+if (typeof global.__mcp_approval_failures === "undefined") {
+  global.__mcp_approval_failures = new Map<string, MCPServiceResponse>();
 }
 if (typeof global.__mcp_starting_up === "undefined") {
   global.__mcp_starting_up = true;
@@ -364,6 +371,9 @@ export class MCPService {
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
   private lastConnectionErrorBase: Map<string, string> = new Map();
+  private get approvalFailures(): Map<string, MCPServiceResponse> {
+    return scopedRegistry('approvalFailures', global.__mcp_approval_failures!);
+  }
   private get lastConnectionError(): Map<string, string> {
     return scopedRegistry("lastConnectionError", this.lastConnectionErrorBase);
   }
@@ -670,9 +680,9 @@ export class MCPService {
         } else {
           log.warn(`Failed to reconnect server ${serverName}: ${result.error}`);
           // Don't retry if authentication is required
-          if (result.requiresAuthentication) {
+          if (result.requiresAuthentication || result.requiresApproval) {
             log.info(
-              `Server ${serverName} requires authentication, stopping retry attempts`,
+              `Server ${serverName} needs user action, stopping retry attempts`,
             );
             this.connectionRetryAttempts.delete(serverName);
             return;
@@ -682,6 +692,10 @@ export class MCPService {
         }
       } catch (error) {
       if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
+        if (executionApprovalFailure(error)) {
+          this.connectionRetryAttempts.delete(serverName);
+          return;
+        }
         log.error(
           `Error during retry connection for server ${serverName}:`,
           error,
@@ -1062,6 +1076,7 @@ export class MCPService {
           await assertMcpIsolationDispatch(client, config.name, config);
           log.info(`connectServer: Server ${config.name} is already connected`);
           this.lastConnectionError.delete(config.name);
+          this.approvalFailures.delete(config.name);
           // The connection is established - a pending retry (e.g. scheduled by a
           // zombie's late close) must not fire against it later.
           this.clearRetryTimer(config.name);
@@ -1376,6 +1391,7 @@ export class MCPService {
       // and cancel any pending retry so an old timer can't fire against the fresh
       // connection later (the retry state is orphaned once we're connected).
       this.lastConnectionError.delete(config.name);
+      this.approvalFailures.delete(config.name);
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
       await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
@@ -1416,6 +1432,19 @@ export class MCPService {
       if (config.transport === 'stdio') {
         revokeMcpAppRuntimeBrokerForServer(config.name);
       }
+      const approvalFailure = executionApprovalFailure(error);
+      if (approvalFailure) {
+        this.clearRetryTimer(config.name);
+        this.connectionRetryAttempts.delete(config.name);
+        const previous = this.approvalFailures.get(config.name);
+        if (previous?.errorCode !== approvalFailure.errorCode) {
+          log.warn(`MCP server ${config.name}: ${approvalFailure.error}`);
+        }
+        this.approvalFailures.set(config.name, approvalFailure);
+        this.lastConnectionError.set(config.name, approvalFailure.error!);
+        return approvalFailure;
+      }
+      this.approvalFailures.delete(config.name);
       log.error(
         `connectServer: Failed to connect to server ${config.name}:`,
         error,
@@ -1734,6 +1763,11 @@ export class MCPService {
     } catch (error) {
       if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       finishDiagnostics();
+      const approvalFailure = executionApprovalFailure(error);
+      if (approvalFailure) {
+        emit({ type: 'result', success: false, error: approvalFailure.error });
+        return approvalFailure;
+      }
       log.warn(`testConnection: Failed to connect to ${config.name}:`, diagnosticRedactor.redact(formatErrorChain(error)));
 
       const requiresAuthentication = isAuthRequiredError(error);
@@ -3287,6 +3321,7 @@ export class MCPService {
       }
       this.stderrLogs.delete(serverName);
       this.lastConnectionError.delete(serverName);
+      this.approvalFailures.delete(serverName);
 
       await this.handleConnectionStateChange(updatedConfig.name, updatedConfig);
     } else {
@@ -3479,6 +3514,8 @@ export class MCPService {
   async getServerStatus(serverName: string): Promise<{
     status: string;
     message?: string;
+    errorCode?: string;
+    requiresApproval?: boolean;
     stderrOutput?: string;
     stdioOAuth?: MCPStdioOAuthStatus;
   }> {
@@ -3502,6 +3539,11 @@ export class MCPService {
     // oauthScopes. In that mixed state, missing FLUJO-managed OAuth tokens must not
     // override the proven working connection with a stale auth-required badge.
     const hasLiveClient = !!this.getClient(serverName);
+    const approvalFailure = this.approvalFailures.get(serverName);
+    if (!hasLiveClient && approvalFailure) {
+      return { status: 'requires_approval', message: approvalFailure.error,
+        errorCode: approvalFailure.errorCode, requiresApproval: true };
+    }
 
     // Check if this is a disconnected streamable server that requires OAuth but has no tokens
     if (config.transport === "streamable") {

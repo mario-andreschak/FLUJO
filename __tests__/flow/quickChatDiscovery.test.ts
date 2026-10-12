@@ -63,3 +63,25 @@ it('surfaces a selected app failure rather than dropping its tools', async () =>
   mockTools.mockResolvedValue({ tools: [], error: 'App authentication required' });
   expect(await buildQuickChatFlow({ ...selection, servers: [{ name: 'Calendar' }] })).toMatchObject({ success: false, statusCode: 503, error: 'App authentication required' });
 });
+
+it('rejects a known text-only model before creating a tool-bound conversation', async () => {
+  mockModels.mockResolvedValue([{ id: 'model-1', name: 'Text AI', supportsTools: false }]);
+  expect(await buildQuickChatFlow(selection)).toMatchObject({
+    success: false, statusCode: 400, error: expect.stringContaining('Choose an AI that can use connected apps'),
+  });
+});
+
+it('qualifies fallback policy members instead of trusting the policy metadata', async () => {
+  const models = [
+    { id: 'text', name: 'Text AI', supportsTools: false },
+    { id: 'text-two', name: 'Another text AI', supportsTools: false },
+    { id: 'model-1', name: 'policy/text', fallbackPolicy: { modelIds: ['text', 'text-two'] } },
+  ];
+  mockModels.mockResolvedValue(models);
+  expect(await buildQuickChatFlow(selection)).toMatchObject({ success: false, statusCode: 400 });
+  mockModels.mockResolvedValue([
+    ...models, { id: 'tools', name: 'App AI', supportsTools: true },
+    { id: 'mixed', name: 'policy/mixed', fallbackPolicy: { modelIds: ['text', 'tools'] } },
+  ]);
+  expect(await buildQuickChatFlow({ ...selection, modelId: 'mixed' })).toMatchObject({ success: true });
+});

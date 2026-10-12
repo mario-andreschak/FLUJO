@@ -87,6 +87,37 @@ it('starts ordinary Quick Chat without fetching or selecting apps or tool schema
 
 afterEach(() => window.localStorage.removeItem(LOCALE_STORAGE_KEY));
 
+it('chooses an app-capable model when the preferred model cannot use tools', async () => {
+  mockLoadModels.mockResolvedValue([
+    { id: 'text', name: 'Text AI', supportsTools: false },
+    { id: 'model-1', name: 'Friendly AI', supportsTools: true },
+  ]);
+  const view = dialog('en', 'text', false);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start chat' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Start chat' }));
+  await waitFor(() => expect(view.onStart).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'model-1' })));
+});
+
+it.each(['en', 'es'] as const)('offers model connection recovery for an incompatible fallback policy in %s', async locale => {
+  mockLoadModels.mockResolvedValue([
+    { id: 'text', name: 'Text AI', supportsTools: false },
+    { id: 'text-two', name: 'Another text AI', supportsTools: false },
+    { id: 'fallback', name: 'policy/text', fallbackPolicy: { modelIds: ['text', 'text-two'] } },
+  ]);
+  dialog(locale, 'fallback', false);
+  expect(await screen.findByRole('link', { name: translate(locale, 'models.connectAi') })).toHaveAttribute('href', '/models?add=1');
+  expect(screen.getByText(translate(locale, 'chat.quick.toolModelRequired'))).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: translate(locale, 'chat.quick.start') })).not.toBeInTheDocument();
+});
+
+it('retains a text-only model for saved-agent authoring', async () => {
+  mockLoadModels.mockResolvedValue([{ id: 'text', name: 'Text AI', supportsTools: false }]);
+  const view = dialog('en', 'text', true);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start chat' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Start chat' }));
+  await waitFor(() => expect(view.onStart).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'text' })));
+});
+
 describe.each(locales)('Quick Chat recovery in $locale', (messages) => {
   const text = {
     ...messages,

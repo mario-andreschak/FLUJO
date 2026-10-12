@@ -335,6 +335,11 @@ export default function ModelConnectionWizard({
   const sessionRef = useRef(0);
   const capabilityRequestRef = useRef(0);
   const operationRef = useRef(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open && error) errorRef.current?.focus();
+  }, [error, open]);
 
   // A parent may close/reopen the dialog while a request is pending. The
   // external operation may finish, but its UI result belongs to that session.
@@ -612,6 +617,11 @@ export default function ModelConnectionWizard({
         });
         if (!current()) return;
         if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.modelDownloadFailed', { model: modelName }));
+        // The download completed independently of saving the FLUJO connection.
+        // Keep that confirmation so a failed save can retry without another pull.
+        setOllama((capability) => capability && !capability.installedModels.includes(modelName)
+          ? { ...capability, installedModels: [...capability.installedModels, modelName] }
+          : capability);
       } catch (pullError) {
         if (!current()) return;
         operationRef.current = false;
@@ -816,7 +826,7 @@ export default function ModelConnectionWizard({
           {!ollamaLoading && ollama ? (
             <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1.5}>
-                <Box>
+                <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 720 }}>{t('models.wizard.recommendedModel', { model: ollamaModel })}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     {ollama.ollamaReachable
@@ -840,15 +850,16 @@ export default function ModelConnectionWizard({
             <Box sx={{ my: 2 }}>
               <LinearProgress />
               <Typography variant="body2" sx={{ mt: 1 }}>{t('models.wizard.downloading', { model: ollamaModel })}</Typography>
-              {ollamaProgress.length ? <Typography component="pre" variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>{ollamaProgress.join('\n')}</Typography> : null}
+              {ollamaProgress.length ? <Typography component="pre" variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 160, overflowY: 'auto' }}>{ollamaProgress.join('\n')}</Typography> : null}
             </Box>
           ) : null}
           <Button
             variant="contained"
             size="large"
-            startIcon={busy || ollamaPulling ? <CircularProgress size={18} color="inherit" /> : <DownloadRoundedIcon />}
+            startIcon={busy || ollamaPulling ? <CircularProgress size={18} color="inherit" /> : ollamaInstalled ? <AutoAwesomeRoundedIcon /> : <DownloadRoundedIcon />}
             onClick={() => void connectOllama()}
             disabled={!ollama?.ollamaReachable || busy || ollamaPulling}
+            sx={{ width: { xs: '100%', sm: 'auto' }, minHeight: 48, overflowWrap: 'anywhere' }}
           >
             {ollamaInstalled ? t('models.wizard.connectModel', { model: ollamaModel }) : t('models.wizard.downloadConnect', { model: ollamaModel })}
           </Button>
@@ -1012,7 +1023,7 @@ export default function ModelConnectionWizard({
     <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-labelledby={titleId}>
       <DialogContent
         data-tour="ai-setup-wizard"
-        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto', '@media (prefers-reduced-motion: reduce)': { '& [data-setup-decoration]': { animation: 'none' } } }}
+        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto', '& .MuiButton-root': { minHeight: 44 }, '& .MuiIconButton-root': { width: 44, height: 44 }, '@media (prefers-reduced-motion: reduce)': { '& [data-setup-decoration]': { animation: 'none' } } }}
       >
         <Box aria-hidden data-setup-decoration sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
         <Box aria-hidden data-setup-decoration sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
@@ -1032,7 +1043,7 @@ export default function ModelConnectionWizard({
             </Box>
           </Box>
 
-          {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
+          {error ? <Alert ref={errorRef} tabIndex={-1} severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
           <Box
             key={step}
             ref={stepContentRef}
