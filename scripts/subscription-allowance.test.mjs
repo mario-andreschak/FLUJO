@@ -106,3 +106,11 @@ test('standalone CLI uses owner environment and emits safe JSON from one GET', a
   assert.doesNotMatch(stdout, /synthetic-cli-token/);
   assert.equal(requests.length, 1); assert.equal(requests[0].method, 'GET'); assert.equal(requests[0].authorization, 'Bearer synthetic-cli-token');
 });
+
+test('the helper preserves subscription billing and provider retry metadata without a balance', () => {
+  const input = source();
+  Object.assign(input.models[0], { billing: 'subscription', reason: 'rate-limited', status: 'unknown', refreshFailed: true, retryAt: new Date(Date.now() + 2245_000).toISOString(), windows: [] });
+  assert.equal(projectSubscriptionAllowance(input).models[0].reason, 'rate-limited');
+  assert.equal(projectSubscriptionAllowance(input).models[0].billing, 'subscription');
+  assert.equal(projectSubscriptionAllowance(input).models[0].retryAt, input.models[0].retryAt);
+});

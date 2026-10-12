@@ -32,10 +32,13 @@ export function projectSubscriptionAllowance(input, now = Date.now()) {
     return {
       modelId: text(model.modelId), ...(model.modelName === undefined ? {} : { modelName: text(model.modelName) }),
       provider: text(model.provider, 128), status, observedAt,
-      source: model.source === null ? null : choice(model.source, ['claude-sdk-usage', 'codex-app-server']),
+      source: model.source === null ? null : choice(model.source, ['claude-sdk-usage', 'claude-oauth-usage', 'codex-app-server']),
       ...(model.accountGroup === undefined ? {} : { accountGroup: typeof model.accountGroup === 'string' && /^[a-f0-9]{64}$/.test(model.accountGroup) ? model.accountGroup : invalid() }),
       ...(model.policyModelIds === undefined ? {} : { policyModelIds: rows(model.policyModelIds, 512).map(value => text(value)) }),
-      ...(model.reason === undefined ? {} : { reason: choice(model.reason, ['not-observed', 'unsupported', 'expired', 'collection-failed']) }),
+      ...(model.reason === undefined ? {} : { reason: choice(model.reason, ['not-observed', 'unsupported', 'expired', 'collection-failed', 'usage-permission', 'rate-limited']) }),
+      ...(model.billing === undefined ? {} : { billing: choice(model.billing, ['subscription', 'api', 'local']) }),
+      ...(model.refreshFailed === undefined ? {} : { refreshFailed: typeof model.refreshFailed === 'boolean' ? model.refreshFailed : invalid() }),
+      ...(model.retryAt === undefined ? {} : { retryAt: iso(model.retryAt) }),
       windows: rows(model.windows, 128).map(rawWindow => {
         const window = object(rawWindow);
         const resetAt = window.resetAt === null ? null : iso(window.resetAt);

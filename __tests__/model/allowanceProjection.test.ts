@@ -39,6 +39,13 @@ test('unknown subscriptions and unsupported API adapters stay distinct', () => {
   expect(projectModelAllowance({ ...model, provider: 'codex', adapter: 'codex-cli' }, undefined, undefined, now).status).toBe('unavailable');
 });
 
+test('subscription accounts, API billing and local inference remain different even under a shared provider name', () => {
+  expect(projectModelAllowance(model, undefined, undefined, now).billing).toBe('subscription');
+  expect(projectModelAllowance({ ...model, provider: 'ollama', adapter: 'openai', baseUrl: 'http://localhost:11434/v1' }, undefined, undefined, now).billing).toBe('local');
+  expect(projectModelAllowance({ ...model, provider: 'ollama', adapter: 'openai', baseUrl: 'https://hosted.example/v1' }, undefined, undefined, now).billing).toBe('api');
+  expect(projectModelAllowance({ ...model, provider: 'openrouter', adapter: 'openai-responses' }, undefined, undefined, now).billing).toBe('api');
+});
+
 test('fresh unknown provider data differs from an expired observation', () => {
   const unknown = { ...snapshot, windows: [{ ...snapshot.windows[0], remainingPercent: null }] };
   expect(projectModelAllowance(model, 'opaque', unknown, now).status).toBe('unknown');
@@ -67,4 +74,12 @@ test('snapshot reads are detached and late observations cannot overwrite newer o
   expect(readAllowanceSnapshot(key)?.windows[0].remainingPercent).toBe(60);
   recordAllowanceSnapshot(key, { ...snapshot, observedAt: new Date(now - 1).toISOString(), windows: [] });
   expect(readAllowanceSnapshot(key)?.windows).toHaveLength(3);
+});
+
+test('an empty SDK result cannot erase a fresh direct account-usage observation', () => {
+  const key = allowanceAccountKey('claude', 'empty-observation-regression');
+  const fresh = { ...snapshot, source: 'claude-oauth-usage' as const };
+  recordAllowanceSnapshot(key, fresh);
+  recordAllowanceSnapshot(key, { ...snapshot, observedAt: new Date(now + 1000).toISOString(), windows: [] });
+  expect(readAllowanceSnapshot(key)).toEqual(fresh);
 });
