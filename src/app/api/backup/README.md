@@ -1,199 +1,25 @@
-# Backup API
+# Ordinary workspace backup
 
-This directory contains the API endpoint for creating backups of application data, including storage files and MCP server repositories.
-
-## Architecture
-
-The Backup API follows a simple architecture:
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  Frontend       │◄───►│  API Layer      │◄───►│  Storage        │
-│  Components     │     │  (route.ts)     │     │  Files          │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                               │
-                               ▼
-                        ┌─────────────────┐
-                        │                 │
-                        │  JSZip Library  │
-                        │                 │
-                        └─────────────────┘
-```
-
-## Components
-
-### API Handler
-
-- `route.ts`: Handles HTTP POST requests to create backup archives containing selected application data
-
-### Integration with Other Services
-
-- **Storage Utilities**: Accesses storage files to include in the backup
-- **JSZip Library**: Creates ZIP archives containing the backup data
-
-## Flow of Control
-
-1. Frontend components make a POST request with selections of what to include in the backup
-2. API handler validates the selections
-3. API handler creates a new ZIP archive and adds metadata
-4. For each selected item, the API reads the corresponding storage file or directory
-5. The API generates the ZIP file and returns it as a downloadable attachment
-
-## API Endpoints
-
-### POST /api/backup
-
-Creates a backup of selected application data.
-
-#### Request Body
+`POST /api/backup` creates a ZIP for the selected workspace after owner, unlock and local-request checks. Persona-attributed conversation snapshots additionally require strict loopback access.
 
 ```json
-{
-  "selections": [
-    "models",
-    "mcpServers",
-    "flows",
-    "chatHistory",
-    "settings",
-    "globalEnvVars",
-    "encryptionKey",
-    "mcpServersFolder"
-  ]
-}
+{"selections":["models","mcpServers","flows","chatHistory","settings","globalEnvVars"]}
 ```
 
-The `selections` array can include any combination of the following items:
-- `models`: Model configurations
-- `mcpServers`: MCP server configurations
-- `flows`: Flow definitions
-- `chatHistory`: Chat history records
-- `settings`: Application settings
-- `globalEnvVars`: Global environment variables
-- `encryptionKey`: Encryption key data
-- `mcpServersFolder`: The entire MCP servers directory (including source code)
+These six selections are allowed. Duplicate selections are collapsed; unsupported selections are excluded. An empty effective selection returns 400. Requests containing only `encryptionKey` or `mcpServersFolder` return 400. Selecting either alongside an allowed component never reads or exports the encryption metadata or raw server folder.
 
-#### Response
+The ZIP retains `backup-info.json` and `storage/<storage-key>.json`, plus modern `storage/conversations/<id>.json` entries. Metadata records `credentials: "omitted"`, the effective selections and omitted legacy selections. Responses use `Cache-Control: no-store`.
 
-The response is a ZIP file with the following headers:
+Ordinary exports omit recognized credential fields and encrypted/failed-encryption envelopes recursively. Model endpoint fields are omitted because endpoints can embed credentials. Global variables retain names with empty values and secret metadata; no variable values are exported, including unmarked legacy values. MCP entries retain descriptive metadata only (name, transport, description, folder, favorite, disabled); launch commands, arguments, environment, HTTP headers, URLs, OAuth state and arbitrary nested transport options are excluded.
 
-```
-Content-Type: application/zip
-Content-Disposition: attachment; filename=flujo-backup.zip
-```
+Restoring these ordinary archives requires reconfiguring credentials and connections. The export does not update stored values or create corruption recovery files. User-authored flow/chat text and descriptive metadata are preserved; a credential embedded in prose or code is not detected by this structural filter. Review that content before sharing.
 
-The ZIP file contains:
-- `backup-info.json`: Metadata about the backup
-- `storage/`: Directory containing storage files
-- `mcp-servers/`: Directory containing MCP server repositories (if selected)
+Older ZIPs remain readable by the existing restore endpoint, including its existing explicit legacy selections. Ordinary backups do not migrate stored ciphertext or rotate keys. Deliberate encrypted recipient transfer uses separate endpoints and fresh recipient keying; see [the transfer contract](../../../../docs/security/recipient-credential-transfer-v1.md). Installed-artifact qualification and resumable in-place migration remain separate work.
 
-## Backup Structure
+## Partial archive outcomes
 
-### Metadata
+Successful ZIP responses retain HTTP 200 and the version `1.0` entry layout. Additive `backup-info.json` fields include `status` (`complete` or `partial`) and `selectionResults`, keyed only by accepted selections with `completed`, `empty`, or `failed` values. Empty selections are distinct from failures. A partially saved selection is marked `failed`; the archive can still contain its successfully serialized entries. No exception text, file paths, or failed record identifiers are included in this outcome metadata.
 
-The `backup-info.json` file contains metadata about the backup:
+`X-Flujo-Backup-Status` mirrors the archive status. Backup Settings downloads partial archives and displays a warning rather than complete-success messaging. If an export has failures and no data entries, it returns a generic HTTP 500 instead of a metadata-only partial ZIP. An entirely empty, error-free export remains compatible with HTTP 200.
 
-```json
-{
-  "version": "1.0",
-  "timestamp": "2025-03-04T14:30:00.000Z",
-  "selections": ["models", "flows", "mcpServersFolder"]
-}
-```
-
-### Storage Files
-
-Storage files are saved in the `storage/` directory with their original filenames:
-
-```
-storage/models.json
-storage/flows.json
-storage/mcp_servers.json
-storage/chat_history.json
-storage/theme.json
-storage/global_env_vars.json
-storage/encryption_key.json
-```
-
-> **Flows:** on disk flows are stored one-file-per-flow (`db/flows/<id>.json`),
-> but the backup route aggregates them back into a single `storage/flows.json`
-> array so the archive format stays stable across FLUJO versions (older versions
-> can still restore newer backups, and vice-versa).
-
-### MCP Servers Folder
-
-If selected, the MCP servers folder is saved in the `mcp-servers/` directory, excluding:
-- `node_modules/` directories
-- `.git/` directories
-- Files larger than 10MB
-
-## Error Handling
-
-The API returns appropriate HTTP status codes and error messages:
-
-- `400 Bad Request`: Missing or invalid selections
-- `500 Internal Server Error`: Server-side errors
-
-Error responses include a descriptive message:
-
-```json
-{
-  "error": "Error message"
-}
-```
-
-## Usage Examples
-
-### Create a Backup
-
-```typescript
-// Create a backup with selected items
-const response = await fetch('/api/backup', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    selections: ['models', 'flows', 'mcpServers', 'settings']
-  })
-});
-
-if (response.ok) {
-  // Convert the response to a blob
-  const blob = await response.blob();
-  
-  // Create a download link
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'flujo-backup.zip';
-  
-  // Trigger the download
-  document.body.appendChild(a);
-  a.click();
-  
-  // Clean up
-  window.URL.revokeObjectURL(url);
-  document.body.removeChild(a);
-} else {
-  const errorData = await response.json();
-  console.error(`Error creating backup: ${errorData.error}`);
-}
-```
-
-## Security Considerations
-
-### Sensitive Data
-
-The backup may contain sensitive information:
-
-1. **Encryption Keys**: If selected, the backup includes encryption keys
-2. **API Keys**: Environment variables may contain API keys
-3. **Credentials**: MCP server configurations may include credentials
-
-Users should be advised to keep backup files secure and consider excluding sensitive data when creating backups for sharing.
-
-### File Size Limitations
-
-To prevent excessive file sizes and potential denial of service:
-
-1. Files larger than 10MB are excluded from MCP server backups
-2. `node_modules` and `.git` directories are excluded
+Flows are read from authoritative legacy storage and strict modern collection snapshots, with modern records winning by ID. This path validates flow snapshots, preserves live-owner visibility, and does not use the UI flow cache or run flow migration. Backup-specific legacy reads distinguish missing files from interrupted empty/whitespace files and reject malformed JSON without generic storage corruption-recovery writes. Stored ciphertext is read unchanged and redacted at the export boundary. Strict chat-history reads must succeed before Persona authority preflight and archive construction; unreadable history fails closed. Individual later serialization failures are recorded and do not prevent remaining safe entries from being saved.

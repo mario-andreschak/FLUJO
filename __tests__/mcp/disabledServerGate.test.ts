@@ -16,7 +16,7 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 // Stored configs are the source of truth for `disabled`: 'srv' is enabled, 'dead' is disabled.
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerConfigs: jest.fn(async () => [
-    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
+    { name: 'srv', transport: 'streamable', serverUrl: 'https://disabled-gate.example.test/mcp', disabled: false },
     { name: 'dead', transport: 'stdio', command: 'x', args: [], env: {}, disabled: true },
   ]),
   saveConfig: jest.fn(async () => ({ success: true })),
@@ -39,6 +39,8 @@ jest.mock('@/backend/services/mcp/resources', () => ({
 const createNewClientMock = jest.fn();
 const createTransportMock = jest.fn((..._args: unknown[]) => ({}));
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: (...args: unknown[]) => createNewClientMock(...args),
   createTransport: (...args: unknown[]) => createTransportMock(...args),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),

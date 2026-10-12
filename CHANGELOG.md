@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Workspace startup
+
+- Flush runtime lock records before publishing them, report the damaged lock path when owner data is unreadable, and retain the original startup failure for later requests. Preserve the bundled MCP runtime build helper when migrating legacy workspace data.
+
+### Schedule recovery
+
+- Keep saved schedules and pause status visible when a refresh fails, with a clear retry action. Confirm pause and delete changes before updating the display, recover from lost deletion responses, and release stalled requests after 30 seconds. Improve phone controls and localized recovery messages while retaining the calendar/day entry.
+
 ### Personas
 
 - Keep first-start migration reports accurate after workspace-lock setup, distinguish directory moves from merges, and release the startup lock if snapshot admission fails.
@@ -31,6 +39,10 @@
 - Let children send progress, questions and results to their parent while working. Keep a finishing parent available for its background children, and identify agent senders in chat and conversation previews.
 - Fix detached child IDs, cancellation propagation, concurrent launch admission and late completion races. Keep communication scoped to the current parent/child run and workspace.
 - Deliver steering during quiet Claude and Codex SDK turns, preserve pending input on delivery failures, and keep tool-call/result pairs intact. See [Subflow communication](docs/SUBFLOW_COMMUNICATION.md).
+
+### Models
+
+- Discover the context window of vLLM-served models: model listing now reads `max_model_len` when an OpenAI-compatible catalogue has no `context_length`.
 
 ## [3.46.1] — 2026-09-28
 

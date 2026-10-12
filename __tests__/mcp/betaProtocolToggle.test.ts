@@ -36,19 +36,18 @@ import {
   getStdioOAuthMrtrController,
 } from "@/backend/services/mcp/betaClient";
 import type { MCPServerConfig, MCPStdioConfig } from "@/shared/types/mcp";
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { fingerprintTrustedHostExecutable } from '@/backend/services/security/trustedHostMcp';
 
-const stdio = (command = "node"): MCPServerConfig =>
-  ({
-    name: "srv",
-    transport: "stdio",
-    command,
-    args: ["server.js"],
-    env: {},
-    disabled: false,
-    rootPath: "",
-    _buildCommand: "",
-    _installCommand: "",
-  }) as unknown as MCPServerConfig;
+let approvedHost: ReturnType<typeof installTrustedHostProfile>;
+const stdio = (command = "node"): MCPStdioConfig => {
+  const executable = command === 'node' ? approvedHost.config.command : approvedHost.alternateCommand;
+  const config: MCPStdioConfig = { ...approvedHost.config, command: executable,
+    trustedHost: { ...approvedHost.config.trustedHost!, entryPoint: executable,
+      executableDigest: fingerprintTrustedHostExecutable(executable) } };
+  approvedHost.approve(config);
+  return config;
+};
 
 const streamable = (): MCPServerConfig =>
   ({
@@ -66,7 +65,9 @@ function withTransport<T>(client: T, transport: unknown): T {
 
 beforeEach(() => {
   loadItemMock.mockReset();
+  approvedHost = installTrustedHostProfile({ name: 'srv' });
 });
+afterEach(() => approvedHost.restore());
 
 describe("isMcpBetaProtocolEnabled", () => {
   it("is disabled when the settings blob has no experimental section", async () => {

@@ -1,4 +1,6 @@
 const rememberMemoryMock = jest.fn();
+const createPersonaGoalWorkItemMock = jest.fn();
+const readPersonaGoalRuntimeMock = jest.fn();
 const searchPersonaMemoryMock = jest.fn();
 const unpinMemoryFromCoreMock = jest.fn();
 const suggestBehaviorInstructionImprovementMock = jest.fn();
@@ -6,6 +8,7 @@ const suggestBehaviorInstructionImprovementMock = jest.fn();
 jest.mock('@/backend/services/enduringAgents', () => ({
   correctMemory: jest.fn(),
   createPersonaWorkItem: jest.fn(),
+  createPersonaGoalWorkItem: (...args: unknown[]) => createPersonaGoalWorkItemMock(...args),
   forgetMemory: jest.fn(),
   pinMemoryToCore: jest.fn(),
   promoteRunTodoToWorkItem: jest.fn(),
@@ -16,6 +19,10 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   ),
   unpinMemoryFromCore: (...args: unknown[]) => unpinMemoryFromCoreMock(...args),
   updatePersonaWorkItem: jest.fn(),
+}));
+
+jest.mock('@/backend/services/enduringAgents/goalRuntimeRead', () => ({
+  readPersonaGoalRuntime: (...args: unknown[]) => readPersonaGoalRuntimeMock(...args),
 }));
 
 jest.mock('@/backend/services/enduringAgents/memoryKernel', () => ({
@@ -74,6 +81,50 @@ describe('authored Persona tools', () => {
     expect(PERSONA_NATIVE_ABILITY_IDS.every(isPersonaToolName)).toBe(true);
     expect(buildPersonaTools(PERSONA_NATIVE_ABILITY_IDS).map((tool) => tool.name))
       .toEqual(PERSONA_NATIVE_ABILITY_IDS);
+  });
+
+  it('binds Goal creation to the current Persona Activity and passes an explicit caller key', async () => {
+    const args = {
+      idempotency_key: 'goal-request-1',
+      title: 'Follow up a synthetic case',
+      success_criteria: 'Record a verified next action and terminal outcome.',
+    };
+    await expect(executePersonaTool('work_item_goal_create', args, {}))
+      .resolves.toMatchObject({ success: false });
+    expect(createPersonaGoalWorkItemMock).not.toHaveBeenCalled();
+    const executionAuthority = authority();
+    createPersonaGoalWorkItemMock.mockResolvedValue({ created: true, item: { id: 'goal_saved' } });
+    await expect(executePersonaTool('work_item_goal_create', args, {
+      executionAuthority,
+      personaAttribution: {
+        personaId: 'persona_owner', activityId: 'activity_owner', behaviorRevisionId: 'revision_owner',
+      },
+    })).resolves.toMatchObject({ success: true, data: { created: true, item: { id: 'goal_saved' } } });
+    expect(createPersonaGoalWorkItemMock).toHaveBeenCalledWith(expect.objectContaining({
+      personaId: 'persona_owner', idempotencyKey: 'goal-request-1',
+      goal: { successCriteria: args.success_criteria },
+      sourceRefs: [{ kind: 'activity', id: 'activity_owner' }],
+    }), { executionAuthority });
+  });
+
+  it('requires a trusted current Activity before and after owner-scoped Goal runtime reads', async () => {
+    const args = { goal_id: 'goal_owner' };
+    await expect(executePersonaTool('work_item_runtime_read', args, {}))
+      .resolves.toMatchObject({ success: false });
+    expect(readPersonaGoalRuntimeMock).not.toHaveBeenCalled();
+    const executionAuthority = authority();
+    readPersonaGoalRuntimeMock.mockResolvedValue({ state: 'accepted_running', verified: true });
+    const ctx = { executionAuthority, personaAttribution: {
+      personaId: 'persona_owner', activityId: 'activity_owner', behaviorRevisionId: 'revision_owner',
+    } };
+    await expect(executePersonaTool('work_item_runtime_read', args, ctx))
+      .resolves.toMatchObject({ success: true, data: { state: 'accepted_running' } });
+    expect(readPersonaGoalRuntimeMock).toHaveBeenCalledWith('persona_owner', 'goal_owner');
+    expect(executionAuthority.assertCurrent).toHaveBeenCalledTimes(2);
+    (executionAuthority.assertCurrent as jest.Mock).mockRejectedValueOnce(new Error('stale Activity'));
+    await expect(executePersonaTool('work_item_runtime_read', args, ctx))
+      .resolves.toMatchObject({ success: false, error: 'stale Activity' });
+    expect(readPersonaGoalRuntimeMock).toHaveBeenCalledTimes(1);
   });
 
   it('requires evidence ids on the maintenance-only remember facade', () => {

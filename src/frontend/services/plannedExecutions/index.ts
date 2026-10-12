@@ -7,6 +7,27 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/plannedExecutions');
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
+async function withRequestDeadline<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error('The request took too long. Please try again.');
+      reject(error);
+      controller.abort(error);
+    }, REQUEST_TIMEOUT_MS);
+  });
+
+  try {
+    // Keep the deadline active while the caller decodes the response body too.
+    return await Promise.race([request(controller.signal), deadline]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 export interface PlannedExecutionListEntry {
   execution: PlannedExecution;
   status: PlannedExecutionStatus;
@@ -16,6 +37,14 @@ export interface PlannedExecutionListEntry {
 export interface PlannedExecutionListResponse {
   paused: boolean;
   executions: PlannedExecutionListEntry[];
+}
+
+export interface SchedulePreviewResult {
+  valid: boolean;
+  error?: string;
+  nextRuns: string[];
+  /** Preview could not be checked; this does not mean the schedule is invalid. */
+  unavailable?: boolean;
 }
 
 export type PlannedExecutionInput = Omit<
@@ -41,19 +70,32 @@ export type PlannedExecutionPatch = Omit<
 
 /**
  * Frontend service for the Planned Executions REST API.
- * Follows the flowService singleton pattern: list reads swallow errors and
- * return empty data; mutations return { success, error }.
+ * List reads return empty data on failure unless the caller opts into errors;
+ * mutations return { success, error }.
  */
 class PlannedExecutionsService {
-  async list(): Promise<PlannedExecutionListResponse> {
-    try {
-      const response = await fetch('/api/planned-executions');
+  async list(options: { throwOnError?: boolean } = {}): Promise<PlannedExecutionListResponse> {
+    const read = async (signal?: AbortSignal): Promise<PlannedExecutionListResponse> => {
+      const response = signal
+        ? await fetch('/api/planned-executions', { signal })
+        : await fetch('/api/planned-executions');
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      return await response.json();
+      const body = await response.json();
+      if (options.throwOnError && (
+        typeof body?.paused !== 'boolean' || !Array.isArray(body?.executions)
+      )) {
+        throw new Error('Invalid planned executions response');
+      }
+      return body;
+    };
+
+    try {
+      return options.throwOnError ? await withRequestDeadline(read) : await read();
     } catch (error) {
       log.warn('Failed to list planned executions', error);
+      if (options.throwOnError) throw error;
       return { paused: false, executions: [] };
     }
   }
@@ -99,12 +141,14 @@ class PlannedExecutionsService {
 
   async delete(id: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await fetch(`/api/planned-executions/${id}`, { method: 'DELETE' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        return { success: false, error: body?.error || `HTTP ${response.status}` };
-      }
-      return { success: true };
+      return await withRequestDeadline(async (signal) => {
+        const response = await fetch(`/api/planned-executions/${id}`, { method: 'DELETE', signal });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          return { success: false, error: body?.error || `HTTP ${response.status}` };
+        }
+        return { success: true };
+      });
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Request failed' };
     }
@@ -112,16 +156,19 @@ class PlannedExecutionsService {
 
   async setPaused(paused: boolean): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await fetch('/api/planned-executions', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paused }),
+      return await withRequestDeadline(async (signal) => {
+        const response = await fetch('/api/planned-executions', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paused }),
+          signal,
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          return { success: false, error: body?.error || `HTTP ${response.status}` };
+        }
+        return { success: true };
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        return { success: false, error: body?.error || `HTTP ${response.status}` };
-      }
-      return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Request failed' };
     }
@@ -157,20 +204,32 @@ class PlannedExecutionsService {
   async previewSchedule(
     cron: string,
     timezone?: string
-  ): Promise<{ valid: boolean; error?: string; nextRuns: string[] }> {
+  ): Promise<SchedulePreviewResult> {
     try {
-      const response = await fetch('/api/planned-executions/preview-schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cron, timezone }),
+      return await withRequestDeadline(async (signal) => {
+        const response = await fetch('/api/planned-executions/preview-schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cron, timezone }),
+          signal,
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const body = await response.json();
+        if (
+          typeof body?.valid !== 'boolean' || !Array.isArray(body?.nextRuns) ||
+          !body.nextRuns.every((run: unknown) => typeof run === 'string' && Number.isFinite(Date.parse(run))) ||
+          (body.error !== undefined && typeof body.error !== 'string')
+        ) {
+          throw new Error('Invalid schedule preview response');
+        }
+        return body;
       });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
     } catch (error) {
       return {
         valid: false,
+        unavailable: true,
         error: error instanceof Error ? error.message : 'Preview failed',
         nextRuns: [],
       };

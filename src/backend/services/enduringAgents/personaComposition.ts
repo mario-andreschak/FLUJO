@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
 import type { Flow } from '@/shared/types/flow';
@@ -708,6 +709,7 @@ export async function updatePersonaComposition(
     await validateUpdate(persona, bundle, input);
 
     const composition = nextPreferences(persona.composition, input);
+    await assertBundledFlujoWorkloadEffectCurrent();
     await updatePersona(PersonaSchema.parse({
       ...persona,
       ...(input.name !== undefined ? { name: input.name } : {}),

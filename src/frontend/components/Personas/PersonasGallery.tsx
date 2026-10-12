@@ -162,7 +162,7 @@ export default function PersonasGallery({
         }}
       >
         <Box>
-          <Typography variant="overline" color="primary.main" fontWeight={800}>
+          <Typography variant="overline" color="primary.main" sx={{ fontWeight: 800 }}>
             {t('personas.eyebrow')}
           </Typography>
           <Typography
@@ -176,7 +176,7 @@ export default function PersonasGallery({
             {t('personas.description')}
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
           <Button
             startIcon={<RefreshRounded />}
             onClick={refresh}
@@ -191,7 +191,7 @@ export default function PersonasGallery({
       </Box>
 
       {loading && items.length === 0 ? (
-        <Stack alignItems="center" justifyContent="center" minHeight="45vh" spacing={2} role="status">
+        <Stack sx={{ alignItems: "center", justifyContent: "center", minHeight: "45vh" }} spacing={2} role="status">
           <CircularProgress aria-hidden="true" />
           <Typography color="text.secondary">{t('personas.loading')}</Typography>
         </Stack>
@@ -216,7 +216,7 @@ export default function PersonasGallery({
           >
             <PersonAddRounded />
           </Avatar>
-          <Typography variant="h5" component="h2" fontWeight={750}>{t('personas.empty')}</Typography>
+          <Typography variant="h5" component="h2" sx={{ fontWeight: 750 }}>{t('personas.empty')}</Typography>
           <Typography color="text.secondary" sx={{ maxWidth: 520, mx: 'auto', my: 1.5 }}>
             {t('personas.emptyHelp')}
           </Typography>

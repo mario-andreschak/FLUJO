@@ -1,12 +1,13 @@
 # Flujo Documentation
 
-Start with [your first successful conversation](./getting-started/README.md), then add the tools and automation your agent needs. The guides below explain supported workflows and the limits of experimental features.
+Start with [installation](./start-here/install.md), then [create a reusable Website Builder](./journeys/website-builder.md) and give it a real site brief in chat. For a smaller first step, try [one successful AI-only conversation](./getting-started/README.md). The guides below explain supported workflows and the limits of experimental features.
 
 ## Documentation Structure
 
 The documentation is organized into the following sections:
 
 - **[Getting Started](./getting-started/README.md)**: Quick start guides and installation instructions
+- **[Start here](./start-here/README.md)**: Website Builder, additional examples, setup choices and everyday help
 - **[Features](./features/README.md)**: Detailed documentation for Flujo's features
 - **[Static node guide](./features/flows/static-node.md)**: Authoring deterministic conversation injection and synthetic tool exchanges
 - **[Architecture](./architecture/README.md)**: Technical architecture and design documentation, including [Static node re-entry semantics](./architecture/static-node-reentry-semantics.md)

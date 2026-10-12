@@ -2030,7 +2030,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         <MainContent>
           <ToolbarContainer elevation={1}>
             <Box sx={{ minWidth: 0, flex: '1 1 180px', display: { xs: 'none', md: 'block' } }}>
-              <Typography data-ask-flujo-flow-field="name" variant="subtitle2" fontWeight={850} noWrap>{flowName}</Typography>
+              <Typography data-ask-flujo-flow-field="name" variant="subtitle2" sx={{ fontWeight: 850 }} noWrap>{flowName}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {authoringMode === 'guided'
                   ? tp('flows.builder.step', nodes.filter(node => ['process', 'subflow', 'signal'].includes(node.data.type)).length)
@@ -2078,7 +2078,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   size="small"
                   checked={authoringMode === 'advanced'}
                   onChange={(event) => setAuthoringMode(event.target.checked ? 'advanced' : 'guided')}
-                  inputProps={{ 'aria-label': t('flows.builder.expertView') }}
+                  slotProps={{ input: { 'aria-label': t('flows.builder.expertView') } }}
                 />
               }
               label={authoringMode === 'advanced' ? t('flows.builder.expert') : t('flows.builder.easy')}
@@ -2104,7 +2104,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   anchorEl={addNodeMenuAnchor}
                   open={!!addNodeMenuAnchor}
                   onClose={() => setAddNodeMenuAnchor(null)}
-                  MenuListProps={{ 'aria-label': t('flows.builder.addNode') }}
+                  slotProps={{ list: { 'aria-label': t('flows.builder.addNode') } }}
                 >
                   {addableNodeTypes.map((nodeType) => (
                     <MenuItem
@@ -2115,7 +2115,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                       }}
                     >
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="subtitle2" fontWeight={750}>{nodeType.label}</Typography>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{nodeType.label}</Typography>
                         <Typography variant="caption" color="text.secondary">{nodeType.description}</Typography>
                       </Box>
                     </MenuItem>
@@ -2204,7 +2204,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   anchorEl={moreActionsMenuAnchor}
                   open={!!moreActionsMenuAnchor}
                   onClose={() => setMoreActionsMenuAnchor(null)}
-                  MenuListProps={{ 'aria-labelledby': 'more-actions-button' }}
+                  slotProps={{ list: { 'aria-labelledby': 'more-actions-button' } }}
                 >
               {authoringMode === 'advanced' && (
                 <MenuItem

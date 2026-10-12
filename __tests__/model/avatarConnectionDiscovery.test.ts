@@ -1,0 +1,50 @@
+import { codexModelHints, discoverAvatarConnections } from '@/backend/services/avatar/connectionDiscovery';
+import type { Model } from '@/shared/types/model';
+
+describe('passive avatar connection discovery', () => {
+  const dependencies = () => ({
+    codexRuntime: jest.fn(async () => 'available' as const),
+    claudeRuntime: jest.fn(async () => 'available' as const),
+    codexLogin: jest.fn(async () => ({ authentication: 'login-detected' as const })),
+  });
+  it('offers both SDK runtimes without treating the Claude host login as a saved Flujo token', async () => {
+    const result = await discoverAvatarConnections([], dependencies());
+    expect(result.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'codex-subscription', authentication: 'login-detected', nextAction: 'use-and-test', verification: 'untested' }),
+      expect.objectContaining({ kind: 'claude-subscription', authentication: 'needs-connection', nextAction: 'connect-token', verification: 'untested' }),
+    ]));
+    expect(result.candidates.every(candidate => candidate.modelChoices.every(model => model.source === 'fallback'))).toBe(true);
+  });
+  it('projects only allowlisted saved-model metadata and excludes models unable to work with tools', async () => {
+    const models: Model[] = [
+      { id: 'claude', name: 'sonnet', displayName: 'My Claude', ApiKey: 'SECRET_TOKEN', adapter: 'claude-cli', provider: 'claude-subscription', promptTemplate: 'PRIVATE_PROMPT', baseUrl: 'https://PRIVATE.example' },
+      { id: 'image', name: 'image-model', ApiKey: 'OTHER_SECRET', supportsTools: false },
+    ];
+    const result = await discoverAvatarConnections(models, dependencies());
+    expect(result.candidates[0]).toMatchObject({ id: 'saved:claude', authentication: 'configured', verification: 'untested' });
+    expect(result.candidates.some(candidate => candidate.modelId === 'image')).toBe(false);
+    for (const secret of ['SECRET_TOKEN', 'PRIVATE_PROMPT', 'PRIVATE.example', 'OTHER_SECRET']) expect(JSON.stringify(result)).not.toContain(secret);
+  });
+  it('keeps an incompatible Codex store distinct from logout and never marks it usable', async () => {
+    const deps = { ...dependencies(), codexLogin: jest.fn(async () => ({ authentication: 'incompatible' as const, reasonCode: 'credential-store-incompatible' })) };
+    const result = await discoverAvatarConnections([{ id: 'c', name: 'gpt-5', ApiKey: '', adapter: 'codex-cli' }], deps);
+    expect(result.candidates[0]).toMatchObject({ authentication: 'incompatible', nextAction: 'repair' });
+    expect(result.candidates.find(candidate => candidate.kind === 'codex-subscription')).toMatchObject({ authentication: 'incompatible', nextAction: 'repair' });
+  });
+  it('keeps missing runtimes visible for repair even when login metadata exists', async () => {
+    const result = await discoverAvatarConnections([], { ...dependencies(), codexRuntime: async () => 'missing' });
+    expect(result.candidates[0]).toMatchObject({ runtime: 'missing', authentication: 'login-detected', nextAction: 'repair' });
+  });
+  it('offers cached model hints without turning catalog visibility into verification', async () => {
+    const result = await discoverAvatarConnections([], { ...dependencies(), codexModels: async () => [{ id: 'cached-model', label: 'cached-model', source: 'host-cache' }] });
+    expect(result.candidates[0]).toMatchObject({ verification: 'untested', modelChoices: [{ id: 'cached-model', source: 'host-cache' }] });
+  });
+  it('uses only recent dated catalog hints and discards stale, undated or future catalogs', () => {
+    const now = Date.parse('2026-10-03T02:00:00Z');
+    const model = { slug: 'current-hint', visibility: 'list', private_metadata: 'EXCLUDE' };
+    expect(codexModelHints({ fetched_at: '2026-10-03T01:00:00Z', models: [model, { slug: 'hidden-hint', visibility: 'hide' }] }, now))
+      .toEqual([{ id: 'current-hint', label: 'current-hint', source: 'host-cache', updatedAt: now - 60 * 60_000 }]);
+    for (const fetched_at of [undefined, 'invalid', '2026-10-01T01:00:00Z', '2026-10-04T01:00:00Z'])
+      expect(codexModelHints({ fetched_at, models: [model] }, now)).toEqual([]);
+  });
+});

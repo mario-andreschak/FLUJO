@@ -203,7 +203,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
           </ListItemIcon>
           <ListItemText
             primary={t(item.label)}
-            primaryTypographyProps={{ fontWeight: active ? 700 : 590, fontSize: '0.92rem' }}
+            slotProps={{ primary: { sx: { fontWeight: active ? 700 : 590, fontSize: '0.92rem' } } }}
           />
           {active && (
             <Box
@@ -567,7 +567,7 @@ export default function Navigation() {
 
         {isCompact && <Box sx={{ flex: 1 }} />}
 
-        <Stack direction="row" spacing={0.7} alignItems="center">
+        <Stack direction="row" spacing={0.7} sx={{ alignItems: "center" }}>
           {/* The workspace menu owns namespace selection and management. It is
               always visible so a single-workspace install can create another. */}
           {!isCompact && <WorkspaceTabs />}
@@ -673,15 +673,7 @@ export default function Navigation() {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         ModalProps={{ keepMounted: true }}
-        slotProps={{
-          backdrop: {
-            sx: {
-              backgroundColor: alpha(theme.palette.common.black, isDarkMode ? 0.2 : 0.1),
-              backdropFilter: 'blur(2px)',
-            },
-          },
-        }}
-        PaperProps={{
+        slotProps={{ paper: {
           sx: {
             display: 'flex',
             flexDirection: 'column',
@@ -692,6 +684,13 @@ export default function Navigation() {
             backgroundImage: `linear-gradient(145deg, ${alpha(theme.palette.primary.main, 0.06)}, transparent 42%)`,
             boxShadow: `18px 0 56px ${alpha(theme.palette.common.black, isDarkMode ? 0.3 : 0.12)}`,
             backdropFilter: 'blur(20px) saturate(125%)',
+          },
+        },
+          backdrop: {
+            sx: {
+              backgroundColor: alpha(theme.palette.common.black, isDarkMode ? 0.2 : 0.1),
+              backdropFilter: 'blur(2px)',
+            },
           },
         }}
       >
@@ -729,7 +728,7 @@ export default function Navigation() {
         </Box>
 
         <Box sx={{ mx: 1, mb: 1.4, p: 1.2, border: 1, borderColor: 'divider', borderRadius: 3, bgcolor: alpha(theme.palette.success.main, 0.06) }}>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack direction="row" sx={{ alignItems: "center" }} spacing={1}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main', boxShadow: `0 0 12px ${theme.palette.success.main}` }} />
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
               {t('nav.privateWorkspace')}

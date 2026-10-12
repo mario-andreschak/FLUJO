@@ -15,8 +15,9 @@ import {
   revokeMcpAppRuntimeBrokerForServer,
 } from '@/backend/mcpApps/runtimeBroker';
 import { createStdioTransport } from '@/backend/services/mcp/connection';
-import type { MCPServerConfig } from '@/shared/types/mcp';
 import { runWithWorkspace } from '@/utils/workspace';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 
 const PROOF_PREFIX = 'flujo-mcp-app-runtime-proof-v1:';
 const IDE_TOKEN = 'A'.repeat(32);
@@ -138,25 +139,22 @@ describe('MCP App sidecar runtime broker', () => {
     else process.env.FLUJO_MCP_APP_SANDBOX_PORT = priorSandboxPort;
   });
 
-  it('injects registration credentials only into the managed MCP Apps transport', () => {
-    const config = {
-      name: 'runtime-broker-factory-test',
-      transport: 'stdio',
-      command: 'node',
-      args: [],
-      env: {},
-      disabled: false,
-      autoApprove: [],
-      rootPath: process.cwd(),
-      _buildCommand: '',
-      _installCommand: '',
-      enableMcpApps: true,
-    } as MCPServerConfig;
+  it('injects registration credentials only into the managed MCP Apps transport', async () => {
+    const profile = installTrustedHostProfile({ name: 'runtime-broker-factory-test' });
+    const config = profile.config;
+    config.enableMcpApps = true;
+    const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+    config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames,
+      MCP_APP_RUNTIME_REGISTER_URL_ENV, MCP_APP_RUNTIME_REGISTER_TOKEN_ENV] };
+    profile.approve();
+    const transports: Array<{ close(): Promise<void> }> = [];
+    try {
 
     const managed = createStdioTransport(config, { enableRuntimeBroker: true }) as unknown as {
       _serverParams?: { env?: Record<string, string> };
       __flujoRuntimeBrokerLeaseId?: string;
     };
+    transports.push(managed as unknown as { close(): Promise<void> });
     expect(managed.__flujoRuntimeBrokerLeaseId).toMatch(/^[0-9a-f-]{36}$/);
     expect(managed._serverParams?.env?.[MCP_APP_RUNTIME_REGISTER_URL_ENV]).toMatch(
       /^http:\/\/127\.0\.0\.1:\d+\/_flujo\/runtime\/register$/,
@@ -170,10 +168,15 @@ describe('MCP App sidecar runtime broker', () => {
       _serverParams?: { env?: Record<string, string> };
       __flujoRuntimeBrokerLeaseId?: string;
     };
+    transports.push(probe as unknown as { close(): Promise<void> });
     expect(probe.__flujoRuntimeBrokerLeaseId).toBeUndefined();
     expect(probe._serverParams?.env?.[MCP_APP_RUNTIME_REGISTER_URL_ENV]).toBeUndefined();
     expect(probe._serverParams?.env?.[MCP_APP_RUNTIME_REGISTER_TOKEN_ENV]).toBeUndefined();
     expect(getMcpAppRuntimeBrokerSnapshot().capabilities).toHaveLength(0);
+    } finally {
+      await Promise.all(transports.map(transport => transport.close()));
+      profile.restore();
+    }
   });
 
   it('proxies only a proved loopback target and its exact HTTP/WebSocket manifest', async () => {

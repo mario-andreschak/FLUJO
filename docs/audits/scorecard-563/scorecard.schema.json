@@ -1,0 +1,2450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flujo.com.co/schemas/scorecard-563.v1.json",
+  "title": "FLUJO epic 563 contract and evidence ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "epic",
+    "scope",
+    "owners",
+    "profiles",
+    "rubric",
+    "budgets",
+    "agreements",
+    "artifacts",
+    "evidence",
+    "gates",
+    "claims",
+    "issueReconciliation",
+    "assessment"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "epic": {
+      "const": 563
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "originalAuditSha",
+        "sourceBaselineSha",
+        "sourcePackageVersion",
+        "baselineDate",
+        "objective",
+        "profileReduction"
+      ],
+      "properties": {
+        "originalAuditSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "sourceBaselineSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "sourcePackageVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baselineDate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "const": "All nine original dimensions independently reassessed at A- or better"
+        },
+        "profileReduction": {
+          "const": "none"
+        }
+      }
+    },
+    "owners": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/owner"
+      },
+      "minItems": 9
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/profile"
+      },
+      "minItems": 3
+    },
+    "rubric": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/row"
+      },
+      "minItems": 9
+    },
+    "budgets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/budget"
+      },
+      "minItems": 1
+    },
+    "agreements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maintainer",
+        "independentReviewer",
+        "disagreements"
+      ],
+      "properties": {
+        "maintainer": {
+          "$ref": "#/$defs/agreement"
+        },
+        "independentReviewer": {
+          "$ref": "#/$defs/agreement"
+        },
+        "disagreements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      },
+      "minItems": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      },
+      "minItems": 1
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gate"
+      },
+      "minItems": 1
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim"
+      },
+      "minItems": 9
+    },
+    "issueReconciliation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      },
+      "minItems": 11
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "sourceSha",
+        "reviewer",
+        "independent",
+        "artifactIds",
+        "evidenceIds",
+        "grades",
+        "acceptedExperimentalClaimIds"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "completed"
+          ]
+        },
+        "sourceSha": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "independent": {
+          "type": "boolean"
+        },
+        "artifactIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "grades": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dimensionId",
+              "grade",
+              "rationale"
+            ],
+            "properties": {
+              "dimensionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "grade": {
+                "type": "string",
+                "enum": [
+                  "A+",
+                  "A",
+                  "A-",
+                  "B+",
+                  "B",
+                  "B-",
+                  "C+",
+                  "C",
+                  "C-",
+                  "D",
+                  "F"
+                ]
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "minItems": 0
+        },
+        "acceptedExperimentalClaimIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "acceptanceContract": {
+      "title": "Reviewed version 1 acceptance minimums",
+      "description": "Normative policy data consumed by validate-scorecard.mjs for cross-record checks. Change with the schema and ledger contract version under explicit review; proposed targets still require human agreement before measurement.",
+      "type": "object",
+      "const": {
+        "contractVersion": 1,
+        "claims": [
+          {
+            "id": "product-fit-a-minus",
+            "dimensionId": "product-fit",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "pilot-users"
+            ],
+            "requiredKinds": [
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "human-evidence"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "feature-surface-a-minus",
+            "dimensionId": "feature-surface",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "novice-success",
+              "novice-time"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "engineering-a-minus",
+            "dimensionId": "engineering",
+            "profileId": "local-owner",
+            "budgetIds": [],
+            "requiredKinds": [
+              "source-check",
+              "installed-artifact",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "code-health-a-minus",
+            "dimensionId": "code-health",
+            "profileId": "local-owner",
+            "budgetIds": [],
+            "requiredKinds": [
+              "source-check",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "security-a-minus",
+            "dimensionId": "security",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "unauthorized-access",
+              "high-findings"
+            ],
+            "requiredKinds": [
+              "security-review",
+              "installed-artifact"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "dependency-audit"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "maturity-a-minus",
+            "dimensionId": "maturity",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "persona-append-p95",
+              "persona-peak-rss",
+              "persona-rss-growth",
+              "persona-append-flatness",
+              "persona-total-collection",
+              "persona-mailbox",
+              "persona-activities",
+              "persona-dispatches",
+              "persona-pins",
+              "persona-leases",
+              "persona-recall-p95",
+              "runtime-peak-rss",
+              "runtime-rss-growth",
+              "runtime-concurrency",
+              "live-smoke",
+              "live-seven-days",
+              "live-28-days",
+              "live-success-rate",
+              "live-interventions",
+              "live-spend"
+            ],
+            "requiredKinds": [
+              "source-check",
+              "offline-simulation",
+              "installed-artifact"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "persona-current-soak",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "community-a-minus",
+            "dimensionId": "community",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "backup-maintainers",
+              "human-contributors"
+            ],
+            "requiredKinds": [
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "human-evidence"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "docs-a-minus",
+            "dimensionId": "docs",
+            "profileId": "local-owner",
+            "budgetIds": [],
+            "requiredKinds": [
+              "baseline-observation",
+              "independent-assessment"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "production-a-minus",
+            "dimensionId": "production",
+            "profileId": "shared-public",
+            "budgetIds": [
+              "recovery-rto",
+              "backup-rpo",
+              "duplicate-effects"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "security-review",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "worker-operations",
+              "shared-profile",
+              "cross-stream-contracts",
+              "dependency-audit"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "production-local-a-minus",
+            "dimensionId": "production",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "recovery-rto",
+              "backup-rpo",
+              "duplicate-effects"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "security-review",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "local-security",
+              "worker-operations",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "production-worker-a-minus",
+            "dimensionId": "production",
+            "profileId": "persistent-worker",
+            "budgetIds": [
+              "recovery-rto",
+              "backup-rpo",
+              "duplicate-effects"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "security-review",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "local-security",
+              "worker-operations",
+              "dependency-audit",
+              "build-verification",
+              "cross-stream-contracts"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "persona-unattended",
+            "dimensionId": "maturity",
+            "profileId": "persistent-worker",
+            "budgetIds": [
+              "persona-append-p95",
+              "persona-peak-rss",
+              "persona-rss-growth",
+              "live-seven-days",
+              "live-28-days",
+              "live-success-rate",
+              "live-interventions",
+              "duplicate-effects",
+              "live-spend"
+            ],
+            "requiredKinds": [
+              "offline-simulation",
+              "live-provider",
+              "human-study"
+            ],
+            "gateIds": [
+              "persona-current-soak",
+              "persona-manual",
+              "persona-live",
+              "dependency-audit"
+            ],
+            "rubricBound": false,
+            "allowExperimental": true
+          }
+        ],
+        "rubricEvidenceKinds": {
+          "product-fit": [
+            "human-study"
+          ],
+          "feature-surface": [
+            "installed-artifact",
+            "human-study"
+          ],
+          "engineering": [
+            "source-check",
+            "installed-artifact",
+            "human-study"
+          ],
+          "code-health": [
+            "source-check",
+            "human-study"
+          ],
+          "security": [
+            "security-review",
+            "installed-artifact"
+          ],
+          "maturity": [
+            "source-check",
+            "offline-simulation",
+            "installed-artifact"
+          ],
+          "community": [
+            "human-study"
+          ],
+          "docs": [
+            "baseline-observation",
+            "independent-assessment"
+          ],
+          "production": [
+            "installed-artifact",
+            "security-review",
+            "human-study"
+          ]
+        },
+        "humanTargets": {
+          "pilot-users": {
+            "operator": ">=",
+            "limit": 10,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 4838400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "denominator": "All enrolled humans reported; ten independent target users each week, excluding author/bots",
+            "window": "Eight consecutive elapsed weeks",
+            "basis": "#563 published plan; #577 agreement pending"
+          },
+          "novice-success": {
+            "operator": ">=",
+            "limit": 8,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "denominator": "Ten novices; provisioning, drop-offs and missing outcomes separately recorded, no favorable replacement",
+            "window": "One attempt per novice, within 15 minutes",
+            "basis": "#563 published plan; #572/#577 agreement pending"
+          },
+          "novice-time": {
+            "operator": "<=",
+            "limit": 900,
+            "unit": "seconds",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "denominator": "All ten attempts from install start; preprovisioning time separately reported",
+            "window": "Single 15-minute attempt",
+            "basis": "#563 published plan; #572/#577 agreement pending"
+          },
+          "human-contributors": {
+            "operator": ">=",
+            "limit": 3,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 7776000,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 3
+            },
+            "denominator": "Unique humans, excluding author and all bots",
+            "window": "90 elapsed days",
+            "basis": "#563 published plan; #576 agreement pending"
+          },
+          "backup-maintainers": {
+            "operator": ">=",
+            "limit": 2,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 2
+            },
+            "denominator": "Named additional humans completing review and disposable release/recovery drills",
+            "window": "After training; observed drills before acceptance",
+            "basis": "#563 published plan; #576 agreement pending"
+          }
+        },
+        "metricUnits": {
+          "persona-append-p95": "ms",
+          "persona-peak-rss": "bytes",
+          "persona-rss-growth": "bytes",
+          "persona-append-flatness": "ratio",
+          "persona-total-collection": "records",
+          "persona-mailbox": "records",
+          "persona-activities": "records",
+          "persona-dispatches": "records",
+          "persona-pins": "records",
+          "persona-leases": "records",
+          "persona-recall-p95": "ms",
+          "pilot-users": "humans",
+          "novice-success": "humans",
+          "novice-time": "seconds",
+          "backup-maintainers": "humans",
+          "human-contributors": "humans",
+          "runtime-peak-rss": "bytes",
+          "runtime-rss-growth": "bytes",
+          "runtime-concurrency": "lanes",
+          "recovery-rto": "seconds",
+          "backup-rpo": "records",
+          "duplicate-effects": "effects",
+          "unauthorized-access": "operations",
+          "high-findings": "findings",
+          "live-smoke": "seconds",
+          "live-seven-days": "seconds",
+          "live-28-days": "seconds",
+          "live-success-rate": "ratio",
+          "live-interventions": "interventions",
+          "live-spend": "USD"
+        },
+        "unitKinds": {
+          "ms": {
+            "kind": "duration",
+            "millisecondsPerUnit": 1
+          },
+          "seconds": {
+            "kind": "duration",
+            "millisecondsPerUnit": 1000
+          },
+          "ratio": {
+            "kind": "ratio"
+          },
+          "USD": {
+            "kind": "continuous"
+          },
+          "bytes": {
+            "kind": "integer"
+          },
+          "records": {
+            "kind": "integer"
+          },
+          "humans": {
+            "kind": "integer"
+          },
+          "lanes": {
+            "kind": "integer"
+          },
+          "effects": {
+            "kind": "integer"
+          },
+          "operations": {
+            "kind": "integer"
+          },
+          "findings": {
+            "kind": "integer"
+          },
+          "interventions": {
+            "kind": "integer"
+          }
+        },
+        "sourceMetricElapsedBudgets": [
+          "persona-recall-p95"
+        ],
+        "metricEvidenceKinds": {
+          "pilot-users": [
+            "human-study"
+          ],
+          "novice-success": [
+            "human-study"
+          ],
+          "novice-time": [
+            "human-study"
+          ],
+          "human-contributors": [
+            "human-study"
+          ],
+          "backup-maintainers": [
+            "human-study"
+          ],
+          "live-smoke": [
+            "live-provider"
+          ],
+          "live-seven-days": [
+            "live-provider"
+          ],
+          "live-28-days": [
+            "live-provider"
+          ],
+          "live-success-rate": [
+            "live-provider"
+          ],
+          "live-interventions": [
+            "live-provider"
+          ],
+          "live-spend": [
+            "live-provider"
+          ],
+          "runtime-peak-rss": [
+            "installed-artifact"
+          ],
+          "runtime-rss-growth": [
+            "installed-artifact"
+          ],
+          "runtime-concurrency": [
+            "installed-artifact"
+          ],
+          "recovery-rto": [
+            "installed-artifact"
+          ],
+          "backup-rpo": [
+            "installed-artifact"
+          ],
+          "duplicate-effects": [
+            "installed-artifact",
+            "live-provider"
+          ],
+          "unauthorized-access": [
+            "security-review",
+            "independent-assessment"
+          ],
+          "high-findings": [
+            "security-review",
+            "independent-assessment"
+          ],
+          "persona-append-p95": [
+            "offline-simulation"
+          ],
+          "persona-peak-rss": [
+            "offline-simulation"
+          ],
+          "persona-rss-growth": [
+            "offline-simulation"
+          ],
+          "persona-append-flatness": [
+            "offline-simulation"
+          ],
+          "persona-total-collection": [
+            "offline-simulation"
+          ],
+          "persona-mailbox": [
+            "offline-simulation"
+          ],
+          "persona-activities": [
+            "offline-simulation"
+          ],
+          "persona-dispatches": [
+            "offline-simulation"
+          ],
+          "persona-pins": [
+            "offline-simulation"
+          ],
+          "persona-leases": [
+            "offline-simulation"
+          ],
+          "persona-recall-p95": [
+            "offline-simulation",
+            "source-check"
+          ]
+        },
+        "budgetPolicies": {
+          "persona-append-p95": {
+            "operator": "<",
+            "limit": 150,
+            "unit": "ms",
+            "denominator": "Raw append samples for every one of 28 days, 20 Activities/day, seed 459, learning enabled",
+            "window": "28 simulated days; no elapsed-time inference",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 28
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-peak-rss": {
+            "operator": "<=",
+            "limit": 805306368,
+            "unit": "bytes",
+            "denominator": "Daily runtime observations on pinned controlled Node 22 runner",
+            "window": "Entire 28 x 20 simulated workload",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-rss-growth": {
+            "operator": "<=",
+            "limit": 268435456,
+            "unit": "bytes",
+            "denominator": "Matched day-1/final observations on same runner",
+            "window": "28 simulated days",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": true,
+            "ratioMode": null
+          },
+          "persona-append-flatness": {
+            "operator": "<=",
+            "limit": 2,
+            "unit": "ratio",
+            "denominator": "All daily raw append samples and nearest-rank p95",
+            "window": "First seven versus last seven simulated days",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": "derived"
+          },
+          "persona-total-collection": {
+            "operator": "<=",
+            "limit": 1248,
+            "unit": "records",
+            "denominator": "2 x 560 generated Activities + 128; all collection kinds included",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-mailbox": {
+            "operator": "<=",
+            "limit": 500,
+            "unit": "records",
+            "denominator": "All Persona mailbox records",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-activities": {
+            "operator": "<=",
+            "limit": 200,
+            "unit": "records",
+            "denominator": "All Persona Activity records",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-dispatches": {
+            "operator": "<=",
+            "limit": 200,
+            "unit": "records",
+            "denominator": "All Persona flow dispatch records",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-pins": {
+            "operator": "<=",
+            "limit": 200,
+            "unit": "records",
+            "denominator": "All Persona Behavior call pins",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-leases": {
+            "operator": "<=",
+            "limit": 50,
+            "unit": "records",
+            "denominator": "All current and legacy Persona lease records",
+            "window": "After every guarded sweep",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-recall-p95": {
+            "operator": "<",
+            "limit": 150,
+            "unit": "ms",
+            "denominator": "50,000 items; 20 searches, with full-candidate and ranking quality checks",
+            "window": "One exact-revision controlled run",
+            "basis": "docs/performance/persona-memory-recall-benchmark.md",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 20
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "pilot-users": {
+            "operator": ">=",
+            "limit": 10,
+            "unit": "humans",
+            "denominator": "All enrolled humans reported; ten independent target users each week, excluding author/bots",
+            "window": "Eight consecutive elapsed weeks",
+            "basis": "#563 published plan; #577 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 4838400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "novice-success": {
+            "operator": ">=",
+            "limit": 8,
+            "unit": "humans",
+            "denominator": "Ten novices; provisioning, drop-offs and missing outcomes separately recorded, no favorable replacement",
+            "window": "One attempt per novice, within 15 minutes",
+            "basis": "#563 published plan; #572/#577 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "novice-time": {
+            "operator": "<=",
+            "limit": 900,
+            "unit": "seconds",
+            "denominator": "All ten attempts from install start; preprovisioning time separately reported",
+            "window": "Single 15-minute attempt",
+            "basis": "#563 published plan; #572/#577 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "backup-maintainers": {
+            "operator": ">=",
+            "limit": 2,
+            "unit": "humans",
+            "denominator": "Named additional humans completing review and disposable release/recovery drills",
+            "window": "After training; observed drills before acceptance",
+            "basis": "#563 published plan; #576 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 2
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "human-contributors": {
+            "operator": ">=",
+            "limit": 3,
+            "unit": "humans",
+            "denominator": "Unique humans, excluding author and all bots",
+            "window": "90 elapsed days",
+            "basis": "#563 published plan; #576 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 7776000,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 3
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "runtime-peak-rss": {
+            "operator": "<=",
+            "limit": 1073741824,
+            "unit": "bytes",
+            "denominator": "Node 22 controlled 2-CPU/2-GiB Windows/Linux runner, eight mixed lanes with <=four active; >=2 MB parent/<=5.6 MB child transcripts; media separately bounded",
+            "window": "24 elapsed hours; measured admission/refusal plus original #520 reproduction",
+            "basis": "#569 resource owner must ratify workload and admission budgets before measurement; not a current guarantee",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 86400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 24
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "runtime-rss-growth": {
+            "operator": "<=",
+            "limit": 134217728,
+            "unit": "bytes",
+            "denominator": "Same #569 workload, first hour baseline after warmup, no cache reset",
+            "window": "Hours 2 through 24",
+            "basis": "#569 proposal; must distinguish GC/allocator high water and retained growth",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 86400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 24
+            },
+            "allowNegative": true,
+            "ratioMode": null
+          },
+          "runtime-concurrency": {
+            "operator": "<=",
+            "limit": 4,
+            "unit": "lanes",
+            "denominator": "Eight queued lanes; refusal/backpressure counts, owned paused states and archive bytes reported",
+            "window": "24 elapsed hours",
+            "basis": "#569 proposal; does not authorize silently reducing configured parallelism",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 86400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 8
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "recovery-rto": {
+            "operator": "<=",
+            "limit": 120,
+            "unit": "seconds",
+            "denominator": "Ten injected process kills and ten graceful restarts per claimed OS/install profile; readiness plus admitted/suppressed schedule state, not port-open alone",
+            "window": "Twenty fault trials per profile",
+            "basis": "#570/#553 owners must ratify; interrupted effects never blindly replay",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 20
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "backup-rpo": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "records",
+            "denominator": "Ten disposable round trips per claimed profile; corruption/unknown-version/foreign-owner negative controls included",
+            "window": "Ten trials per OS/install profile",
+            "basis": "#570/#567 proposal; coherent writer freeze required before capture",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "duplicate-effects": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "effects",
+            "denominator": "All admitted effect IDs across restart/fault trials; unknown outcomes counted separately, never success",
+            "window": "All recovery trials and authorized live runs",
+            "basis": "#570/#553/#578 proposal",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "unauthorized-access": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "operations",
+            "denominator": "Every positive/negative row of session/token/origin/CSRF/account/workspace/process/export/share/revoke matrix; report exact row count, skipped rows block",
+            "window": "One complete release matrix per profile",
+            "basis": "#566-#568/#574-#575; security owner must sign coverage",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "high-findings": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "findings",
+            "denominator": "All independent review findings; severity dispute remains blocker",
+            "window": "At final independent reassessment",
+            "basis": "#563/#578",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-smoke": {
+            "operator": ">=",
+            "limit": 3600,
+            "unit": "seconds",
+            "denominator": "All due rounds, admitted Activities, verified effects, failures, unscheduled interventions and spend observations",
+            "window": "One elapsed hour, before longer live stages",
+            "basis": "#578 proposal; concrete account/model scope and separately declared enforced monetary envelope remain unset",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 3600,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-seven-days": {
+            "operator": ">=",
+            "limit": 604800,
+            "unit": "seconds",
+            "denominator": "All due rounds and verified effects across restarts; no omitted downtime; >=99% successful due rounds, zero duplicate effects",
+            "window": "Seven consecutive elapsed days",
+            "basis": "#578 proposal; enforceable account/model spend cap and owner authorization required",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 604800,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-28-days": {
+            "operator": ">=",
+            "limit": 2419200,
+            "unit": "seconds",
+            "denominator": "All due rounds and verified effects across entire claim; no simulated-time substitution",
+            "window": "28 consecutive elapsed days, if multi-week autonomy claimed",
+            "basis": "#578; claim stays experimental until demonstrated",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 2419200,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-success-rate": {
+            "operator": ">=",
+            "limit": 0.99,
+            "unit": "ratio",
+            "denominator": "All due rounds, including missed/stalled/rejected/failed; zero denominator fails; planned faults and unscheduled interventions separate",
+            "window": "Each authorized seven/28-day run",
+            "basis": "#505/#578 proposal; requires useful output-quality assessment, not repeated no-op checks",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": "fraction"
+          },
+          "live-interventions": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "interventions",
+            "denominator": "All intervention requests/actions after setup; scheduled fault/control actions also reported separately",
+            "window": "Each claimed unattended live window",
+            "basis": "#505/#578 proposal; human absence cannot be inferred from fixture automation",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-spend": {
+            "operator": "<=",
+            "limit": null,
+            "unit": "USD",
+            "denominator": "All provider charges attributable to the declared run/account/model scope, reconciled with enforced accounting. No numeric cap is declared here; the measurement owner records concrete funding and an accounted limit before acceptance measurement. Existing development/deployment authorization remains in force.",
+            "window": "Per future authorized run",
+            "basis": "#578; null records the undeclared numeric acceptance measurement envelope. The owner supplies concrete funding and accounted budget; existing development/deployment authorization remains in force.",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          }
+        },
+        "retainedSourceFailures": [
+          {
+            "id": "build-verification-hosted-c255b867",
+            "sourceSha": "c255b867b2fc1fe7696e7aa4dcef0f42c5ed256a",
+            "result": "failed",
+            "kind": "source-check",
+            "location": "docs/audits/scorecard-563/evidence/hosted-ci-c255b867-failure.json",
+            "sha256": "ebc9a5ebcdd957b2a9896389ef78571be10da843f8f10dd9b0f4cc99406d05fd"
+          },
+          {
+            "id": "native-codeql-integration-80-failure",
+            "sourceSha": "1a53970d4966136095f747674f3b9e5ea58e34c2",
+            "result": "failed",
+            "kind": "source-check",
+            "location": "docs/audits/scorecard-563/evidence/native-codeql-1a53970d-failure.json",
+            "sha256": "5821bbb4207d3ac96fcb6f72c9cb79ef55ae701a98f972c0f99d29be4e61e5c6"
+          }
+        ]
+      }
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "role",
+        "humanName",
+        "acceptance"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "humanName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acceptance": {
+          "type": "string",
+          "enum": [
+            "unassigned",
+            "accepted"
+          ]
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "status",
+        "trustBoundaries",
+        "osInstallMatrix",
+        "prerequisites",
+        "exclusions",
+        "gateIds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "current-local-envelope",
+            "gated-proposal",
+            "accepted"
+          ]
+        },
+        "trustBoundaries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "osInstallMatrix": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "platform",
+              "methods",
+              "acceptance",
+              "evidenceIds"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "minLength": 1
+              },
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "acceptance": {
+                "type": "string",
+                "enum": [
+                  "documented-unverified",
+                  "pending",
+                  "verified"
+                ]
+              },
+              "evidenceIds": {
+                "type": "array",
+                "minItems": 0,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "gateIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "dimension",
+        "originalGrade",
+        "targetGrade",
+        "ownerId",
+        "baseline",
+        "criteria",
+        "evidenceRequired",
+        "issues"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "originalGrade": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetGrade": {
+          "const": "A-"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "evidenceRequired": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "baseline-observation",
+              "source-check",
+              "offline-simulation",
+              "installed-artifact",
+              "human-study",
+              "live-provider",
+              "security-review",
+              "independent-assessment",
+              "external-agreement"
+            ]
+          },
+          "minItems": 1
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ownerId",
+        "status",
+        "metric",
+        "operator",
+        "limit",
+        "unit",
+        "denominator",
+        "window",
+        "basis",
+        "declaredAt",
+        "agreementEvidenceIds",
+        "observation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "existing-contract",
+            "proposed",
+            "agreed"
+          ]
+        },
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "<",
+            "<=",
+            ">=",
+            ">",
+            "="
+          ]
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "window": {
+          "type": "string",
+          "minLength": 1
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "declaredAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agreementEvidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "observation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clock",
+            "minimumSeconds",
+            "minimumSimulatedDays",
+            "minimumDenominator"
+          ],
+          "properties": {
+            "clock": {
+              "type": "string",
+              "enum": [
+                "elapsed",
+                "simulated",
+                "any"
+              ]
+            },
+            "minimumSeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minimumSimulatedDays": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minimumDenominator": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "agreement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "identity",
+        "evidenceIds"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "agreed",
+            "disagreed"
+          ]
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "identity",
+        "sourceSha",
+        "provenance",
+        "payloadSha256",
+        "metadataEvidenceIds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "source",
+            "npm",
+            "container",
+            "windows-installer",
+            "source-build"
+          ]
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceSha": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "observed-metadata",
+            "verified-content",
+            "not-observed"
+          ]
+        },
+        "payloadSha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadataEvidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "result",
+        "integrity",
+        "sourceSha",
+        "artifactId",
+        "ownerId",
+        "observedAt",
+        "environment",
+        "commands",
+        "raw",
+        "scope",
+        "limits",
+        "budgetIds",
+        "metrics",
+        "window",
+        "links",
+        "profileIds",
+        "artifactProof"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "baseline-observation",
+            "source-check",
+            "offline-simulation",
+            "installed-artifact",
+            "human-study",
+            "live-provider",
+            "security-review",
+            "independent-assessment",
+            "external-agreement"
+          ]
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "pending",
+            "not-evaluated"
+          ]
+        },
+        "integrity": {
+          "type": "string",
+          "enum": [
+            "checksummed",
+            "reported-only"
+          ]
+        },
+        "sourceSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "artifactId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "platform",
+            "node",
+            "provider",
+            "tools"
+          ],
+          "properties": {
+            "platform": {
+              "type": "string",
+              "minLength": 1
+            },
+            "node": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provider": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tools": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "raw": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "location",
+              "sha256",
+              "verification"
+            ],
+            "properties": {
+              "location": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verification": {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "metadata-only",
+                  "not-verified"
+                ]
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "budgetIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "budgetId",
+              "value",
+              "denominator",
+              "numerator"
+            ],
+            "properties": {
+              "budgetId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "number"
+              },
+              "denominator": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "numerator": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "minItems": 0
+        },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "start",
+            "end",
+            "simulatedDays"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "instant",
+                "simulated",
+                "elapsed"
+              ]
+            },
+            "start": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "end": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "simulatedDays": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "profileIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "artifactProof": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "location"
+              ],
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ownerId",
+        "kind",
+        "profileIds",
+        "status",
+        "description",
+        "evidenceIds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "source",
+            "installed",
+            "human",
+            "live",
+            "independent",
+            "external"
+          ]
+        },
+        "profileIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "passed",
+            "failed"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "dimensionId",
+        "profileId",
+        "statement",
+        "status",
+        "requiredKinds",
+        "evidenceIds",
+        "budgetIds",
+        "gateIds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimensionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "source-supported",
+            "release-supported",
+            "experimental"
+          ]
+        },
+        "requiredKinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "baseline-observation",
+              "source-check",
+              "offline-simulation",
+              "installed-artifact",
+              "human-study",
+              "live-provider",
+              "security-review",
+              "independent-assessment",
+              "external-agreement"
+            ]
+          },
+          "minItems": 1
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "budgetIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "gateIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue",
+        "state",
+        "asOf",
+        "sourceStatus",
+        "releaseStatus",
+        "interpretation",
+        "remaining",
+        "evidenceIds"
+      ],
+      "properties": {
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "OPEN",
+            "CLOSED"
+          ]
+        },
+        "asOf": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceStatus": {
+          "type": "string",
+          "enum": [
+            "current-fix-present",
+            "local-unintegrated",
+            "design-open",
+            "reported-automated-pass",
+            "manual-open",
+            "source-proposal"
+          ]
+        },
+        "releaseStatus": {
+          "type": "string",
+          "enum": [
+            "unverified",
+            "reported-specific-release"
+          ]
+        },
+        "interpretation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remaining": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "artifactAcceptanceReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "result",
+        "artifactId",
+        "sourceSha",
+        "payloadSha256",
+        "profileIds",
+        "producer",
+        "checks"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
+        "artifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "payloadSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "profileIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "sourceSha"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceSha": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "profileId",
+              "required",
+              "result",
+              "command",
+              "platform",
+              "installMethod"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "profileId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "failed",
+                  "skipped",
+                  "not-evaluated"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "platform": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "installMethod": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

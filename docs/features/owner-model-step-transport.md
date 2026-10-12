@@ -41,6 +41,18 @@ authority; a contextless child may not silently use ordinary transport. These
 guards are admission checks, not a substitute for the owner's broker and
 original-task accounting.
 
+Direct Azure, OpenRouter Agent, Antigravity and Gemini assessment entries also
+reject bound records before their concrete client or sender can run. This
+applies even when a caller misdeclares the model's saved adapter as OpenAI;
+only the OpenAI Chat Completions boundary implements this transport contract.
+
+Protected MCP clients carry a process-private HMAC equality token for their
+resolved configuration. The token detects recipient or credential rotation
+without publishing an unkeyed digest of secrets; it is not password storage or
+authorization. A protected connection failure cannot fall through to ordinary
+OAuth capability discovery or authentication-configuration mutation. Recipient
+classification comes from the trusted adapter, independently of caller headers.
+
 The Process preflight reads the saved model before asynchronous prompt,
 resource, and MCP preparation. The model handler reads it again before the
 provider request. A concurrent catalog edit can make an initially ordinary

@@ -6,6 +6,9 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({
   debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), verbose: jest.fn(),
 }) }));
 jest.mock('@/backend/services/mcp/betaClient', () => ({ isBetaClient: () => false }));
+jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: jest.fn(async () => [{
+  name: 'protected-fixture', transport: 'streamable', serverUrl: 'https://adapter-bundle.example.test/mcp', disabled: false,
+}]) }));
 
 type ExtensionModule = typeof import('@/backend/execution/extensions');
 const processState = globalThis as typeof globalThis & { __flujoExecutionExtensions?: unknown };

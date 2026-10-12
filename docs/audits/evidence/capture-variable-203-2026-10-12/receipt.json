@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "issue": "https://github.com/mario-andreschak/FLUJO/issues/203",
+  "outcome": "passed",
+  "sourceRevision": "ecac4ba4dc5799d16c903bf1bffeb7b2814641d0",
+  "sourceTree": "80be9bed509a3c49dc977933f440b561354ba3b4",
+  "applicationBuildId": "0jDH6VlRufb7QpcJ1CKp5",
+  "execution": {
+    "startedUtc": "2026-10-12T14:26:22.444Z",
+    "finishedUtc": "2026-10-12T14:26:38.96Z",
+    "measuredSeconds": 16.516,
+    "conversationId": "43fa8c55-ea49-4834-9ed8-e03cc7a852e2",
+    "runId": "db8a9121-20dc-43da-8c16-9348d7937ac8",
+    "provider": "codex",
+    "model": "gpt-6-luna",
+    "authentication": "Existing ChatGPT subscription login; no API credential provisioned",
+    "httpStatus": 200,
+    "finalStatus": "completed",
+    "finalAssistantText": "VERIFIED:CAPTURE_203_READY",
+    "usage": {
+      "promptTokens": 26508,
+      "completionTokens": 49,
+      "totalTokens": 26557
+    },
+    "usageScope": "Sum of both completed node dispatches; the completion endpoint reports only the final dispatch",
+    "billing": "Provider did not return a dollar charge"
+  },
+  "flow": {
+    "authorship": "UI only; saved model configuration provisioned before startup",
+    "id": "78d555d0-491e-403d-85ca-d326a92d5f38",
+    "name": "Capture Variable Acceptance 203",
+    "captureVariable": "captured203",
+    "savedDownstreamPrompt": "Read this value: ${var:captured203}. Reply with exactly VERIFIED: followed immediately by that value. No spaces, explanation, or punctuation.",
+    "resolvedDownstreamPrompt": "Read this value: CAPTURE_203_READY. Reply with exactly VERIFIED: followed immediately by that value. No spaces, explanation, or punctuation.",
+    "modelDispatches": [
+      {
+        "id": "224b247d-46c4-4455-b632-04d796c3256b",
+        "conversationId": "43fa8c55-ea49-4834-9ed8-e03cc7a852e2",
+        "runId": "db8a9121-20dc-43da-8c16-9348d7937ac8",
+        "node": {
+          "nodeId": "9b466f00-86b5-4dca-aa9e-ab385ca53363",
+          "nodeName": "Produce capture"
+        },
+        "modelId": "1e183444-62c6-437b-96ab-176a970ebfb1",
+        "modelName": "GPT-6 Luna",
+        "adapter": "codex-cli",
+        "operation": "thread.runStreamed",
+        "timestamp": 1791815182801,
+        "outcome": "completed",
+        "attempt": 1,
+        "inputMode": "full-history",
+        "canonicalMessageCount": 2,
+        "wireMessageCount": 2,
+        "mediaCount": 0,
+        "archiveVersion": 2
+      },
+      {
+        "id": "977f4d51-5e05-4430-8500-f754ee6ebc95",
+        "conversationId": "43fa8c55-ea49-4834-9ed8-e03cc7a852e2",
+        "runId": "db8a9121-20dc-43da-8c16-9348d7937ac8",
+        "node": {
+          "nodeId": "049af150-7d39-4407-990f-3743184341d0",
+          "nodeName": "Verify captured value"
+        },
+        "modelId": "1e183444-62c6-437b-96ab-176a970ebfb1",
+        "modelName": "GPT-6 Luna",
+        "adapter": "codex-cli",
+        "operation": "thread.runStreamed",
+        "timestamp": 1791815189562,
+        "outcome": "completed",
+        "attempt": 1,
+        "inputMode": "full-history",
+        "canonicalMessageCount": 5,
+        "wireMessageCount": 3,
+        "mediaCount": 0,
+        "archiveVersion": 2
+      }
+    ]
+  },
+  "ui": {
+    "desktopViewport": {
+      "width": 1280,
+      "height": 900
+    },
+    "saveReloadVerified": true,
+    "phone": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "captureRestored": true,
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "chatResultVisible": true,
+      "chatPageOverflow": false
+    },
+    "uncaughtBrowserErrors": []
+  },
+  "steps": [
+    "Agents → Start simple → No, I’ll build it myself.",
+    "Name agent Capture Variable Acceptance 203.",
+    "Create goal step: Reply with exactly CAPTURE_203_READY. Do not add explanation or punctuation.",
+    "Choose an AI → GPT-6 Luna → Save.",
+    "Add later AI step using ${var:captured203}.",
+    "Choose GPT-6 Luna for the later step.",
+    "Enable Expert view.",
+    "Open first AI step properties in Expert view.",
+    "Set Capture as run variable to captured203.",
+    "Save changes → Save flow → reload; capture field remains captured203.",
+    "Navigate to Talk to run the saved agent.",
+    "Select Capture Variable Acceptance 203 in Talk.",
+    "Send Run the two steps and verify the captured value.",
+    "Make the first step explicitly return CAPTURE_203_READY and call the connected downstream handoff."
+  ],
+  "limits": [
+    "Source-built production application; published installer acceptance not evaluated.",
+    "No subflow-session token-saving, full-provider, novice-cohort or release acceptance claim.",
+    "Read-only flow and model-turn APIs collected evidence; they did not create or modify the flow."
+  ],
+  "validation": {
+    "applicationInputRevision": "ecac4ba4dc5799d16c903bf1bffeb7b2814641d0",
+    "checks": [
+      {
+        "command": "npm run typecheck",
+        "startedUtc": "2026-10-12T14:30:33.0329325Z",
+        "finishedUtc": "2026-10-12T14:30:45.5278307Z",
+        "seconds": 12.4890531,
+        "exitCode": 0
+      },
+      {
+        "command": "npm run typecheck:mcp",
+        "startedUtc": "2026-10-12T14:30:45.5601784Z",
+        "finishedUtc": "2026-10-12T14:30:53.0325649Z",
+        "seconds": 7.4718243,
+        "exitCode": 0
+      },
+      {
+        "command": "npm run lint",
+        "startedUtc": "2026-10-12T14:30:53.0374431Z",
+        "finishedUtc": "2026-10-12T14:33:06.6088335Z",
+        "seconds": 133.5711321,
+        "exitCode": 0
+      },
+      {
+        "command": "npm run build",
+        "startedUtc": "2026-10-12T14:33:06.6165625Z",
+        "finishedUtc": "2026-10-12T14:37:35.5777585Z",
+        "seconds": 268.9609796,
+        "exitCode": 0
+      }
+    ],
+    "focusedRegressions": {
+      "suites": 4,
+      "seconds": 8.191,
+      "tests": 33,
+      "result": "passed"
+    },
+    "independentReview": "No blocking findings; issue acceptance and secret exclusion reviewed",
+    "remoteWorkflowsDispatched": 0,
+    "containerBuilds": 0
+  }
+}

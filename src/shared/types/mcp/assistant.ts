@@ -3,8 +3,20 @@ import type { ResolvedInstallPlan } from '@/utils/mcp/registry';
 
 export type McpAssistantAuthMode = 'oauth-dcr' | 'oauth-manual' | 'none' | 'unknown';
 
+/** Recommendation evidence is advisory; it never supplies execution consent. */
+export type McpRecommendationTier = 'flujo-supported' | 'local-reviewed' | 'local-unreviewed' | 'remote';
+export interface McpRecommendationCost {
+  kind: 'free' | 'byok' | 'paid' | 'unknown';
+  evidence?: string;
+  sourceUrl?: string;
+}
+export interface McpRecommendationSupportEvidence {
+  kind: 'shipped-package' | 'spotlight';
+  source: string;
+}
+
 export interface McpAssistantSource {
-  id: 'registry' | 'github' | 'npm' | 'awesome-mcp';
+  id: 'registry' | 'github' | 'npm' | 'awesome-mcp' | 'workspace';
   label: string;
   url: string;
   status: 'searched' | 'unavailable';
@@ -18,6 +30,12 @@ export interface McpAssistantCandidate {
   description: string;
   score: number;
   recommended: boolean;
+  /** Existing bundled servers only open configuration; they are never installed/enabled by research. */
+  action?: 'install' | 'configure-existing';
+  existingServerName?: string;
+  recommendationTier?: McpRecommendationTier;
+  supportEvidence?: McpRecommendationSupportEvidence;
+  cost?: McpRecommendationCost;
   /** Registry candidates currently support stdio and hosted HTTP transports. */
   plan: ResolvedInstallPlan & { transport: 'stdio' | 'streamable' | 'sse' };
   config: Partial<MCPServerConfig>;
@@ -63,6 +81,8 @@ export interface McpAssistantInstallInput {
 
 export interface McpAssistantInstallResult {
   installed: boolean;
+  needsConfiguration?: boolean;
+  existingServerName?: string;
   serverName?: string;
   alreadyExisted?: boolean;
   tools?: Array<{ name: string; description?: string }>;

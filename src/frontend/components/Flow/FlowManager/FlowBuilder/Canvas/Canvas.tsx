@@ -263,7 +263,7 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
           p: 1.5,
         }}
         >
-        <Typography id="node-selection-title" variant="subtitle1" fontWeight={800}>
+        <Typography id="node-selection-title" variant="subtitle1" sx={{ fontWeight: 800 }}>
           {t('flows.canvas.addNext')}
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -276,17 +276,16 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t('flows.canvas.searchTypes')}
-          inputProps={{ 'aria-label': t('flows.canvas.searchTypes') }}
-          sx={{ my: 1.25 }}
-          InputProps={{
+          slotProps={{ htmlInput: { 'aria-label': t('flows.canvas.searchTypes') }, input: {
             startAdornment: (
               <InputAdornment position="start">
                 <SearchRoundedIcon fontSize="small" />
               </InputAdornment>
             ),
-          }}
+          } }}
+          sx={{ my: 1.25 }}
         />
-        <Box display="flex" flexDirection="column" gap={0.75} sx={{ overflowY: 'auto', maxHeight: 360 }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75,  overflowY: 'auto', maxHeight: 360 }}>
           {availableNodeTypes.map((node) => (
             <Paper
               component="button"
@@ -320,10 +319,10 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
                 },
               }}
             >
-              <Box display="flex" alignItems="center" gap={1.25}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
                 {getNodeIcon(node.type)}
                 <Box>
-                  <Typography variant="subtitle2" fontWeight={800}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                     {node.label}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">

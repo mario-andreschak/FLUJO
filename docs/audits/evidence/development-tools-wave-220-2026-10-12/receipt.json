@@ -1,0 +1,510 @@
+{
+  "recordedAt": "2026-10-12T19:24:21.739Z",
+  "source": {
+    "base": "d827a852813cd3b529386e77b5b5dff513083253",
+    "tree": "c03ecdeeadda6379f9e3e28ccb5fbecd23ca5e8a",
+    "originalPr": "2f20661974c53076003c3155f3476fd9bc5349cf",
+    "branch": "codex/qualified-development-tools-20261012",
+    "time": "2026-10-12T19:04:49.1663415Z"
+  },
+  "buildId": "Jil0jS41X9V3BQWWMMNzh",
+  "scope": "Existing PR1065 compatible development dependencies and issue220 browser acceptance; actual anonymous local app, synthetic persisted data, disabled schedules",
+  "local": [
+    {
+      "name": "typecheck",
+      "exit": 0,
+      "seconds": 12.1000501,
+      "time": "2026-10-12T19:05:02.7925429Z"
+    },
+    {
+      "name": "lint",
+      "exit": 0,
+      "seconds": 101.2438451,
+      "time": "2026-10-12T19:06:44.0398956Z"
+    }
+  ],
+  "build": {
+    "exit": 0,
+    "seconds": 308.9077437,
+    "time": "2026-10-12T19:08:00.5704350Z"
+  },
+  "runner": {
+    "passedTests": 9
+  },
+  "focused": [
+    {
+      "name": "node",
+      "passedTests": 22,
+      "passedSuites": 4
+    },
+    {
+      "name": "jsdom",
+      "passedTests": 17,
+      "passedSuites": 1
+    },
+    {
+      "name": "workspace-and-summary",
+      "passedTests": 16,
+      "passedSuites": 3
+    }
+  ],
+  "watch": {
+    "initial": true,
+    "rerun": true,
+    "stopped": true,
+    "forcedStop": true
+  },
+  "browser": {
+    "driver": "@playwright/test and playwright1.64.0",
+    "channel": "system Chrome",
+    "modes": [
+      {
+        "mode": "dev",
+        "startedAt": "2026-10-12T19:14:12.893Z",
+        "finishedAt": "2026-10-12T19:18:21.250Z",
+        "elapsedSeconds": 248.357,
+        "checks": [
+          {
+            "name": "desktop: separate run trees and fan-out"
+          },
+          {
+            "name": "desktop: keyboard per-node collapse and expansion"
+          },
+          {
+            "name": "desktop: fallback buckets are last and flat",
+            "headings": [
+              "Acceptance wave",
+              "Ad hoc",
+              "Archived / no longer scheduled"
+            ]
+          },
+          {
+            "name": "desktop: group collapse persists through reload"
+          },
+          {
+            "name": "desktop: depth and cycle terminate",
+            "maxDepth": 20
+          },
+          {
+            "name": "desktop: empty waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "desktop: http waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "desktop: network waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "desktop: recovered waves reload restores nested run history"
+          },
+          {
+            "name": "desktop: Day remains the scheduling entry point"
+          },
+          {
+            "name": "desktop: Waves graph matches chat parent-child lineage",
+            "graph": {
+              "nodes": [
+                {
+                  "id": "package:__workspace__",
+                  "text": "My workspaceFlows created in this workspace"
+                },
+                {
+                  "id": "simple-flow:wave-root-flow",
+                  "text": "CollectSynthetic visual acceptance flowWHENSchedule: 0 0 12 1 1 *Flow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-edit-flow",
+                  "text": "EditSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:default-agent-flujo",
+                  "text": "FLUJOMy workspaceWHENUsed manuallyProcess Node→bash→browser+2THENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-publish-flow",
+                  "text": "PublishSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-review-flow",
+                  "text": "ReviewSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                }
+              ],
+              "edges": [
+                {
+                  "id": "simple-relation:completion%3Awave-edit-flow%3Awave-publish-flow%3A",
+                  "label": "Edge from simple-flow:wave-edit-flow to simple-flow:wave-publish-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-edit-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-edit-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-review-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-review-flow"
+                }
+              ]
+            }
+          },
+          {
+            "name": "desktop: viewport does not overflow",
+            "width": 1280,
+            "scroll": 1280
+          },
+          {
+            "name": "phone: separate run trees and fan-out"
+          },
+          {
+            "name": "phone: keyboard per-node collapse and expansion"
+          },
+          {
+            "name": "phone: fallback buckets are last and flat",
+            "headings": [
+              "Acceptance wave",
+              "Ad hoc",
+              "Archived / no longer scheduled"
+            ]
+          },
+          {
+            "name": "phone: group collapse persists through reload"
+          },
+          {
+            "name": "phone: depth and cycle terminate",
+            "maxDepth": 20
+          },
+          {
+            "name": "phone: empty waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "phone: http waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "phone: network waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "phone: recovered waves reload restores nested run history"
+          },
+          {
+            "name": "phone: Day remains the scheduling entry point"
+          },
+          {
+            "name": "phone: Waves graph matches chat parent-child lineage",
+            "graph": {
+              "nodes": [
+                {
+                  "id": "package:__workspace__",
+                  "text": "My workspaceFlows created in this workspace"
+                },
+                {
+                  "id": "simple-flow:wave-root-flow",
+                  "text": "CollectSynthetic visual acceptance flowWHENSchedule: 0 0 12 1 1 *Flow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-edit-flow",
+                  "text": "EditSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:default-agent-flujo",
+                  "text": "FLUJOMy workspaceWHENUsed manuallyProcess Node→bash→browser+2THENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-publish-flow",
+                  "text": "PublishSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-review-flow",
+                  "text": "ReviewSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                }
+              ],
+              "edges": [
+                {
+                  "id": "simple-relation:completion%3Awave-edit-flow%3Awave-publish-flow%3A",
+                  "label": "Edge from simple-flow:wave-edit-flow to simple-flow:wave-publish-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-edit-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-edit-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-review-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-review-flow"
+                }
+              ]
+            }
+          },
+          {
+            "name": "phone: viewport does not overflow",
+            "width": 390,
+            "scroll": 390
+          }
+        ],
+        "pageErrors": []
+      },
+      {
+        "mode": "production",
+        "startedAt": "2026-10-12T19:09:23.536Z",
+        "finishedAt": "2026-10-12T19:09:59.451Z",
+        "elapsedSeconds": 35.915,
+        "checks": [
+          {
+            "name": "desktop: separate run trees and fan-out"
+          },
+          {
+            "name": "desktop: keyboard per-node collapse and expansion"
+          },
+          {
+            "name": "desktop: fallback buckets are last and flat",
+            "headings": [
+              "Acceptance wave",
+              "Ad hoc",
+              "Archived / no longer scheduled"
+            ]
+          },
+          {
+            "name": "desktop: group collapse persists through reload"
+          },
+          {
+            "name": "desktop: depth and cycle terminate",
+            "maxDepth": 20
+          },
+          {
+            "name": "desktop: empty waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "desktop: http waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "desktop: network waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "desktop: recovered waves reload restores nested run history"
+          },
+          {
+            "name": "desktop: Day remains the scheduling entry point"
+          },
+          {
+            "name": "desktop: Waves graph matches chat parent-child lineage",
+            "graph": {
+              "nodes": [
+                {
+                  "id": "package:__workspace__",
+                  "text": "My workspaceFlows created in this workspace"
+                },
+                {
+                  "id": "simple-flow:wave-root-flow",
+                  "text": "CollectSynthetic visual acceptance flowWHENSchedule: 0 0 12 1 1 *Flow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-edit-flow",
+                  "text": "EditSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:default-agent-flujo",
+                  "text": "FLUJOMy workspaceWHENUsed manuallyProcess Node→bash→browser+2THENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-publish-flow",
+                  "text": "PublishSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-review-flow",
+                  "text": "ReviewSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                }
+              ],
+              "edges": [
+                {
+                  "id": "simple-relation:completion%3Awave-edit-flow%3Awave-publish-flow%3A",
+                  "label": "Edge from simple-flow:wave-edit-flow to simple-flow:wave-publish-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-edit-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-edit-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-review-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-review-flow"
+                }
+              ]
+            }
+          },
+          {
+            "name": "desktop: viewport does not overflow",
+            "width": 1280,
+            "scroll": 1280
+          },
+          {
+            "name": "phone: separate run trees and fan-out"
+          },
+          {
+            "name": "phone: keyboard per-node collapse and expansion"
+          },
+          {
+            "name": "phone: fallback buckets are last and flat",
+            "headings": [
+              "Acceptance wave",
+              "Ad hoc",
+              "Archived / no longer scheduled"
+            ]
+          },
+          {
+            "name": "phone: group collapse persists through reload"
+          },
+          {
+            "name": "phone: depth and cycle terminate",
+            "maxDepth": 20
+          },
+          {
+            "name": "phone: empty waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "phone: http waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "phone: network waves reload gives complete flat fallback",
+            "visibleConversations": 37
+          },
+          {
+            "name": "phone: recovered waves reload restores nested run history"
+          },
+          {
+            "name": "phone: Day remains the scheduling entry point"
+          },
+          {
+            "name": "phone: Waves graph matches chat parent-child lineage",
+            "graph": {
+              "nodes": [
+                {
+                  "id": "package:__workspace__",
+                  "text": "My workspaceFlows created in this workspace"
+                },
+                {
+                  "id": "simple-flow:wave-root-flow",
+                  "text": "CollectSynthetic visual acceptance flowWHENSchedule: 0 0 12 1 1 *Flow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-edit-flow",
+                  "text": "EditSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:default-agent-flujo",
+                  "text": "FLUJOMy workspaceWHENUsed manuallyProcess Node→bash→browser+2THENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-publish-flow",
+                  "text": "PublishSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                },
+                {
+                  "id": "simple-flow:wave-review-flow",
+                  "text": "ReviewSynthetic visual acceptance flowWHENWhen a flow is completedFlow completesTHENFlow completes"
+                }
+              ],
+              "edges": [
+                {
+                  "id": "simple-relation:completion%3Awave-edit-flow%3Awave-publish-flow%3A",
+                  "label": "Edge from simple-flow:wave-edit-flow to simple-flow:wave-publish-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-edit-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-edit-flow"
+                },
+                {
+                  "id": "simple-relation:completion%3Awave-root-flow%3Awave-review-flow%3A",
+                  "label": "Edge from simple-flow:wave-root-flow to simple-flow:wave-review-flow"
+                }
+              ]
+            }
+          },
+          {
+            "name": "phone: viewport does not overflow",
+            "width": 390,
+            "scroll": 390
+          }
+        ],
+        "pageErrors": []
+      }
+    ]
+  },
+  "fixture": {
+    "conversationCount": 37,
+    "schedulerPaused": true,
+    "executionIds": [
+      "check-root",
+      "check-edit",
+      "check-review",
+      "check-publish"
+    ],
+    "waves": [
+      {
+        "id": "check-root",
+        "nodes": [
+          {
+            "executionId": "check-edit",
+            "flowId": "wave-edit-flow",
+            "name": "Edit"
+          },
+          {
+            "executionId": "check-publish",
+            "flowId": "wave-publish-flow",
+            "name": "Publish"
+          },
+          {
+            "executionId": "check-review",
+            "flowId": "wave-review-flow",
+            "name": "Review"
+          },
+          {
+            "executionId": "check-root",
+            "flowId": "wave-root-flow",
+            "name": "Acceptance wave"
+          }
+        ],
+        "edges": [
+          {
+            "fromExecutionId": "check-edit",
+            "toExecutionId": "check-publish",
+            "via": "completion",
+            "on": [
+              "completed"
+            ]
+          },
+          {
+            "fromExecutionId": "check-root",
+            "toExecutionId": "check-edit",
+            "via": "completion",
+            "on": [
+              "completed"
+            ]
+          },
+          {
+            "fromExecutionId": "check-root",
+            "toExecutionId": "check-review",
+            "via": "completion",
+            "on": [
+              "completed"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "faultInjection": [
+    "Empty waves response",
+    "HTTP503 wave service",
+    "Failed wave transport"
+  ],
+  "limits": [
+    "No real scheduler/provider spawning or physical phone acceptance is claimed.",
+    "Current ConversationTree depth20 and per-path cycle behavior were tested; deep rows retain its existing clipping behavior.",
+    "No full suite, remote CI, container, installed-package or release checks were run."
+  ]
+}

@@ -138,6 +138,22 @@ describe('extractJsonObject', () => {
 // ---------------------------------------------------------------------------
 
 describe('generateFlow — happy path', () => {
+  it('generates a draft with a locally authenticated Antigravity CLI model', async () => {
+    getModelMock.mockResolvedValue({ ...generatorModel, name: 'flash', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    const result = await generateFlow({ description: 'Build me a research flow', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', model: expect.objectContaining({ adapter: 'antigravity-cli' }) }));
+  });
+
+  it('does not use local Google auth when a configured key cannot be resolved', async () => {
+    getModelMock.mockResolvedValue({ ...generatorModel, adapter: 'antigravity-cli', provider: 'antigravity-cli' });
+    resolveKeyMock.mockResolvedValue(null);
+    const result = await generateFlow({ description: 'Build me a research flow', modelId: 'model-gen' });
+    expect(result.success).toBe(false);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('returns a clean draft in one attempt', async () => {
     const result = await generateFlow({ description: 'Build me a research flow', modelId: 'model-gen' });
     expect(result.success).toBe(true);

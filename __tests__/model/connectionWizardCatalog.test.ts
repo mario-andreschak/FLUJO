@@ -2,6 +2,7 @@ import { buildGuidedModels } from '@/frontend/components/models/connectionWizard
 import {
   GEMINI_NATIVE_FALLBACK_MODELS,
   GEMINI_NATIVE_GUIDED_MODELS,
+  ANTIGRAVITY_CLI_GUIDED_MODELS,
 } from '@/shared/types/model/provider';
 
 describe('guided model bundles', () => {
@@ -27,9 +28,9 @@ describe('guided model bundles', () => {
   });
 
   it('creates keyless Codex models for the local ChatGPT login', () => {
-    const models = buildGuidedModels({ kind: 'codex-subscription' });
+    const models = buildGuidedModels({ kind: 'codex-subscription', codexModels: [{ id: 'future-model', name: 'Future model' }] });
 
-    expect(models.map((model) => model.name)).toEqual(['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.4-mini']);
+    expect(models.map((model) => model.name)).toEqual(['future-model']);
     expect(models.every((model) => model.provider === 'codex' && model.ApiKey === '')).toBe(true);
   });
 
@@ -44,6 +45,25 @@ describe('guided model bundles', () => {
       model.ApiKey === 'gemini-key'
     )).toBe(true);
     expect(models.map(model => model.name)).toContain('gemini-3.8-flash');
+  });
+
+  it('creates a practical account-mode Antigravity bundle without native generation controls', () => {
+    const models = buildGuidedModels({ kind: 'antigravity-cli' });
+    expect(models.map(model => model.name)).toEqual([...ANTIGRAVITY_CLI_GUIDED_MODELS]);
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high']);
+    expect(models.every(model => model.provider === 'antigravity-cli' && model.adapter === 'antigravity-cli')).toBe(true);
+    expect(models.every(model => model.ApiKey === '' && model.baseUrl === '')).toBe(true);
+    expect(models.every(model => model.temperature === undefined && model.reasoningEffort === undefined)).toBe(true);
+    expect(models.every(model => model.visionInputCapability === 'unsupported')).toBe(true);
+    for (const model of models) expect(model.inputModalities).toEqual(['text']);
+    expect(new Set(models.map(model => model.id)).size).toBe(models.length);
+  });
+
+  it('creates a practical Gemini-only API-key bundle and excludes account-only models', () => {
+    const models = buildGuidedModels({ kind: 'antigravity-cli', apiKey: '  gemini-api-key  ' });
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high']);
+    expect(models.every(model => model.ApiKey === 'gemini-api-key')).toBe(true);
+    expect(models[0].displayName).toBe('Antigravity CLI Default');
   });
 
   it('normalizes an Ollama server root to its OpenAI-compatible endpoint', () => {

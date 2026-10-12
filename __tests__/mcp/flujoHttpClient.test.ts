@@ -30,6 +30,16 @@ describe('standalone flujo HTTP client', () => {
     expect(flujoBaseUrl()).toBe('http://127.0.0.1:4317');
   });
 
+  it('removes only terminal slashes, keeping path and query bytes intact', () => {
+    expect(flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: '  https://example.test/a//b?value=x/y///  ' }))
+      .toBe('https://example.test/a//b?value=x/y');
+    expect(flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: 'http://127.0.0.1:4200/path///', FLUJO_WORKER_MODE: '1' }))
+      .toBe('http://127.0.0.1:4200/path');
+    expect(flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: '/' })).toBe('');
+    expect(() => flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: 'http://user:pass@localhost:4200///',
+      FLUJO_WORKER_MODE: '1' })).toThrow('loopback');
+  });
+
   it('maps every tool group to a narrow domain endpoint', () => {
     expect(toolRoute('execute_flow')).toBe('/api/mcp/flujo/flows');
     expect(toolRoute('propose_ui_action')).toBe('/api/mcp/flujo/flows');

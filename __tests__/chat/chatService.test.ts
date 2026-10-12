@@ -192,6 +192,7 @@ describe('chatService REST methods', () => {
       onmessage: null as ((event: MessageEvent) => void) | null,
       onerror: null as ((event: Event) => void) | null,
       close: jest.fn(),
+      addEventListener: jest.fn(),
     };
     const eventSourceMock = jest.fn(() => source);
     (global as any).EventSource = eventSourceMock;
@@ -209,7 +210,7 @@ describe('chatService REST methods', () => {
     } as MessageEvent);
 
     expect(eventSourceMock).toHaveBeenCalledWith(
-      '/v1/chat/events?scope=sidebar&workspace=default-workspace',
+      '/v1/chat/events?scope=sidebar&cursorVersion=1&workspace=default-workspace',
     );
     expect(result).toBe(source);
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({

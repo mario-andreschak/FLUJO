@@ -1,0 +1,6 @@
+gpg: Signature made Tue Jan 21 11:56:21 2025 WSN
+gpg:                using RSA key 890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4
+gpg: Good signature from "RafaelGSS <rafael.nunu@hotmail.com>" [unknown]
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 890C 08DB 8579 162F EE0D  F9DB 8BEA B4DF CF55 5EF4

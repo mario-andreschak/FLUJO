@@ -1,3 +1,6 @@
+import { installOwnerFixture } from '../utils/ownerFixture';
+let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>> | undefined;
+afterEach(async () => { await ownerFixture?.restore(); ownerFixture = undefined; });
 import { NextRequest } from 'next/server';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { StorageKey } from '@/shared/types/storage';
@@ -78,7 +81,7 @@ const shippedBash = (name: string): MCPServerConfig => ({
 
 const request = (query: string): NextRequest =>
   new NextRequest(`http://localhost:4200/api/mcp/app-sandbox${query}`, {
-    headers: { host: 'localhost:4200' },
+    headers: { host: 'localhost:4200', ...ownerFixture?.headers },
   });
 
 const expectDenied = async (response: Response) => {
@@ -233,6 +236,7 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
 
   it('keeps a localhost dashboard working after Public mode is selected', async () => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
+    ownerFixture = await installOwnerFixture();
     await setMcpAppConsent('acme', URI, 'allow-always');
     loadServerConfigs.mockResolvedValue([external('acme')]);
 

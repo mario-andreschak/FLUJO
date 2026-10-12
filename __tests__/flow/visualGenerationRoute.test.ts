@@ -46,4 +46,11 @@ describe('POST /api/flow/generate/visual', () => {
     expect(response.status).toBe(400);
     expect(generateVisuallyMock).not.toHaveBeenCalled();
   });
+
+  it('returns a fixed failure event without backend exception details', async () => {
+    generateVisuallyMock.mockRejectedValueOnce(new Error('Authorization: Bearer private-test-token'));
+    const response = await POST(request({ description: 'Build a flow', modelId: 'model-1' }));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('{"type":"error","error":"Visual flow generation failed. Please try again."}\n');
+  });
 });

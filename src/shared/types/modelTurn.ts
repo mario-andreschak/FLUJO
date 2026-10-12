@@ -28,7 +28,7 @@ export interface ModelTurnIndexEntry {
   canonicalMessageCount: number;
   wireMessageCount: number;
   mediaCount: number;
-  archiveVersion: 1;
+  archiveVersion: 1 | 2;
 }
 
 export type ModelTurnMediaKind = 'image' | 'audio' | 'video' | 'file';
@@ -75,7 +75,7 @@ export interface ArchivedMediaParameter {
 }
 
 export interface ModelTurnSnapshot {
-  version: 1;
+  version: 1 | 2;
   entry: ModelTurnIndexEntry;
   /** Lossless node-threaded conversation immediately before wire shaping. */
   canonicalMessages: FlujoChatMessage[];
@@ -98,6 +98,34 @@ export interface ModelTurnSnapshot {
   };
   visualCompaction?: VisualCompactionDiagnostic;
   contextCompaction?: ContextCompactionDiagnostic;
+}
+
+/** V2 dispatch inputs are immutable; only this small companion file changes. */
+export interface ModelTurnOutcomeRecord {
+  version: 1;
+  archiveVersion: 2;
+  conversationId: string;
+  dispatchId: string;
+  outcome: Exclude<ModelDispatchOutcome, 'running'>;
+}
+
+export const MODEL_TURN_OUTCOME_MAX_BYTES = 1024;
+
+/** Validate identity before overlaying an outcome on an immutable dispatch. */
+export function parseModelTurnOutcomeRecord(
+  value: unknown,
+  conversationId: string,
+  dispatchId: string,
+): ModelTurnOutcomeRecord {
+  const record = value as Partial<ModelTurnOutcomeRecord> | null;
+  if (!record || typeof record !== 'object' || Array.isArray(record)
+    || Object.keys(record).sort().join(',') !== 'archiveVersion,conversationId,dispatchId,outcome,version'
+    || record.version !== 1 || record.archiveVersion !== 2
+    || record.conversationId !== conversationId || record.dispatchId !== dispatchId
+    || !['completed', 'error', 'cancelled'].includes(String(record.outcome))) {
+    throw new Error('Invalid model-turn outcome record');
+  }
+  return record as ModelTurnOutcomeRecord;
 }
 
 export interface ModelTurnTimelineResponse {

@@ -422,7 +422,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
           <Typography color="text.secondary" align="center">
             {t('flows.serverTools.noneConnected')}
           </Typography>
-          <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
+          <Typography variant="caption" color="text.secondary" align="center" sx={{ display: "block",  mt: 1 }}>
             {canConnectServer
               ? t('flows.serverTools.pickHelp')
               : t('flows.serverTools.connectHelp')}
@@ -557,13 +557,13 @@ const ServerTools: React.FC<ServerToolsProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             sx={{ mb: 2 }}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
           />
           
           {/* Tool list */}

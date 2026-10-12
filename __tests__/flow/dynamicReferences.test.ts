@@ -43,6 +43,20 @@ const mockedGetFlow = flowService.getFlow as jest.Mock;
 const mockedLoadConversation = loadConversationState as jest.Mock;
 
 describe('dynamic @ reference resolution', () => {
+  it('preserves prototype-like authored data keys without replacing output prototypes', async () => {
+    const value = JSON.parse('{"__proto__":{"name":"@current.flow.name"},"constructor":"@current.flow.name","toString":"literal","nested":[{"__proto__":"@current.flow.id"}]}');
+    const result = await resolvePromptDynamicReferences(value, { flowId: 'flow-1' }) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.hasOwn(result, '__proto__')).toBe(true);
+    expect(result['__proto__']).toEqual({ name: 'Daily report' });
+    expect(result.constructor).toBe('Daily report');
+    expect(result.toString).toBe('literal');
+    const nested = (result.nested as Record<string, unknown>[])[0];
+    expect(Object.getPrototypeOf(nested)).toBe(Object.prototype);
+    expect(Object.hasOwn(nested, '__proto__')).toBe(true);
+    expect(nested['__proto__']).toBe('flow-1');
+    expect(Object.hasOwn(Object.prototype, 'name')).toBe(false);
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     mockedGetFlow.mockResolvedValue({

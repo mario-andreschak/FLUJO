@@ -1,0 +1,26 @@
+{
+  "snapshotEncryption": {
+    "format": "flujo-workspace-encrypted",
+    "cipher": "aes-256-gcm",
+    "writeVersion": 2,
+    "readVersions": [
+      1,
+      2
+    ],
+    "legacyPlaintextRead": true,
+    "recipientKeyRequired": true,
+    "recipientKeyBytes": 32,
+    "recipientKeyEncoding": "base64",
+    "v2Aad": "flujo:workspace-snapshot:v2",
+    "v2Digest": "sha256-encrypted-wire",
+    "v1Digest": "sha256-plaintext-zip"
+  },
+  "snapshotLimits": {
+    "maxFileBytes": 268435456,
+    "maxUncompressedBytes": 1073741824,
+    "maxManifestBytes": 8388608,
+    "maxArchiveBytes": 1082130432,
+    "maxEncryptedBytes": 1442844672,
+    "maxMembers": 65534
+  }
+}

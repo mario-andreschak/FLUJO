@@ -1,0 +1,633 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "publicUse": "reviewed",
+  "reviewedAtUtc": "2026-10-11T16:54:54.919Z",
+  "title": "Create and connect the Website Builder agent",
+  "provenance": {
+    "kind": "Genuine screen recording of operator actions in real software",
+    "operator": "Demo operator using agent-operated UI tools",
+    "humanUsabilityStudy": false,
+    "runtimePackage": "flujo-ai",
+    "runtimeVersion": "3.46.2",
+    "documentationSourceVersion": "3.46.3"
+  },
+  "source": {
+    "fileName": "act3-agent.mp4",
+    "storage": "Private recording retained outside the repository",
+    "sha256": "cc07aae1bd174e77ded98bfccea0f3e623f28b835db0e20d476d5b786fcd7f33",
+    "captureStartUtc": "2026-10-11T16:08:14.525888774Z",
+    "durationSeconds": 1800,
+    "width": 1600,
+    "height": 1000,
+    "framesPerSecond": 20,
+    "frameCount": 36000,
+    "bytes": 39009297,
+    "videoCodec": "h264",
+    "audioStreams": 0
+  },
+  "edit": {
+    "method": "Chronological real source intervals at normal speed. Idle waits, tool-configuration preparation, a missed manual-setup click, and terminal clipboard preparation are omitted. Full frame, no overlays, redrawn UI, artificial typing, or added cursor.",
+    "rangeConvention": "Start inclusive, end exclusive; seconds from source start",
+    "totalOutputSeconds": 111,
+    "captionForFilm": "The operator pastes a reusable website-building goal, chooses a saved AI connection and connected tool, then saves and opens the agent.",
+    "embeddedCaption": false
+  },
+  "clips": [
+    {
+      "id": "agent-create",
+      "summary": "Open Agents, Start simple, choose manual setup, paste the real generic workflow goal, and create the AI step.",
+      "output": {
+        "path": "githubpages/film/media/walkthrough/act3-agent-create.mp4",
+        "sha256": "caed8ac276159e521ba12b806bfe4efef42f6fd1ffb2e039f9da521df4246f15",
+        "durationSeconds": 39,
+        "width": 1600,
+        "height": 1000,
+        "framesPerSecond": 20,
+        "frameCount": 780,
+        "bytes": 2015134,
+        "videoCodec": "h264",
+        "pixelFormat": "yuv420p",
+        "audioStreams": 0,
+        "fastStart": true
+      },
+      "ranges": [
+        {
+          "sourceStart": 635,
+          "sourceEnd": 643,
+          "outputStart": 0,
+          "outputEnd": 8,
+          "sourceStartUtc": "2026-10-11T16:18:49.525Z",
+          "sourceEndUtc": "2026-10-11T16:18:57.525Z"
+        },
+        {
+          "sourceStart": 685,
+          "sourceEnd": 693,
+          "outputStart": 8,
+          "outputEnd": 16,
+          "sourceStartUtc": "2026-10-11T16:19:39.525Z",
+          "sourceEndUtc": "2026-10-11T16:19:47.525Z"
+        },
+        {
+          "sourceStart": 778,
+          "sourceEnd": 785,
+          "outputStart": 16,
+          "outputEnd": 23,
+          "sourceStartUtc": "2026-10-11T16:21:12.525Z",
+          "sourceEndUtc": "2026-10-11T16:21:19.525Z"
+        },
+        {
+          "sourceStart": 863.5,
+          "sourceEnd": 871.5,
+          "outputStart": 23,
+          "outputEnd": 31,
+          "sourceStartUtc": "2026-10-11T16:22:38.025Z",
+          "sourceEndUtc": "2026-10-11T16:22:46.025Z"
+        },
+        {
+          "sourceStart": 900,
+          "sourceEnd": 908,
+          "outputStart": 31,
+          "outputEnd": 39,
+          "sourceStartUtc": "2026-10-11T16:23:14.525Z",
+          "sourceEndUtc": "2026-10-11T16:23:22.525Z"
+        }
+      ],
+      "actions": [
+        {
+          "label": "158-open-agents",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:18:51.707Z",
+          "afterUtc": "2026-10-11T16:18:52.004Z",
+          "sourceSeconds": 637.181,
+          "outputSeconds": 2.181,
+          "point": [
+            563,
+            36
+          ]
+        },
+        {
+          "label": "159-agents-page",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:18:54.412Z",
+          "afterUtc": "2026-10-11T16:18:54.791Z",
+          "sourceSeconds": 639.886,
+          "outputSeconds": 4.886
+        },
+        {
+          "label": "160-start-simple-agent",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:19:41.812Z",
+          "afterUtc": "2026-10-11T16:19:42.203Z",
+          "sourceSeconds": 687.286,
+          "outputSeconds": 10.286,
+          "point": [
+            1260,
+            131
+          ]
+        },
+        {
+          "label": "161-agent-creation-choice",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:19:44.713Z",
+          "afterUtc": "2026-10-11T16:19:45.131Z",
+          "sourceSeconds": 690.187,
+          "outputSeconds": 13.187
+        },
+        {
+          "label": "164-manual-setup-settled",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:21:14.062Z",
+          "afterUtc": "2026-10-11T16:21:14.344Z",
+          "sourceSeconds": 779.536,
+          "outputSeconds": 17.536,
+          "point": [
+            660,
+            505
+          ]
+        },
+        {
+          "label": "165-goal-field-ready",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:21:16.670Z",
+          "afterUtc": "2026-10-11T16:21:17.109Z",
+          "sourceSeconds": 782.144,
+          "outputSeconds": 20.144
+        },
+        {
+          "label": "166-paste-generic-agent-goal",
+          "tool": "terminal_execute",
+          "beforeUtc": "2026-10-11T16:22:35.912Z",
+          "afterUtc": "2026-10-11T16:22:44.230Z",
+          "sourceSeconds": 861.386,
+          "note": "Terminal command omitted. Only the later real browser paste and its result are in the public clip; tool-call start is outside its ranges."
+        },
+        {
+          "label": "167-generic-goal-entered",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:22:44.512Z",
+          "afterUtc": "2026-10-11T16:22:44.924Z",
+          "sourceSeconds": 869.986,
+          "outputSeconds": 29.486
+        },
+        {
+          "label": "168-create-website-goal-step",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:23:16.488Z",
+          "afterUtc": "2026-10-11T16:23:16.772Z",
+          "sourceSeconds": 901.962,
+          "outputSeconds": 32.962,
+          "point": [
+            1089,
+            754
+          ]
+        },
+        {
+          "label": "169-agent-step-created",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:23:20.095Z",
+          "afterUtc": "2026-10-11T16:23:20.477Z",
+          "sourceSeconds": 905.569,
+          "outputSeconds": 36.569
+        }
+      ],
+      "sceneChangeOutputSeconds": [
+        2.95,
+        3.05,
+        3.15,
+        3.3,
+        3.4,
+        11,
+        11.3,
+        11.4,
+        11.45,
+        16,
+        17.95,
+        23.25,
+        33.35,
+        33.6,
+        33.7,
+        38.35
+      ]
+    },
+    {
+      "id": "agent-bindings",
+      "summary": "Choose Website Builder AI for the step, then attach DesktopCommanderMCP through Apps this step can use.",
+      "output": {
+        "path": "githubpages/film/media/walkthrough/act3-agent-bindings.mp4",
+        "sha256": "05144a0c6f22c98799e2960afab97554a7f146eb0ac591f7f3804c974c2ba5c9",
+        "durationSeconds": 28,
+        "width": 1600,
+        "height": 1000,
+        "framesPerSecond": 20,
+        "frameCount": 560,
+        "bytes": 1360742,
+        "videoCodec": "h264",
+        "pixelFormat": "yuv420p",
+        "audioStreams": 0,
+        "fastStart": true
+      },
+      "ranges": [
+        {
+          "sourceStart": 973,
+          "sourceEnd": 980,
+          "outputStart": 0,
+          "outputEnd": 7,
+          "sourceStartUtc": "2026-10-11T16:24:27.525Z",
+          "sourceEndUtc": "2026-10-11T16:24:34.525Z"
+        },
+        {
+          "sourceStart": 1019,
+          "sourceEnd": 1026,
+          "outputStart": 7,
+          "outputEnd": 14,
+          "sourceStartUtc": "2026-10-11T16:25:13.525Z",
+          "sourceEndUtc": "2026-10-11T16:25:20.525Z"
+        },
+        {
+          "sourceStart": 1065,
+          "sourceEnd": 1072,
+          "outputStart": 14,
+          "outputEnd": 21,
+          "sourceStartUtc": "2026-10-11T16:25:59.525Z",
+          "sourceEndUtc": "2026-10-11T16:26:06.525Z"
+        },
+        {
+          "sourceStart": 1130,
+          "sourceEnd": 1137,
+          "outputStart": 21,
+          "outputEnd": 28,
+          "sourceStartUtc": "2026-10-11T16:27:04.525Z",
+          "sourceEndUtc": "2026-10-11T16:27:11.525Z"
+        }
+      ],
+      "actions": [
+        {
+          "label": "170-choose-agent-model",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:24:29.951Z",
+          "afterUtc": "2026-10-11T16:24:30.236Z",
+          "sourceSeconds": 975.425,
+          "outputSeconds": 2.425,
+          "point": [
+            1529,
+            834
+          ]
+        },
+        {
+          "label": "171-agent-model-options",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:24:32.560Z",
+          "afterUtc": "2026-10-11T16:24:32.913Z",
+          "sourceSeconds": 978.034,
+          "outputSeconds": 5.034
+        },
+        {
+          "label": "172-select-website-builder-ai",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:25:15.739Z",
+          "afterUtc": "2026-10-11T16:25:16.021Z",
+          "sourceSeconds": 1021.213,
+          "outputSeconds": 9.213,
+          "point": [
+            510,
+            522
+          ]
+        },
+        {
+          "label": "173-model-bound",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:25:18.446Z",
+          "afterUtc": "2026-10-11T16:25:18.823Z",
+          "sourceSeconds": 1023.92,
+          "outputSeconds": 11.92
+        },
+        {
+          "label": "174-add-agent-app",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:26:01.446Z",
+          "afterUtc": "2026-10-11T16:26:01.740Z",
+          "sourceSeconds": 1066.92,
+          "outputSeconds": 15.92,
+          "point": [
+            1528,
+            922
+          ]
+        },
+        {
+          "label": "175-agent-app-options",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:26:03.952Z",
+          "afterUtc": "2026-10-11T16:26:04.271Z",
+          "sourceSeconds": 1069.426,
+          "outputSeconds": 18.426
+        },
+        {
+          "label": "176-attach-desktop-commander",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:27:06.924Z",
+          "afterUtc": "2026-10-11T16:27:07.218Z",
+          "sourceSeconds": 1132.398,
+          "outputSeconds": 23.398,
+          "point": [
+            1088,
+            477
+          ]
+        },
+        {
+          "label": "177-tool-attached",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:27:09.429Z",
+          "afterUtc": "2026-10-11T16:27:09.811Z",
+          "sourceSeconds": 1134.903,
+          "outputSeconds": 25.903
+        }
+      ],
+      "sceneChangeOutputSeconds": [
+        3,
+        3.1,
+        3.25,
+        9.85,
+        10.1,
+        16.6,
+        16.7,
+        16.8,
+        24.05
+      ]
+    },
+    {
+      "id": "agent-save-and-chat",
+      "summary": "Paste Website Builder as the agent name, Save, inspect the same agent in Expert view, return to Easy, and open a real empty chat using Try it.",
+      "output": {
+        "path": "githubpages/film/media/walkthrough/act3-agent-save-and-chat.mp4",
+        "sha256": "f88d7c2c774546e9e124410edb174de88f7227013f8ece07ceadcaf7d043abc3",
+        "durationSeconds": 44,
+        "width": 1600,
+        "height": 1000,
+        "framesPerSecond": 20,
+        "frameCount": 880,
+        "bytes": 1943213,
+        "videoCodec": "h264",
+        "pixelFormat": "yuv420p",
+        "audioStreams": 0,
+        "fastStart": true
+      },
+      "ranges": [
+        {
+          "sourceStart": 1292.5,
+          "sourceEnd": 1300.5,
+          "outputStart": 0,
+          "outputEnd": 8,
+          "sourceStartUtc": "2026-10-11T16:29:47.025Z",
+          "sourceEndUtc": "2026-10-11T16:29:55.025Z"
+        },
+        {
+          "sourceStart": 1365,
+          "sourceEnd": 1376,
+          "outputStart": 8,
+          "outputEnd": 19,
+          "sourceStartUtc": "2026-10-11T16:30:59.525Z",
+          "sourceEndUtc": "2026-10-11T16:31:10.525Z"
+        },
+        {
+          "sourceStart": 1409,
+          "sourceEnd": 1418,
+          "outputStart": 19,
+          "outputEnd": 28,
+          "sourceStartUtc": "2026-10-11T16:31:43.525Z",
+          "sourceEndUtc": "2026-10-11T16:31:52.525Z"
+        },
+        {
+          "sourceStart": 1643,
+          "sourceEnd": 1650,
+          "outputStart": 28,
+          "outputEnd": 35,
+          "sourceStartUtc": "2026-10-11T16:35:37.525Z",
+          "sourceEndUtc": "2026-10-11T16:35:44.525Z"
+        },
+        {
+          "sourceStart": 1736,
+          "sourceEnd": 1745,
+          "outputStart": 35,
+          "outputEnd": 44,
+          "sourceStartUtc": "2026-10-11T16:37:10.525Z",
+          "sourceEndUtc": "2026-10-11T16:37:19.525Z"
+        }
+      ],
+      "actions": [
+        {
+          "label": "181-paste-agent-name",
+          "tool": "terminal_execute",
+          "beforeUtc": "2026-10-11T16:29:46.144Z",
+          "afterUtc": "2026-10-11T16:29:53.265Z",
+          "sourceSeconds": 1291.618,
+          "note": "Terminal command omitted. Only the later real browser paste and its result are in the public clip; tool-call start is outside its ranges."
+        },
+        {
+          "label": "182-agent-name-entered",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:29:54.247Z",
+          "afterUtc": "2026-10-11T16:29:54.643Z",
+          "sourceSeconds": 1299.721,
+          "outputSeconds": 7.221
+        },
+        {
+          "label": "183-save-website-builder",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:31:02.162Z",
+          "afterUtc": "2026-10-11T16:31:02.429Z",
+          "sourceSeconds": 1367.636,
+          "outputSeconds": 10.636,
+          "point": [
+            1423,
+            162
+          ]
+        },
+        {
+          "label": "184-agent-save-result",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:31:08.269Z",
+          "afterUtc": "2026-10-11T16:31:08.666Z",
+          "sourceSeconds": 1373.743,
+          "outputSeconds": 16.743
+        },
+        {
+          "label": "185-show-expert-view",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:31:45.902Z",
+          "afterUtc": "2026-10-11T16:31:46.168Z",
+          "sourceSeconds": 1411.376,
+          "outputSeconds": 21.376,
+          "point": [
+            1315,
+            162
+          ]
+        },
+        {
+          "label": "186-same-agent-expert-graph",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:31:49.008Z",
+          "afterUtc": "2026-10-11T16:31:49.423Z",
+          "sourceSeconds": 1414.482,
+          "outputSeconds": 24.482
+        },
+        {
+          "label": "189-return-easy-view",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:35:39.260Z",
+          "afterUtc": "2026-10-11T16:35:39.544Z",
+          "sourceSeconds": 1644.734,
+          "outputSeconds": 29.734,
+          "point": [
+            628,
+            162
+          ]
+        },
+        {
+          "label": "190-saved-agent-easy-view",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:35:41.766Z",
+          "afterUtc": "2026-10-11T16:35:42.437Z",
+          "sourceSeconds": 1647.24,
+          "outputSeconds": 32.24
+        },
+        {
+          "label": "191-try-website-builder",
+          "tool": "click",
+          "beforeUtc": "2026-10-11T16:37:12.386Z",
+          "afterUtc": "2026-10-11T16:37:12.691Z",
+          "sourceSeconds": 1737.86,
+          "outputSeconds": 36.86,
+          "point": [
+            1481,
+            161
+          ]
+        },
+        {
+          "label": "192-website-builder-chat",
+          "tool": "look_at_screen",
+          "beforeUtc": "2026-10-11T16:37:15.691Z",
+          "afterUtc": "2026-10-11T16:37:16.060Z",
+          "sourceSeconds": 1741.165,
+          "outputSeconds": 40.165
+        }
+      ],
+      "sceneChangeOutputSeconds": [
+        11,
+        11.25,
+        11.35,
+        17.25,
+        17.35,
+        17.45,
+        21.85,
+        30.3,
+        37.55,
+        38,
+        38.15,
+        38.3
+      ]
+    }
+  ],
+  "actionTimingBasis": "Allowlisted real action-log metadata only. Tool-call UTC times mapped to the recording start and ranges, rounded to milliseconds. A terminal tool call can begin before the selected browser-only paste footage; the observed paste timing is recorded separately. Action times are not generated cursor traces.",
+  "observedConfiguration": {
+    "agentName": "Website Builder",
+    "goalText": "Build working websites from the brief. Use your connected tools to create the files, serve a local preview, and check the small-screen layout and interactions. Ask for missing essentials and use sensible defaults. Keep each project inside /workspace/website-projects. Prefer simple HTML, CSS and JavaScript when suitable. Do not delete files or run cleanup commands.",
+    "modelDisplayName": "Website Builder AI",
+    "modelProvider": "OpenRouter",
+    "modelId": "google/gemini-3-flash-preview",
+    "modelIdentityEvidence": "docs/journeys/evidence/walkthrough-model-setup-clip.json",
+    "connectedApp": "DesktopCommanderMCP",
+    "attachedTools": 26,
+    "agentSteps": 1,
+    "expertNodes": 4,
+    "expertConnections": 3,
+    "nodeLabels": [
+      "Start Node",
+      "AI task",
+      "Finish Node",
+      "DesktopCommanderMCP"
+    ],
+    "saveConfirmation": "Agent saved.",
+    "chat": "Try it opens a new Website Builder conversation with an empty composer. No prompt is sent or model result claimed by these clips."
+  },
+  "pasteObservations": [
+    {
+      "field": "Workflow goal",
+      "clipId": "agent-create",
+      "selectedSourceStart": 863.5,
+      "emptyFieldObservedAtSource": 863.5,
+      "pastedTextFirstObservedAtSource": 863.75,
+      "outputSeconds": 23.25,
+      "method": "Actual clipboard paste after browser activation; terminal preparation is omitted. Text appears at once, as recorded."
+    },
+    {
+      "field": "Agent name",
+      "clipId": "agent-save-and-chat",
+      "selectedSourceStart": 1292.5,
+      "oldValueObservedAtSource": 1292.5,
+      "selectionObservedAtSource": 1292.75,
+      "pastedTextFirstObservedAtSource": 1293,
+      "outputSeconds": 0.5,
+      "method": "Actual clipboard paste after browser activation; terminal preparation is omitted. Text appears at once, as recorded."
+    }
+  ],
+  "limitationsAndRecoveries": [
+    "The earlier action162 click did not advance the manual setup choice. The later action164 click succeeds and is included. No application state was fabricated to bypass it.",
+    "The Expert view shows four nodes and three connections. The separate Fit graph action187 made no visible change in the reviewed frames and is omitted; a successful reframing is not claimed.",
+    "During navigation into Talk, a previous demo conversation title briefly appears while the new conversation initializes. The selected result is the real empty Website Builder conversation.",
+    "These clips prove agent creation, binding, saving, and chat entry. Website generation and acceptance belong to the later live-run capture."
+  ],
+  "privacyReview": {
+    "method": "111 one-second output samples, 27 full-resolution source frames including paste boundaries, every source frame in the first second of each selected paste interval (40 boundary frames), allowlisted action-log matching, and scene-change scans of all 2220 output frames at threshold0.025. All detected scene changes were visually reviewed.",
+    "fullResolutionSourceSeconds": [
+      640,
+      690,
+      733,
+      783,
+      863.5,
+      863.75,
+      864,
+      864.5,
+      870,
+      904,
+      978,
+      1024,
+      1069,
+      1135,
+      1215,
+      1292,
+      1292.5,
+      1292.65,
+      1292.75,
+      1292.85,
+      1293,
+      1300,
+      1374,
+      1415,
+      1515,
+      1648,
+      1742
+    ],
+    "mandatoryExcludedIntervals": [
+      {
+        "sourceStart": 860,
+        "sourceEnd": 863.5,
+        "reason": "Goal clipboard preparation and terminal flash before the reviewed browser-only start."
+      },
+      {
+        "sourceStart": 1290,
+        "sourceEnd": 1292.5,
+        "reason": "Name clipboard preparation and terminal flash before the reviewed browser-only start."
+      }
+    ],
+    "observations": [
+      "No standalone terminal, credential value, email address, or private host filesystem path observed in selected outputs.",
+      "Owned demo container path /workspace/website-projects is intentionally visible in the operator-authored goal.",
+      "Prior workshop-demo agent names and conversation titles remain visible in navigation. They are demo content, not a human usability study.",
+      "Real clipboard paste is preserved; no letter-by-letter typing animation was created.",
+      "No cursor was added during editing."
+    ],
+    "limitations": "Visual sampling and all-frame scene-change detection, not OCR or manual review of every output frame. Coarse sampling alone missed the name terminal flash; full-resolution boundary inspection established the final safe starts. The raw video and full action log remain private.",
+    "publicScope": "Only the three listed video outputs and this sanitized manifest are reviewed for public use."
+  }
+}

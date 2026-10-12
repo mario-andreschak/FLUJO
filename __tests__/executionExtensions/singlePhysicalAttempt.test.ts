@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
 import { OpenAiResponsesAdapter } from '@/backend/services/model/adapters/openaiResponsesAdapter';
+import { AzureOpenAiAdapter } from '@/backend/services/model/adapters/azureOpenAiAdapter';
+import { OpenRouterAgentAdapter } from '@/backend/services/model/adapters/openrouterAgentAdapter';
+import { AntigravityCliAdapter } from '@/backend/services/model/adapters/antigravityCliAdapter';
+import { GeminiAdapter } from '@/backend/services/model/adapters/geminiAdapter';
 import { OpenRouterMediaAdapter } from '@/backend/services/model/adapters/openrouterMediaAdapter';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
@@ -694,6 +698,29 @@ describe('authenticated single physical OpenAI attempt', () => {
     expect(() => getCompletionAdapter({
       ...boundModel(), provider: 'anthropic', adapter: 'anthropic',
     })).toThrow(expect.objectContaining({ code: 'execution_owner_model_adapter_unsupported' }));
+  });
+
+  it.each([
+    ['Azure', AzureOpenAiAdapter],
+    ['OpenRouter Agent', OpenRouterAgentAdapter],
+    ['Antigravity', AntigravityCliAdapter],
+    ['Gemini', GeminiAdapter],
+  ] as const)('refuses a direct %s entry with a misdeclared bound model before any send', async (_name, Concrete) => {
+    const direct = new Concrete();
+    await expect(direct.createCompletion({ ...input(), model: boundModel(), apiKey: '' }))
+      .rejects.toBeInstanceOf(ExecutionExtensionError);
+    if ('createStreamCompletion' in direct) {
+      await expect(direct.createStreamCompletion!({ ...input(), model: boundModel(), apiKey: '' }))
+        .rejects.toBeInstanceOf(ExecutionExtensionError);
+    }
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('rejects bound Gemini assessment before entering its separate assessment sender', async () => {
+    await expect(new GeminiAdapter().createCompletion({
+      ...input(), model: boundModel(), apiKey: '', readOnlyAssessment: {} as never,
+    })).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+    expect(physicalRequests).toBe(0);
   });
 
   it.each(['response', 'stream'] as const)('sends a bound %s step only through the owner with no FLUJO credential', async mode => {

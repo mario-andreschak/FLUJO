@@ -1,9 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { Model } from '@/shared/types';
+import type { NormalizedModel } from '@/shared/types/model/response';
 import {
   AZURE_OPENAI_DEFAULT_API_VERSION,
+  ANTIGRAVITY_CLI_API_KEY_MODELS,
+  ANTIGRAVITY_CLI_GUIDED_MODELS,
+  getAntigravityCliModelLabel,
   GEMINI_NATIVE_GUIDED_MODELS,
+  getProviderProfileById,
 } from '@/shared/types/model/provider';
 
 export type GuidedConnectionKind =
@@ -11,9 +16,11 @@ export type GuidedConnectionKind =
   | 'requesty-free'
   | 'openrouter-paid'
   | 'requesty-paid'
+  | 'orcarouter-paid'
   | 'azure'
   | 'claude-subscription'
   | 'codex-subscription'
+  | 'antigravity-cli'
   | 'gemini-native'
   | 'ollama';
 
@@ -25,6 +32,7 @@ interface GuidedModelInput {
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  codexModels?: NormalizedModel[];
 }
 
 interface ModelTemplate {
@@ -109,6 +117,15 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
       supportsTools: true,
     },
   ],
+  'orcarouter-paid': [{
+    name: 'anthropic/claude-sonnet-4',
+    displayName: 'Claude Sonnet via OrcaRouter',
+    description: 'A vendor/model connection through your OrcaRouter account.',
+    provider: getProviderProfileById('orcarouter')!.provider,
+    adapter: getProviderProfileById('orcarouter')!.adapter,
+    baseUrl: getProviderProfileById('orcarouter')!.baseUrl,
+    supportsTools: true,
+  }],
   'requesty-paid': [
     {
       name: 'deepseek/deepseek-v3.2',
@@ -176,49 +193,20 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
       supportsTools: true,
     },
   ],
-  'codex-subscription': [
-    {
-      name: 'gpt-6-astra',
-      displayName: 'Codex Astra',
-      description: 'The most capable Codex model for complex reasoning and agent work.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'high',
-      supportsTools: true,
-    },
-    {
-      name: 'gpt-5.6-terra',
-      displayName: 'Codex Terra',
-      description: 'A balanced Codex model for everyday agent work.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'medium',
-      supportsTools: true,
-    },
-    {
-      name: 'gpt-5.6-sol',
-      displayName: 'Codex Sol',
-      description: 'The high-capability Codex model for difficult work.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'high',
-      supportsTools: true,
-    },
-    {
-      name: 'gpt-5.4-mini',
-      displayName: 'Codex Mini',
-      description: 'A quick, efficient Codex option for smaller tasks.',
-      provider: 'codex',
-      adapter: 'codex-cli',
-      reasoningEffort: 'medium',
-      supportsTools: true,
-    },
-  ],
+  'codex-subscription': [],
   'gemini-native': GEMINI_NATIVE_GUIDED_MODELS.map((name) => ({
     name,
     ...GEMINI_GUIDED_METADATA[name],
     provider: 'gemini' as const,
     adapter: 'gemini' as const,
+    supportsTools: true,
+  })),
+  'antigravity-cli': ANTIGRAVITY_CLI_GUIDED_MODELS.map((name) => ({
+    name,
+    displayName: name === 'default' ? getAntigravityCliModelLabel(name) : `Antigravity ${getAntigravityCliModelLabel(name)}`,
+    description: 'Uses the official Antigravity CLI with an Antigravity account login or a Gemini API key on this host. Model availability depends on the chosen authentication mode.',
+    provider: 'antigravity-cli' as const,
+    adapter: 'antigravity-cli' as const,
     supportsTools: true,
   })),
 };
@@ -252,7 +240,15 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
           supportsTools: true,
         },
       ]
-    : TEMPLATES[input.kind];
+    : input.kind === 'codex-subscription'
+      ? (input.codexModels ?? []).map(model => ({
+          name: model.id, displayName: model.name, description: model.description ?? '',
+          provider: 'codex' as const, adapter: 'codex-cli' as const,
+        }))
+    : input.kind === 'antigravity-cli' && apiKey
+      ? TEMPLATES[input.kind].filter(template =>
+        (ANTIGRAVITY_CLI_API_KEY_MODELS as readonly string[]).includes(template.name))
+      : TEMPLATES[input.kind];
 
   return templates.map((template) => ({
     id: uuidv4(),
@@ -263,6 +259,9 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
     baseUrl: template.baseUrl || '',
     provider: template.provider,
     adapter: template.adapter,
+    ...(input.kind === 'antigravity-cli'
+      ? { inputModalities: ['text'], visionInputCapability: 'unsupported' as const }
+      : {}),
     ...(input.kind === 'azure'
       ? { azureApiVersion: input.azureApiVersion?.trim() || AZURE_OPENAI_DEFAULT_API_VERSION }
       : {}),
@@ -275,6 +274,6 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
   }));
 }
 
-export function guidedBundleNames(kind: GuidedConnectionKind): string[] {
-  return buildGuidedModels({ kind }).map((model) => model.displayName || model.name);
+export function guidedBundleNames(kind: GuidedConnectionKind, apiKey?: string): string[] {
+  return buildGuidedModels({ kind, apiKey }).map((model) => model.displayName || model.name);
 }

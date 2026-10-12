@@ -29,6 +29,7 @@ async function GET_handler(_request: NextRequest, { params }: RouteContext) {
     const statusWithVersion = {
       ...status,
       resourceListVersion: mcpService.getResourceListVersion(name),
+      shutdownReceipt: mcpService.getServerShutdownReceipt(name),
     };
     return json(statusWithVersion, 200);
   } catch (error) {

@@ -123,6 +123,8 @@ export interface ModelTestResult {
 export interface NormalizedModel {
   id: string;
   name: string;
+  /** Account/client-advertised reasoning options. */
+  reasoningEfforts?: string[];
   description?: string;
   /** Provider-advertised input context limit, in tokens. */
   contextWindow?: number;

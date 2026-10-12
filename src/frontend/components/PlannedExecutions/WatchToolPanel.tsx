@@ -443,7 +443,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
                   evaluate: { ...evaluate, maxCallsPerDay: Math.max(1, Number(e.target.value) || 1) },
                 })
               }
-              inputProps={{ min: 1 }}
+              slotProps={{ htmlInput: { min: 1 } }}
               helperText={t('automations.tool.costGuard')}
               sx={{ width: 180 }}
             />

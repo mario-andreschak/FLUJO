@@ -33,6 +33,7 @@ jest.mock('@/backend/services/runResources', () => {
 });
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 
@@ -172,6 +173,130 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     expect(value.processedToolCalls[0]).toMatchObject({ id: 'call1', name: 'mcp_a_1' });
     // event order for a lone call is exactly tool:call then tool:result
     expect(emit.mock.calls.map(([e]) => e.type)).toEqual(['tool:call', 'tool:result']);
+  });
+
+  it.each(['short', 'café🙂'.repeat(150)])('binds the full MCP tool-message string independently of the event preview (%#)', async (text) => {
+    const data = { content: [{ type: 'text', text }] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValueOnce({ success: true, data });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('bound-call', 'mcp_a_1', {})], toolNameMap, emit,
+    });
+    expect(result.success).toBe(true);
+    const value = (result as { value: { toolCallMessages: Array<{ tool_call_id: string; content: string }> } }).value;
+    expect(value.toolCallMessages[0]).toMatchObject({ tool_call_id: 'bound-call', content: full });
+    const event = emit.mock.calls.map(([row]) => row).find(row => row.type === 'tool:result');
+    expect(event).toMatchObject({ toolCallId: 'bound-call',
+      result: full.length > 500 ? `${full.slice(0, 500)}…` : full,
+      resultContentBinding: { serialization: 'utf8-string-v1',
+        sha256: createHash('sha256').update(full, 'utf8').digest('hex'), bytes: Buffer.byteLength(full, 'utf8') } });
+    if (full.length > 500) expect(event.resultContentBinding.sha256)
+      .not.toBe(createHash('sha256').update(event.result, 'utf8').digest('hex'));
+  });
+
+  it.each([
+    { label: 'stdio OAuth revocation', error: 'Synthetic external authorization revoked',
+      errorType: 'stdio-oauth-required', statusCode: 428, requiresAuthentication: true },
+    { label: 'long UTF-8 diagnostic', error: 'café🙂'.repeat(150) },
+    { label: 'timeout', error: 'Synthetic tool timeout', errorType: 'timeout' },
+    { label: 'cancellation', error: 'Synthetic tool cancelled', errorType: 'cancelled' },
+  ])('preserves returned $label failures without a full result binding', async ({ label: _label, ...failure }) => {
+    callToolMock.mockResolvedValueOnce({ success: false, ...failure });
+    const emit = jest.fn();
+    const full = `Error: ${failure.error}`;
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('failed-call', 'mcp_a_1', {})], toolNameMap, emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(result.value.toolCallMessages).toHaveLength(1);
+    expect(result.value.toolCallMessages[0]).toMatchObject({
+      role: 'tool', tool_call_id: 'failed-call', content: full,
+    });
+    expect(result.value.processedToolCalls).toEqual([{
+      id: 'failed-call', name: 'mcp_a_1', args: {}, result: full, exitCode: 1,
+    }]);
+    const events = emit.mock.calls.map(([row]) => row);
+    expect(events.map(row => row.type)).toEqual(['tool:call', 'tool:result']);
+    expect(events[1]).toMatchObject({ toolCallId: 'failed-call', name: 'mcp_a_1', isError: true,
+      result: full.length > 500 ? `${full.slice(0, 500)}…` : full });
+    expect(events[1]).not.toHaveProperty('resultContentBinding');
+  });
+
+  it.each(['short', 'café🙂'.repeat(150)])('preserves protocol isError diagnostics without a full result binding (%#)', async (text) => {
+    const data = { isError: true, content: [{ type: 'text', text }] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValueOnce({ success: true, data });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('protocol-failed-call', 'mcp_a_1', {})], toolNameMap, emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(result.value.toolCallMessages).toHaveLength(1);
+    expect(result.value.toolCallMessages[0]).toMatchObject({
+      role: 'tool', tool_call_id: 'protocol-failed-call', content: full,
+    });
+    expect(result.value.processedToolCalls).toEqual([{
+      id: 'protocol-failed-call', name: 'mcp_a_1', args: {}, result: full, exitCode: 1,
+    }]);
+    const events = emit.mock.calls.map(([row]) => row);
+    expect(events.map(row => row.type)).toEqual(['tool:call', 'tool:result']);
+    expect(events[1]).toMatchObject({ toolCallId: 'protocol-failed-call', isError: true,
+      result: full.length > 500 ? `${full.slice(0, 500)}…` : full });
+    expect(events[1]).not.toHaveProperty('resultContentBinding');
+  });
+
+  it.each(['transport', 'protocol'])('keeps %s failure and successful bindings separate when a concurrent batch completes out of order', async (failureKind) => {
+    let releaseFailure!: () => void;
+    const failureGate = new Promise<void>(resolve => { releaseFailure = resolve; });
+    const resolved: string[] = [];
+    const data = { content: [{ type: 'text', text: 'café🙂'.repeat(150) }] };
+    const full = JSON.stringify(data);
+    const failureData = { isError: true, content: [{ type: 'text', text: 'Synthetic MCP tool failure' }] };
+    const failureContent = failureKind === 'transport'
+      ? 'Error: Synthetic external authorization revoked' : JSON.stringify(failureData);
+    callToolMock.mockImplementation(async (_server: string, tool: string) => {
+      if (tool === 'op1') {
+        await failureGate;
+        resolved.push(tool);
+        return failureKind === 'transport'
+          ? { success: false, error: 'Synthetic external authorization revoked', errorType: 'stdio-oauth-required' }
+          : { success: true, data: failureData };
+      }
+      resolved.push(tool);
+      releaseFailure();
+      return { success: true, data };
+    });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('failed-call', 'mcp_a_1', {}), toolCall('success-call', 'mcp_a_2', {})],
+      toolNameMap, emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(resolved).toEqual(['op2', 'op1']);
+    expect(result.value.toolCallMessages).toHaveLength(2);
+    expect(result.value.toolCallMessages).toMatchObject([
+      { tool_call_id: 'failed-call' }, { tool_call_id: 'success-call' },
+    ]);
+    expect(result.value.toolCallMessages[0].content).toBe(failureContent);
+    expect(result.value.toolCallMessages[1].content).toBe(full);
+    expect(result.value.processedToolCalls.map(call => call.exitCode)).toEqual([1, 0]);
+    const results = emit.mock.calls.map(([row]) => row).filter(row => row.type === 'tool:result');
+    expect(results).toHaveLength(2);
+    expect(results.map(row => row.toolCallId).sort()).toEqual(['failed-call', 'success-call']);
+    const failed = results.find(row => row.toolCallId === 'failed-call');
+    const successful = results.find(row => row.toolCallId === 'success-call');
+    expect(failed).toMatchObject({ isError: true, result: failureContent });
+    expect(failed).not.toHaveProperty('resultContentBinding');
+    expect(successful).toMatchObject({ isError: false,
+      result: `${full.slice(0, 500)}…`, resultContentBinding: { serialization: 'utf8-string-v1',
+        sha256: createHash('sha256').update(full, 'utf8').digest('hex'), bytes: Buffer.byteLength(full, 'utf8') } });
   });
 
   it('stops mid-batch on Stop: every tool_call id is answered, not-started calls carry the cancelled text', async () => {

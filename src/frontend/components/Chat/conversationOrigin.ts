@@ -1,4 +1,4 @@
-import type { FlowInvocationSource } from '@/backend/execution/flow/types';
+import type { FlowInvocationSource } from '@/shared/types/execution/invocation';
 
 export type ConversationOriginKey = FlowInvocationSource | 'unknown';
 

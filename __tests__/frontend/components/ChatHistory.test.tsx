@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import ChatHistory from '@/frontend/components/Chat/ChatHistory';
 import type { ConversationListItem } from '@/frontend/components/Chat';
@@ -25,6 +25,43 @@ describe('ChatHistory', () => {
   };
   const rowIds = (element: Element) => Array.from(element.querySelectorAll('[data-conversation-id]'))
     .map((row) => row.getAttribute('data-conversation-id'));
+
+  it('keeps Ad-hoc and Archived wave buckets last and flat after collapsing runtime chains', async () => {
+    writeWorkspaceUiPreference('flujo-ui:chat-sidebar:group', 'wave');
+    const previousFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ waves: [{
+      id: 'real', rootExecutionIds: ['scheduled'], nodes: [{ executionId: 'scheduled', name: 'Genuine wave' }],
+    }] }) } as Response);
+    try {
+      const conversations: ConversationListItem[] = [
+        { ...parent, id: 'adhoc-parent', title: 'Ad-hoc parent' },
+        { ...child, id: 'adhoc-child', title: 'Ad-hoc child', parentConversationId: 'adhoc-parent', rootConversationId: 'adhoc-parent' },
+        { ...parent, id: 'archived-parent', title: 'Archived parent', plannedExecutionId: 'deleted' },
+        { ...child, id: 'archived-child', title: 'Archived child', plannedExecutionId: 'deleted', parentConversationId: 'archived-parent', rootConversationId: 'archived-parent' },
+        { ...parent, id: 'wave-parent', title: 'Wave parent', plannedExecutionId: 'scheduled' },
+        { ...child, id: 'wave-child', title: 'Wave child', plannedExecutionId: 'scheduled', parentConversationId: 'wave-parent', rootConversationId: 'wave-parent' },
+        { ...child, id: 'wave-sibling', title: 'Wave sibling', plannedExecutionId: 'scheduled', parentConversationId: 'wave-parent', rootConversationId: 'wave-parent' },
+      ];
+      render(<ChatHistory {...pinProps} conversations={conversations} />);
+      await screen.findByText('Genuine wave');
+      expect(rowIds(screen.getByRole('list', { name: 'Conversations' }))).toEqual([
+        'wave-parent', 'wave-child', 'wave-sibling', 'adhoc-child', 'adhoc-parent', 'archived-child', 'archived-parent',
+      ]);
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+      await waitFor(() => expect(screen.queryByText('Wave child')).not.toBeInTheDocument());
+      for (const label of ['Genuine wave', 'Ad hoc', 'Archived / no longer scheduled']) {
+        fireEvent.click(screen.getByText(label).closest('[role="button"]')!);
+      }
+      await waitFor(() => expect(screen.getByText('Ad-hoc child')).toBeVisible());
+      expect(screen.getByText('Archived child')).toBeVisible();
+      expect(screen.getByText('Wave parent')).toBeVisible();
+      expect(screen.queryByText('Wave child')).not.toBeInTheDocument();
+      expect(screen.queryByText('Wave sibling')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Expand conversation chain' }));
+      expect(await screen.findByText('Wave child')).toBeVisible();
+      expect(screen.getByText('Wave sibling')).toBeVisible();
+    } finally { global.fetch = previousFetch; }
+  });
 
   it('identifies Persona drafts and completed runs by Persona instead of their changing Core Flow', () => {
     const conversations: ConversationListItem[] = [

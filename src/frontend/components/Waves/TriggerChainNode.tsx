@@ -107,7 +107,7 @@ export default function TriggerChainNode({ data }: NodeProps) {
               {t('waves.signals')}
             </Typography>
           </Box>
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap" }} useFlexGap>
             {signals.map((s) => (
               <Tooltip
                 key={s.topic}

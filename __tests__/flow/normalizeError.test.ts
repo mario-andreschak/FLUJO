@@ -125,3 +125,53 @@ describe('emitErrorOnce dedupe guard', () => {
     expect(sharedState.errorEventEmitted).toBe(true);
   });
 });
+
+describe('normalized top-level credential masking', () => {
+  describe.each([
+    ['API key', 'sk-normalizedSECRET12345678', '[REDACTED]'],
+    ['bearer token', 'bEaReR session-token-12345678', 'Bearer [REDACTED]'],
+  ])('%s', (_label, credential, replacement) => {
+    it.each<[string, (message: string) => unknown]>([
+      ['Error.message', (message: string) => new Error(message)],
+      ['string', (message: string) => message],
+      ['object.message', (message: string) => ({ message })],
+      ['String fallback', (message: string) => ({ toString: () => message })],
+    ])('masks credentials from %s without discarding the reason', (_shape, makeError) => {
+      const norm = normalizeChatError(makeError('Provider refused credential ' + credential + '; retry later.'));
+      expect(norm.message).toBe('Provider refused credential ' + replacement + '; retry later.');
+      expect(JSON.stringify(norm)).not.toContain(credential);
+    });
+  });
+
+  it.each(['string', 'record'] as const)('masks a legacy %s error on readback', shape => {
+    const raw = 'Rejected sk-legacySECRET12345678 and Bearer legacy-token-12345678.';
+    const response = shape === 'string' ? raw : { success: false, error: raw };
+    const derived = deriveLastErrorFromLastResponse(response);
+    expect(derived?.message).toBe('Rejected [REDACTED] and Bearer [REDACTED]');
+    expect(JSON.stringify(derived)).not.toContain('sk-legacySECRET12345678');
+    expect(JSON.stringify(derived)).not.toContain('legacy-token-12345678');
+  });
+
+  it('persists and emits a masked error once while preserving error metadata', () => {
+    const sharedState = makeSharedState();
+    const emit = jest.fn();
+    const raw = 'Rejected sk-emittedSECRET12345678 and Bearer emitted-token-12345678.';
+    const err = Object.assign(new Error(raw), {
+      details: { status: 429, code: 'rate_limit_exceeded', type: 'rate_limit_error', retryAfter: '7' },
+    });
+    const norm = emitErrorOnce(sharedState, emit, err, { nodeId: 'model', nodeName: 'Model' });
+    emitErrorOnce(sharedState, emit, err);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(sharedState.lastError).toBe(norm);
+    expect(norm).toMatchObject({
+      message: 'Rejected [REDACTED] and Bearer [REDACTED]',
+      httpStatus: 429, code: 'rate_limit_exceeded', providerType: 'rate_limit_error',
+      retryAfter: '7', errorClass: 'rate_limit', nodeId: 'model', nodeName: 'Model',
+    });
+    expect(emit.mock.calls[0][0]).toMatchObject({ type: 'error', message: norm?.message, error: norm });
+    const servedAndPersisted = JSON.stringify({ events: emit.mock.calls, lastError: sharedState.lastError });
+    expect(servedAndPersisted).not.toContain('sk-emittedSECRET12345678');
+    expect(servedAndPersisted).not.toContain('emitted-token-12345678');
+    expect(err.message).toBe(raw);
+  });
+});

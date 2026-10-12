@@ -18,7 +18,10 @@ jest.mock('@/utils/encryption/secure', () => ({
   isUserEncryptionEnabled: async () => false,
   decryptWithPassword: async () => null,
 }));
-jest.mock('@/backend/utils/packageRegistryClient', () => ({ login: (...args: unknown[]) => mockLogin(...args) }));
+jest.mock('@/backend/utils/packageRegistryClient', () => ({
+  resolveRegistryBaseUrl: async () => 'https://registry.flujo.com.co',
+  login: (...args: unknown[]) => mockLogin(...args),
+}));
 
 import { saveItem } from '@/utils/storage/backend';
 import { encryptApiKey } from '@/backend/services/model/encryption';

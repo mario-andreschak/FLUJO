@@ -87,22 +87,21 @@ function githubHeaders(): Record<string, string> {
 
 /** GET with a bounded timeout, chained to an external abort signal. */
 async function githubGet(path: string, signal: AbortSignal): Promise<Response | null> {
+  signal.throwIfAborted();
   const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     return await fetch(`${GITHUB_API}${path}`, {
       headers: githubHeaders(),
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, signal]),
       cache: 'no-store',
     });
   } catch (error) {
+    signal.throwIfAborted();
     log.warn(`GitHub request failed (${path})`, error instanceof Error ? error.message : error);
     return null;
   } finally {
     clearTimeout(timer);
-    signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -128,6 +127,7 @@ export const githubProvider: QualitySignalProvider = {
   },
 
   async prefetch(query, candidates, signal) {
+    signal.throwIfAborted();
     // 1) One search, sorted by stars desc — the rate-limit-friendly bulk path.
     const term = `${query ?? ''} mcp`.trim();
     const search = `/search/repositories?q=${encodeURIComponent(term)}&sort=stars&order=desc&per_page=${SEARCH_PER_PAGE}`;
@@ -143,6 +143,7 @@ export const githubProvider: QualitySignalProvider = {
           });
         }
       } catch (error) {
+        signal.throwIfAborted();
         log.warn('Failed to parse GitHub search response', error);
       }
     } else if (res && isRateLimited(res)) {
@@ -155,6 +156,7 @@ export const githubProvider: QualitySignalProvider = {
     if (!activeToken()) return;
     let budget = MAX_DIRECT_LOOKUPS;
     for (const c of candidates) {
+      signal.throwIfAborted();
       if (budget <= 0) break;
       const repo = candidateRepo(c);
       if (!repo || repoStats.has(repo)) continue;
@@ -170,6 +172,7 @@ export const githubProvider: QualitySignalProvider = {
           pushedAtMs: r.pushed_at ? Date.parse(r.pushed_at) : null,
         });
       } catch {
+        signal.throwIfAborted();
         /* skip unparseable repo response */
       }
     }

@@ -367,6 +367,23 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   // would be noise the user can't meaningfully act on.
   for (const node of processNodes) {
     const props = node.data?.properties ?? {};
+    if (props.terminalRouting !== undefined) {
+      if (props.terminalRouting !== 'tool-free') {
+        add('error', 'invalid-terminal-routing', 'terminalRouting must be "tool-free" or absent.', node);
+      } else {
+        const outgoing = flow.edges.filter(edge => edge.source === node.id);
+        const incomingToolEdges = flow.edges.filter(edge => edge.target === node.id && edge.data?.edgeType === 'mcp');
+        const target = outgoing.length === 1 ? flow.nodes.find(candidate => candidate.id === outgoing[0].target) : undefined;
+        if (outgoing.length !== 1 || outgoing[0].data?.condition || outgoing[0].data?.bidirectional
+            || (target?.data?.type ?? target?.type) !== 'finish') {
+          add('error', 'tool-free-terminal-route-invalid', 'Tool-free terminal routing requires a sole unconditioned Finish successor.', node);
+        }
+        if (incomingToolEdges.length || ['mcpNodes', 'resourceNodes', 'personaTools'].some(key => Array.isArray(props[key]) && (props[key] as unknown[]).length)
+            || props.allowQuestion === true || props.enableTodoTool === true) {
+          add('error', 'tool-free-terminal-tools-denied', 'Tool-free terminal routing cannot authorize executable tools.', node);
+        }
+      }
+    }
     const boundModel = props.boundModel as string | undefined;
     if (!boundModel) {
       add('error', 'process-missing-model', `Process node "${getNodeLabel(node)}" has no model bound.`, node);

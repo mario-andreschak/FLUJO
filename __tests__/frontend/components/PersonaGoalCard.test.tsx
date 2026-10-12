@@ -103,3 +103,69 @@ it('keeps an indefinite responsibility active when milestones change unless the 
     goal: expect.objectContaining({ completionPolicy: 'success_criteria' }),
   })));
 });
+
+it.each([
+  ['textbox', 'Success criteria', '   ', 'A clear milestone', 'Describe what success looks like.'],
+  ['spinbutton', 'Seconds between work sessions', '9', '60', 'Enter a whole number from 10 to 604,800.'],
+  ['spinbutton', 'Seconds between work sessions', '604801', '60', 'Enter a whole number from 10 to 604,800.'],
+  ['spinbutton', 'Daily work session limit', '', '100', 'Enter a whole number from 1 to 10,000.'],
+  ['spinbutton', 'Daily work session limit', '10001', '100', 'Enter a whole number from 1 to 10,000.'],
+  ['spinbutton', 'Maximum work sessions (optional)', '1.5', '', 'Enter a whole number of 1 or more, or leave empty.'],
+])('explains an invalid %s field %s with value %s and clears the error when corrected', (role, name, invalid, corrected, message) => {
+  render(<PersonaGoalCard item={item} busy={false} mutate={mutate} />);
+  fireEvent.click(screen.getByText('Success criteria and limits'));
+  const field = screen.getByRole(role, { name });
+  fireEvent.change(field, { target: { value: invalid } });
+  expect(field).toHaveAttribute('aria-invalid', 'true');
+  expect(field).toHaveAccessibleDescription(message);
+  const save = screen.getByRole('button', { name: 'Save' });
+  expect(save).toBeDisabled();
+  fireEvent.click(save);
+  expect(updateWorkItemMock).not.toHaveBeenCalled();
+
+  fireEvent.change(field, { target: { value: corrected } });
+  expect(field).toHaveAttribute('aria-invalid', 'false');
+  expect(screen.queryByText(message)).not.toBeInTheDocument();
+  expect(save).toBeEnabled();
+});
+
+it('keeps unsaved changes and recovery actions visible when settings are collapsed', async () => {
+  const paused: PersonaWorkItem = { ...item, goal: { ...item.goal!, state: 'paused' } };
+  render(<PersonaGoalCard item={paused} busy={false} mutate={mutate} />);
+  const summary = screen.getByText('Success criteria and limits');
+  const details = summary.closest('details')!;
+  fireEvent.click(summary);
+  fireEvent.change(screen.getByRole('spinbutton', { name: 'Maximum work sessions (optional)' }), { target: { value: '50' } });
+  fireEvent.click(summary);
+  expect(details).not.toHaveAttribute('open');
+  expect(screen.getByRole('status')).toHaveTextContent('You have unsaved changes.');
+  const save = screen.getByRole('button', { name: 'Save' });
+  const discard = screen.getByRole('button', { name: 'Discard changes' });
+  expect(save.closest('details')).toBeNull();
+  expect(discard.closest('details')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Continue goal' })).toBeDisabled();
+
+  fireEvent.click(discard);
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Continue goal' })).toBeEnabled();
+  fireEvent.click(summary);
+  expect(screen.getByRole('spinbutton', { name: 'Maximum work sessions (optional)' })).toHaveValue(null);
+  expect(updateWorkItemMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Continue goal' }));
+  await waitFor(() => expect(controlWorkItemMock).toHaveBeenCalledWith(item.personaId, item.id, 'retry'));
+});
+
+it('discards edits against the current snapshot before accepting its newer revision', async () => {
+  const view = render(<PersonaGoalCard item={item} busy={false} mutate={mutate} />);
+  fireEvent.click(screen.getByText('Success criteria and limits'));
+  const limit = screen.getByRole('spinbutton', { name: 'Maximum work sessions (optional)' });
+  fireEvent.change(limit, { target: { value: '50' } });
+  view.rerender(<PersonaGoalCard item={{ ...item, updatedAt: 100, goal: { ...item.goal!, maxRounds: 20 } }} busy={false} mutate={mutate} />);
+  expect(limit).toHaveValue(50);
+  fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+  expect(limit).toHaveValue(20);
+  fireEvent.change(limit, { target: { value: '30' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(updateWorkItemMock).toHaveBeenCalledWith(item.personaId, item.id, expect.objectContaining({ expectedUpdatedAt: 100 })));
+});

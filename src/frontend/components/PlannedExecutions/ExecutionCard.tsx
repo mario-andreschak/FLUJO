@@ -528,11 +528,11 @@ const ExecutionCard = ({
                   checked={execution.enabled}
                   onChange={(event) => onToggleEnabled(event.target.checked)}
                   size="small"
-                  inputProps={{
+                  slotProps={{ input: {
                     'aria-label': execution.enabled
                       ? t('automations.card.turnOff')
                       : t('automations.card.turnOn'),
-                  }}
+                  } }}
                 />
                 <Typography
                   variant="caption"

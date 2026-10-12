@@ -12,6 +12,12 @@ import type { NextRequest } from 'next/server';
 import JSZip from 'jszip';
 import { StorageKey } from '@/shared/types/storage';
 
+// These fixtures test archive content and Persona preflight after unlocking.
+// Real private-profile lock enforcement has its own API/lock suites.
+jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: async () => null }));
+// Keep real local/Persona checks, while owner session authorization is covered separately.
+jest.mock('@/backend/services/security/ownerAccess', () => ({ ...jest.requireActual('@/backend/services/security/ownerAccess'), assertOwnerRequest: () => null }));
+
 // Match the collection-backed fixture below at the authoring boundary as well.
 // Real filesystem locking/ownership is covered by personaOwnedFlows and its
 // process tests; this suite exercises the actual backup/restore route logic.
@@ -22,6 +28,11 @@ jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
     const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
     return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
   },
+}));
+
+jest.mock('@/backend/services/enduringAgents/store', () => ({
+  getPersona: jest.fn(async (id: string) => id === 'alive' ? { id } : null),
+  getPersonaDeletionTombstone: jest.fn(async (id: string) => id === 'deleted' ? { id } : null),
 }));
 
 const loadItemMock = jest.fn();
@@ -36,9 +47,12 @@ const conversationFiles = new Map<string, unknown>();
 
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => loadItemMock(...args),
+  loadItemForBackup: (...args: unknown[]) => loadItemMock(...args),
   saveItem: (...args: unknown[]) => saveItemMock(...args),
   saveCollectionItem: (...args: unknown[]) => saveCollectionItemMock(...args),
   loadCollectionItem: (...args: unknown[]) => loadCollectionItemMock(...args),
+  listCollectionItemEntriesStrict: jest.fn(async (collection: string) =>
+    Array.from((collection === 'conversations' ? conversationFiles : flowFiles).entries()).map(([id, item]) => ({ id, item }))),
   listCollectionItems: jest.fn(async (collection: string) =>
     Array.from((collection === 'conversations' ? conversationFiles : flowFiles).values())),
   // loadFlows backfills timestamps from file mtime (#108); model the stats API.
@@ -123,6 +137,152 @@ beforeEach(() => {
 });
 
 describe('backup route', () => {
+  it('marks failed selections without leaking loader errors', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.MODELS) throw new Error('secret-canary');
+      return null;
+    });
+    const response = await callBackup(['models', 'flows', 'settings']);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    const metadata = await zip.file('backup-info.json')!.async('string');
+    expect(JSON.parse(metadata)).toMatchObject({ status: 'partial', selectionResults: { models: 'failed', flows: 'completed', settings: 'empty' } });
+    expect(metadata).not.toContain('secret-canary');
+  });
+
+  it('does not report a metadata-only archive when every selection failed', async () => {
+    loadItemMock.mockRejectedValue(new Error('secret-canary'));
+    expect((await callBackup(['models', 'settings'])).status).toBe(500);
+  });
+
+  it('exports legacy flows with modern disk snapshots winning over legacy and cached values', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => key === StorageKey.FLOWS ? [
+      { ...flowsData[0], name: 'legacy-stale' },
+      { ...flowsData[0], id: 'legacy-only' },
+    ] : null);
+    (global as unknown as { __flujo_flowsCache: unknown }).__flujo_flowsCache = [{ ...flowsData[0], name: 'cached-stale' }];
+    const response = await callBackup(['flows']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(JSON.parse(await zip.file('storage/flows.json')!.async('string'))).toEqual([flowsData[0], { ...flowsData[0], id: 'legacy-only' }]);
+  });
+
+  it('marks invalid disk flows failed rather than using a valid stale cache', async () => {
+    (global as unknown as { __flujo_flowsCache: unknown }).__flujo_flowsCache = flowsData;
+    flowFiles.set('broken', { id: 'broken' });
+    const response = await callBackup(['flows', 'models']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(response.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+    expect(zip.file('storage/flows.json')).toBeNull();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string')).selectionResults.flows).toBe('failed');
+  });
+
+  it('fails closed when conversation storage cannot be authoritatively read', async () => {
+    jest.requireMock('@/utils/storage/backend').listCollectionItemEntriesStrict.mockRejectedValueOnce(new Error('private-path-secret'));
+    const response = await callBackup(['chatHistory', 'models']);
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain('private-path-secret');
+  });
+
+  it('records invalid conversation snapshots as partial and still saves the remaining snapshots', async () => {
+    conversationFiles.set('broken', { conversationId: '../unsafe' });
+    const response = await callBackup(['chatHistory']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(zip.file('storage/conversations/conversation-2.json')).not.toBeNull();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string')).selectionResults.chatHistory).toBe('failed');
+    expect(response.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+  });
+
+  it('refuses a failed selection plus absent data without pretending it is a usable partial backup', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.MODELS) throw new Error('secret');
+      return null;
+    });
+    expect((await callBackup(['models', 'settings'])).status).toBe(500);
+  });
+
+  it('marks credential-only redacted values empty rather than completed without an entry', async () => {
+    loadItemMock.mockResolvedValue('encrypted:secret-canary');
+    const response = await callBackup(['models']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(zip.file('storage/models.json')).toBeNull();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string')).selectionResults.models).toBe('empty');
+  });
+
+  it('continues after a conversation serialization failure and records partial history', async () => {
+    conversationFiles.set('broken', { conversationId: 'broken', messages: [{ content: BigInt(1) }] });
+    const response = await callBackup(['chatHistory']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(zip.file('storage/conversations/conversation-2.json')).not.toBeNull();
+    expect(zip.file('storage/conversations/broken.json')).toBeNull();
+    expect(response.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string')).selectionResults.chatHistory).toBe('failed');
+  });
+
+  it('keeps ordinary flows and live-owner flows while excluding missing or deleted owners', async () => {
+    for (const personaId of ['alive', 'missing', 'deleted']) {
+      flowFiles.set(personaId, { ...flowsData[0], id: personaId, personaOwnership: { personaId, kind: 'core' } });
+    }
+    const response = await callBackup(['flows']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(JSON.parse(await zip.file('storage/flows.json')!.async('string')).map((flow: { id: string }) => flow.id)).toEqual(['flow-1', 'alive']);
+  });
+
+  it('fails closed on interrupted legacy history before constructing an archive', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.CHAT_HISTORY) throw new Error('Backup storage item is empty');
+      return modelsData;
+    });
+    const response = await callBackup(['chatHistory', 'models']);
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Content-Type')).not.toBe('application/zip');
+  });
+
+  it('records unreadable legacy flows as failed while exporting healthy selections', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.FLOWS) throw new Error('Backup storage item is empty');
+      return modelsData;
+    });
+    const response = await callBackup(['flows', 'models']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(response.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string')).selectionResults).toEqual({ flows: 'failed', models: 'completed' });
+  });
+
+  it('never reads or archives the key or raw server files even when explicitly selected', async () => {
+    const response = await callBackup(['models', 'encryptionKey', 'mcpServersFolder']);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(loadItemMock).not.toHaveBeenCalledWith(StorageKey.ENCRYPTION_KEY, expect.anything());
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    expect(Object.keys(zip.files).some(name => name.startsWith('mcp-servers/'))).toBe(false);
+    expect(zip.file(`storage/${StorageKey.ENCRYPTION_KEY}.json`)).toBeNull();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string'))).toMatchObject({
+      selections: ['models'], credentials: 'omitted',
+    });
+  });
+
+  it('strips mixed plaintext/ciphertext credentials and unknown legacy env values without changing storage', async () => {
+    const source = [{ id: 'model-1', ApiKey: 'plaintext-canary', baseUrl: 'https://user:password@host/?token=canary', nested: { value: 'encrypted_failed:canary' } }];
+    loadItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.MODELS) return source;
+      if (key === StorageKey.GLOBAL_ENV_VARS) return { UNMARKED: 'legacy-canary', SECRET: { value: 'encrypted:canary', metadata: { isSecret: true } } };
+      if (key === StorageKey.MCP_SERVERS) return [{ name: 'server', transport: 'stdio', args: ['--password=arg-canary'], env: { X: 'env-canary' }, oauthTokens: { access_token: 'token-canary' }, headers: { Authorization: 'header-canary' } }];
+      return null;
+    });
+    const response = await callBackup(['models', 'mcpServers', 'globalEnvVars']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    const text = (await Promise.all(Object.values(zip.files).filter(file => !file.dir).map(file => file.async('string')))).join('');
+    expect(text).not.toContain('canary');
+    expect(JSON.parse(await zip.file('storage/models.json')!.async('string'))).toEqual([{ id: 'model-1', nested: {} }]);
+    expect(source[0].ApiKey).toBe('plaintext-canary');
+    expect(saveItemMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an export consisting only of unsupported or credential-bearing selections', async () => {
+    expect((await callBackup(['encryptionKey', 'mcpServersFolder', 'unknown'])).status).toBe(400);
+    expect(loadItemMock).not.toHaveBeenCalled();
+  });
   it('reads selections through the storage backend and zips them under storage/<key>.json', async () => {
     const response = await callBackup(['models', 'flows']);
     expect(response.status).toBe(200);

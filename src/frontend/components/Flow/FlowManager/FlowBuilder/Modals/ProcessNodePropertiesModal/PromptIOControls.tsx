@@ -4,7 +4,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
-import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutlined';
 import OptionCard from '@/frontend/components/shared/OptionCard';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Model, ProcessNodeData } from './types';

@@ -2,12 +2,13 @@ import OpenAI from 'openai';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
-import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { parseDataUrl } from './messageUtils';
+import { supportsExplicitOpenAiPromptCaching } from './openaiPromptCaching';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import {
@@ -117,6 +118,17 @@ function stashReasoning(key: string, callId: string, items: ReasoningItem[]): vo
   }
 }
 
+/** Shared Responses reasoning carry-over for SDKs using the same wire protocol. */
+export function getCarriedResponsesReasoning(conversationId?: string, nodeId?: string): Map<string, ReasoningItem[]> | undefined {
+  const key = sessionKey(conversationId, nodeId);
+  return key ? reasoningBySession().get(key) : undefined;
+}
+
+export function rememberResponsesReasoning(conversationId: string | undefined, nodeId: string | undefined, callId: string | undefined, items: ReasoningItem[]): void {
+  const key = sessionKey(conversationId, nodeId);
+  if (key && callId && items.length) stashReasoning(key, callId, items);
+}
+
 /** Drop a session's carried reasoning (housekeeping / tests). */
 export function forgetReasoning(conversationId: string, nodeId?: string): void {
   const key = sessionKey(conversationId, nodeId);
@@ -133,6 +145,31 @@ export function __resetReasoningStore(): void {
 // ---------------------------------------------------------------------------
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+
+/** Mark the latest reusable history boundaries after wire translation. The
+ * late node instruction stays unmarked, and encrypted reasoning stays intact. */
+export function withResponsesCacheBreakpoints(input: ResponseInputItem[]): ResponseInputItem[] {
+  const cacheableTypes = new Set(['input_text', 'input_image', 'input_file']);
+  const candidates: number[] = [];
+  input.forEach((item, index) => {
+    const record = item as unknown as Record<string, unknown>;
+    if (record.role === 'system' || record.role === 'developer') return;
+    const content = record.type === 'function_call_output' ? record.output : record.content;
+    if ((typeof content === 'string' && content.length > 0) || (Array.isArray(content) &&
+      content.some(part => part && typeof part === 'object' && cacheableTypes.has(part.type)))) candidates.push(index);
+  });
+  const marked = new Set(candidates.slice(-4));
+  return input.map((item, index) => {
+    if (!marked.has(index)) return item;
+    const record = item as unknown as Record<string, unknown>;
+    const field = record.type === 'function_call_output' ? 'output' : 'content';
+    const content = record[field];
+    const parts = typeof content === 'string' ? [{ type: 'input_text', text: content }] : content as Record<string, unknown>[];
+    const boundary = parts.findLastIndex(part => part && cacheableTypes.has(String(part.type)));
+    return { ...record, [field]: parts.map((part, partIndex) => partIndex === boundary
+      ? { ...part, prompt_cache_breakpoint: { mode: 'explicit' } } : part) } as unknown as ResponseInputItem;
+  });
+}
 
 /** Flatten a Chat Completions `content` field to plain text. */
 function textOf(content: unknown): string {
@@ -509,7 +546,7 @@ export function fromResponse(
  * the first time the provider rejects it by name. Costs at most one retried
  * request per parameter per model per process.
  */
-const DROPPABLE = ['include', 'temperature', 'prompt_cache_key', 'parallel_tool_calls'] as const;
+const DROPPABLE = ['include', 'temperature', 'prompt_cache_key', 'prompt_cache_options', 'parallel_tool_calls'] as const;
 type Droppable = (typeof DROPPABLE)[number];
 
 const unsupportedParams = new Map<string, Set<Droppable>>();
@@ -555,7 +592,8 @@ function rejectedParam(err: unknown, alreadyDropped: Set<Droppable>): Droppable 
     // `include` is also named via the value that triggered it.
     const mentioned =
       haystack.includes(param) ||
-      (param === 'include' && haystack.includes('encrypted_content'));
+      (param === 'include' && haystack.includes('encrypted_content')) ||
+      (param === 'prompt_cache_options' && haystack.includes('prompt_cache_breakpoint'));
     if (mentioned) return param;
   }
   return undefined;
@@ -566,7 +604,9 @@ function rejectedParam(err: unknown, alreadyDropped: Set<Droppable>): Droppable 
 // ---------------------------------------------------------------------------
 
 export class OpenAiResponsesAdapter implements CompletionAdapter {
-  async createCompletion({
+  async createCompletion(assessmentInput: CompletionInput): Promise<CompletionResult> {
+    assertReadOnlyAssessmentInput(assessmentInput);
+    const {
     model,
     apiKey,
     messages,
@@ -580,9 +620,11 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     conversationId,
     nodeId,
     promptCacheKey,
+    promptCacheMode,
     toolNameMap,
     executionExtensionContext,
-  }: CompletionInput): Promise<CompletionResult> {
+    readOnlyAssessment,
+    } = assessmentInput;
     await assertExecutionExtensionConcreteAdapter(executionExtensionContext, model, 'openai-responses');
     const openai = createOpenAIClient({
       apiKey,
@@ -604,13 +646,17 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     ];
     const pk = paramKey(model);
     const dropped = unsupportedParams.get(pk) ?? new Set<Droppable>();
+    const explicitCache = promptCacheMode === 'explicit' && supportsExplicitOpenAiPromptCaching(model);
 
     const buildBody = (omit: Set<Droppable>): Record<string, unknown> => ({
       model: model.name,
-      input,
+      input: explicitCache && !omit.has('prompt_cache_options')
+        ? withResponsesCacheBreakpoints(input) : input,
       // Stateless by design — FLUJO owns the history and rewrites it every turn,
       // which an append-only server-side thread cannot represent.
       store: false,
+      ...(explicitCache && !omit.has('prompt_cache_options')
+        ? { prompt_cache_options: { mode: 'explicit' } } : {}),
       ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
@@ -638,10 +684,10 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
           { adapter: 'openai-responses', operation: 'responses.create', request: body },
           () => openai.responses.create(
               body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-              signal ? { signal } : undefined,
+              readOnlyAssessment ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
             ),
         ),
-        { signal, onAttempt: onProviderAttempt },
+        { signal, onAttempt: onProviderAttempt, ...(readOnlyAssessment ? { maxAttempts: 1 } : {}) },
       ) as Promise<OpenAI.Responses.Response>;
     };
 
@@ -654,6 +700,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         response = await send(omit);
         break;
       } catch (error) {
+        if (readOnlyAssessment) throw error;
         const param = rejectedParam(error, omit);
         if (!param) throw error;
         omit.add(param);
@@ -700,12 +747,15 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     conversationId,
     nodeId,
     promptCacheKey,
+    promptCacheMode,
     onModelDelta,
     onSdkRequest,
     onSdkRequestResult,
     toolNameMap,
     executionExtensionContext,
+    readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
+    if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     await assertExecutionExtensionConcreteAdapter(executionExtensionContext, model, 'openai-responses');
     const openai = createOpenAIClient({
       apiKey,
@@ -727,11 +777,15 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     const dropped = unsupportedParams.get(pk) ?? new Set<Droppable>();
     const liveMessageId = `stream_${uuidv4()}`;
     let streamedMedia: ModelMediaPart[] = [];
+    const explicitCache = promptCacheMode === 'explicit' && supportsExplicitOpenAiPromptCaching(model);
 
     const buildBody = (omit: Set<Droppable>): Record<string, unknown> => ({
       model: model.name,
-      input,
+      input: explicitCache && !omit.has('prompt_cache_options')
+        ? withResponsesCacheBreakpoints(input) : input,
       store: false,
+      ...(explicitCache && !omit.has('prompt_cache_options')
+        ? { prompt_cache_options: { mode: 'explicit' } } : {}),
       stream: true,
       ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),

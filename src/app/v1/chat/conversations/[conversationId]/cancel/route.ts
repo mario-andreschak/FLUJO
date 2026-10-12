@@ -1,4 +1,5 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -55,6 +56,7 @@ async function POST_handler(
           FlowExecutor.conversationStates.set(conversationId, sharedState);
         }
       } catch (storageError) {
+        if (storageError instanceof ConversationLogReadPressureError) throw storageError;
         log.warn(`Error loading state from storage for cancellation`, { requestId, conversationId, error: storageError });
         // If we can't load state, we can't cancel, but maybe return success anyway?
         // Let's return an error for clarity.
@@ -217,6 +219,7 @@ async function POST_handler(
     return NextResponse.json({ success: true, message: 'Cancellation request processed.' });
 
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error processing cancellation request', {
       requestId,
       conversationId,

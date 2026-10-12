@@ -325,7 +325,7 @@ const FlowDashboard = ({
   // Generate loading skeletons
   const renderSkeletons = () => {
     return Array(6).fill(0).map((_, index) => (
-      <Grid item xs={12} sm={viewMode === 'compact' ? 12 : 6} md={viewMode === 'compact' ? 12 : 4} key={`skeleton-${index}`}>
+      <Grid size={{ xs: 12, sm: viewMode === 'compact' ? 12 : 6, md: viewMode === 'compact' ? 12 : 4 }} key={`skeleton-${index}`}>
         <FlowCardSkeleton />
       </Grid>
     ));
@@ -336,10 +336,7 @@ const FlowDashboard = ({
     <Grid container spacing={2.5}>
       {items.map(flow => (
         <Grid 
-          item 
-          xs={12} 
-          sm={viewMode === 'compact' ? 12 : 6} 
-          md={viewMode === 'compact' ? 12 : getGridColumns() === 3 ? 4 : 6} 
+          size={{ xs: 12, sm: viewMode === 'compact' ? 12 : 6, md: viewMode === 'compact' ? 12 : getGridColumns() === 3 ? 4 : 6 }}
           key={flow.id}
         >
           <FlowCard
@@ -387,13 +384,13 @@ const FlowDashboard = ({
             value={searchTerm}
             onChange={handleSearchChange}
             inputRef={searchInputRef}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
             sx={{ maxWidth: { sm: 300 } }}
           />
           
@@ -582,7 +579,7 @@ const FlowDashboard = ({
             {searchTerm ? (
               <Typography variant="body2" color="textSecondary" align="center">
                 {t('flows.dashboard.noMatchHelp')}
-                <Box component="span" display="block" mt={1}>
+                <Box component="span" sx={{ display: "block", mt: 1 }}>
                   <Trans
                     message="flows.dashboard.trySearch"
                     values={{ clearAction: <Button size="small" onClick={() => setSearchTerm('')}>{t('flows.dashboard.clearSearch')}</Button> }}
@@ -593,7 +590,7 @@ const FlowDashboard = ({
               <Typography variant="body2" color="textSecondary" align="center">
                 {t('flows.dashboard.emptyHelp')}
                 {onCreateFlow && (
-                  <Box component="span" display="block" mt={2}>
+                  <Box component="span" sx={{ display: "block", mt: 2 }}>
                     <Button 
                       variant="contained" 
                       color="primary" 

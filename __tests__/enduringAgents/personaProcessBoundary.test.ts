@@ -103,6 +103,23 @@ describe('Persona continuity across OS process boundaries', () => {
     killOrphanedPersonaChildren();
   });
 
+  it('keeps snapshot-store leases exclusive across owned process death and takeover', async () => {
+    const first = await start();
+    const second = await start();
+    await first.request({ type: 'captureGateEnter', token: 'first-store', mode: 'snapshot-store' });
+    const next = second.request({ type: 'captureGateEnter', token: 'next-store', mode: 'snapshot-store' }, 10_000);
+    await waitFor(async () => {
+      const status = await second.request<{ requested: boolean; held: boolean }>({ type: 'captureGateStatus', token: 'next-store' });
+      return status.requested && !status.held;
+    }, value => value, { timeoutMs: 5000, description: 'snapshot-store contender observed waiting' });
+    const exit = await first.kill();
+    expect(exit.code !== null || exit.signal !== null).toBe(true);
+    await expect(next).resolves.toMatchObject({ held: true, pid: second.child.pid });
+    await second.request({ type: 'captureGateLeave', token: 'next-store' });
+    await expect(second.request({ type: 'captureGateEnter', token: 'third-store', mode: 'snapshot-store' })).resolves.toMatchObject({ held: true });
+    await second.request({ type: 'captureGateLeave', token: 'third-store' });
+  });
+
   it('keeps the accepted ingress and negative-control matrix explicit', () => {
     expect(PERSONA_INGRESS_MATRIX.map((entry) => entry.label)).toEqual([
       'core chat',

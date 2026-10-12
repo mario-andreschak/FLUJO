@@ -19,11 +19,11 @@ export async function fetchProviderModels(
   apiKey?: string,
   profileId?: string,
 ): Promise<NormalizedModel[]> {
-  log.debug(`fetchProviderModels: Delegating to backend service for baseUrl: ${baseUrl}`, {
-    modelId,
+  log.debug('fetchProviderModels: Delegating to backend service', {
+    hasModelId: Boolean(modelId),
     hasApiKey: Boolean(apiKey),
     profileId,
-    searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
+    hasSearch: Boolean(searchTerm)
   });
   try {
     return await modelService.fetchProviderModels(
@@ -33,8 +33,8 @@ export async function fetchProviderModels(
       apiKey,
       profileId,
     );
-  } catch (error) {
-    log.warn(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
+  } catch {
+    log.warn('fetchProviderModels: Provider catalogue unavailable');
     // Return empty array instead of throwing to avoid UI errors
     return [];
   }

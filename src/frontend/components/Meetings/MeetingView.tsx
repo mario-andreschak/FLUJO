@@ -94,14 +94,14 @@ export default function MeetingView({
 
   return (
     <Box>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between" sx={{ mb: 2 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { xs: 'stretch', sm: 'center' }, justifyContent: "space-between",  mb: 2 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center",  minWidth: 0 }}>
           <Button color="inherit" startIcon={<ArrowBackRounded />} onClick={onBack}>{t('meetings.back')}</Button>
           <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
           <MeetingStatusChip status={meeting.status} />
           {isRunning && <Chip size="small" variant="outlined" color={streamConnected ? 'success' : 'default'} icon={streamConnected ? <FiberManualRecordRounded /> : <CircularProgress size={12} />} label={streamConnected ? t('meetings.live.connected') : t('meetings.live.reconnecting')} sx={streamConnected ? { '& .MuiChip-icon': { fontSize: 9 } } : undefined} />}
         </Stack>
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", justifyContent: "flex-end" }} useFlexGap>
           {canStart ? (
             <Button variant="contained" startIcon={busy ? <CircularProgress color="inherit" size={17} /> : meeting.status === 'draft' ? <PlayArrowRounded /> : <ReplayRounded />} disabled={busy} onClick={() => void onStart()}>
               {meeting.status === 'paused' ? t('meetings.resume') : t('meetings.start')}
@@ -120,15 +120,15 @@ export default function MeetingView({
 
       <Paper variant="outlined" sx={{ mb: 2, overflow: 'hidden', background: `linear-gradient(120deg, ${alpha(theme.palette.primary.main, 0.08)}, transparent 55%, ${alpha(theme.palette.secondary.main, 0.05)}), ${alpha(theme.palette.background.paper, 0.96)}`, backdropFilter: 'blur(16px)' }}>
         <Box sx={{ p: { xs: 2, sm: 2.5 } }}>
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { xs: 'flex-start', md: 'center' } }}>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="h5" sx={{ fontWeight: 790, letterSpacing: '-0.03em' }}>{meeting.title}</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, maxWidth: 760, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{meeting.openingPrompt}</Typography>
               {meeting.openingMedia?.length ? <Chip size="small" icon={<DescriptionRounded />} label={t('meetings.attachments.count', { count: meeting.openingMedia.length })} variant="outlined" sx={{ mt: 1 }} /> : null}
             </Box>
             <Stack direction="row" spacing={2.5} sx={{ flexShrink: 0 }}>
-              <Box><Typography variant="overline" color="text.secondary">{t('meetings.round')}</Typography><Typography variant="h6" fontWeight={780}>{discussionRoundCount}<Typography component="span" color="text.secondary" fontSize="0.8rem"> / {meeting.policy.maxRounds}</Typography></Typography></Box>
-              <Box><Typography variant="overline" color="text.secondary">{t('meetings.agents')}</Typography><Typography variant="h6" fontWeight={780}>{meeting.participants.length}</Typography></Box>
+              <Box><Typography variant="overline" color="text.secondary">{t('meetings.round')}</Typography><Typography variant="h6" sx={{ fontWeight: 780 }}>{discussionRoundCount}<Typography component="span" color="text.secondary" sx={{ fontSize: "0.8rem" }}> / {meeting.policy.maxRounds}</Typography></Typography></Box>
+              <Box><Typography variant="overline" color="text.secondary">{t('meetings.agents')}</Typography><Typography variant="h6" sx={{ fontWeight: 780 }}>{meeting.participants.length}</Typography></Box>
             </Stack>
           </Stack>
         </Box>
@@ -141,7 +141,7 @@ export default function MeetingView({
         <Box sx={{ minWidth: 0 }}>
           <MeetingControlRail meeting={meeting} onPrivateNote={onPrivateNote} onSteer={onSteer} onProposeMotion={(motion) => setHumanMotions((current) => [...current, motion])} />
           <Paper variant="outlined" sx={{ minHeight: 500, p: { xs: 1.25, sm: 2 } }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5, px: 0.5 }}>
+            <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between",  mb: 1.5, px: 0.5 }}>
               <Typography variant="h6" sx={{ fontWeight: 750 }}>{meeting.phase === 'breakout' ? t('meetings.breakout.title') : t('meetings.transcript.title')}</Typography>
               <Chip size="small" variant="outlined" label={t('meetings.transcript.events', { count: events.filter(isTranscriptVisibleEvent).length })} />
             </Stack>
@@ -152,12 +152,12 @@ export default function MeetingView({
         <Stack spacing={2} sx={{ position: { lg: 'sticky' }, top: { lg: 'calc(var(--app-bar-height) + 68px)' } }}>
           <MeetingMotions meeting={meeting} motions={motions} />
           <Paper variant="outlined" sx={{ p: 1.7 }}>
-            <Typography variant="subtitle2" fontWeight={750}>{t('meetings.details')}</Typography>
+            <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{t('meetings.details')}</Typography>
             <Stack spacing={1.1} sx={{ mt: 1.2 }}>
-              <Stack direction="row" justifyContent="space-between"><Typography variant="body2" color="text.secondary">{t('meetings.detail.facilitation')}</Typography><Typography variant="body2" fontWeight={650}>{t(`meetings.facilitation.mode.${meeting.policy.moderatorMode}` as TranslationKey)}</Typography></Stack>
-              <Stack direction="row" justifyContent="space-between"><Typography variant="body2" color="text.secondary">{t('meetings.detail.finishRule')}</Typography><Typography variant="body2" fontWeight={650}>{t(`meetings.facilitation.${meeting.policy.finishThreshold}` as TranslationKey)}</Typography></Stack>
-              <Stack direction="row" justifyContent="space-between"><Typography variant="body2" color="text.secondary">{t('meetings.detail.parallel')}</Typography><Typography variant="body2" fontWeight={650}>{meeting.policy.concurrencyLimit}</Typography></Stack>
-              {meeting.usage && <><Divider /><Stack direction="row" justifyContent="space-between" alignItems="center"><Stack direction="row" spacing={0.6} alignItems="center"><TokenRounded fontSize="small" color="action" /><Typography variant="body2" color="text.secondary">{t('meetings.detail.tokens')}</Typography></Stack><Typography variant="body2" fontWeight={650}>{formatNumber(meeting.usage.totalTokens)}</Typography></Stack></>}
+              <Stack direction="row" sx={{ justifyContent: "space-between" }}><Typography variant="body2" color="text.secondary">{t('meetings.detail.facilitation')}</Typography><Typography variant="body2" sx={{ fontWeight: 650 }}>{t(`meetings.facilitation.mode.${meeting.policy.moderatorMode}` as TranslationKey)}</Typography></Stack>
+              <Stack direction="row" sx={{ justifyContent: "space-between" }}><Typography variant="body2" color="text.secondary">{t('meetings.detail.finishRule')}</Typography><Typography variant="body2" sx={{ fontWeight: 650 }}>{t(`meetings.facilitation.${meeting.policy.finishThreshold}` as TranslationKey)}</Typography></Stack>
+              <Stack direction="row" sx={{ justifyContent: "space-between" }}><Typography variant="body2" color="text.secondary">{t('meetings.detail.parallel')}</Typography><Typography variant="body2" sx={{ fontWeight: 650 }}>{meeting.policy.concurrencyLimit}</Typography></Stack>
+              {meeting.usage && <><Divider /><Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}><Stack direction="row" spacing={0.6} sx={{ alignItems: "center" }}><TokenRounded fontSize="small" color="action" /><Typography variant="body2" color="text.secondary">{t('meetings.detail.tokens')}</Typography></Stack><Typography variant="body2" sx={{ fontWeight: 650 }}>{formatNumber(meeting.usage.totalTokens)}</Typography></Stack></>}
             </Stack>
           </Paper>
         </Stack>
@@ -173,8 +173,8 @@ export default function MeetingView({
         const participant = meeting.participants.find((item) => item.id === selectedParticipantId);
         const chatPath = participant ? magicLinkPath({ kind: 'conversation', id: participant.conversationId }) : null;
         return (
-          <Drawer anchor="right" open={Boolean(participant)} onClose={() => setSelectedParticipantId(null)} PaperProps={{ sx: { width: { xs: '100%', md: 'min(920px, 76vw)' }, maxWidth: '100%' } }}>
-            {participant && chatPath && <Stack sx={{ height: '100%', minHeight: 0 }}><Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1 }}><Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="subtitle1" fontWeight={760} noWrap>{participant.name}</Typography><Typography variant="caption" color="text.secondary">{meetingParticipantSourceLabel(participant, t)}</Typography></Box><Tooltip title={t('meetings.openChat')}><IconButton onClick={() => router.push(chatPath)} aria-label={t('meetings.openChat')}><OpenInNewRounded /></IconButton></Tooltip><IconButton onClick={() => setSelectedParticipantId(null)} aria-label={t('common.close')}><CloseRounded /></IconButton></Stack><Divider /><Box component="iframe" title={`${participant.name} FLUJO Chat`} src={withWorkspaceUrl(chatPath)} sx={{ flex: 1, width: '100%', minHeight: 0, border: 0, bgcolor: 'background.default' }} /></Stack>}
+          <Drawer anchor="right" open={Boolean(participant)} onClose={() => setSelectedParticipantId(null)} slotProps={{ paper: { sx: { width: { xs: '100%', md: 'min(920px, 76vw)' }, maxWidth: '100%' } } }}>
+            {participant && chatPath && <Stack sx={{ height: '100%', minHeight: 0 }}><Stack direction="row" spacing={1} sx={{ alignItems: "center",  px: 1.5, py: 1 }}><Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="subtitle1" sx={{ fontWeight: 760 }} noWrap>{participant.name}</Typography><Typography variant="caption" color="text.secondary">{meetingParticipantSourceLabel(participant, t)}</Typography></Box><Tooltip title={t('meetings.openChat')}><IconButton onClick={() => router.push(chatPath)} aria-label={t('meetings.openChat')}><OpenInNewRounded /></IconButton></Tooltip><IconButton onClick={() => setSelectedParticipantId(null)} aria-label={t('common.close')}><CloseRounded /></IconButton></Stack><Divider /><Box component="iframe" title={`${participant.name} FLUJO Chat`} src={withWorkspaceUrl(chatPath)} sx={{ flex: 1, width: '100%', minHeight: 0, border: 0, bgcolor: 'background.default' }} /></Stack>}
           </Drawer>
         );
       })()}

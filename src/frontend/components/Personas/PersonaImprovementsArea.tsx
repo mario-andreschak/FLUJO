@@ -167,11 +167,11 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
   return (
     <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
       <Stack spacing={2.5}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1.5 }}>
           <Box>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
               <AutoAwesomeRounded color="primary" />
-              <Typography variant="h5" component="h2" fontWeight={760}>{t('personas.improvements.title')}</Typography>
+              <Typography variant="h5" component="h2" sx={{ fontWeight: 760 }}>{t('personas.improvements.title')}</Typography>
             </Stack>
             <Typography color="text.secondary" sx={{ mt: 0.5 }}>
               {t('personas.improvements.description')}
@@ -188,14 +188,14 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
         {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
         {notice && <Alert severity="success" onClose={() => setNotice(null)}>{notice}</Alert>}
         {loading ? (
-          <Stack alignItems="center" py={5} spacing={2} role="status">
+          <Stack sx={{ alignItems: "center", py: 5 }} spacing={2} role="status">
             <CircularProgress aria-hidden="true" />
             <Typography color="text.secondary">{t('personas.improvements.loading')}</Typography>
           </Stack>
         ) : visible.length === 0 ? (
           <Box sx={{ py: 5, textAlign: 'center' }}>
             <AutoAwesomeRounded sx={{ fontSize: 42, color: 'text.disabled', mb: 1 }} />
-            <Typography variant="h6" component="h3" fontWeight={720}>{t('personas.improvements.empty')}</Typography>
+            <Typography variant="h6" component="h3" sx={{ fontWeight: 720 }}>{t('personas.improvements.empty')}</Typography>
             <Typography color="text.secondary">{t('personas.improvements.emptyHelp')}</Typography>
           </Box>
         ) : (
@@ -211,9 +211,9 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                 <Card key={proposal.id} variant="outlined" sx={{ borderRadius: 3 }}>
                   <CardContent>
                     <Stack spacing={1.5}>
-                      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1 }}>
                         <Box>
-                          <Typography variant="h6" component="h3" fontWeight={740}>
+                          <Typography variant="h6" component="h3" sx={{ fontWeight: 740 }}>
                             {behavior?.name ?? t('personas.improvements.behaviorFallback')}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
@@ -225,7 +225,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                             })}
                           </Typography>
                         </Box>
-                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                        <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }} useFlexGap>
                            <Chip
                             size="small"
                             color={STATUS_COLOR[proposal.status]}
@@ -263,7 +263,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                        <Divider />
                       <Box>
                         <Typography variant="subtitle2">{t('personas.improvements.basedOn')}</Typography>
-                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
+                        <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap",  mt: 0.75 }}>
                           {[...new Set(proposal.evidenceRefs.map((source) => source.kind))].map((kind) => (
                             <Chip key={kind} size="small" variant="outlined" label={sourceLabel(kind, t)} />
                           ))}
@@ -434,7 +434,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                helperText={t('personas.improvements.migrationNotesHelp')}
                value={migrationNotes}
                onChange={(event) => setMigrationNotes(event.target.value)}
-               inputProps={{ maxLength: 10_000 }}
+               slotProps={{ htmlInput: { maxLength: 10_000 } }}
              />
            </Stack>
          </DialogContent>

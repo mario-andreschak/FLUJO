@@ -21,12 +21,7 @@ export default function Error({
 
   return (
     <Box 
-      display="flex" 
-      flexDirection="column" 
-      alignItems="center" 
-      justifyContent="center" 
-      height="100%"
-      p={4}
+      sx={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", p: 4 }}
     >
       <Typography variant="h6" color="error" gutterBottom>
         {t('models.error.title')}
