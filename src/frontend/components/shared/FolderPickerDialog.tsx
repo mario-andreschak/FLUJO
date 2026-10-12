@@ -194,7 +194,7 @@ const FolderPickerDialog = ({
                   </ListItemIcon>
                   <ListItemText
                     primary={entry.name}
-                    primaryTypographyProps={{ noWrap: true }}
+                    slotProps={{ primary: { noWrap: true } }}
                   />
                 </ListItemButton>
               ))}

@@ -220,9 +220,9 @@ function AgentTree({
   const { t, tp } = useI18n();
   return (
     <Stack spacing={0.75}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 0.5 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center",  px: 0.5 }}>
         <AccountTreeRoundedIcon color="primary" fontSize="small" />
-        <Typography variant="subtitle2" fontWeight={850}>{t('flows.generator.visualTree')}</Typography>
+        <Typography variant="subtitle2" sx={{ fontWeight: 850 }}>{t('flows.generator.visualTree')}</Typography>
         <Chip size="small" label={`${state.agentOrder.length}`} />
       </Stack>
       {state.agentOrder.map((agentId) => {
@@ -251,10 +251,10 @@ function AgentTree({
               transition: 'all 180ms ease',
             }}
           >
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
               <SmartToyRoundedIcon color={selected ? 'primary' : 'action'} fontSize="small" />
-              <Box minWidth={0} flex={1}>
-                <Typography variant="body2" fontWeight={800} noWrap>{agent.name}</Typography>
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>{agent.name}</Typography>
                 <Typography variant="caption" color="text.secondary">
                   {tp('flows.card.step', agent.steps.length)} · {t('flows.generator.visualLevel', { count: agent.depth })}
                 </Typography>
@@ -291,10 +291,10 @@ function ExpertPreviewPanel({
         bgcolor: (theme) => alpha(theme.palette.background.default, 0.55),
       }}
     >
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center",  px: 1.5, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
         <SchemaRoundedIcon color="primary" fontSize="small" />
-        <Box minWidth={0} flex={1}>
-          <Typography variant="subtitle2" fontWeight={850}>{t('flows.generator.visualExpertPreview')}</Typography>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 850 }}>{t('flows.generator.visualExpertPreview')}</Typography>
           <Typography variant="caption" color="text.secondary" noWrap>{agentName}</Typography>
         </Box>
         <Chip size="small" variant="outlined" color="primary" label={t('flows.builder.relayout')} />
@@ -309,12 +309,12 @@ function ExpertPreviewPanel({
           />
         ) : (
           <Box sx={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', p: 4, textAlign: 'center' }}>
-            <Stack spacing={1.5} alignItems="center">
+            <Stack spacing={1.5} sx={{ alignItems: "center" }}>
               <Box sx={{ position: 'relative', display: 'grid', placeItems: 'center', width: 64, height: 64 }}>
                 <Box sx={{ position: 'absolute', inset: 0, borderRadius: '50%', bgcolor: 'primary.main', opacity: 0.1, animation: `${breathe} 1.5s ease-in-out infinite` }} />
                 <SchemaRoundedIcon color="primary" sx={{ fontSize: 32 }} />
               </Box>
-              <Typography variant="body2" fontWeight={750}>{t('flows.generator.visualPreviewWaiting')}</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 750 }}>{t('flows.generator.visualPreviewWaiting')}</Typography>
               <Typography variant="caption" color="text.secondary">{t('flows.generator.visualPreviewHelp')}</Typography>
             </Stack>
           </Box>
@@ -338,7 +338,7 @@ export default function VisualGenerationCanvas({
   if (!agent) {
     return (
       <Box sx={{ minHeight: 360, display: 'grid', placeItems: 'center', textAlign: 'center', p: 4 }}>
-        <Stack alignItems="center" spacing={2}>
+        <Stack sx={{ alignItems: "center" }} spacing={2}>
           <Box sx={{ position: 'relative', display: 'grid', placeItems: 'center', width: 88, height: 88 }}>
             <Box sx={{ position: 'absolute', inset: 0, borderRadius: '50%', bgcolor: 'primary.main', opacity: 0.12, animation: `${breathe} 1.5s ease-in-out infinite` }} />
             <AutoAwesomeRoundedIcon color="primary" sx={{ fontSize: 42 }} />
@@ -378,10 +378,10 @@ export default function VisualGenerationCanvas({
       <Box sx={{ minWidth: 0, p: { xs: 1.5, sm: 2.5 }, overflowY: 'auto' }}>
         <Stack spacing={2}>
           <Paper elevation={0} sx={{ p: 2, border: 1, borderColor: 'divider', borderRadius: 3, bgcolor: (theme) => alpha(theme.palette.primary.main, 0.045) }}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-              <Box flex={1} minWidth={0}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography variant="overline" color="primary.main">{t('flows.generator.visualLevelAgent', { count: agent.depth })}</Typography>
-                <Typography variant="h5" fontWeight={850}>{agent.name}</Typography>
+                <Typography variant="h5" sx={{ fontWeight: 850 }}>{agent.name}</Typography>
                 <Typography variant="body2" color="text.secondary">{agent.goal}</Typography>
               </Box>
               <Chip color={statusColor(agent.status)} label={t(STATUS_LABEL_KEYS[agent.status])} />
@@ -389,8 +389,8 @@ export default function VisualGenerationCanvas({
           </Paper>
 
           <Box sx={{ px: 1.5, py: 1, borderRadius: 2.5, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-            <Typography variant="caption" fontWeight={850} color="primary.main" sx={{ textTransform: 'uppercase' }}>{t('flows.guided.when')}</Typography>
-            <Typography variant="body2" fontWeight={700}>{t('flows.guided.someoneAsks')}</Typography>
+            <Typography variant="caption" color="primary.main" sx={{ fontWeight: 850,  textTransform: 'uppercase' }}>{t('flows.guided.when')}</Typography>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>{t('flows.guided.someoneAsks')}</Typography>
           </Box>
 
           {agent.steps.map((step, index) => {
@@ -412,12 +412,12 @@ export default function VisualGenerationCanvas({
                   }}
                 >
                   <Stack spacing={1.25}>
-                    <Stack direction="row" spacing={1.25} alignItems="flex-start">
+                    <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
                       <Box sx={{ display: 'grid', placeItems: 'center', width: 32, height: 32, flexShrink: 0, borderRadius: 2, bgcolor: 'primary.main', color: 'primary.contrastText', fontWeight: 850 }}>
                         {index + 1}
                       </Box>
-                      <Box minWidth={0} flex={1}>
-                        <Typography variant="subtitle1" fontWeight={850}>{step.label}</Typography>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 850 }}>{step.label}</Typography>
                         <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>{formatTaskPreview(step.task)}</Typography>
                       </Box>
                       {waitingForDecision && <CircularProgress size={18} />}
@@ -425,19 +425,19 @@ export default function VisualGenerationCanvas({
 
                     {(suggestions || decisions.length > 0 || childAgents.length > 0) && <Divider />}
                     {suggestions && suggestions.tools.length + suggestions.agents.length > 0 && (
-                      <Stack direction="row" spacing={0.75} alignItems="center">
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                         <AutoAwesomeRoundedIcon color="info" fontSize="small" />
-                        <Typography variant="caption" fontWeight={800}>{t('flows.generator.visualSuggestionsReviewed')}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 800 }}>{t('flows.generator.visualSuggestionsReviewed')}</Typography>
                       </Stack>
                     )}
                     {decisions.length > 0 && (
-                      <Stack direction="row" gap={0.75} flexWrap="wrap">
+                      <Stack direction="row" sx={{ gap: 0.75, flexWrap: "wrap" }}>
                         {decisions.map((decision) => <DecisionChip key={decision.id} decision={decision} />)}
                       </Stack>
                     )}
                     {childAgents.length > 0 && (
                       <Stack spacing={0.75}>
-                        <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ textTransform: 'uppercase' }}>{t('flows.generator.visualNewHelpers')}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800,  textTransform: 'uppercase' }}>{t('flows.generator.visualNewHelpers')}</Typography>
                         {childAgents.map((child) => (
                           <Chip
                             key={child.id}
@@ -465,13 +465,13 @@ export default function VisualGenerationCanvas({
 
           <ArrowDownwardRoundedIcon sx={{ alignSelf: 'center', color: 'text.disabled' }} />
           <Box sx={{ px: 1.5, py: 1, borderRadius: 2.5, border: 1, borderColor: 'divider', bgcolor: (theme) => alpha(theme.palette.success.main, 0.055) }}>
-            <Typography variant="caption" fontWeight={850} color="success.main" sx={{ textTransform: 'uppercase' }}>{t('flows.guided.then')}</Typography>
-            <Typography variant="body2" fontWeight={700}>{t('flows.guided.sendAnswer')}</Typography>
+            <Typography variant="caption" color="success.main" sx={{ fontWeight: 850,  textTransform: 'uppercase' }}>{t('flows.guided.then')}</Typography>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>{t('flows.guided.sendAnswer')}</Typography>
           </Box>
 
           {state.activities.length > 0 && (
             <Paper elevation={0} sx={{ p: 1.5, borderRadius: 3, bgcolor: 'action.hover' }}>
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                 {working ? <CircularProgress size={16} /> : <CheckCircleRoundedIcon color="success" fontSize="small" />}
                 <Typography variant="caption" color="text.secondary">
                   {state.activities[state.activities.length - 1]}

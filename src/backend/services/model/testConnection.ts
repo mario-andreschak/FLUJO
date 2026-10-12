@@ -491,6 +491,8 @@ async function testModelTransports(params: ModelTestParams): Promise<ModelTestRe
         `Check the model name and the ${
         adapter === 'claude-cli'
           ? 'OAuth token (claude setup-token) and that the `claude` CLI is installed'
+          : adapter === 'antigravity-cli'
+            ? 'Gemini API key, or Antigravity account login as the FLUJO server/worker OS user'
           : adapter === 'codex-cli'
             ? 'OpenAI API key (or run `codex login` for a ChatGPT plan and leave the key empty)'
             : 'API key'

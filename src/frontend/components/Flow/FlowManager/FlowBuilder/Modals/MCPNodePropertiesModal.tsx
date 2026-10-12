@@ -464,7 +464,7 @@ export const MCPNodePropertiesModal = ({
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             {t('flows.mcpNode.timeoutHelp')}
           </Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { xs: 'stretch', sm: 'flex-start' } }}>
             <TextField
               label={t('flows.mcpNode.timeoutSeconds')}
               type="number"
@@ -473,7 +473,7 @@ export const MCPNodePropertiesModal = ({
               value={isTimeoutInfinite ? '' : (toolTimeout ?? '')}
               placeholder={String(DEFAULT_TOOL_CALL_TIMEOUT_SECONDS)}
               disabled={isTimeoutInfinite}
-              inputProps={{ min: 1 }}
+              slotProps={{ htmlInput: { min: 1 } }}
               onChange={(event) => {
                 const raw = event.target.value;
                 if (raw === '') {
@@ -522,7 +522,7 @@ export const MCPNodePropertiesModal = ({
         maxWidth="xl"
         fullWidth
         data-authoring-mode={authoringMode}
-        PaperProps={{
+        slotProps={{ paper: {
           sx: {
             borderTop: 5,
             borderColor: 'info.main',
@@ -532,7 +532,7 @@ export const MCPNodePropertiesModal = ({
             maxWidth: { xs: 'calc(100% - 16px)', sm: '95vw' },
             maxHeight: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
           },
-        }}
+        } }}
       >
         <DialogHeaderActions
           title={t('flows.modal.properties', { name: nodeData.label || t('flows.mcpNode.title') })}

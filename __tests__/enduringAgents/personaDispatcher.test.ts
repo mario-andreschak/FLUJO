@@ -38,6 +38,7 @@ import type {
   RoleVersion,
 } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
+import { _setPersonaRuntimeLockProcessBirthProbeForTests } from '@/backend/services/enduringAgents/runtimeLock';
 
 let workspaceSequence = 0;
 
@@ -667,7 +668,13 @@ function takeWorkspaceSteering(workspaceId: string, conversationId: string): voi
 }
 
 describe('Persona Flow dispatcher', () => {
+  beforeEach(() => {
+    // Keep durable ownership checks deterministic under parallel Windows CI load.
+    _setPersonaRuntimeLockProcessBirthProbeForTests(async (pid) => `win32-v2:${pid}`);
+  });
+
   afterEach(() => {
+    _setPersonaRuntimeLockProcessBirthProbeForTests(undefined);
     FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
     FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     jest.restoreAllMocks();
@@ -1403,18 +1410,27 @@ describe('Persona Flow dispatcher', () => {
 
   it('renews while running, aborts on lease loss, and never completes with a stale fence', async () => {
     const harness = makeHarness(workspace('lease-loss'), { heartbeatIntervalMs: 5 });
-    (harness.dependencies.renewPersonaActivityLease as jest.Mock).mockRejectedValue(
-      new Error('opaque lease_secret should never persist'),
-    );
+    const flowReady = deferred<void>();
+    const observeAbort = jest.fn();
+    (harness.dependencies.renewPersonaActivityLease as jest.Mock).mockImplementation(async () => {
+      // Lose the lease while the Flow is running, after its abort listener is ready.
+      await flowReady.promise;
+      throw new Error('opaque lease_secret should never persist');
+    });
     (harness.dependencies.runFlow as jest.Mock).mockImplementation((input: FlowRunInput) => (
       new Promise<FlowRunResult>((resolve) => {
-        input.abortSignal!.addEventListener('abort', () => {
+        const finish = () => {
+          observeAbort();
           resolve({
             ...successfulResult(input),
             status: 'error',
             error: { message: 'aborted', statusCode: 500 },
           });
-        }, { once: true });
+        };
+        const signal = input.abortSignal!;
+        if (signal.aborted) finish();
+        else signal.addEventListener('abort', finish, { once: true });
+        flowReady.resolve();
       })
     ));
 
@@ -1427,7 +1443,10 @@ describe('Persona Flow dispatcher', () => {
     expect(dispatch.error).toMatchObject({ code: 'LEASE_LOST' });
     expect(dispatch.error?.message).not.toContain('lease_secret');
     expect(harness.dependencies.renewPersonaActivityLease).toHaveBeenCalled();
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+    expect(observeAbort).toHaveBeenCalledTimes(1);
     expect(harness.dependencies.completePersonaActivity).not.toHaveBeenCalled();
+    expect(harness.dependencies.completePersonaActivityWithinRuntimeLock).not.toHaveBeenCalled();
   });
 
   it('drains queued work serially after the active dispatch completes', async () => {

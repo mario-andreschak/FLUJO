@@ -32,14 +32,14 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
   useEffect(() => { void load(); }, [load]);
 
   if (error) return <Alert severity="error" sx={{ m: 4 }}>{error}</Alert>;
-  if (!role || !impact) return <Stack alignItems="center" sx={{ p: 6 }}><CircularProgress /></Stack>;
+  if (!role || !impact) return <Stack sx={{ alignItems: "center",  p: 6 }}><CircularProgress /></Stack>;
 
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 900, mx: 'auto' }}>
       <Button component={Link} href="/roles">{t('roles.back')}</Button>
-      <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={2} sx={{ mt: 2 }}>
+      <Stack direction="row" sx={{ alignItems: "flex-start", justifyContent: "space-between", gap: 2,  mt: 2 }}>
         <Box>
-          <Stack direction="row" gap={1} alignItems="center">
+          <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
             <Typography variant="h4" component="h1">{role.name}</Typography>
             {role.archived && <Chip label={t('roles.archived')} />}
           </Stack>
@@ -64,13 +64,13 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
       <Typography color="text.secondary" sx={{ mt: 0.5 }}>
         {t('roles.behaviorsHelp')}
       </Typography>
-      <Stack gap={1.5} sx={{ my: 1.5 }}>
+      <Stack sx={{ gap: 1.5,  my: 1.5 }}>
         {role.behaviors.map((behavior) => localizeRoleBehavior(behavior, t)).map((behavior) => (
           <Box
             key={behavior.key}
             sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 2 }}
           >
-            <Typography fontWeight={700}>{behavior.name}</Typography>
+            <Typography sx={{ fontWeight: 700 }}>{behavior.name}</Typography>
             {behavior.description && (
               <Typography color="text.secondary" sx={{ mt: 0.5 }}>
                 {behavior.description}
@@ -80,7 +80,7 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
         ))}
       </Stack>
       <Typography variant="h6" component="h2">{t('roles.suggestedApps')}</Typography>
-      <Stack direction="row" gap={1} flexWrap="wrap" sx={{ my: 1.5 }}>
+      <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap",  my: 1.5 }}>
         {role.suggestedApps.length === 0
           ? <Typography color="text.secondary">{t('roles.noApps')}</Typography>
           : role.suggestedApps.map((app) => (

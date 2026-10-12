@@ -397,7 +397,7 @@ export default function PersonaSettings({
   const selectedRoleUnavailable = Boolean(options && !selectedRole);
 
   return (
-    <Stack spacing={2} maxWidth={900} sx={{
+    <Stack spacing={2} sx={{ maxWidth: 900,
       '&& .MuiSelect-select': { whiteSpace: 'normal', overflowWrap: 'anywhere', height: 'auto' },
     }}>
       <Box>
@@ -427,7 +427,7 @@ export default function PersonaSettings({
           value={form.name}
           onChange={(event) => set('name', event.target.value)}
           required
-          inputProps={{ maxLength: 160 }}
+          slotProps={{ htmlInput: { maxLength: 160 } }}
           error={!valid}
         />
         <TextField
@@ -436,17 +436,17 @@ export default function PersonaSettings({
           onChange={(event) => set('mission', event.target.value)}
           multiline
           minRows={3}
-          inputProps={{ maxLength: 20_000 }}
+          slotProps={{ htmlInput: { maxLength: 20_000 } }}
         />
         <TextField
           label={t('personas.settings.picture')}
           value={form.avatarUrl}
           onChange={(event) => set('avatarUrl', event.target.value)}
           helperText={t('personas.settings.pictureHelp')}
-          inputProps={{ maxLength: 2_000 }}
+          slotProps={{ htmlInput: { maxLength: 2_000 } }}
         />
         {form.avatarUrl && (
-          <Stack direction="row" spacing={2} alignItems="center">
+          <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={form.avatarUrl}
@@ -657,7 +657,7 @@ export default function PersonaSettings({
           </Alert>
         )}
       </Box>
-      <Stack direction="row" justifyContent="flex-end">
+      <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
         <Button
           variant="contained"
           onClick={() => void save()}
@@ -677,7 +677,7 @@ export default function PersonaSettings({
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {exportBusy && !exportPreview && (
-              <Stack direction="row" spacing={1.5} alignItems="center" role="status">
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }} role="status">
                 <CircularProgress size={24} aria-hidden="true" />
                 <Typography>{t('personas.settings.loadingExport')}</Typography>
               </Stack>
@@ -762,7 +762,7 @@ export default function PersonaSettings({
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {deleteBusy && !deletePreview && (
-              <Stack direction="row" spacing={1.5} alignItems="center" role="status">
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }} role="status">
                 <CircularProgress size={24} aria-hidden="true" />
                 <Typography>{t('personas.settings.loadingDeletion')}</Typography>
               </Stack>

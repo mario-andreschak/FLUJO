@@ -103,7 +103,7 @@ const ServerList: React.FC<ServerListProps> = ({
           (server as MCPStreamableConfig).oauthTokens !== undefined;
         
         return (
-          <Grid item xs={12} md={6} lg={4} key={server.name}>
+          <Grid size={{ xs: 12, md: 6, lg: 4 }} key={server.name}>
             <ServerCard
               name={server.name}
               status={server.status}

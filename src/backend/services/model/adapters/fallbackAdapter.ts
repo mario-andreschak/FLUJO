@@ -13,6 +13,7 @@ import { resolveAndDecryptApiKey } from '../encryption';
 import { parseRetryAfterMs } from '@/backend/execution/flow/retryAfter';
 import { isFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import type { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { executionExtensionSinglePhysicalAttempt } from '@/backend/execution/extensions';
 
 const cooldowns = new Map<string, { until: number; reason: FallbackTrigger }>();
 
@@ -51,6 +52,7 @@ export class FallbackAdapter implements CompletionAdapter {
   }
 
   private async route(input: CompletionInput, stream: boolean): Promise<CompletionResult> {
+    await executionExtensionSinglePhysicalAttempt(input.executionExtensionContext, input.model);
     const models = await loadItem<Model[]>(StorageKey.MODELS, []);
     const invalid = validateFallbackPolicy(input.model, models);
     if (invalid) throw new Error(invalid);

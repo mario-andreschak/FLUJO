@@ -105,3 +105,24 @@ test('focus during pending admission supersedes the old scope and still mounts t
   expect(global.fetch).toHaveBeenCalledTimes(3);
   view.unmount();
 });
+
+test('failed phone admission offers retry before mounting any workspace provider', async () => {
+  global.fetch = jest.fn().mockRejectedValueOnce(new Error('offline')).mockImplementation(async () => session('reconnected'));
+  const view = render(<PhoneHostBoundary enabled fallback={<span>Loading</span>}><PhoneVoiceHost /></PhoneHostBoundary>);
+  await waitFor(() => expect(view.getByRole('alert')).toBeDefined());
+  expect(mockMounts).toBe(0);
+  fireEvent.click(view.getByRole('button'));
+  await waitFor(() => expect(mockTransport?.scopeKey).toMatch(/^phone:/));
+  expect(mockMounts).toBe(1);
+  expect(global.fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+test('World retains its ordinary local voice behavior when phone hosting is off', async () => {
+  global.fetch = jest.fn();
+  const view = render(<PhoneVoiceHost />);
+  await waitFor(() => expect(mockMounts).toBe(1));
+  expect(mockTransport).toBeUndefined();
+  expect(global.fetch).not.toHaveBeenCalled();
+  view.unmount();
+});

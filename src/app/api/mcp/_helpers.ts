@@ -1,3 +1,4 @@
+import { bundledFlujoWorkloadJsonResponse } from '@/backend/services/security/bundledFlujoWorkload';
 import { mcpService } from '@/backend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 
@@ -12,10 +13,7 @@ import { MCPServerConfig } from '@/shared/types/mcp';
  * Build a JSON Response with the given status code.
  */
 export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+  return bundledFlujoWorkloadJsonResponse(body, status);
 }
 
 /**

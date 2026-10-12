@@ -2,6 +2,7 @@ import { PersonaRecoveryError } from './personaRecoveryError';
 import { inflateRawSync } from 'node:zlib';
 import JSZip from 'jszip';
 import { PERSONA_RECOVERY_MAX_ARCHIVE_BYTES } from '@/shared/types/personaRecovery';
+import { MODEL_TURN_OUTCOME_MAX_BYTES } from '@/shared/types/modelTurn';
 
 /** ZIP32 intentionally bounds one recovery point; limits apply before and during inflation. */
 export const PERSONA_RECOVERY_ZIP_LIMITS = Object.freeze({
@@ -16,7 +17,9 @@ type Limits = { [Key in keyof typeof PERSONA_RECOVERY_ZIP_LIMITS]: number };
 // The previous source archive is opaque evidence, never recursively inflated.
 // It may exceed an ordinary file's limit, but still consumes the total budget.
 export const personaRecoveryFileByteLimit = (name: string, limits: Limits = PERSONA_RECOVERY_ZIP_LIMITS) => (
-  name === 'evidence/recovery-source.zip' ? limits.archiveBytes : limits.fileBytes
+  name === 'evidence/recovery-source.zip' ? limits.archiveBytes
+    : name.startsWith('model-turns/') && name.endsWith('.outcome.json')
+      ? Math.min(limits.fileBytes, MODEL_TURN_OUTCOME_MAX_BYTES) : limits.fileBytes
 );
 const ROOTS = new Set(['records', 'flows', 'flow-versions', 'conversations', 'conversation-logs',
   'conversation-summaries', 'model-turns', 'home', 'evidence']);

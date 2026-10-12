@@ -27,6 +27,8 @@ jest.mock('@/backend/services/mcp/config', () => {
 });
 
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: jest.fn(),
   createTransport: jest.fn(),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
@@ -61,6 +63,8 @@ import {
   shouldRecreateClient,
 } from '@/backend/services/mcp/connection';
 import * as configModule from '@/backend/services/mcp/config';
+import { TrustedHostMcpError } from '@/backend/services/security/trustedHostMcp';
+import { runWithWorkspace } from '@/utils/workspace';
 
 interface FakeTransport {
   onclose?: () => void;
@@ -109,6 +113,8 @@ describe('MCPService restart-loop protection', () => {
     global.__mcp_clients?.clear();
     global.__mcp_connecting?.clear();
     global.__mcp_active_transports?.clear();
+    global.__mcp_approval_failures?.clear();
+    global.__mcp_workspace_registries?.delete('approval-status-workspace');
     global.__mcp_starting_up = false;
 
     configState.configs = [SERVER];
@@ -127,6 +133,64 @@ describe('MCPService restart-loop protection', () => {
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
+    global.__mcp_approval_failures?.clear();
+    global.__mcp_workspace_registries?.delete('approval-status-workspace');
+  });
+
+  it('stops reconnect timers and exposes approval failures as user action', async () => {
+    await service.connectServer('srv');
+    transports[0].onclose?.();
+    mockCreateTransport.mockImplementation(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
+    await jest.advanceTimersByTimeAsync(5000);
+    const attempts = mockCreateTransport.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(300000);
+    expect(mockCreateTransport).toHaveBeenCalledTimes(attempts);
+    expect(await service.getServerStatus('srv')).toMatchObject({
+      status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED',
+    });
+  });
+
+  it.each([true, false])('shares approval status across service instances when startup is %s', async startingUp => {
+    global.__mcp_starting_up = startingUp;
+    mockCreateTransport.mockImplementationOnce(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
+    expect(await service.connectServer('srv')).toMatchObject({ requiresApproval: true });
+
+    const statusService = new MCPService();
+    expect(await statusService.getServerStatus('srv')).toMatchObject({
+      status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED',
+    });
+
+    expect(await statusService.connectServer('srv')).toMatchObject({ success: true });
+    await statusService.disconnectServer('srv');
+    global.__mcp_starting_up = false;
+    expect(await new MCPService().getServerStatus('srv')).toMatchObject({ status: 'error' });
+  });
+
+  it('keeps a shared approval failure in its own workspace', async () => {
+    mockCreateTransport.mockImplementationOnce(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
+    await runWithWorkspace('approval-status-workspace', () => service.connectServer('srv'));
+
+    const statusService = new MCPService();
+    expect(await statusService.getServerStatus('srv')).toMatchObject({ status: 'error' });
+    expect(await runWithWorkspace('approval-status-workspace', () => statusService.getServerStatus('srv')))
+      .toMatchObject({ status: 'requires_approval', errorCode: 'HOST_CONSENT_REQUIRED' });
+
+    expect(await statusService.connectServer('srv')).toMatchObject({ success: true });
+    expect(await runWithWorkspace('approval-status-workspace', () => service.getServerStatus('srv')))
+      .toMatchObject({ status: 'requires_approval', errorCode: 'HOST_CONSENT_REQUIRED' });
+  });
+
+  it('stops reconnect timers and exposes approval failures as user action', async () => {
+    await service.connectServer('srv');
+    transports[0].onclose?.();
+    mockCreateTransport.mockImplementation(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
+    await jest.advanceTimersByTimeAsync(5000);
+    const attempts = mockCreateTransport.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(300000);
+    expect(mockCreateTransport).toHaveBeenCalledTimes(attempts);
+    expect(await service.getServerStatus('srv')).toMatchObject({
+      status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED',
+    });
   });
 
   it('ignores a late close event from a replaced (zombie) transport', async () => {

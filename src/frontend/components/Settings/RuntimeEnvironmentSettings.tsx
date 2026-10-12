@@ -131,8 +131,8 @@ export default function RuntimeEnvironmentSettings() {
           const configured = values[definition.name] ?? '';
           return (
             <Box key={definition.name} sx={{ p: 2, border: 1, borderColor: 'divider', borderRadius: 2 }}>
-              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                <Typography component="label" htmlFor={`runtime-env-${definition.name}`} fontFamily="monospace" fontWeight={700}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center",  mb: 1 }}>
+                <Typography component="label" htmlFor={`runtime-env-${definition.name}`} sx={{ fontFamily: "monospace", fontWeight: 700 }}>
                   {definition.name}
                 </Typography>
                 {active !== undefined && <Chip size="small" variant="outlined" label={t('settings.runtimeEnv.active')} />}
@@ -155,7 +155,7 @@ export default function RuntimeEnvironmentSettings() {
         })}
       </Stack>
 
-      <Stack direction="row" justifyContent="flex-end">
+      <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
         <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveRoundedIcon />} disabled={saving || !data} onClick={() => void save()}>
           {t('settings.runtimeEnv.save')}
         </Button>

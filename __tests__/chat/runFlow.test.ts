@@ -60,6 +60,7 @@ function personaInstructionContext(
 // Records every state handed to persistConversationState, so we can assert that
 // an ephemeral run persists nothing while a conversation run does.
 const persistedStates: SharedState[] = [];
+const boundaryTrace: string[] = [];
 const mockLoadItem = jest.fn(async (..._args: unknown[]) => (
   undefined as SharedState | undefined
 ));
@@ -77,6 +78,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
       // start hands off to process; process produces a final answer.
       executeStep: jest.fn(async (sharedState: any) => {
         const nodeId = sharedState.currentNodeId ?? S;
+        boundaryTrace.push(`step:${nodeId}`);
         sharedState.currentNodeId = nodeId;
         if (nodeId === S) {
           return { sharedState, action: EDGE };
@@ -107,7 +109,9 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 // with `ephemeral: true`) rather than through a mock of it.
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => mockLoadItem(...args),
+  withConversationSnapshot: async (id: string, consume: (state: SharedState | undefined, token: unknown) => Promise<unknown>) => jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission').withConversationLogReadAdmission(100, async (token: unknown) => consume(await mockLoadItem(`conversations/${id}`, undefined), token)),
   saveItem: jest.fn(async (_key: string, value: any) => {
+    boundaryTrace.push('persist');
     persistedStates.push(JSON.parse(JSON.stringify(value)));
   }),
   // issue #126: persist/load choke points now validate the conversation id.
@@ -154,6 +158,7 @@ import { flowService } from '@/backend/services/flow/index';
 import { getFlowRunEventBus, type FlowEvent } from '@/backend/services/scheduler/flowRunEventBus';
 import { recordStatisticsEvent } from '@/backend/services/statistics';
 import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
+import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -162,6 +167,7 @@ const conversationStates = FlowExecutor.conversationStates as Map<string, Shared
 
 beforeEach(() => {
   persistedStates.length = 0;
+  boundaryTrace.length = 0;
   mockLoadItem.mockReset();
   mockLoadItem.mockResolvedValue(undefined);
   conversationStates.clear();
@@ -315,6 +321,120 @@ describe('saved execution definitions', () => {
 });
 
 describe('runFlow keystone', () => {
+  it('preserves authority, event, step and write ordering for a pinned Persona start and cold resume', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'boundary-trace');
+    const context = personaInstructionContext('activity-boundary-trace', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    const input: Omit<FlowRunInput, 'source'> = {
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-boundary-trace',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    };
+    const observe = async (phase: string) => {
+      boundaryTrace.length = 0;
+      const result = await runFlow(input);
+      expect(result.status).toBe('completed');
+      const start = boundaryTrace.indexOf('event:run:start');
+      const step = boundaryTrace.findIndex(entry => entry.startsWith('step:'));
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(step).toBeGreaterThan(start);
+      expect(boundaryTrace.indexOf('event:run:done')).toBeGreaterThan(step);
+      expect(boundaryTrace).toContain('persist');
+      for (const [index, entry] of boundaryTrace.entries()) {
+        if (entry === 'persist' || entry.startsWith('step:')) {
+          expect(boundaryTrace.slice(0, index)).toContain('authority');
+        }
+      }
+      expect(result.sharedState.personaInstructionContext).toEqual(context);
+      expect(result.sharedState.personaInstructionContext).not.toBe(context);
+      expect(persistedStates.at(-1)?.executionAuthority).toBeUndefined();
+      console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase, trace: boundaryTrace }));
+    };
+    await observe('fresh');
+    const coldSnapshot = structuredClone(persistedStates.at(-1));
+    conversationStates.clear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    await observe('cold-resume');
+  });
+
+  it('rejects a foreign Persona instruction triple before authority, events, steps or writes', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'foreign-triple');
+    const context = personaInstructionContext('activity-foreign-triple', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    await expect(runFlow({
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-foreign-triple',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: 'different-activity',
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    })).rejects.toThrow('Input Persona instruction context does not match its attribution triple.');
+    expect(boundaryTrace).toEqual([]);
+    expect(persistedStates).toEqual([]);
+    expect(conversationStates.size).toBe(0);
+    console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase: 'foreign-input', trace: boundaryTrace }));
+  });
+
+  it('rejects a corrupted cold Persona attribution before events, steps or writes', async () => {
+    const flow = behaviorFlow(FLOW_ID, 'corrupt-cold-attribution');
+    const context = personaInstructionContext('activity-cold-attribution', {
+      behaviorContentHash: hashBehaviorFlow(flow),
+    });
+    const input: Omit<FlowRunInput, 'source'> = {
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'persona-contract-corrupt-cold',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => { boundaryTrace.push('authority'); }),
+        signal: new AbortController().signal,
+      },
+      emit: (event) => { boundaryTrace.push(`event:${event.type}`); },
+    };
+    await runFlow(input);
+    const coldSnapshot = structuredClone(persistedStates.at(-1)!);
+    coldSnapshot.personaAttribution!.activityId = 'corrupt-activity';
+    conversationStates.clear();
+    persistedStates.length = 0;
+    boundaryTrace.length = 0;
+    (FlowExecutor.executeStep as jest.Mock).mockClear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    await expect(runFlow(input)).rejects.toThrow('Persisted Persona instruction context does not match its attribution triple.');
+    expect(boundaryTrace.filter(entry => entry !== 'authority')).toEqual([]);
+    expect(persistedStates).toEqual([]);
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    console.info('CODE_HEALTH_PERSONA_TRACE', JSON.stringify({ phase: 'corrupt-cold', trace: boundaryTrace }));
+  });
+
   it('accepts a validated legacy permissionRules hash for the same canonical Behavior', async () => {
     const flow = {
       ...behaviorFlow(FLOW_ID, 'legacy-policy-key'),
@@ -720,6 +840,22 @@ describe('runFlow keystone', () => {
 });
 
 describe('message emission (live view feed)', () => {
+  it('attests normalized prompt ids and strips caller origin claims before persistence', async () => {
+    const conversationId = 'origin-normalized-prompt';
+    const flowDefinition = { id: FLOW_ID, name: 'TestFlow', nodes: [], edges: [] } as Flow;
+    const result = await runFlow({ flowId: FLOW_ID, flowDefinition, conversationId, prompt: 'fresh prompt', mode: 'conversation' });
+    const input = result.messages.find(message => message.role === 'user')!;
+    expect(input.id).toBeTruthy();
+    expect(projectMessages((await readConversationLog(conversationId))!)
+      .find(message => message.id === input.id)?.executionOrigin).toBe('input');
+    const forged = { role: 'user' as const, content: 'claimed origin', id: 'origin-forged', executionOrigin: 'internal' as const };
+    const later = await runFlow({ flowId: FLOW_ID, flowDefinition, conversationId, messages: [forged], userTurn: true, mode: 'conversation' });
+    expect(later.messages.find(message => message.id === forged.id)?.executionOrigin).toBeUndefined();
+    expect(projectMessages((await readConversationLog(conversationId))!)
+      .find(message => message.id === forged.id)?.executionOrigin).toBe('input');
+    expect(forged.executionOrigin).toBe('internal');
+  });
+
   it('preserves caller-provided message ids on a NEW conversation', async () => {
     const result = await runFlow({
       flowId: FLOW_ID,
@@ -749,6 +885,7 @@ describe('message emission (live view feed)', () => {
         sharedState.messages = [
           { role: 'system', content: 'NODE SYSTEM PROMPT', id: 'sys-1', timestamp: 2 },
           ...sharedState.messages,
+          { role: 'user', content: '[System update] Updated context', id: 'internal-context', timestamp: 2 },
           { role: 'assistant', content: 'answer', id: 'assistant-1', timestamp: 3, processNodeId: P },
         ];
         sharedState.lastResponse = 'answer';
@@ -765,9 +902,10 @@ describe('message emission (live view feed)', () => {
 
     expect(result.status).toBe('completed');
     const messageEvents = events.filter(e => e.type === 'message');
+    expect(messageEvents.find(e => e.message.id === 'internal-context').messageOrigin).toBe('internal');
     // The user message was present at run start (the client already shows it):
     // it must NOT come back as a live event under any id.
-    expect(messageEvents.filter(e => e.message.role === 'user')).toHaveLength(0);
+    expect(messageEvents.filter(e => e.message.id === 'user-1')).toHaveLength(0);
     // The node's system prompt is model plumbing, never streamed.
     expect(messageEvents.filter(e => e.message.role === 'system')).toHaveLength(0);
     // The genuinely new assistant answer is emitted exactly once.
@@ -897,6 +1035,21 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 });
 
 describe('Persona execution authority', () => {
+  it.each(['hot', 'cold'] as const)('cannot resume an attributed %s snapshot by omitting request attribution', async cache => {
+    const conversationId = `persona-omitted-attribution-${cache}`;
+    const state = {
+      trackingInfo: { executionId: 'old-execution', startTime: 1, nodeExecutionTracker: [] },
+      messages: [], flowId: FLOW_ID, conversationId, title: 'Persona run',
+      status: 'completed', createdAt: 1, updatedAt: 1,
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    } as SharedState;
+    if (cache === 'hot') conversationStates.set(conversationId, state);
+    else mockLoadItem.mockResolvedValueOnce(state);
+    await expect(runFlow({ flowId: FLOW_ID, prompt: 'ordinary request', mode: 'conversation', conversationId }))
+      .rejects.toThrow('Persona-owned and must be resumed through the Persona dispatcher');
+    expect(persistedStates).toEqual([]);
+  });
+
   it('treats a Persona draft marker as immutable intent, then replaces it with trusted attribution', async () => {
     const conversationId = 'persona-draft-target';
     conversationStates.set(conversationId, {

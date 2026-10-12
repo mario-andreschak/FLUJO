@@ -1,0 +1,113 @@
+{
+  "sourceTree": "149a776fe22895b856e05c0b27035f71ee1109a7",
+  "runtimeTree": "7272bc39bb7123e5fef7bbce8f21ecd9505ccb1e",
+  "baseMain": "0be39bc96bbe65cdc10c0ac6274489ee5d123ee3",
+  "buildId": "JFwsulG2ngx9uwvba1_Xk",
+  "typecheck": {
+    "passed": true,
+    "seconds": 12.9631666
+  },
+  "lint": {
+    "passed": true,
+    "seconds": 98.7493211
+  },
+  "applicationBuild": {
+    "passed": true,
+    "seconds": 306.9317623,
+    "container": false
+  },
+  "focused": {
+    "passed": true,
+    "suites": 6,
+    "tests": 59,
+    "cliTests": 11,
+    "seconds": 9.1189519
+  },
+  "browser": {
+    "method": "CUA on actual production app",
+    "desktop": "1280x720",
+    "phone": "390x844",
+    "passed": [
+      "fresh empty allowance state",
+      "real native discovery and seven-model guided save",
+      "immediate shared account meter without reload",
+      "keyboard details expansion",
+      "relative observation/reset labels",
+      "live refresh loading/completion on desktop",
+      "phone keyboard collapse and pointer expansion",
+      "accessible icon refresh loading/completion on phone",
+      "consistent overview and seven card readings",
+      "no horizontal overflow at both widths"
+    ],
+    "fixtures": "No provider or catalogue fixtures were used in successful CUA acceptance",
+    "screenshots": "Private account screenshots retained locally; no percentages or account identity committed"
+  },
+  "providers": {
+    "codex": {
+      "passed": true,
+      "source": "codex-app-server",
+      "windows": 1,
+      "seconds": 5.18,
+      "inference": false
+    },
+    "claude": {
+      "acceptance": "Issue756 stays open for successful same-subscription Claude usage and displayed percentage after authorized provider access permits it",
+      "lastRecordedAt": "2026-10-12T20:38:34.506Z",
+      "httpStatus": 403,
+      "providerMessage": "OAuth authentication is currently not allowed for this organization.",
+      "userConstraint": "No Claude token available today; no further credential work",
+      "existingLocalLoginRefresh": {
+        "originalSetupTokenIdentityEstablished": false,
+        "sameStoredAccount": true,
+        "profileMatchedStoredIdentity": true,
+        "cli": "2.1.289",
+        "seconds": 2.4181155,
+        "passed": true,
+        "inference": false,
+        "scopesExpanded": false
+      },
+      "passed": false,
+      "providerError": "permission_error",
+      "reason": "usage-permission",
+      "setupTokenLastRecordedAt": "2026-10-12T14:49:07.027Z",
+      "setupTokenRequestRepeated": false
+    }
+  },
+  "regressions": {
+    "firstConnection": "Two cases failed before repair, passed after",
+    "bundleCollection": "Failed before repair, passed after; original collection remains active",
+    "preservedAssertions": "Numeric window and shared-model count verified"
+  },
+  "independentReview": "No introduced defect in f823f300 versus actual main0be39bc9; external positive Claude acceptance remains on issue756",
+  "remoteCI": "Paused; no dispatch, rerun, container build or release check",
+  "timings": "Measured separately; overlapping work is not summed",
+  "recordedAt": "2026-10-12T20:58:23.6254193Z",
+  "deliveryScope": "Locally qualified PR1112 fixes can merge through protected process; no issue756 closure or successful Claude balance is claimed",
+  "currentLocalValidation": {
+    "typecheck": {
+      "passed": true,
+      "seconds": 63.5115856,
+      "scope": "source and tests"
+    },
+    "applicationBuild": {
+      "passed": true,
+      "buildId": "7cP_zzBqtWTNUTmZWDJsS",
+      "seconds": 342.2540548,
+      "mcpWorkspaces": 5,
+      "container": false
+    },
+    "originalQualifiedInputTree": "149a776fe22895b856e05c0b27035f71ee1109a7",
+    "validatedHead": "f823f300f5fca8090e4c092fd5f4dbe43fe10476",
+    "lint": {
+      "passed": true,
+      "seconds": 102.2669263,
+      "scope": "source"
+    },
+    "claudeSdk": "0.3.296",
+    "node": "22.23.3",
+    "focusedAndBrowser": "Retained qualification reused for identical inputs; no broad or remote suite repeated",
+    "applicationTestDependencyInputsUnchanged": true,
+    "recordedAt": "2026-10-12T20:58:23.6254193Z",
+    "runtimeTree": "7272bc39bb7123e5fef7bbce8f21ecd9505ccb1e"
+  }
+}

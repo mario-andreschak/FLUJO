@@ -1,4 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { getManagedTrustedHost } from './trustedHost';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
@@ -31,7 +32,7 @@ export async function listServerResources(
 
   try {
     log.info(`Listing resources for server ${serverName}`);
-    const response = await client.listResources();
+    const response = await client.listResources(undefined, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
     const resources = (response.resources || []) as MCPResource[];
     log.verbose('Processed resources:', resources);
     return { resources };
@@ -69,7 +70,7 @@ export async function listServerResourceTemplates(
 
   try {
     log.info(`Listing resource templates for server ${serverName}`);
-    const response = await client.listResourceTemplates();
+    const response = await client.listResourceTemplates(undefined, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
     const resourceTemplates = (response.resourceTemplates || []) as MCPResourceTemplate[];
     return { resourceTemplates };
   } catch (error) {

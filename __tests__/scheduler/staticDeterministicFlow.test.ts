@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /** Real FlowSpec -> FlowConverter/Pocketflow -> runFlow -> scheduler history.
  * Only storage and MCP delivery are fixtures; no model or live failing worker
  * is needed to exercise deterministic scheduled output/error semantics. */
@@ -56,8 +59,9 @@ describe('Static-only scheduled flows (#537/#538)', () => {
   let events: FlowEvent[];
   let unsubscribe: () => void;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store.clear();
+    privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
     fixtureFlow = flow({ onError: 'fail' });
     FlowExecutor.clearFlowCache();
     FlowExecutor.conversationStates.clear();

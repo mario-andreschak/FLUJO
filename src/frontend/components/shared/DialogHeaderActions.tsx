@@ -42,7 +42,7 @@ export default function DialogHeaderActions({
 
   return (
     <DialogTitle component="div" sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
-      <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
         {typeof title === 'string' ? (
           <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }} {...titleProps}>
             {title}
@@ -50,7 +50,7 @@ export default function DialogHeaderActions({
         ) : (
           title
         )}
-        <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
           {additionalActions}
           {showAskFlujo && <AskFlujoButton />}
           {showBugReport && <BugReportButton variant="icon" />}

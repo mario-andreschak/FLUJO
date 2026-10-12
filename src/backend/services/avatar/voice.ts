@@ -2,6 +2,7 @@ import { createNativeTurns } from '@/vendor/avatar/server/native-turns.mjs';
 import { streamNativeTurn, validateNativeTurn } from '@/vendor/avatar/server/openrouter-native.mjs';
 import { transcribe, validateTranscription } from '@/vendor/avatar/server/transcription.mjs';
 import { PublicError } from '@/vendor/avatar/server/support.mjs';
+import { synthesizePocket, validatePocketSpeech, POCKET_MAX_TEXT } from '@/vendor/avatar/server/pocket-speech.mjs';
 import { createHash } from 'node:crypto';
 import { assertExecutionConversationAccess, assertExecutionStateAccess } from '@/backend/execution/extensions';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -84,8 +85,7 @@ function sessionFor(request: Request, trusted?: TrustedAvatarVoiceContext) {
   return { owner, session };
 }
 
-async function boundedBody(request: Request, signal: AbortSignal) {
-  const maximum = 12 * 1024 * 1024;
+async function boundedBody(request: Request, signal: AbortSignal, maximum = 12 * 1024 * 1024) {
   if (Number(request.headers.get('content-length')) > maximum) throw new PublicError(413, 'body_too_large', 'The recording is too large.');
   const reader = request.body?.getReader();
   if (!reader) throw new PublicError(400, 'invalid_voice_request', 'Send a voice request.');
@@ -130,7 +130,7 @@ export async function handleAuthenticatedAvatarVoice(request: Request, action: s
   return handleVoice(request, action, trusted);
 }
 async function handleVoice(request: Request, action: string, trusted?: TrustedAvatarVoiceContext): Promise<Response> {
-  if (!['native-turn', 'native-input', 'native-observe', 'native-played', 'native-reset', 'native-result', 'native-result-receipt'].includes(action)) return Response.json({ error: 'Unknown voice action.' }, { status: 404 });
+  if (!['local-speech', 'native-turn', 'native-input', 'native-observe', 'native-played', 'native-reset', 'native-result', 'native-result-receipt'].includes(action)) return Response.json({ error: 'Unknown voice action.' }, { status: 404 });
   const owned = new AbortController();
   const abort = () => owned.abort(interrupted());
   const revoke = () => {
@@ -220,7 +220,7 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
     const bound = sessionFor(request, trusted), owner = bound.owner; session = bound.session; epoch = session.epoch;
     const currentSession = session;
     session.controllers.add(owned);
-    const body = await boundedBody(request, owned.signal); await check();
+    const body = await boundedBody(request, owned.signal, action === 'local-speech' ? 8192 : undefined); await check();
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new PublicError(400, 'invalid_voice_request', 'Send a valid voice request.');
     if (action === 'native-reset') {
       if (Object.keys(body).length) throw new PublicError(400, 'invalid_voice_request', 'Reset takes no options.');
@@ -228,6 +228,24 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
       return Response.json({ accepted: true });
     }
     if (action === 'native-played') return Response.json(session.ledger.played(body));
+    if (action === 'local-speech') {
+      if (session.active >= 1 || session.calls.length >= 20) throw new PublicError(429, 'rate_limited', 'Voice is busy. Try again shortly.');
+      session.active++; active = true; session.calls.push(Date.now());
+      let speech;
+      if ('conversationId' in body || 'messageId' in body) {
+        if (Object.keys(body).some(key => !['conversationId', 'messageId', 'locale'].includes(key)) || typeof body.conversationId !== 'string' || typeof body.messageId !== 'string')
+          throw new PublicError(400, 'invalid_voice_request', 'Choose a recorded reply.');
+        const result = await abortable(canonicalVoiceResult(body.conversationId, body.messageId), owned.signal); await check();
+        provenance = { conversationId: body.conversationId, messageId: body.messageId, digest: resultDigest(result), expires: Date.now() + 60_000 };
+        // The conversation flow must author a short utterance. Never turn a
+        // background report into speech by clipping its first paragraph.
+        if (result.reply.length > POCKET_MAX_TEXT) throw new PublicError(409, 'conversation_reply_required', 'A short conversation reply is needed before speaking. The full work result stays in Chat.');
+        speech = validatePocketSpeech({ text: result.reply, locale: body.locale });
+      } else speech = validatePocketSpeech(body);
+      const audio = await abortable(synthesizePocket(speech, process.env.FLUJO_AVATAR_POCKET_ORIGIN, scopedFetch, owned.signal), owned.signal);
+      await checkResult();
+      return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' } });
+    }
     if (!avatarVoiceAvailable()) throw new PublicError(503, 'voice_unconfigured', 'Voice is unavailable. You can type and connect your work AI.');
     if (action === 'native-result-receipt') {
       if (Object.keys(body).some(key => !['conversationId', 'messageId', 'locale', 'expectedResultDigest'].includes(key)) || !['es', 'pt', 'en'].includes(String(body.locale))

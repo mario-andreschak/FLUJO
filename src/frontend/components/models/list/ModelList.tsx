@@ -145,7 +145,7 @@ export const ModelList = ({
 
     if (isLoading) {
         return (
-            <Box display="flex" justifyContent="center" py={4}>
+            <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
                 <CircularProgress />
             </Box>
         );
@@ -155,7 +155,7 @@ export const ModelList = ({
     const renderModelGrid = (items: Model[]) => (
         <Grid container spacing={2.5}>
             {items.map((model) => (
-                <Grid item xs={12} sm={6} md={4} key={model.id}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={model.id}>
                     <ModelCard
                         model={model}
                         onEdit={() => handleUpdate(model)}

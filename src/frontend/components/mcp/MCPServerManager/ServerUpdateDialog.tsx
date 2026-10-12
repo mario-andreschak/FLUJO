@@ -214,7 +214,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
     <Dialog open={open} onClose={running ? undefined : onClose} maxWidth="sm" fullWidth onClick={(e) => e.stopPropagation()}>
       <DialogHeaderActions
         title={(
-          <Box display="flex" alignItems="center" gap={1} minWidth={0}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
             <SystemUpdateAltIcon color="primary" />
             <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
               {t('mcp.update.title', { server: serverName })}
@@ -302,7 +302,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
               <ListItemIcon sx={{ minWidth: 32 }}>{stepIcon(stepStates[s.key])}</ListItemIcon>
               <ListItemText
                 primary={s.label}
-                primaryTypographyProps={{ variant: 'body2', noWrap: true, title: s.label }}
+                slotProps={{ primary: { variant: 'body2', noWrap: true, title: s.label } }}
               />
             </ListItem>
           ))}

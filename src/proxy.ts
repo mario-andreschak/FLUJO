@@ -4,6 +4,10 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { authorizeExecutionTransport } from '@/backend/execution/extensions';
+import { resolveBundledFlujoWorkloadRequest } from '@/backend/services/security/bundledFlujoWorkload';
+import {
+  assertOwnerRequest, resolveOwnerRequest, isRemoteAvatarVoiceRequest, assertRemoteAvatarVoiceOrigin,
+} from '@/backend/services/security/ownerAccess';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -31,15 +35,29 @@ import { authorizeExecutionTransport } from '@/backend/execution/extensions';
  * breakpoints) is now guarded centrally (#143). The highest-risk handlers
  * additionally keep their in-handler `assertLocalRequest` as defense-in-depth.
  *
- * It only reads the Host/Origin headers and calls the pure `isLocalRequest`
- * helper, so it is safe in Next's proxy runtime.
+ * An explicitly configured owner policy adds hashed, scoped API bearer
+ * authentication. The durable policy is read independently by the Node proxy
+ * and workspace handler boundary; neither trusts an identity header or globals
+ * from the other runtime. Protocol exceptions retain their handler auth.
  *
  * OPTIONS/preflight: CORS preflight requests carry no credentials or body and
  * cannot themselves reach a sink, so we let `OPTIONS` pass through to avoid
  * confusing browser errors; the actual (non-OPTIONS) method is still blocked for
  * non-local callers, and CORS headers are tightened in `next.config.mjs`.
  */
-export function proxy(request: NextRequest): NextResponse {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
+  const workload = await resolveBundledFlujoWorkloadRequest(request);
+  if (workload.kind === 'denied') return new NextResponse(workload.response.body, {
+    status: workload.response.status, headers: workload.response.headers,
+  });
+  if (workload.kind === 'authorized') {
+    if (!isRequestHostAllowed(request.headers.get('host'))
+        || !isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
+      return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
+    }
+    const denied = await workload.authorization.recheck();
+    return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();
+  }
   // Let CORS preflight through; the real request is still guarded below.
   if (request.method === 'OPTIONS') {
     return NextResponse.next();
@@ -55,6 +73,15 @@ export function proxy(request: NextRequest): NextResponse {
     : new NextResponse(extensionResponse.body, { status: extensionResponse.status, headers: extensionResponse.headers });
 
   if (isWorkerMode()) {
+    // Private owner provisioning is needed before MCP bootstrap can complete.
+    // This narrow route authenticates independently again in its handler.
+    if (/^\/api\/mcp\/servers\/[^/]+\/host-consent$/.test(pathname)
+        && ['GET', 'POST', 'DELETE'].includes(request.method)) {
+      const owner = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+      return owner.ok ? NextResponse.next() : new NextResponse(owner.response.body, {
+        status: owner.response.status, headers: owner.response.headers,
+      });
+    }
     // Private network membership and a caller-supplied Host header are not
     // authentication. Every worker HTTP control/execution surface uses the
     // dedicated bearer, including the normally public OpenAI and MCP routes.
@@ -65,9 +92,6 @@ export function proxy(request: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
-  // MCP routes retain their existing inline local guards outside worker mode.
-  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return NextResponse.next();
-
   // The selected exposure mode is the outer boundary for every endpoint,
   // including the intentionally public webhook/OAuth/OpenAI surfaces.
   if (!isRequestHostAllowed(request.headers.get('host'))) {
@@ -76,6 +100,22 @@ export function proxy(request: NextRequest): NextResponse {
       { status: 403, headers: { 'content-type': 'application/json' } },
     );
   }
+
+  const ownerDenied = assertOwnerRequest(request);
+  if (ownerDenied) return new NextResponse(ownerDenied.body, {
+    status: ownerDenied.status, headers: ownerDenied.headers,
+  });
+
+  // The private BFF may differ from this host. Only exact voice routes with a
+  // strict workspace-bound voice principal and explicitly approved Origin pass.
+  if (isRemoteAvatarVoiceRequest(request)) {
+    const admitted = resolveOwnerRequest(request, ['avatar:voice']);
+    const denied = admitted.ok ? assertRemoteAvatarVoiceOrigin(request) : admitted.response;
+    return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();
+  }
+
+  // MCP routes retain their existing inline Origin guards outside worker mode.
+  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return NextResponse.next();
 
   // Public protocol surfaces do not require a same-origin browser request, but
   // they still cannot escape the selected Localhost/Network/Public host scope.

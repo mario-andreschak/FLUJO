@@ -57,12 +57,12 @@ export default function MeetingPhaseTimeline({ meeting, events }: MeetingPhaseTi
       <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.8 }}>
         {t('meetings.timeline.label')}
       </Typography>
-      <Stack direction="row" alignItems="center" sx={{ overflowX: 'auto', pb: 0.25 }}>
+      <Stack direction="row" sx={{ alignItems: "center",  overflowX: 'auto', pb: 0.25 }}>
         {steps.map((phase, index) => {
           const active = meeting.phase === phase;
           const complete = finished || index < activeIndex || (!active && observed.has(phase));
           return (
-            <Stack key={phase} direction="row" alignItems="center" sx={{ flex: index === steps.length - 1 ? '0 0 auto' : '1 0 auto' }}>
+            <Stack key={phase} direction="row" sx={{ alignItems: "center",  flex: index === steps.length - 1 ? '0 0 auto' : '1 0 auto' }}>
               <Chip
                 size="small"
                 icon={complete ? <CheckRounded /> : undefined}

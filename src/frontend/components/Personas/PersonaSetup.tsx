@@ -74,12 +74,11 @@ export default function PersonaSetup({
       <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
         <Stack
           direction="row"
-          alignItems="center"
           spacing={1}
-          sx={{ mb: 2.5 }}
+          sx={{ alignItems: "center",  mb: 2.5 }}
         >
-          <Box color="primary.main"><HubRounded /></Box>
-          <Typography variant="h5" component="h2" fontWeight={760}>{t('personas.setup.title')}</Typography>
+          <Box sx={{ color: "primary.main" }}><HubRounded /></Box>
+          <Typography variant="h5" component="h2" sx={{ fontWeight: 760 }}>{t('personas.setup.title')}</Typography>
         </Stack>
         <Box
           sx={{
@@ -95,7 +94,7 @@ export default function PersonaSetup({
           {facts.map((fact) => (
             <Paper key={fact.label} variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
               <Typography variant="overline" color="text.secondary">{fact.label}</Typography>
-              <Typography fontWeight={740} sx={{ overflowWrap: 'anywhere' }}>
+              <Typography sx={{ fontWeight: 740,  overflowWrap: 'anywhere' }}>
                 {fact.value}
               </Typography>
             </Paper>

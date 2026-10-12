@@ -6,7 +6,8 @@
  * inline-conversation request.
  */
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { EventStreamHandlers } from '@/frontend/services/chat';
 
 const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
@@ -17,10 +18,12 @@ jest.mock('next/navigation', () => ({
 
 const mockGetConversationChains = jest.fn();
 const mockGetConversation = jest.fn();
+const mockSubscribeToSidebarEvents = jest.fn();
 jest.mock('@/frontend/services/chat', () => ({
   chatService: {
     getConversationChains: (...args: unknown[]) => mockGetConversationChains(...args),
     getConversation: (...args: unknown[]) => mockGetConversation(...args),
+    subscribeToSidebarEvents: (...args: unknown[]) => mockSubscribeToSidebarEvents(...args),
   },
 }));
 
@@ -95,6 +98,7 @@ beforeEach(() => {
   mockPush.mockReset();
   mockGetConversationChains.mockReset();
   mockGetConversation.mockReset();
+  mockSubscribeToSidebarEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
   mockGetConversation.mockResolvedValue({
     id: 'root 1',
     title: 'Root chain',
@@ -106,6 +110,26 @@ beforeEach(() => {
 });
 
 describe('Chain Chat page container (#405)', () => {
+  it('reloads the canonical graph on recovery and cancels delayed reconnection on unmount', async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetConversationChains.mockResolvedValue(chainResponse());
+      const { unmount } = render(<ConversationChainGraph />);
+      await act(async () => { await Promise.resolve(); });
+      const handlers = mockSubscribeToSidebarEvents.mock.calls[0][0] as EventStreamHandlers;
+      await act(async () => handlers.onReset?.({ version: 1, reason: 'replay-gap', recovery: 'reload-snapshot', nextSeq: 42 }));
+      expect(mockGetConversationChains).toHaveBeenCalledTimes(2);
+      expect(mockSubscribeToSidebarEvents).toHaveBeenCalledTimes(1);
+      act(() => jest.advanceTimersByTime(3000));
+      expect(mockSubscribeToSidebarEvents).toHaveBeenCalledTimes(2);
+      const current = mockSubscribeToSidebarEvents.mock.calls[1][0] as EventStreamHandlers;
+      await act(async () => current.onReset?.({ version: 1, reason: 'slow-consumer', recovery: 'reload-snapshot', nextSeq: 50 }));
+      unmount();
+      act(() => jest.advanceTimersByTime(3000));
+      expect(mockSubscribeToSidebarEvents).toHaveBeenCalledTimes(2);
+      expect(mockGetConversation).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
   it('renders the projected family as a semantic top-down tree', async () => {
     mockGetConversationChains.mockResolvedValue(chainResponse());
 

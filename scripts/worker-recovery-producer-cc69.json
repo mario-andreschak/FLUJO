@@ -1,0 +1,61 @@
+{
+  "identity": {
+    "head": "cc69b5e35f09d5cb49383e3cc0c1e79e676d77e0",
+    "tree": "cfd8f3bf3de00e95e8e36c819f6e4d8e7452b8ed"
+  },
+  "qualification": {
+    "status": "BUILD_AND_FIVE_PACKS_VERIFIED",
+    "scope": "current-compiled-local-recovery-only",
+    "cases": 0
+  },
+  "buildId": "IhXG4rnNAIRBPnLrQ-XFO",
+  "evidence": {
+    "buildReceipt": {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\build-currentcc69-original-result.json",
+      "bytes": 11363,
+      "sha256": "adce0102de170f8e2b599e1000efc28c13352e536708024ab713ad94f83110f1"
+    },
+    "packReceipt": {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\pack-currentcc69-original-result.json",
+      "bytes": 4555,
+      "sha256": "29654011decd9a2674cc0a0fe8ceac6f633873801ddea8146bb79d67aaa9e115"
+    },
+    "archive": {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\artifacts\\flujo-ai-3.46.3.tgz",
+      "bytes": 10333685,
+      "sha256": "839e4dc521df62460fadad51a5f3eb106ac48503507a123306381d6715bbb16a"
+    },
+    "payloadCopyReceipt": {
+      "path": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103ab-04e3-7410-a856-ee3e55aa349c\\recovery-nrec2-pin-affected-validation-20261007-v1\\actual-current-cc69-payload-copy-result.json",
+      "bytes": 3300370,
+      "sha256": "df7d571970ff78e26ef88489e005fdb839ba95ecce175e4dc2293a85f462ce32"
+    }
+  },
+  "packageArchives": [
+    {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\artifacts\\flujo-ai-3.46.3.tgz",
+      "bytes": 10333685,
+      "sha256": "839e4dc521df62460fadad51a5f3eb106ac48503507a123306381d6715bbb16a"
+    },
+    {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\artifacts\\mario.andreschak-mcp-filesystem-3.46.3.tgz",
+      "bytes": 56613,
+      "sha256": "918435f4274c5d84ffafc07e1c0b5bcf662af768cbe27319b3b78a1679e50a21"
+    },
+    {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\artifacts\\mario.andreschak-mcp-bash-3.46.3.tgz",
+      "bytes": 57885,
+      "sha256": "a8cb28f8d9734cbed4764a8ec0388f80f1ea77999b7b045c56e9c378c1f44755"
+    },
+    {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\artifacts\\mario.andreschak-mcp-browser-3.46.3.tgz",
+      "bytes": 95401,
+      "sha256": "1ed59e83050e60b7f77ef92d6adf4f897a382202623cc0af9213310cdadc95fa"
+    },
+    {
+      "path": "C:\\Users\\Moe\\.codex\\bcc69-20261007\\artifacts\\mario.andreschak-mcp-flujo-3.46.3.tgz",
+      "bytes": 11678,
+      "sha256": "40c9d29272aaa98363770cccdb9f305134cb76bb94fdc3a0f7b339bd88f6caa6"
+    }
+  ]
+}

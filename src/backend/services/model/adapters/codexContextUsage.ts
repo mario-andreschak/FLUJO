@@ -1,5 +1,5 @@
 import path from 'path';
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import type { ModelContextUsage } from '@/shared/types/model/contextUsage';
 import type { CodexUsageLike } from './codexUsage';
 
@@ -108,9 +108,11 @@ export async function readCodexTokenSnapshot(home: string, threadId: string): Pr
   try {
     const file = await findRollout(home, threadId);
     if (!file) return undefined;
-    const handle = await fs.open(file, 'r');
+    const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     try {
-      const { size } = await handle.stat();
+      const stats = await handle.stat();
+      if (!stats.isFile()) return undefined;
+      const { size } = stats;
       const lowerBound = Math.max(0, size - MAX_TAIL_BYTES);
       let position = size;
       let suffix = Buffer.alloc(0);

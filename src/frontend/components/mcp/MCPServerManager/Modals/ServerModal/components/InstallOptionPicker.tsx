@@ -175,7 +175,7 @@ export const InstallOptionList: React.FC<InstallOptionListProps> = ({
                       ? t('mcp.marketplace.runsLocal')
                       : t('mcp.marketplace.hostedRemote')
                 }
-                primaryTypographyProps={{ sx: { wordBreak: 'break-all' } }}
+                slotProps={{ primary: { sx: { wordBreak: 'break-all' } } }}
               />
             </ListItemButton>
           );

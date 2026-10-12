@@ -107,20 +107,20 @@ export function TicketCard({
       variant="outlined"
       sx={{ p: 2, borderRadius: 3, opacity: ticket.status === 'done' ? 0.65 : 1 }}
     >
-      <Stack direction="row" spacing={1} alignItems="flex-start">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
         {selectable && (
           <Checkbox
             size="small"
             checked={selected}
             onChange={() => onToggleSelect?.(ticket.id)}
-            inputProps={{ 'aria-label': t('tickets.action.select') }}
+            slotProps={{ input: { 'aria-label': t('tickets.action.select') } }}
           />
         )}
         <Stack spacing={1.2} sx={{ flex: 1, minWidth: 0 }}>
           <Box>
-            <Stack direction="row" alignItems="center" gap={1}>
+            <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
               {ticket.title && (
-                <Typography variant="subtitle1" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700,  overflowWrap: 'anywhere' }}>
                   {ticket.title}
                 </Typography>
               )}
@@ -144,14 +144,14 @@ export function TicketCard({
           </Box>
 
           {labels.length > 0 && (
-            <Stack direction="row" flexWrap="wrap" gap={0.75}>
+            <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.75 }}>
               {labels.map((label) => (
                 <Chip key={label} label={label} size="small" variant="outlined" />
               ))}
             </Stack>
           )}
 
-          <Stack direction="row" alignItems="center" flexWrap="wrap" gap={0.5}>
+          <Stack direction="row" sx={{ alignItems: "center", flexWrap: "wrap", gap: 0.5 }}>
             <Button size="small" startIcon={<SmartToyRounded />} onClick={askFlujo}>
               {t('tickets.action.askFlujo')}
             </Button>

@@ -58,6 +58,7 @@ describe('bounded native rollout reader', () => {
     file = path.join(directory, `rollout-2026-09-19T11-19-09-${threadId}.jsonl`);
   });
   afterEach(async () => {
+    jest.restoreAllMocks();
     await fs.rm(home, { recursive: true, force: true });
   });
 
@@ -71,6 +72,42 @@ describe('bounded native rollout reader', () => {
     expect((await readCodexTokenSnapshot(home, threadId))?.contextUsage.totalTokens).toBe(12390);
     await fs.appendFile(file, '\n' + JSON.stringify(event) + '\n');
     expect((await readCodexTokenSnapshot(home, threadId))?.contextUsage.totalTokens).toBe(166287);
+  });
+
+  it('rejects a rollout replaced with a directory and, on POSIX, a FIFO without waiting for a writer', async () => {
+    await fs.writeFile(file, JSON.stringify(event));
+    expect((await readCodexTokenSnapshot(home, threadId))?.contextUsage.totalTokens).toBe(166287);
+    const originalOpen = fs.open.bind(fs);
+    let swapped = false;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === file && !swapped) {
+        swapped = true;
+        await fs.unlink(file);
+        await fs.mkdir(file);
+      }
+      return originalOpen(...args);
+    });
+    expect(await readCodexTokenSnapshot(home, threadId)).toBeUndefined();
+    expect(swapped).toBe(true);
+    jest.restoreAllMocks();
+    if (process.platform !== 'win32') {
+      await fs.rmdir(file);
+      await fs.writeFile(file, JSON.stringify(event));
+      const probeFifo = require('../security/fixtures/stableFileFifo.cjs') as (read: (file: string) => Promise<never>) => Promise<{
+        denied: boolean; swapped: boolean; watchdogReleased: boolean; closedDescriptors: number; nonblocking: boolean;
+      }>;
+      const result = await probeFifo(async fifoPath => {
+        // Substitute the descriptor target after the production rollout lookup.
+        const nativeOpen = fs.open.bind(fs);
+        jest.spyOn(fs, 'open').mockImplementation((...args: Parameters<typeof fs.open>) =>
+          nativeOpen(String(args[0]) === file ? fifoPath : args[0], args[1], args[2]));
+        try {
+          if (await readCodexTokenSnapshot(home, threadId) !== undefined) throw new Error('Unexpected rollout bytes');
+          throw new Error('File read unavailable');
+        } finally { jest.restoreAllMocks(); }
+      });
+      expect(result).toMatchObject({ denied: true, swapped: true, watchdogReleased: false, closedDescriptors: 1, nonblocking: true });
+    }
   });
 
   it('returns unknown for missing files, unsafe IDs, and a tail beyond the read budget', async () => {

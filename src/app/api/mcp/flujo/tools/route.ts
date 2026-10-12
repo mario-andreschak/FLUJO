@@ -1,6 +1,7 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { json } from '@/app/api/mcp/_helpers';
+import { assertBundledFlujoWorkloadAction, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 
 /** Return the current MCP tool schemas. Tool execution is split across domain routes. */
 async function GET_handler(_request: Request) {
@@ -8,7 +9,9 @@ async function GET_handler(_request: Request) {
   if (lock) return lock;
 
   const { internalToolDefinitions } = await import('@/backend/services/mcp/internalTools');
-  return json({ tools: internalToolDefinitions() }, 200);
+  await assertBundledFlujoWorkloadAction('listTools', 'GET', '/api/mcp/flujo/tools');
+  const allowed = getAuthorizedBundledFlujoWorkloadToolNames();
+  return json({ tools: internalToolDefinitions().filter(tool => allowed === undefined || allowed.includes(tool.name)) }, 200);
 }
 
 const GET_workspaceRoute = withWorkspaceRoute(GET_handler);

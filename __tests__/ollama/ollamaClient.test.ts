@@ -12,8 +12,8 @@ const MB = 1024 * 1024;
  * A minimal stand-in for `fetch`'s Response that exposes exactly what `pull`
  * consumes: `ok` and a `body.getReader()` yielding the given NDJSON chunks.
  */
-function streamingResponse(chunks: string[]) {
-  const encoded = chunks.map((c) => new TextEncoder().encode(c));
+function streamingResponse(chunks: (string | Uint8Array)[]) {
+  const encoded = chunks.map((c) => (typeof c === 'string' ? new TextEncoder().encode(c) : c));
   let i = 0;
   return {
     ok: true,
@@ -47,6 +47,38 @@ describe('ollama pull', () => {
   const realFetch = global.fetch;
   afterEach(() => {
     global.fetch = realFetch;
+  });
+
+  it.each([
+    { chunks: [] },
+    { chunks: ['{"status":"downloading","completed":100,"total":100}\n'] },
+    { chunks: ['{"status":"succ'] },
+  ])(
+    'rejects a stream ending without terminal success: %j',
+    async ({ chunks }) => {
+      global.fetch = jest.fn().mockResolvedValue(streamingResponse(chunks)) as unknown as typeof fetch;
+      await expect(pull('llama3.2:3b', () => {})).rejects.toThrow('without a success status');
+    }
+  );
+
+  it('accepts terminal success without a newline and preserves split UTF-8 progress', async () => {
+    const encoded = new TextEncoder().encode('{"status":"下载模型"}\n{"status":"success"}');
+    global.fetch = jest.fn().mockResolvedValue(
+      streamingResponse([encoded.slice(0, 13), encoded.slice(13, 14), encoded.slice(14)])
+    ) as unknown as typeof fetch;
+    const got: OllamaPullProgress[] = [];
+    await pull('llama3.2:3b', (progress) => got.push(progress));
+    expect(got).toEqual([{ status: '下载模型' }, { status: 'success' }]);
+  });
+
+  it('preserves caller-visible streamed errors instead of replacing them with missing success', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      streamingResponse(['{"error":"manifest unavailable"}'])
+    ) as unknown as typeof fetch;
+    const onProgress = jest.fn();
+    await expect(pull('missing', onProgress)).resolves.toBeUndefined();
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalledWith({ error: 'manifest unavailable' });
   });
 
   it('invokes onProgress for each NDJSON line, even when split across chunks', async () => {

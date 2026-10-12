@@ -54,7 +54,7 @@ async function setup() {
 }
 
 describe('specialist call persistence and privacy', () => {
-  it('fences private SDK archives against missing authority and deletion, including queued writes', async () => fresh(async () => {
+  it('fences private SDK archives against missing authority and completed deletion, including queued writes', async () => fresh(async () => {
     const { persona, authority, claim } = await setup();
     const personaAttribution = { personaId: persona.id, activityId: claim.activity.id };
     const input = {
@@ -67,21 +67,33 @@ describe('specialist call persistence and privacy', () => {
     const durableContext = { personaAttribution, executionAuthority: authority };
     const entry = await archiveModelDispatch({ ...input, durableContext });
     const preview = await previewPersonaDeletion(persona.id);
+    // A call starting first does not establish admission order. Observe the
+    // real revocation before placing stale SDK writes behind a physical lock.
+    const deletion = await deletePersona(persona.id, {
+      previewToken: preview.previewToken, confirmation: 'DELETE', archivePolicy: 'anonymize',
+    });
+    expect(deletion.status).toBe('completed');
     let entered!: () => void;
     let release!: () => void;
     const ready = new Promise<void>((resolve) => { entered = resolve; });
     const hold = new Promise<void>((resolve) => { release = resolve; });
     const blocker = withPersonaRuntimeLock(persona.id, async () => { entered(); await hold; });
     await ready;
-    const deletion = deletePersona(persona.id, {
-      previewToken: preview.previewToken, confirmation: 'DELETE', archivePolicy: 'anonymize',
-    });
     const outcome = updateModelDispatchOutcome(input.conversationId, entry.id, 'completed', durableContext);
     const lateArchive = archiveModelDispatch({ ...input, durableContext });
-    const settled = Promise.allSettled([deletion, outcome, lateArchive]);
-    release();
-    await blocker;
-    expect((await settled).map((result) => result.status)).toEqual(['fulfilled', 'rejected', 'rejected']);
+    const settled = Promise.allSettled([outcome, lateArchive]);
+    try {
+      release();
+      await blocker;
+      const results = await settled;
+      expect(results.map(result => result.status)).toEqual(['rejected', 'rejected']);
+      for (const result of results) {
+        if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: 'flow_execution_authority_lost' });
+      }
+    } finally {
+      release();
+      await Promise.allSettled([blocker, settled]);
+    }
     // This isolated SDK fixture has no conversation index. Its unchanged result
     // proves the rejected writer did not reach disk; the conversation deletion
     // integration separately verifies removal of indexed archives and media.

@@ -1,5 +1,8 @@
 import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { MCPStreamableConfig } from '@/shared/types/mcp';
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 
 const mockLoadConfigs = jest.fn();
 const mockSaveConfigs = jest.fn();
@@ -29,7 +32,8 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
     redirect_uris: ['http://127.0.0.1:4200/api/oauth/callback'],
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    privateFixture = await installPrivateProfileFixture();
     for (const logger of Object.values(mockLog)) logger.mockReset();
     mockLoadConfigs.mockReset();
     mockSaveConfigs.mockReset().mockResolvedValue({ success: true });
@@ -57,7 +61,7 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
     expect(mockLog.verbose).toHaveBeenCalledWith('Tokens to save', { hasAccessToken: true, hasRefreshToken: true });
     await expect(provider.tokens()).resolves.toMatchObject(tokens);
     await expect(provider.codeVerifier()).resolves.toBe('synthetic-new-verifier');
-    expect(config.oauthClientInformation?.client_secret).toBe(client.client_secret);
+    expect(config.oauthClientInformation).toMatchObject({ format: 'flujo-oauth-v1', ciphertext: expect.stringMatching(/^v2:/) });
   });
   it('retains the browser authorization URL without logging its state or private parameters', async () => {
     const url = new URL('https://oauth.invalid/authorize?state=synthetic-private-state&extra=synthetic-private-parameter');
@@ -68,15 +72,18 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
   });
   it('keeps the previous active credential until storage acknowledges the staged replacement', async () => {
     let accept!: (result: { success: boolean }) => void;
-    mockSaveConfigs.mockImplementationOnce(() => new Promise(resolve => { accept = resolve; }));
+    let stagedReady!: () => void;
+    const ready = new Promise<void>(resolve => { stagedReady = resolve; });
+    mockSaveConfigs.mockImplementationOnce(() => new Promise(resolve => { accept = resolve; stagedReady(); }));
     const saving = provider.saveTokens(tokens);
-    await Promise.resolve();
+    await ready;
     const staged = (mockSaveConfigs.mock.calls[0][0] as Map<string, MCPStreamableConfig>).get(config.name)!;
-    expect(staged.oauthTokens?.access_token).toBe(tokens.access_token);
-    expect(config.oauthTokens?.access_token).toBe('synthetic-old-access');
+    expect(staged.oauthTokens).toMatchObject({ format: 'flujo-oauth-v1', ciphertext: expect.stringMatching(/^v2:/) });
+    expect(config.oauthTokens).toMatchObject({ access_token: 'synthetic-old-access' });
     accept({ success: true });
     await saving;
-    expect(config.oauthTokens?.access_token).toBe(tokens.access_token);
+    expect(config.oauthTokens).toMatchObject({ format: 'flujo-oauth-v1', ciphertext: expect.stringMatching(/^v2:/) });
+    await expect(provider.tokens()).resolves.toMatchObject(tokens);
   });
   it.each(['tokens', 'client', 'verifier', 'invalidation'] as const)('refuses false save success and preserves previous %s state', async kind => {
     const before = JSON.stringify(config);
@@ -94,7 +101,7 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
   it('refuses unreadable configuration without acknowledging or replacing credentials', async () => {
     mockLoadConfigs.mockResolvedValueOnce({ success: false, error: 'synthetic-load-secret' });
     await expect(provider.saveTokens(tokens)).rejects.toThrow('OAuth credential persistence failed');
-    expect(config.oauthTokens?.access_token).toBe('synthetic-old-access');
+    expect(config.oauthTokens).toMatchObject({ access_token: 'synthetic-old-access' });
     expect(mockSaveConfigs).not.toHaveBeenCalled();
     expect(renderedLogs()).not.toContain('synthetic-load-secret');
   });
@@ -106,7 +113,7 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
     expect(rejected?.message).not.toContain('synthetic-thrown-secret');
     expect(rejected?.cause).toBeUndefined();
     expect(renderedLogs()).not.toContain('synthetic-thrown-secret');
-    expect(config.oauthTokens?.access_token).toBe('synthetic-old-access');
+    expect(config.oauthTokens).toMatchObject({ access_token: 'synthetic-old-access' });
   });
   it('acknowledges successful explicit invalidation and preserves unrelated configuration', async () => {
     await provider.invalidateCredentials('all');

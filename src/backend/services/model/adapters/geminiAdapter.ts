@@ -4,7 +4,7 @@ import { contextUsageFromCompletion } from './contextUsage';
 import { mapGeminiUsage } from './geminiUsage';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import { extractText, extractMediaParts, parseToolArgs } from './messageUtils';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -335,7 +335,10 @@ function toChatCompletion(
  * `tool_calls` so FLUJO's tool-execution loop drives them.
  */
 export class GeminiAdapter implements CompletionAdapter {
-  async createCompletion({
+  async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    assertReadOnlyAssessmentInput(input);
+    if (input.readOnlyAssessment) return this.createAssessment(input);
+    const {
     model,
     apiKey,
     messages,
@@ -345,7 +348,7 @@ export class GeminiAdapter implements CompletionAdapter {
     signal,
     onSdkRequest,
     onSdkRequestResult,
-  }: CompletionInput): Promise<CompletionResult> {
+    } = input;
     // Raise the per-request timeout (SDK default is short relative to a long
     // agentic turn) via httpOptions; see shared timeouts config.
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
@@ -399,6 +402,69 @@ export class GeminiAdapter implements CompletionAdapter {
     };
   }
 
+  private async createAssessment(input: CompletionInput): Promise<CompletionResult> {
+    const { model, apiKey, messages, signal, maxTokens, temperature } = input;
+    // Native REST avoids the SDK's unconfigurable redirect-following transport.
+    // Only a representable Gemini API root is accepted; never rewrite an OpenAI
+    // gateway, Vertex endpoint, query, or arbitrary saved path into another API.
+    let base: URL;
+    try { base = new URL(model.baseUrl || 'https://generativelanguage.googleapis.com/v1beta'); }
+    catch { throw new Error('The saved Gemini endpoint is not supported for read-only assessment.'); }
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
+    if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && local)) || base.username || base.password
+      || base.search || base.hash || !/^\/(?:v1|v1beta|v1alpha)\/?$/.test(base.pathname)) {
+      throw new Error('The saved Gemini endpoint is not supported for read-only assessment.');
+    }
+    const name = model.name.replace(/^models\//, '');
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/.test(name)) throw new Error('The saved Gemini model name is not supported for read-only assessment.');
+    const endpoint = `${base.origin}${base.pathname.replace(/\/$/, '')}/models/${name}:generateContent`;
+    const { systemInstruction, contents } = await toGeminiContents(messages, signal);
+    const thinkingConfig = typeof model.thinkingBudget === 'number' ? { thinkingBudget: model.thinkingBudget }
+      : model.thinkingLevel ? { thinkingLevel: model.thinkingLevel.toUpperCase() } : undefined;
+    const body = { contents, ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}), generationConfig: {
+      maxOutputTokens: maxTokens, ...(temperature === undefined ? {} : { temperature }),
+      ...(thinkingConfig ? { thinkingConfig } : {}), responseModalities: ['TEXT'],
+    } };
+    const data = await observeSdkRequest(
+      { onSdkRequest: input.onSdkRequest, onSdkRequestResult: input.onSdkRequestResult, signal },
+      { adapter: 'gemini', operation: 'models.generateContent(readOnlyAssessment)', request: body },
+      async () => {
+        signal!.throwIfAborted();
+        const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify(body), signal, redirect: 'error', credentials: 'omit', cache: 'no-store' });
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('Gemini assessment response is unavailable.');
+        try {
+          if (!response.ok || Number(response.headers.get('content-length')) > 128 * 1024) throw new Error();
+          let bytes = 0;
+          const chunks: Uint8Array[] = [];
+          while (true) {
+            signal!.throwIfAborted();
+            const part = await reader.read();
+            if (part.done) break;
+            bytes += part.value.byteLength;
+            if (bytes > 128 * 1024) throw new Error();
+            chunks.push(part.value);
+          }
+          const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as GenerateContentResponse;
+          if (!Array.isArray(parsed.candidates) || parsed.candidates.length !== 1
+            || !Array.isArray(parsed.candidates[0].content?.parts)
+            || parsed.candidates[0].content.parts.some(part => typeof part.text !== 'string'
+              || part.functionCall || part.functionResponse || part.inlineData || part.fileData || part.executableCode || part.codeExecutionResult)) throw new Error();
+          return parsed;
+        } catch {
+          if (signal!.aborted) signal!.throwIfAborted();
+          throw new Error('Gemini assessment response is unavailable.');
+        } finally {
+          await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      },
+    );
+    const result = toChatCompletion(model.name, data);
+    return { ...result, contextUsage: contextUsageFromCompletion(result.completion.usage, model.contextWindow, true) };
+  }
+
   async createStreamCompletion({
     model,
     apiKey,
@@ -410,7 +476,9 @@ export class GeminiAdapter implements CompletionAdapter {
     onModelDelta,
     onSdkRequest,
     onSdkRequestResult,
+    readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
+    if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);
     const functionDeclarations = toGeminiTools(tools);

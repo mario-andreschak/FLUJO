@@ -1,0 +1,305 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "hosted-ci-b8cf905f",
+  "capturedAt": "2026-10-04T05:42:53.917Z",
+  "sourceSha": "b8cf905ff263559d8591f7dd839c2c75cf29f79f",
+  "executedMergeSha": "d2380e5c43293db433f8ce82c643c62a0ce66c20",
+  "sourceTree": "d4eba4ed7aec6e41fb272a64bea86b4bc2dbc883",
+  "executedTree": "d4eba4ed7aec6e41fb272a64bea86b4bc2dbc883",
+  "treeEqual": true,
+  "producer": "GitHub Actions verify workflow; Docs inspected downloaded public bytes and metadata",
+  "run": {
+    "id": 37178001458,
+    "headSha": "b8cf905ff263559d8591f7dd839c2c75cf29f79f",
+    "status": "completed",
+    "conclusion": "failure",
+    "runAttempt": 1,
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37178001458"
+  },
+  "audit": {
+    "id": 111364576301,
+    "status": "completed",
+    "conclusion": "success",
+    "startedAt": "2026-10-04T04:48:19Z",
+    "completedAt": "2026-10-04T04:49:12Z",
+    "steps": [
+      {
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 1,
+        "started_at": "2026-10-04T04:48:19Z",
+        "completed_at": "2026-10-04T04:48:20Z"
+      },
+      {
+        "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 2,
+        "started_at": "2026-10-04T04:48:20Z",
+        "completed_at": "2026-10-04T04:48:23Z"
+      },
+      {
+        "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 3,
+        "started_at": "2026-10-04T04:48:23Z",
+        "completed_at": "2026-10-04T04:48:27Z"
+      },
+      {
+        "name": "Run npm ci --include=dev",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 4,
+        "started_at": "2026-10-04T04:48:27Z",
+        "completed_at": "2026-10-04T04:49:08Z"
+      },
+      {
+        "name": "Audit the installed lockfile dependencies, including build tools",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 5,
+        "started_at": "2026-10-04T04:49:08Z",
+        "completed_at": "2026-10-04T04:49:09Z"
+      },
+      {
+        "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 6,
+        "started_at": "2026-10-04T04:49:09Z",
+        "completed_at": "2026-10-04T04:49:10Z"
+      },
+      {
+        "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 11,
+        "started_at": "2026-10-04T04:49:10Z",
+        "completed_at": "2026-10-04T04:49:10Z"
+      },
+      {
+        "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 12,
+        "started_at": "2026-10-04T04:49:10Z",
+        "completed_at": "2026-10-04T04:49:10Z"
+      },
+      {
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 13,
+        "started_at": "2026-10-04T04:49:10Z",
+        "completed_at": "2026-10-04T04:49:10Z"
+      }
+    ],
+    "platform": "GitHub-hosted Ubuntu",
+    "node": "v22.23.3",
+    "command": "npm audit --include=dev --audit-level=high --json > dependency-audit.json",
+    "installationCommand": "npm ci --include=dev",
+    "stepConclusion": "success",
+    "numericExitCodeSeparatelyCaptured": false,
+    "payload": {
+      "location": "docs/audits/scorecard-563/evidence/npm-audit-hosted-b8cf905f-all.json",
+      "byteLength": 366,
+      "sha256": "0574bfa0dfb81a15024bd5ed9b28b5dbd5ab1b15efef8c59abd51070226bb263"
+    },
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 551,
+        "dev": 811,
+        "optional": 88,
+        "peer": 0,
+        "peerOptional": 0,
+        "total": 1420
+      }
+    },
+    "artifact": {
+      "id": 11293303890,
+      "name": "dependency-audit-d2380e5c43293db433f8ce82c643c62a0ce66c20-37178001458-1",
+      "digest": "sha256:f2881940c9a937c2a6ff51c64388738026f8edb39e31fa6c71583dbe678549bf",
+      "sizeInBytes": 329,
+      "downloadByteLength": 329,
+      "downloadSha256": "f2881940c9a937c2a6ff51c64388738026f8edb39e31fa6c71583dbe678549bf"
+    },
+    "jobLogSha256": "b94e9530859637fda14545a09294b75de5969219ec18deb71d39c898287a23a0",
+    "selectedJobLogLines": [
+      "2026-10-04T04:48:21.1705437Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +d2380e5c43293db433f8ce82c643c62a0ce66c20:refs/remotes/pull/611/merge",
+      "2026-10-04T04:48:23.0278471Z  * [new ref]         d2380e5c43293db433f8ce82c643c62a0ce66c20 -> pull/611/merge",
+      "2026-10-04T04:48:23.4014482Z HEAD is now at d2380e5 Merge b8cf905ff263559d8591f7dd839c2c75cf29f79f into 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "2026-10-04T04:48:23.4101461Z d2380e5c43293db433f8ce82c643c62a0ce66c20",
+      "2026-10-04T04:48:26.4046046Z node: v22.23.3",
+      "2026-10-04T04:48:27.0378626Z ##[group]Run npm ci --include=dev",
+      "2026-10-04T04:48:27.0379018Z \u001b[36;1mnpm ci --include=dev\u001b[0m",
+      "2026-10-04T04:49:08.7635707Z ##[group]Run npm audit --include=dev --audit-level=high --json > dependency-audit.json",
+      "2026-10-04T04:49:08.7636381Z \u001b[36;1mnpm audit --include=dev --audit-level=high --json > dependency-audit.json\u001b[0m",
+      "2026-10-04T04:49:09.5298154Z   name: dependency-audit-d2380e5c43293db433f8ce82c643c62a0ce66c20-37178001458-1",
+      "2026-10-04T04:49:10.3363445Z Artifact dependency-audit-d2380e5c43293db433f8ce82c643c62a0ce66c20-37178001458-1.zip successfully finalized. Artifact ID 11293303890",
+      "2026-10-04T04:49:10.3365128Z Artifact dependency-audit-d2380e5c43293db433f8ce82c643c62a0ce66c20-37178001458-1 has been successfully uploaded! Final size is 329 bytes. Artifact ID is 11293303890"
+    ]
+  },
+  "jobs": [
+    {
+      "id": 111364576301,
+      "name": "dependency-security",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:48:19Z",
+      "completedAt": "2026-10-04T04:49:12Z"
+    },
+    {
+      "id": 111364576322,
+      "name": "typecheck",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:49:29Z",
+      "completedAt": "2026-10-04T04:51:17Z"
+    },
+    {
+      "id": 111364576336,
+      "name": "workflow-contract",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:47:27Z",
+      "completedAt": "2026-10-04T04:48:10Z"
+    },
+    {
+      "id": 111364576337,
+      "name": "Release safety (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:47:19Z",
+      "completedAt": "2026-10-04T04:48:20Z"
+    },
+    {
+      "id": 111364576346,
+      "name": "CodeQL (javascript-typescript)",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:47:18Z",
+      "completedAt": "2026-10-04T04:53:13Z"
+    },
+    {
+      "id": 111364576376,
+      "name": "Production build (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:47:20Z",
+      "completedAt": "2026-10-04T04:52:06Z"
+    },
+    {
+      "id": 111364576384,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:48:08Z",
+      "completedAt": "2026-10-04T04:50:05Z"
+    },
+    {
+      "id": 111364576393,
+      "name": "Release safety (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:48:12Z",
+      "completedAt": "2026-10-04T04:51:15Z"
+    },
+    {
+      "id": 111364576400,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:49:14Z",
+      "completedAt": "2026-10-04T05:15:56Z"
+    },
+    {
+      "id": 111364576413,
+      "name": "CodeQL (actions)",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:49:27Z",
+      "completedAt": "2026-10-04T04:49:57Z"
+    },
+    {
+      "id": 111364576422,
+      "name": "Production build (windows-latest)",
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-10-04T04:48:22Z",
+      "completedAt": "2026-10-04T05:07:09Z"
+    },
+    {
+      "id": 111364576455,
+      "name": "test-isolated",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T04:49:30Z",
+      "completedAt": "2026-10-04T04:52:19Z"
+    },
+    {
+      "id": 111364577137,
+      "name": "diagnostic Persona memory profile (not release acceptance)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "startedAt": "2026-10-04T04:47:17Z",
+      "completedAt": "2026-10-04T04:47:16Z"
+    },
+    {
+      "id": 111368651551,
+      "name": "verification",
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-10-04T05:15:59Z",
+      "completedAt": "2026-10-04T05:16:05Z"
+    }
+  ],
+  "priorGateStates": [
+    {
+      "id": "dependency-audit",
+      "ownerId": "engineering",
+      "kind": "source",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "status": "failed",
+      "description": "Planning main retains its failed audit. PR #600 at 59b65de81b52db2e29cde2d5848436661d04e631 has checksummed producer-reported clean audit payloads; integration and the assessed release audit remain pending. An unbound concurrent replay cannot qualify a source SHA.",
+      "evidenceIds": [
+        "dependency-audit-2026-10-03",
+        "dependency-remediation-59b65de8"
+      ]
+    },
+    {
+      "id": "build-verification",
+      "ownerId": "engineering",
+      "kind": "source",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "status": "pending",
+      "description": "Selected candidate source must pass required typecheck, lint, ordinary/isolated tests, builds, release-safety and verification prerequisites; failed/cancelled/skipped required jobs remain non-acceptance.",
+      "evidenceIds": []
+    }
+  ],
+  "scope": "Hosted producer execution and current downloaded-byte inspection. Root Ubuntu development-inclusive installed dependency graph only; no independent audit replay, Windows/macOS graph, production-only mode, installed-release security, human/live evidence or grade acceptance.",
+  "limits": [
+    "Downloaded archive digest matches artifact API metadata; payload bytes and executed/source tree correspondence were verified by Docs, not the producer execution repeated.",
+    "The audit covers the root Ubuntu development-inclusive installed graph. It is not a separately run production-only, Windows/macOS, container/plugin graph or released-artifact audit.",
+    "The source gate remains pending for selected-release/profile qualification. Planning audit failure, PR #600 producer receipts and the unbound replay remain historical evidence.",
+    "Overall verify and Windows installed-startup jobs failed; the clean audit does not replace those failures or establish a successful release.",
+    "No model run, human agreement, human observation, live elapsed window or independent nine-dimension grade is established."
+  ]
+}

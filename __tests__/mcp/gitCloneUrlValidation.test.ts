@@ -1,3 +1,7 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Regression tests for the repository-URL / branch validation of the /api/git
  * clone action (security hardening for issue 58).

@@ -1,7 +1,7 @@
 import path from 'path';
-import { promises as fs } from 'fs';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { synchronizeCodexAuth } from './codexAuth';
+import { admitCodexDirectory, writeCodexRuntimeFile } from './codexRuntimeFiles';
 
 const CONFIG_FILE = 'config.toml';
 
@@ -37,7 +37,7 @@ export async function prepareCodexRuntimeEnvironment(
   // Per workspace (#406): the Codex runtime home holds auth.json + config.toml,
   // which are workspace-owned credentials/settings, not installation-wide ones.
   const home = path.join(getWorkspaceDataDir(), 'db', 'codex-runtime');
-  await fs.mkdir(home, { recursive: true, mode: 0o700 });
+  const guard = await admitCodexDirectory(home, true);
   const workingDirectory = path.join(home, 'workspace');
   const appData = path.join(home, 'AppData', 'Roaming');
   const localAppData = path.join(home, 'AppData', 'Local');
@@ -49,18 +49,20 @@ export async function prepareCodexRuntimeEnvironment(
   const temp = path.join(home, 'tmp');
   await Promise.all(
     [workingDirectory, appData, localAppData, configHome, cache, data, state, runtime, temp]
-      .map(directory => fs.mkdir(directory, { recursive: true, mode: 0o700 })),
+      .map(directory => admitCodexDirectory(directory, true)),
   );
 
-  await fs.writeFile(
+  await writeCodexRuntimeFile(home,
     path.join(home, CONFIG_FILE),
     '# Managed by FLUJO. Codex runtime settings are supplied per invocation.\ncli_auth_credentials_store = "file"\n',
-    { encoding: 'utf8', mode: 0o600 },
+    guard,
   );
 
   if (useUserLogin) {
+    await guard();
     await synchronizeCodexAuth(home);
   }
+  await guard();
 
   const env: Record<string, string> = {
     ...inheritedEnvironment(),

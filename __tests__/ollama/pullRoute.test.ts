@@ -44,6 +44,19 @@ async function drain(res: Response): Promise<CommandStreamEvent[]> {
 describe('POST /api/local-models/pull', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it.each([undefined, { status: 'downloading', total: 100, completed: 100 }])(
+    'fails when the client resolves without terminal success: %j',
+    async (progress) => {
+      (ollama.pull as jest.Mock).mockImplementation(async (_model, onProgress) => {
+        if (progress) onProgress(progress);
+      });
+      const events = await drain(await POST(postRequest({ model: 'llama3.2:3b' })));
+      expect(events.filter((event) => event.type === 'result')).toEqual([
+        { type: 'result', success: false, error: 'Ollama pull ended without a success status' },
+      ]);
+    }
+  );
+
   it('streams progress as stdout then a success result', async () => {
     (ollama.pull as jest.Mock).mockImplementation(
       async (_model: string, onProgress: (p: unknown) => void) => {
@@ -75,6 +88,7 @@ describe('POST /api/local-models/pull', () => {
     (ollama.pull as jest.Mock).mockImplementation(
       async (_model: string, onProgress: (p: unknown) => void) => {
         onProgress({ error: 'pull model manifest: file does not exist' });
+        onProgress({ status: 'success' });
       }
     );
 
@@ -87,5 +101,9 @@ describe('POST /api/local-models/pull', () => {
     const last = events[events.length - 1];
     expect(last.type).toBe('result');
     expect((last as { success: boolean }).success).toBe(false);
+    expect(last).toEqual({
+      type: 'result', success: false, error: 'pull model manifest: file does not exist',
+    });
+    expect(events.filter((event) => event.type === 'result')).toHaveLength(1);
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   DEFAULT_WORKSPACE,
   getSelectedWorkspace,
@@ -29,7 +30,7 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
   initializeWorkspaceSelection();
   migrateLegacyBrowserWorkspaceContent();
   const pageRequestOnMount = useRef(readWorkspacePageRequest());
-  const [status, setStatus] = useState<'loading' | 'migrating' | 'ready' | 'error'>('loading');
+  const [status, setStatus] = useState<'loading' | 'migrating' | 'ready' | 'error' | 'owner-auth'>('loading');
   const [errorMessage, setErrorMessage] = useState('Workspace discovery is not ready.');
 
   useEffect(() => {
@@ -40,6 +41,10 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
       while (!cancelled) {
         try {
           const response = await fetch('/api/workspaces', { cache: 'no-store' });
+          if (response.status === 401) {
+            if (!cancelled) setStatus('owner-auth');
+            return;
+          }
           const payload = (await response.json()) as {
             workspaces?: Array<{ name?: unknown }>;
             code?: unknown;
@@ -120,6 +125,15 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
         </div>
       </div>
     );
+  }
+  if (status === 'owner-auth') {
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    return <div className="app-loading" role="alert">
+      <div className="app-loading__content">
+        <span>Sign in as the owner to open this workspace.</span>
+        <Link href={`/owner/login?returnTo=${encodeURIComponent(returnTo)}`}>Owner sign in</Link>
+      </div>
+    </div>;
   }
   if (status === 'error') {
     return (

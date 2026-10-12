@@ -13,12 +13,12 @@ import Watershed, { PLACE_ROUTES, PLACE_KINDS, LANDMARK_POSITIONS, type WorldPla
 import ConnectionSetup from './ConnectionSetup';
 import { useAvatarWork } from './useAvatarWork';
 import { useWorldPanel } from './useWorldPanel';
-import { useNativeRouterVoice, voiceHeaders, type NativeVoiceTransport } from '@/vendor/avatar/client/useNativeRouterVoice';
-import { DEFAULT_LOCALE } from '@/vendor/avatar/client/locale';
+import { useNativeRouterVoice, usePocketSpeech, voiceHeaders, DEFAULT_LOCALE, type NativeVoiceTransport } from '@flujo-ai/avatar-sdk/native-voice';
 import ResourcePreview from './ResourcePreview';
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
 import WorldLink from './WorldLink';
 import WorldScene from './WorldScene';
+import '@flujo-ai/avatar-sdk/styles.css';
 import styles from './world.module.css';
 
 export default function AvatarWorld({ voiceTransport }: { voiceTransport?: NativeVoiceTransport } = {}) {
@@ -36,6 +36,10 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
   const [actionResults, setActionResults] = useState<Record<string, string>>({});
   const [voiceMessages, setVoiceMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string; done: boolean }>>([]);
   const [voiceAvailable, setVoiceAvailable] = useState(false);
+  const [pocketAvailable, setPocketAvailable] = useState(false);
+  const pocketRequest = useCallback((result: {conversationId:string;messageId:string;locale:string}, signal:AbortSignal) =>
+    fetch('/api/avatar/local-speech', {method:'POST',headers:voiceHeaders(),body:JSON.stringify(result),signal,credentials:'same-origin',cache:'no-store',redirect:'error'}), []);
+  const pocket = usePocketSpeech(pocketRequest);
   const offered = useRef(new Set<string>());
   const voiceRequest = useRef(0);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -98,11 +102,15 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
       .then(response => response.ok ? response.json() : null)
       .then(status => { if (!controller.signal.aborted) setVoiceAvailable(Boolean(status?.available)); })
       .catch(() => {});
+    if(!voiceTransport)void fetch('/api/avatar/local-speech',{signal:controller.signal,credentials:'same-origin',cache:'no-store',redirect:'error'})
+      .then(response=>response.ok?response.json():null).then(status=>{if(!controller.signal.aborted)setPocketAvailable(status?.available===true);}).catch(()=>{});
     return () => controller.abort();
-  }, [requestVoice]);
+  }, [requestVoice,voiceTransport]);
+  useEffect(()=>{pocket.disable();},[locale,work.target.kind,'id' in work.target ? work.target.id : '',pocket.disable]);
+  useEffect(()=>{if(setup||panel.open||voice.connected)pocket.disable();},[setup,panel.open,voice.connected,pocket.disable]);
   // Sensitive configuration panels never leave a microphone recording in the background.
   useEffect(() => { if (setup || panel.open) voice.disconnect(); }, [setup, panel.open, voice.disconnect]);
-  const phase = voice.connected && voice.phase === 'speaking' ? voice.phase : work.busy ? work.phase : voice.connected && voice.phase === 'listening' ? voice.phase : work.phase;
+  const phase = pocket.speaking ? 'speaking' : voice.connected && voice.phase === 'speaking' ? voice.phase : work.busy ? work.phase : voice.connected && voice.phase === 'listening' ? voice.phase : work.phase;
   const narrationConversationId = work.conversation?.id;
   const narrationLast = work.messages.at(-1);
   const narrationMessageId = narrationLast?.role === 'assistant' ? narrationLast.id : undefined;
@@ -110,16 +118,17 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
     if (work.busy || !narrationConversationId || !narrationMessageId) return;
     const key = `${narrationConversationId}:${narrationMessageId}`;
     // Connecting voice enables future results; it never replays an old setup recommendation.
-    if (!voice.connected) { offered.current.add(key); return; }
+    if (!voice.connected&&!pocket.enabled) { offered.current.add(key); return; }
     if (offered.current.has(key)) return;
     offered.current.add(key);
+    if(pocket.enabled){pocket.speak({conversationId:narrationConversationId,messageId:narrationMessageId,locale});return;}
     const owner = voice.getSessionOwner();
     const requestEpoch = voiceRequest.current;
     const controller = new AbortController();
     void requestVoice('native-result-receipt', { method: 'POST', headers: voiceHeaders(), signal: controller.signal, body: JSON.stringify({ conversationId: narrationConversationId, messageId: narrationMessageId, locale }) })
       .then(response => response.ok ? response.json() : null).then(receipt => { if (!controller.signal.aborted && receipt?.taskId && owner && voiceRequest.current === requestEpoch) voice.sendTaskResult(receipt.taskId, owner); }).catch(() => {});
     return () => controller.abort();
-  }, [narrationMessageId, work.busy, narrationConversationId, voice.connected, locale, voice.sendTaskResult, voice.getSessionOwner, requestVoice]);
+  }, [narrationMessageId, work.busy, narrationConversationId, voice.connected, pocket.enabled,pocket.speak,locale, voice.sendTaskResult, voice.getSessionOwner, requestVoice]);
   useEffect(() => { if (work.messages.length) transcript.current?.scrollTo({ top: transcript.current.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); }, [work.messages]);
   useEffect(() => { if (!work.busy) void reload(); }, [work.busy, reload]);
   useEffect(() => {
@@ -134,6 +143,7 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
       return;
     }
     voiceRequest.current++;
+    pocket.stop();
     voice.interrupt(false);
     setVoiceMessages([]);
     setDraft('');
@@ -159,7 +169,8 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
       <label>{c.language}<select aria-label="Language / Idioma" value={locale} onChange={event => { const value = event.target.value as WorldLocale; setLocale(value); window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:locale'), value); }}><option value="en">EN</option><option value="es">ES</option><option value="pt">PT</option></select></label>
       <div className={styles.stylePicker} role="group" aria-label={c.style}>{(['moss', 'orbit', 'spark'] as AvatarStyle[]).map(style => <button key={style} aria-pressed={avatar === style} onClick={() => { setAvatar(style); window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:style'), style); }} title={c[style === 'moss' ? 'quiet' : style === 'orbit' ? 'measured' : 'bright']}>{style === 'moss' ? '··' : style === 'orbit' ? '◉' : '✧'}<span>{style[0].toUpperCase() + style.slice(1)}</span></button>)}</div>
       {voiceAvailable && !voice.connected && <button onClick={() => { setControls(false); void voice.connect(false); }} disabled={voice.connecting}>{c.voiceOutput}</button>}
-      {work.conversation && <><button onClick={() => { setControls(false); panel.navigate(`/chat?conversation=${encodeURIComponent(work.conversation!.id)}`); }}>{c.inspect} ↗</button><button onClick={() => { voice.disconnect(); offered.current.clear(); setVoiceMessages([]); work.newChat(); setControls(false); }} disabled={work.busy}>{c.newChat}</button></>}
+      {pocketAvailable&&<button aria-pressed={pocket.enabled} onClick={()=>{voice.disconnect();if(pocket.enabled)pocket.disable();else pocket.enable();setControls(false);}}>{locale==='es'?'Voz local':locale==='pt'?'Voz local':'Local speech'}</button>}
+      {work.conversation && <><button onClick={() => { setControls(false); panel.navigate(`/chat?conversation=${encodeURIComponent(work.conversation!.id)}`); }}>{c.inspect} ↗</button><button onClick={() => { voice.disconnect(); pocket.disable(); offered.current.clear(); setVoiceMessages([]); work.newChat(); setControls(false); }} disabled={work.busy}>{c.newChat}</button></>}
     </aside>}
     <div className={`${styles.mapLayer} ${exploring ? styles.mapVisible : ''}`} aria-hidden={details || setup || panel.open} inert={details || setup || panel.open}><Watershed snapshot={snapshot} locale={locale} selected={place} onSelect={selected => { setExploring(true); setPlace(selected); if (selected === 'models') setSetup(true); }} /></div>
     <section className={`${styles.companion} ${exploring ? styles.companionAside : ''}`} style={exploring && place ? { left: `${LANDMARK_POSITIONS[place][0]}%`, '--arrival-y': `${LANDMARK_POSITIONS[place][1] - 22}%` } as CSSProperties : undefined}>
@@ -176,14 +187,14 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
       {message.actions?.map(action => <div className={styles.proposal} key={action.id}><p>{action.label || action.evidence || action.type}</p><button onClick={async () => { const result = await panel.apply(message.scopeId || '', action); setActionResults(current => ({ ...current, [action.id]: result.message })); }}>{c.apply}</button>{actionResults[action.id] && <small>{actionResults[action.id]}</small>}</div>)}
     </article>)}{voice.connected && voiceMessages.at(-1)?.role === 'assistant' && voiceMessages.at(-1)?.text && <article className={styles.message} aria-live="polite"><small>{avatar}</small><p>{voiceMessages.at(-1)?.text}</p></article>}</div>}
     <div className={styles.bottomBar}>
-      {(error || work.error || voice.error || snapshot?.unavailable.length) ? <p role="alert" className={styles.error}>{work.error || voice.error || error || c.unavailable}<button onClick={() => { voice.clearError(); setError(null); void reload(); }}>↻</button></p> : null}
+      {(error || work.error || voice.error || pocket.error || snapshot?.unavailable.length) ? <p role="alert" className={styles.error}>{work.error || voice.error || pocket.error || error || c.unavailable}<button onClick={() => { voice.clearError(); setError(null); void reload(); }}>↻</button></p> : null}
       {work.phase === 'waiting' && work.conversation && <button className={styles.attention} onClick={() => panel.navigate(`/chat?conversation=${encodeURIComponent(work.conversation!.id)}`)}>{c.waiting} ↗</button>}
       <form className={styles.composer} onSubmit={event => { event.preventDefault(); void send(); }}>
         <button type="button" aria-label={voice.hasMicrophone ? c.stopSpeech : c.voice} aria-pressed={voice.hasMicrophone} disabled={!voiceAvailable || voice.connecting} onClick={() => voice.hasMicrophone ? voice.disconnect() : void voice.connect(true)} title={voiceAvailable ? c.voice : c.voiceOff}>{voice.hasMicrophone ? '◌' : '◉'}</button>
         <textarea ref={input} aria-label={c.draft} placeholder={c.draft} value={draft} rows={1} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }} />
         <button type="submit" aria-label={c.send} disabled={!draft.trim()}>↑</button>
       </form>
-      <div className={styles.workControls}><div>{voice.connected && voice.phase === 'speaking' && <button onClick={() => voice.interrupt()}>{c.stopSpeech}</button>}{work.busy && <button onClick={() => void work.stop().catch(err => setError(String(err)))}>{c.stop}</button>}</div></div>
+      <div className={styles.workControls}><div>{voice.connected && voice.phase === 'speaking' && <button onClick={() => voice.interrupt()}>{c.stopSpeech}</button>}{pocket.speaking&&<button onClick={pocket.stop}>{c.stopSpeech}</button>}{work.busy && <button onClick={() => void work.stop().catch(err => setError(String(err)))}>{c.stop}</button>}</div></div>
     </div>
     {place && place !== 'models' && exploring && <aside className={styles.placeSheet} data-side={LANDMARK_POSITIONS[place][0] > 55 ? 'left' : 'right'}><div className={styles.sheetHead}><span className={styles.eyebrow}>{labels[place]}</span><button onClick={() => setPlace(null)} aria-label={c.close}>×</button></div><h2>{labels[place]}</h2>
       {objects.length === 0 && <p>{c.empty}</p>}{objects.map(object => <div key={`${object.kind}:${object.id}`}><button className={styles.object} onClick={() => object.resource ? setResource(object) : panel.navigate(object.href)}><span>◈</span><div><strong>{object.name}</strong><small>{object.state}</small></div><span>↗</span></button>{(['flow', 'persona'].includes(object.kind) && object.canTalk) && <button className={styles.talkIdentity} disabled={work.busy} onClick={() => { if (work.newChat({ kind: object.kind as 'flow' | 'persona', id: object.id, name: object.name })) { voice.disconnect(); setVoiceMessages([]); offered.current.clear(); setPlace(null); setExploring(false); input.current?.focus(); } }}>{c.talkTo} · {object.name} ↗</button>}</div>)}

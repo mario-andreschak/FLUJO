@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "publicUse": "reviewed",
+  "reviewedAtUtc": "2026-10-11T15:37:29.841Z",
+  "title": "Website Builder AI model test succeeds after credential repair",
+  "provenance": {
+    "kind": "Genuine screen recording of operator actions in real software",
+    "operator": "Demo operator using agent-operated UI tools",
+    "humanUsabilityStudy": false,
+    "runtimePackage": "flujo-ai",
+    "runtimeVersion": "3.46.2",
+    "documentationSourceVersion": "3.46.3"
+  },
+  "source": {
+    "fileName": "act1-recovery.mp4",
+    "storage": "Private recording retained outside the repository",
+    "sha256": "6691cf421dacb8cf1f740e55fdd06ef8372d0b49d703bb37a0d67326642bd990",
+    "captureStartUtc": "2026-10-11T15:26:06.132110397Z",
+    "durationSeconds": 420,
+    "width": 1600,
+    "height": 1000,
+    "framesPerSecond": 20,
+    "frameCount": 8400,
+    "bytes": 7249817,
+    "videoCodec": "h264",
+    "audioStreams": 0
+  },
+  "output": {
+    "path": "githubpages/film/media/walkthrough/act1-model-test.mp4",
+    "sha256": "5e5e407061db5ef5ffbf288609216b32d22a139ebfa5bbf8559baf5be94cf7be",
+    "durationSeconds": 25,
+    "width": 1600,
+    "height": 1000,
+    "framesPerSecond": 20,
+    "frameCount": 500,
+    "bytes": 841290,
+    "videoCodec": "h264",
+    "pixelFormat": "yuv420p",
+    "audioStreams": 0,
+    "fastStart": true
+  },
+  "edit": {
+    "method": "One continuous 25-second source interval, normal speed, full frame; no internal cuts, overlays, generated UI, or added cursor.",
+    "rangeConvention": "Start inclusive, end exclusive; seconds from source start",
+    "ranges": [
+      {
+        "sourceStart": 340,
+        "sourceEnd": 365,
+        "outputStart": 0,
+        "outputEnd": 25
+      }
+    ]
+  },
+  "actions": [
+    {
+      "label": "Test model: Website Builder AI",
+      "sourceSeconds": 345.112,
+      "outputSeconds": 5.112,
+      "result": "The UI sends a live model test request."
+    },
+    {
+      "label": "Test running",
+      "sourceSeconds": 345.5,
+      "outputSeconds": 5.5,
+      "result": "The test dialog appears with its loading state."
+    },
+    {
+      "label": "Model test passed",
+      "sourceSeconds": 349.95,
+      "outputSeconds": 9.95,
+      "result": "Green success result is visible for all four checks."
+    }
+  ],
+  "actionTimingBasis": "Click time supplied by the capture operator; subsequent running/success states visually confirmed. State-transition timestamps are derived from the decoded source-aligned output scene-change scan, not provider completion timestamps.",
+  "observedResult": {
+    "connectionName": "Website Builder AI",
+    "provider": "OpenRouter",
+    "modelId": "google/gemini-3-flash-preview",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "adapter": "openai-responses",
+    "endpoint": "/responses",
+    "status": "passed",
+    "checks": [
+      {
+        "label": "OpenAI SDK (used by flows)",
+        "status": "passed",
+        "httpStatus": 200,
+        "uiReportedDurationMs": 1035,
+        "response": "pong"
+      },
+      {
+        "label": "axios (independent cross-check)",
+        "status": "passed",
+        "httpStatus": 200,
+        "uiReportedDurationMs": 1024,
+        "response": "pong"
+      },
+      {
+        "label": "Adapter round-trip (the path flows take)",
+        "status": "passed",
+        "httpStatus": 200,
+        "uiReportedDurationMs": 1035,
+        "response": "pong"
+      },
+      {
+        "label": "FLUJO tool round-trip",
+        "status": "passed",
+        "uiReportedDurationMs": 2974,
+        "response": "FLUJO tool schema accepted, arguments validated, tool executed, and result received by the model."
+      }
+    ],
+    "durationScope": "Individual check durations displayed by FLUJO; do not sum them or equate them with total wall-clock time."
+  },
+  "recoveryContext": {
+    "earlierAttempt": "The earlier Act 1 model test returned HTTP 401. That failure remains in the existing evidence.",
+    "earlierEvidence": "docs/journeys/evidence/walkthrough-act1-manifest.json",
+    "repair": "The demo operator repaired credential configuration before this successful retry.",
+    "privateExcludedSourceIntervalSeconds": {
+      "start": 0,
+      "end": 187
+    },
+    "limitations": "This clip shows the successful retry. It is not evidence that the first setup attempt succeeded, and it does not expose or reproduce the private credential repair."
+  },
+  "privacyReview": {
+    "method": "25 one-second output samples, seven full-resolution source frames, and an all-frame decoded scene-change scan (500 frames, threshold 0.04).",
+    "fullResolutionSourceSeconds": [
+      340,
+      345,
+      346,
+      350,
+      355,
+      360,
+      364
+    ],
+    "sceneChangeOutputSeconds": [
+      5.5,
+      5.6,
+      9.95
+    ],
+    "observations": [
+      "No terminal, password value, API-key value, or private filesystem path observed.",
+      "Visible provider/model IDs, base URL, test results, and timings are public/demo metadata.",
+      "No cursor is embedded in reviewed frames; no cursor was added during editing."
+    ],
+    "limitations": "Visual sampling with an all-frame scene-change scan; not OCR or a frame-by-frame credential audit. The full 420-second source remains private and is not approved for publication.",
+    "publicScope": "Only this 25-second output asset and this sanitized manifest are approved for public use."
+  }
+}

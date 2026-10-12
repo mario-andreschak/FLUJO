@@ -1,9 +1,11 @@
-import { promises as fs } from 'node:fs';
+import { constants, openSync, closeSync, promises as fs } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
 import {
   addFolderToZipLinkSafe,
+  atomicWriteWithoutLinks,
   restoreFolderFromZipLinkSafe,
 } from '@/backend/services/workspace/backupRestoreFs';
 
@@ -23,7 +25,27 @@ describe('MCP backup/restore link safety', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it('refuses publication when ownership retires during the final target inspection', async () => {
+    const destination = path.join(mcpRoot, 'owned.json');
+    await fs.writeFile(destination, 'original');
+    const lstat = fs.lstat.bind(fs);
+    let inspections = 0;
+    let retired = false;
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const result = await lstat(...args);
+      if (String(args[0]) === destination && ++inspections === 2) retired = true;
+      return result;
+    });
+    await expect(atomicWriteWithoutLinks(workspaceRoot, destination, Buffer.from('replacement'), {
+      assertOwned: async () => { if (retired) throw new Error('Recovery owner retired'); },
+    })).rejects.toThrow('Recovery owner retired');
+    expect(retired).toBe(true);
+    expect(await fs.readFile(destination, 'utf8')).toBe('original');
+    expect((await fs.readdir(mcpRoot)).filter(name => name.startsWith('.flujo-restore-'))).toEqual([]);
   });
 
   it('backs up regular files but skips junctions and hard links to outside data', async () => {
@@ -63,6 +85,109 @@ describe('MCP backup/restore link safety', () => {
       'mcp-servers',
       workspaceRoot,
     )).rejects.toThrow(/real directory/i);
+  });
+
+  it('rejects an admitted file replaced by a non-regular entry before open without reading it', async () => {
+    const file = path.join(mcpRoot, 'replaced.json');
+    await fs.writeFile(file, 'admitted fixture');
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    let watchdogReleased = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let read: jest.SpyInstance | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === file) {
+        expect(args[1]).toBe(constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        await fs.unlink(file);
+        if (process.platform === 'win32') await fs.mkdir(file);
+        else {
+          execFileSync('mkfifo', [file], { timeout: 1000, windowsHide: true });
+          // Release a blocking predecessor so regression failure cannot strand
+          // libuv's open. A correct nonblocking read never needs this writer.
+          watchdog = setTimeout(() => {
+            watchdogReleased = true;
+            try { closeSync(openSync(file, constants.O_WRONLY | constants.O_NONBLOCK)); }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENXIO') throw error; }
+          }, 750);
+        }
+        replaced = true;
+      }
+      const handle = await open(...args);
+      if (String(args[0]) === file) read = jest.spyOn(handle, 'read');
+      return handle;
+    });
+    const skipped: string[] = [];
+    const zip = new JSZip();
+    try {
+      await addFolderToZipLinkSafe(zip, mcpRoot, 'mcp-servers', workspaceRoot, entry => skipped.push(entry));
+    } finally { clearTimeout(watchdog); }
+    expect(replaced).toBe(true);
+    expect(watchdogReleased).toBe(false);
+    expect(zip.file('mcp-servers/replaced.json')).toBeNull();
+    expect(skipped).toContain('mcp-servers/replaced.json');
+    if (read) expect(read).not.toHaveBeenCalled();
+  });
+
+  it('skips a file whose checked/opened inode values collide as Numbers', async () => {
+    const file = path.join(mcpRoot, 'server.json');
+    await fs.writeFile(file, 'inside');
+    const colliding = BigInt('9007199254740992');
+    expect(Number(colliding)).toBe(Number(colliding + BigInt(1)));
+    const lstat = fs.lstat.bind(fs);
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const value = await lstat(...args);
+      if (String(args[0]) === file) {
+        expect(args[1]).toEqual({ bigint: true });
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding });
+      }
+      return value;
+    });
+    const open = fs.open.bind(fs);
+    let read: jest.SpyInstance | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]) === file) {
+        const actual = await handle.stat({ bigint: true });
+        jest.spyOn(handle, 'stat').mockResolvedValue(Object.assign(Object.create(Object.getPrototypeOf(actual)), actual, { ino: colliding + BigInt(1) }));
+        read = jest.spyOn(handle, 'read');
+      }
+      return handle;
+    });
+    const zip = new JSZip();
+    await addFolderToZipLinkSafe(zip, mcpRoot, 'mcp-servers', workspaceRoot);
+    expect(zip.file('mcp-servers/server.json')).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('preserves a restore candidate with an unowned exact inode hidden by Number rounding', async () => {
+    const target = path.join(mcpRoot, 'server.json');
+    const colliding = BigInt('9007199254740992');
+    const open = fs.open.bind(fs);
+    let temporary = '';
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).includes('.flujo-restore-')) {
+        temporary = String(args[0]);
+        const stat = handle.stat.bind(handle);
+        jest.spyOn(handle, 'stat').mockImplementation(async () => {
+          const value = await stat({ bigint: true });
+          return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding });
+        });
+      }
+      return handle;
+    });
+    const lstat = fs.lstat.bind(fs);
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const value = await lstat(...args);
+      if (String(args[0]) === temporary) {
+        expect(args[1]).toEqual({ bigint: true });
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding + BigInt(1) });
+      }
+      return value;
+    });
+    await expect(atomicWriteWithoutLinks(workspaceRoot, target, Buffer.from('intended'))).rejects.toThrow('temporary file changed');
+    await expect(fs.access(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(temporary, 'utf8')).toBe('intended');
   });
 
   it('does not restore through an existing junction ancestor', async () => {

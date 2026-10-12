@@ -1,5 +1,6 @@
 'use client';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { NativeVoiceTransport } from '@/vendor/avatar/client/nativeVoiceTransport';
 import { bindPhoneHostRequests, initializeWorkspaceSelection, readWorkspacePageRequest, setSelectedWorkspace, workspacePageUrl } from '@/frontend/utils/workspaceSelection';
 import { createPhoneVoiceTransport, readPhoneVoiceSession, unavailablePhoneVoiceTransport, type PhoneVoiceSession } from './AvatarWorld/phoneVoiceTransport';
@@ -13,7 +14,10 @@ export default function PhoneHostBoundary({ enabled, children, fallback = null }
 
 /** Admission precedes WorkspaceBootstrap and every data-bearing provider/frame. */
 function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
+  const { t } = useI18n();
   const [transport, setTransport] = useState<NativeVoiceTransport | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     let disposed = false, generation = 0;
     let lookup: AbortController | undefined;
@@ -21,7 +25,7 @@ function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallba
     bindPhoneHostRequests();
     const retire = () => {
       active?.lifetime.abort(); active = undefined; bindPhoneHostRequests();
-      if (!disposed) setTransport(null);
+      if (!disposed) { setTransport(null); setFailed(true); }
     };
     const refresh = async () => {
       const current = ++generation;
@@ -54,6 +58,7 @@ function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallba
         if (disposed || request.signal.aborted || current !== generation) { lifetime.abort(); return; }
         if (active?.lifetime !== lifetime || lifetime.signal.aborted) return;
         active.ready = true;
+        setFailed(false);
         setTransport(next);
       } catch {
         if (!disposed && !request.signal.aborted && current === generation) retire();
@@ -67,6 +72,11 @@ function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallba
       disposed = true; generation++; lookup?.abort(); retire(); clearInterval(timer);
       window.removeEventListener('focus', visible); document.removeEventListener('visibilitychange', visible);
     };
-  }, []);
-  return transport ? <PhoneHostContext.Provider value={transport}>{children}</PhoneHostContext.Provider> : fallback;
+  }, [retry]);
+  if (transport) return <PhoneHostContext.Provider value={transport}>{children}</PhoneHostContext.Provider>;
+  if (!failed) return fallback;
+  return <div className="app-loading" role="alert"><div className="premium-surface" style={{ width: 'min(92vw, 520px)', padding: 28, textAlign: 'center' }}>
+    <h2>{t('shell.error.title')}</h2><p>{t('shell.error.body')}</p>
+    <button type="button" style={{ minHeight: 48, padding: '0 24px' }} onClick={() => { setFailed(false); setRetry(value => value + 1); }}>{t('shell.error.reload')}</button>
+  </div></div>;
 }

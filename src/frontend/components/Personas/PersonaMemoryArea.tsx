@@ -469,11 +469,11 @@ export default function PersonaMemoryArea({
         <Stack
           direction={{ xs: 'column', md: 'row' }}
           spacing={1.5}
-          alignItems={{ xs: 'stretch', md: 'center' }}
+          sx={{ alignItems: { xs: 'stretch', md: 'center' } }}
         >
-          <Stack direction="row" spacing={1} alignItems="center" flex={1}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center", flex: 1 }}>
             <MemoryRounded color="primary" />
-            <Typography variant="h5" component="h2" fontWeight={780}>
+            <Typography variant="h5" component="h2" sx={{ fontWeight: 780 }}>
               {t('personas.memory.title')}
             </Typography>
           </Stack>
@@ -551,7 +551,7 @@ export default function PersonaMemoryArea({
                     id={`memory-${bucket}`}
                     variant="overline"
                     color="text.secondary"
-                    fontWeight={800}
+                    sx={{ fontWeight: 800 }}
                   >
                     {bucketLabel(bucket)} · {items.length}
                   </Typography>
@@ -619,20 +619,18 @@ export default function PersonaMemoryArea({
                             <CardContent>
                               <Stack
                                 direction={{ xs: 'column', sm: 'row' }}
-                                justifyContent="space-between"
-                                alignItems={{ xs: 'flex-start', sm: 'flex-start' }}
-                                gap={1}
+                                sx={{ justifyContent: "space-between", alignItems: { xs: 'flex-start', sm: 'flex-start' }, gap: 1 }}
                               >
-                                <Stack direction="row" spacing={0.5} alignItems="flex-start" flex={1}>
+                                <Stack direction="row" spacing={0.5} sx={{ alignItems: "flex-start", flex: 1 }}>
                                   {memory.status === 'candidate' && (
                                     <Checkbox
                                       checked={selectedReviewIds.includes(memory.id)}
                                       disabled={isPending}
-                                      inputProps={{
+                                      slotProps={{ input: {
                                         'aria-label': t('personas.memory.selectCandidate', {
                                           memory: memory.content,
                                         }),
-                                      }}
+                                      } }}
                                       onChange={(event) => setSelectedReviewIds(current => (
                                         event.target.checked
                                           ? [...new Set([...current, memory.id])]
@@ -644,7 +642,7 @@ export default function PersonaMemoryArea({
                                     {memory.content}
                                   </Typography>
                                 </Stack>
-                                <Stack direction="row" spacing={0.75} flexWrap="wrap" justifyContent="flex-end">
+                                <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
                                   {conflicts.length > 0 && (
                                     <Chip
                                       size="small"
@@ -682,10 +680,9 @@ export default function PersonaMemoryArea({
                                       key={counterpart.id}
                                       direction={{ xs: 'column', sm: 'row' }}
                                       spacing={1}
-                                      alignItems={{ xs: 'flex-start', sm: 'center' }}
-                                      sx={{ p: 1, borderRadius: 2, bgcolor: 'warning.light' }}
+                                      sx={{ alignItems: { xs: 'flex-start', sm: 'center' },  p: 1, borderRadius: 2, bgcolor: 'warning.light' }}
                                     >
-                                      <Typography variant="body2" flex={1}>
+                                      <Typography variant="body2" sx={{ flex: 1 }}>
                                         {t('personas.memory.conflictsWith', {
                                           content: counterpart.content,
                                         })}

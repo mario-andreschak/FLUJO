@@ -25,7 +25,7 @@ import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ChatIcon from '@mui/icons-material/Chat';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Flow, NodeType } from '@/frontend/types/flow/flow';
 import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
@@ -34,6 +34,7 @@ import { getFlowCardMetrics } from '@/utils/shared/flowCardMetrics';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
@@ -334,7 +335,7 @@ const FlowCard = ({
           onChange={handleSelect}
           disabled={disabled}
           onClick={(event) => event.stopPropagation()}
-          inputProps={{ 'aria-label': t('flows.card.select', { name: flow.name }) }}
+          slotProps={{ input: { 'aria-label': t('flows.card.select', { name: flow.name }) } }}
           sx={{
             position: 'absolute',
             top: 2,
@@ -566,6 +567,9 @@ const FlowCard = ({
         </>
       )}
 
+      <Box sx={{ gridColumn: '1 / -1' }}>
+        <AllowanceBar entity={{ kind: 'flows', id: flow.id }} modelIds={flow.nodes.flatMap(node => typeof node.data?.properties?.boundModel === 'string' ? [node.data.properties.boundModel] : [])} />
+      </Box>
       {!pickerMode && onSetFolder && (
         <FolderAssignMenu
           anchorEl={folderAnchorEl}

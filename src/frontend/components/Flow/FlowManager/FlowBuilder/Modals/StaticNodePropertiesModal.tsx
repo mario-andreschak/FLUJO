@@ -209,17 +209,17 @@ const MessageComposer = ({ entry, onChange, globalNames, suggestions }: MessageC
         background: (theme) => `linear-gradient(135deg, ${alpha(meta.color, theme.palette.mode === 'dark' ? 0.12 : 0.05)}, transparent 42%)`,
       }}
     >
-      <Stack direction="row" spacing={1.25} alignItems="flex-start">
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
         <Avatar sx={{ width: 34, height: 34, bgcolor: meta.color }}>{meta.icon}</Avatar>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center",  mb: 1 }}>
             <TextField
               select
               size="small"
               value={entry.role}
               onChange={(event) => onChange({ role: event.target.value as typeof entry.role })}
               sx={{ minWidth: 142, '& .MuiInputBase-root': { borderRadius: 2 } }}
-              inputProps={{ 'aria-label': 'Message role' }}
+              slotProps={{ htmlInput: { 'aria-label': 'Message role' } }}
             >
               <MenuItem value="system">{t('flows.static.role.system')}</MenuItem>
               <MenuItem value="user">{t('flows.static.role.user')}</MenuItem>
@@ -273,7 +273,7 @@ const MessageComposer = ({ entry, onChange, globalNames, suggestions }: MessageC
               ariaLabel={t('flows.static.messageAria', { role: roleLabel })}
               placeholder={t(messagePlaceholderKey[entry.role])}
             />
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.75 }}>
+            <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center",  mt: 0.75 }}>
               <Typography variant="caption" color="text.secondary">
                 {t('flows.static.referencesHelp')}
               </Typography>
@@ -431,7 +431,7 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
               {tools.map((tool) => (
                 <MenuItem key={tool.name} value={tool.name}>
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={700}>{tool.name}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>{tool.name}</Typography>
                     {tool.description && (
                       <Typography variant="caption" color="text.secondary" noWrap>{tool.description}</Typography>
                     )}
@@ -473,7 +473,7 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
             onChange={(event) => onChange({ argumentsJson: event.target.value })}
             error={entry.argumentsJson.trim() !== '' && (() => { try { JSON.parse(entry.argumentsJson); return false; } catch { return true; } })()}
             helperText={t('flows.static.rawArgumentsHelp')}
-            inputProps={{ style: { fontFamily: 'monospace' } }}
+            slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
           />
         </AccordionDetails>
       </Accordion>
@@ -484,7 +484,7 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
           sx={{ p: 2, borderRadius: 2.5, borderColor: (theme) => alpha(theme.palette.secondary.main, 0.32) }}
         >
           <Stack spacing={1.5}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} justifyContent="space-between" alignItems={{ sm: 'center' }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gap: 1, justifyContent: "space-between", alignItems: { sm: 'center' } }}>
               <Box>
                 <Typography variant="subtitle2">{t('flows.static.mockResult')}</Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -510,7 +510,7 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
               value={entry.result}
               onChange={(event) => onChange({ result: event.target.value })}
               placeholder={t('flows.static.mockResultPlaceholder')}
-              inputProps={{ style: { fontFamily: 'monospace' } }}
+              slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
             />
           </Stack>
         </Paper>
@@ -658,7 +658,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
         onClose={onClose}
         maxWidth="lg"
         fullWidth
-        PaperProps={{ sx: { height: { xs: '100dvh', sm: '92vh' }, maxHeight: { xs: '100dvh', sm: '92vh' }, borderRadius: { xs: 0, sm: 3 } } }}
+        slotProps={{ paper: { sx: { height: { xs: '100dvh', sm: '92vh' }, maxHeight: { xs: '100dvh', sm: '92vh' }, borderRadius: { xs: 0, sm: 3 } } } }}
       >
         <DialogHeaderActions title={t('flows.static.title')} onClose={onClose} />
         <Divider />
@@ -674,10 +674,10 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                 background: (theme) => `linear-gradient(120deg, ${alpha(theme.palette.info.main, 0.14)}, ${alpha(theme.palette.secondary.main, 0.08)} 58%, transparent)`,
               }}
             >
-              <Stack direction="row" spacing={2} alignItems="center">
+              <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
                 <Avatar sx={{ width: 48, height: 48, bgcolor: 'info.main' }}><AutoAwesomeRoundedIcon /></Avatar>
                 <Box>
-                  <Typography variant="h6" fontWeight={800}>{t('flows.static.heroTitle')}</Typography>
+                  <Typography variant="h6" sx={{ fontWeight: 800 }}>{t('flows.static.heroTitle')}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     {t('flows.static.heroHelp')}
                   </Typography>
@@ -687,10 +687,10 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
 
             <Accordion defaultExpanded={false} sx={{ borderRadius: '12px !important', '&:before': { display: 'none' } }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1.25} alignItems="center">
+                <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
                   <SettingsRoundedIcon color="action" />
                   <Box>
-                    <Typography fontWeight={700}>{t('flows.static.nodeSettings')}</Typography>
+                    <Typography sx={{ fontWeight: 700 }}>{t('flows.static.nodeSettings')}</Typography>
                     <Typography variant="caption" color="text.secondary">{t('flows.static.nodeSettingsHelp')}</Typography>
                   </Box>
                 </Stack>
@@ -734,9 +734,9 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
             </Accordion>
 
             <Box>
-              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1.5} sx={{ mb: 1.5 }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", alignItems: { sm: 'center' }, gap: 1.5,  mb: 1.5 }}>
                 <Box>
-                  <Typography variant="h6" fontWeight={800}>{t('flows.static.entriesTitle')}</Typography>
+                  <Typography variant="h6" sx={{ fontWeight: 800 }}>{t('flows.static.entriesTitle')}</Typography>
                   <Typography variant="body2" color="text.secondary">{t('flows.static.entriesHelp')}</Typography>
                 </Box>
                 <Stack direction="row" spacing={1}>
@@ -752,7 +752,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
               {entries.length === 0 ? (
                 <Paper variant="outlined" sx={{ py: 6, px: 2, textAlign: 'center', borderStyle: 'dashed', borderRadius: 3 }}>
                   <AutoAwesomeRoundedIcon color="disabled" sx={{ fontSize: 42 }} />
-                  <Typography fontWeight={700} sx={{ mt: 1 }}>{t('flows.static.empty')}</Typography>
+                  <Typography sx={{ fontWeight: 700,  mt: 1 }}>{t('flows.static.empty')}</Typography>
                   <Typography variant="body2" color="text.secondary">{t('flows.static.executionOrder')}</Typography>
                 </Paper>
               ) : (
@@ -782,14 +782,14 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                           overflow: 'hidden',
                         }}
                       >
-                        <Stack direction="row" alignItems="center">
+                        <Stack direction="row" sx={{ alignItems: "center" }}>
                           <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ pl: 2, pr: 1, flex: 1, minWidth: 0 }}>
-                            <Stack direction="row" alignItems="center" spacing={1.25} sx={{ width: '100%', minWidth: 0 }}>
+                            <Stack direction="row" spacing={1.25} sx={{ alignItems: "center",  width: '100%', minWidth: 0 }}>
                               <Avatar sx={{ width: 30, height: 30, bgcolor: entry.kind === 'toolCall' ? 'info.main' : roleMeta[entry.role].color }}>
                                 {entry.kind === 'toolCall' ? <BuildRoundedIcon sx={{ fontSize: 17 }} /> : roleMeta[entry.role].icon}
                               </Avatar>
                               <Chip size="small" label={index + 1} />
-                              <Typography fontWeight={700} noWrap sx={{ flex: 1 }}>{title}</Typography>
+                              <Typography noWrap sx={{ fontWeight: 700,  flex: 1 }}>{title}</Typography>
                               {entry.kind === 'toolCall' && entry.serverName && <Chip size="small" variant="outlined" label={entry.serverName} />}
                             </Stack>
                           </AccordionSummary>

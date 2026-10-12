@@ -86,7 +86,7 @@ function mockRipgrepMatches(records: Array<{ path: string; line: number; text: s
   }) as typeof spawn);
 }
 
-function mockHangingRipgrep(): jest.Mock {
+function mockHangingRipgrep(onSpawn: () => void): jest.Mock {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const child = Object.assign(new EventEmitter(), {
@@ -105,7 +105,7 @@ function mockHangingRipgrep(): jest.Mock {
     return true;
   });
   (child as ChildProcess & { kill: typeof kill }).kill = kill;
-  mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
+  mockedSpawn.mockImplementationOnce((() => { onSpawn(); return child; }) as typeof spawn);
   return kill;
 }
 
@@ -444,7 +444,9 @@ describe('filesystem operations', () => {
 
   it('search kills ripgrep when the MCP request is cancelled', async () => {
     _setRipgrepExecutableForTests(process.platform === 'win32' ? 'C:\\tools\\rg.exe' : '/tools/rg');
-    const kill = mockHangingRipgrep();
+    let spawned!: () => void;
+    const started = new Promise<void>(resolve => { spawned = resolve; });
+    const kill = mockHangingRipgrep(spawned);
     const controller = new AbortController();
     const pending = filesystemCallTool(
       'search',
@@ -452,13 +454,26 @@ describe('filesystem operations', () => {
       undefined,
       controller.signal,
     );
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Physical confinement does real I/O before spawning. Observe that actual
+    // boundary rather than assuming one event-loop turn completed startup.
+    await started;
     controller.abort();
 
     const result = await pending;
     expect(result.isError).toBe(true);
     expect(parse(result).error).toContain('cancelled');
     expect(kill).toHaveBeenCalled();
+  });
+
+  it('search does not spawn ripgrep when cancelled before startup completes', async () => {
+    _setRipgrepExecutableForTests(process.platform === 'win32' ? 'C:\\tools\\rg.exe' : '/tools/rg');
+    const controller = new AbortController();
+    const pending = filesystemCallTool('search', { path: dir, content: 'token' }, undefined, controller.signal);
+    controller.abort();
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(parse(result).error).toContain('cancelled');
+    expect(mockedSpawn).not.toHaveBeenCalled();
   });
 
   it('creates, moves and deletes', async () => {

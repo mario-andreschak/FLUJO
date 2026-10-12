@@ -12,6 +12,7 @@ import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 import WorkspaceBootstrap from './WorkspaceBootstrap';
+import { AllowanceProvider } from '@/frontend/contexts/AllowanceContext';
 import PhoneHostBoundary from './PhoneHostBoundary';
 import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
 import './AvatarWorld/embed.css';
@@ -172,6 +173,9 @@ interface AppWrapperProps {
 }
 
 export default function AppWrapper({ children, phoneHost = false }: AppWrapperProps) {
+  const pathname = usePathname();
+  // Sign-in must render before workspace/storage providers make protected requests.
+  if (pathname === '/owner/login') return <>{children}</>;
   log.debug('Rendering AppWrapper');
   return (
     <I18nProvider>
@@ -181,6 +185,7 @@ export default function AppWrapper({ children, phoneHost = false }: AppWrapperPr
           <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
             <ThemeProvider>
               <StorageProvider>
+                <AllowanceProvider>
                 <AskFlujoProvider>
                   <TourProvider>
                     <LocalizedAppShell>
@@ -188,6 +193,7 @@ export default function AppWrapper({ children, phoneHost = false }: AppWrapperPr
                     </LocalizedAppShell>
                   </TourProvider>
                 </AskFlujoProvider>
+                </AllowanceProvider>
               </StorageProvider>
             </ThemeProvider>
           </WorkspaceBootstrap>

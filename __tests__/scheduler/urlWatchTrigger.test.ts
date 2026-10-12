@@ -173,4 +173,38 @@ describe('armUrlWatch', () => {
     await flush();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+  it('refuses a URL request before fetch when durable schedule admission fails', async () => {
+    const { deps, fetchImpl } = makeDeps();
+    const trigger = armUrlWatch(config, { ...deps, assertCurrent: async () => { throw new Error('schedule disabled'); } });
+    try {
+      await flush();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(deps.saveState).not.toHaveBeenCalled();
+      expect(deps.onFire).not.toHaveBeenCalled();
+      expect(deps.onError).toHaveBeenCalledWith('schedule disabled');
+    } finally { trigger.dispose(); }
+  });
+
+  it('refuses effects when a durable schedule changes while response text is pending', async () => {
+    const { deps, fetchImpl } = makeDeps();
+    let current = true;
+    let release!: (value: string) => void;
+    const body = new Promise<string>(resolve => { release = resolve; });
+    const text = jest.fn(() => body);
+    fetchImpl.mockResolvedValue({ ok: true, text });
+    const trigger = armUrlWatch(config, { ...deps, assertCurrent: async () => {
+      if (!current) throw new Error('schedule replaced');
+    } });
+    try {
+      await flush();
+      expect(text).toHaveBeenCalledTimes(1);
+      current = false;
+      release('changed body');
+      await flush();
+      expect(deps.saveState).not.toHaveBeenCalled();
+      expect(deps.onFire).not.toHaveBeenCalled();
+      expect(deps.onError).toHaveBeenCalledWith('schedule replaced');
+    } finally { release('changed body'); await flush(); trigger.dispose(); }
+  });
+
 });

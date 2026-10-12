@@ -51,6 +51,20 @@ describe('resumed Subflow transcript recovery', () => {
     jest.clearAllMocks();
   });
 
+  it('retains a native parallel-tool transcript for the same child conversation', async () => {
+    const parallel = state([
+      message('user', 'user', 'research'),
+      { ...message('call-a', 'assistant', ''), processNodeId: 'worker', tool_calls: [{ id: 'a', type: 'function', function: { name: 'read', arguments: '{}' } }] } as FlujoChatMessage,
+      { ...message('call-b', 'assistant', ''), processNodeId: 'worker', tool_calls: [{ id: 'b', type: 'function', function: { name: 'list', arguments: '{}' } }] } as FlujoChatMessage,
+      { ...message('result-b', 'tool', 'two'), tool_call_id: 'b' } as FlujoChatMessage,
+      { ...message('result-a', 'tool', 'one'), tool_call_id: 'a' } as FlujoChatMessage,
+    ]);
+    loadState.mockResolvedValue(parallel);
+    await expect(prepareResumedSessionTranscript({ conversationId: 'conversation-1', childFlowId: 'child', inputMode: 'resume' }))
+      .resolves.toEqual({ kind: 'valid', state: parallel, summarized: false, trimmedTurns: 0 });
+    expect(replaceTranscript).not.toHaveBeenCalled();
+  });
+
   it('classifies a missing registered child without mutating persistence', async () => {
     loadState.mockResolvedValue(undefined);
 

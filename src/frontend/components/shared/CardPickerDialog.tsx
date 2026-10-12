@@ -84,8 +84,7 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
       fullScreen={resolvedFullScreen}
       aria-labelledby={!ariaLabel && title !== undefined && title !== null ? titleId : undefined}
       aria-describedby={description ? descriptionId : undefined}
-      PaperProps={ariaLabel ? { 'aria-label': ariaLabel } : undefined}
-      TransitionProps={{ onExited: restoreFocus }}
+      slotProps={{ paper: ariaLabel ? { 'aria-label': ariaLabel } : undefined, transition: { onExited: restoreFocus } }}
     >
       {title !== undefined && title !== null && (
         <>

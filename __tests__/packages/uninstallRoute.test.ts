@@ -1,3 +1,6 @@
+import { installOwnerFixture } from '../utils/ownerFixture';
+let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>> | undefined;
+afterEach(async () => { await ownerFixture?.restore(); ownerFixture = undefined; });
 /**
  * REST route tests for POST /api/packages/uninstall and GET /api/packages/installed
  * (issue #211): the localhost / DNS-rebinding guard, body validation, the 404 for
@@ -29,7 +32,7 @@ const previousExposureMode = process.env.FLUJO_EXPOSURE_MODE;
 const post = (body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) => {
   const request = new Request('http://localhost:4200/api/packages/uninstall', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: { 'content-type': 'application/json', ...ownerFixture?.headers, ...headers },
     body: JSON.stringify(body),
   }) as unknown as NextRequest;
   return POST(request);
@@ -92,6 +95,7 @@ describe('POST /api/packages/uninstall', () => {
 
   it('denies Persona-aware uninstall while the app is publicly exposed', async () => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
+    ownerFixture = await installOwnerFixture();
     inspectPackageUninstallMock.mockResolvedValue({ exists: true, requiresPersonaControl: true });
 
     const res = await post(
@@ -105,6 +109,7 @@ describe('POST /api/packages/uninstall', () => {
 
   it('keeps legacy package uninstall available in public mode', async () => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
+    ownerFixture = await installOwnerFixture();
 
     const res = await post(
       { packageName: 'my-pkg' },

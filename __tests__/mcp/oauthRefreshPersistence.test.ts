@@ -15,6 +15,10 @@
  *     server card showed the orange auth badge after every restart >1h.
  */
 
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (v: unknown) => v),
   resolveAndDecryptApiKey: jest.fn(async (v: string) => v),
@@ -34,6 +38,8 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 }));
 
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: jest.fn(),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
@@ -160,7 +166,7 @@ describe('MCPService.getServerStatus with expired OAuth tokens', () => {
     global.__mcp_starting_up = true;
     const status = await new MCPService().getServerStatus('legacy');
     expect(status.status).toBe('requires_authentication');
-    expect(config.oauthTokens?.refresh_token).toBe('synthetic-legacy-refresh');
+    expect(config.oauthTokens).toMatchObject({ refresh_token: 'synthetic-legacy-refresh' });
     expect(saveConfig).not.toHaveBeenCalled();
   });
 });

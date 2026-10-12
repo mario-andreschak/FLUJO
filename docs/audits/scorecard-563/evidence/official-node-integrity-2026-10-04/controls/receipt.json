@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-04T05:49:59.322Z",
+  "operator": "AI assistant",
+  "control": "append exactly one byte to signed official Node 22.23.3 checksum file; original signature and pinned public keyring unchanged",
+  "exitCode": 1,
+  "actualBadSignature": true,
+  "publicationPerformed": false,
+  "inventory": [
+    {
+      "file": "tampered-SHASUMS256.txt",
+      "bytes": 3982,
+      "sha256": "c6d7b7290f3c3f24b5578c61b98451ce4558c72429357318139093f080cff1cd"
+    },
+    {
+      "file": "signature-status.txt",
+      "bytes": 270,
+      "sha256": "9cc7ef0156ea77e345c66dd8b2e4a184414964e0b1fba84c95089136a0dcaf6e"
+    },
+    {
+      "file": "signature-stderr.txt",
+      "bytes": 214,
+      "sha256": "e4f0be145b0ef92bcb022e68c40cdc5ce4fe98431951cbd5b00bf8517e1cfb56"
+    }
+  ]
+}

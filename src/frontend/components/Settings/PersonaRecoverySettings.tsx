@@ -125,7 +125,7 @@ export default function PersonaRecoverySettings() {
       }} />
       {file && <Typography variant="body2" sx={{ overflowWrap: 'anywhere', maxWidth: '100%' }}>{file.name}</Typography>}
       <TextField fullWidth label={t('settings.personaRecovery.destination')} value={destination} disabled={busy}
-        helperText={t('settings.personaRecovery.destinationHelp')} inputProps={{ maxLength: 64 }}
+        helperText={t('settings.personaRecovery.destinationHelp')} slotProps={{ htmlInput: { maxLength: 64 } }}
         onChange={(event) => { setDestination(event.target.value); setPreview(null); setRestored(null); }} />
       <Button ref={inspectRef} variant="outlined" disabled={busy || !file || !destinationValid} onClick={() => void inspect()}>{t('settings.personaRecovery.inspect')}</Button>
     </Box>

@@ -239,6 +239,7 @@ export function installWorkspaceInterceptor(): void {
         return Promise.reject(new DOMException('Phone workspace access ended.', 'AbortError'));
       }
       url.searchParams.set(WORKSPACE_QUERY_PARAM, scope.workspace);
+      headers.set('x-flujo-workspace', scope.workspace);
       const method = (init?.method ?? source?.method ?? 'GET').toUpperCase();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) headers.set('x-phone-csrf', scope.csrf);
       const signal = AbortSignal.any([scope.signal, ...(source?.signal ? [source.signal] : []), ...(init?.signal ? [init.signal] : [])]);

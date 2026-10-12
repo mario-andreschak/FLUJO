@@ -137,7 +137,7 @@ const BuildTools: React.FC<BuildToolsProps> = ({
               }}
             >
               <CircularProgress size={20} color="info" />
-              <Typography variant="body2" color="info.dark" fontWeight="medium">
+              <Typography variant="body2" color="info.dark" sx={{ fontWeight: "medium" }}>
               {installMessages[installMessageIndex]}
               </Typography>
             </Paper>
@@ -179,7 +179,7 @@ const BuildTools: React.FC<BuildToolsProps> = ({
               }}
             >
               <CircularProgress size={20} color="info" />
-              <Typography variant="body2" color="info.dark" fontWeight="medium">
+              <Typography variant="body2" color="info.dark" sx={{ fontWeight: "medium" }}>
                 {buildMessages[buildMessageIndex]}
               </Typography>
             </Paper>

@@ -1,0 +1,24 @@
+{
+  "name": "@flujo-ai/avatar-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Flujo Avatar presentation and host-owned native voice SDK",
+  "repository": { "type": "git", "url": "https://github.com/flujo-app/flujo-avatar.git", "directory": "packages/avatar-sdk" },
+  "files": ["dist", "public", "server", "README.md", "NOTICE.md", "PROVENANCE.json"],
+  "exports": {
+    ".": { "types": "./dist/sdk/index.d.ts", "import": "./dist/sdk.js" },
+    "./eyes": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./factory": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./world": { "types": "./dist/world/index.d.ts", "import": "./dist/world.js" },
+    "./native-voice": { "types": "./dist/sdk/native-voice.d.ts", "import": "./dist/native-voice.js" },
+    "./voice-transport": { "types": "./dist/sdk/index.d.ts", "import": "./dist/sdk.js" },
+    "./styles.css": { "types": "./dist/styles.css.d.ts", "default": "./dist/sdk.css" },
+    "./world.css": { "types": "./dist/world.css.d.ts", "default": "./dist/world.css" },
+    "./audio-capture.js": "./public/avatar-audio-capture.js",
+    "./server/pocket-speech": { "types": "./server/pocket-speech.d.mts", "import": "./server/pocket-speech.mjs" },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": { "react": "^18.3.1 || ^19.0.0" },
+  "engines": { "node": ">=22" }
+}

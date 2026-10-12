@@ -30,6 +30,9 @@ type Encryption = typeof import('@/backend/services/model/encryption');
 // FLUJO_DATA_DIR.
 async function loadEncryption(): Promise<Encryption> {
   jest.resetModules();
+  const secure = await import('@/utils/encryption/secure');
+  await secure.initializeEncryption('registry-fixture-password');
+  await secure.authenticate('registry-fixture-password');
   return import('@/backend/services/model/encryption');
 }
 

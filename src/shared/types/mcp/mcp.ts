@@ -3,6 +3,7 @@ import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js
 import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { MCPShutdownReceipt } from './shutdown';
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
@@ -182,6 +183,10 @@ export type MCPManagerConfig = {
   toolParameterPresets?: MCPToolParameterPresets;
   /** Runtime-home policy for stdio servers. Missing means `inherit`. */
   runtimeHomeMode?: MCPRuntimeHomeMode;
+  /** Strict Linux container policy; approval lives in a separate private operator file. */
+  isolation?: unknown;
+  /** Explicit host trust request; authority lives in a separate private owner grant. */
+  trustedHost?: unknown;
 }
 
 export type MCPElicitationPolicy = {
@@ -235,6 +240,8 @@ export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   launch?: MCPLaunchSpec;
 };
 
+export type MCPEncryptedOAuthValue = { format: 'flujo-oauth-v1'; ciphertext: string };
+
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
   transport: 'streamable';
   serverUrl: string;
@@ -249,9 +256,9 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthScopes?: string[];
   // Stored OAuth data
   oauthClientMetadata?: OAuthClientMetadata;
-  oauthClientInformation?: OAuthClientInformation;
-  oauthTokens?: OAuthTokens;
-  oauthCodeVerifier?: string;
+  oauthClientInformation?: OAuthClientInformation | MCPEncryptedOAuthValue;
+  oauthTokens?: OAuthTokens | MCPEncryptedOAuthValue;
+  oauthCodeVerifier?: string | MCPEncryptedOAuthValue;
   /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
   oauthState?: string;
   /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */
@@ -308,11 +315,17 @@ export function isTaskCallResponse(r: unknown): r is MCPTaskCallResponse {
 
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
+    /** Shutdown observation only; success alone never confirms process exit. */
+    shutdownReceipt?: MCPShutdownReceipt;
   data?: T;
   error?: string;
+  /** Validated modern Tasks failure; never persisted in the remote-task ledger. */
+  taskError?: { code: number; message: string; data?: unknown };
   statusCode?: number;
   progressToken?: string;
   errorType?: string;
+  errorCode?: string;
+  requiresApproval?: boolean;
   toolName?: string;
   timeout?: number;
   requiresAuthentication?: boolean;
@@ -365,7 +378,7 @@ export interface MCPStdioOAuthStatus {
 }
 
 type WithMCPServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
-  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
+  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication' | 'requires_approval';
   tools: Array<{
     name: string;
     description: string;

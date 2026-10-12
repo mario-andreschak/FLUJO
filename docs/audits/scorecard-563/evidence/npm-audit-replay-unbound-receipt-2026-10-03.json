@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "dependency-audit-replay-unbound",
+  "capturedAt": "2026-10-03T22:52:35.070Z",
+  "command": "npm audit --json --package-lock-only --ignore-scripts --include=dev --audit-level=high",
+  "auditExitCode": 0,
+  "auditResult": "passed-zero-findings",
+  "intendedSourceSha": "59b65de81b52db2e29cde2d5848436661d04e631",
+  "sourceBindingResult": "rejected",
+  "laterObservedSourceSha": "9f0406959dbacac7b31d648fdf6874e56ef30eb4",
+  "laterObservedBranch": "codex/scorecard-integration",
+  "laterObservedWorkingTree": "staged integration changes and a merge conflict",
+  "reason": "The pre-execution check saw clean 59b65de8, but the coordinator started integration while this capture was in progress. No atomic before/after lockfile identity was retained. The zero-finding replay cannot be attributed to 59b65de8 or a completed integration/release.",
+  "raw": {
+    "location": "docs/audits/scorecard-563/evidence/npm-audit-replay-unbound-2026-10-03.json",
+    "sha256": "b8af7490d4040b02a648f2eef1839ca16bf974021b57073e99564a228cdff160"
+  }
+}

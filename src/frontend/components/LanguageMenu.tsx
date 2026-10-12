@@ -40,8 +40,7 @@ export default function LanguageMenu() {
         anchorEl={anchorEl}
         open={Boolean(anchorEl)}
         onClose={() => setAnchorEl(null)}
-        MenuListProps={{ 'aria-label': t('language.menu') }}
-        slotProps={{ paper: { sx: { mt: 1, minWidth: 210, borderRadius: 2.5 } } }}
+        slotProps={{ list: { 'aria-label': t('language.menu') },  paper: { sx: { mt: 1, minWidth: 210, borderRadius: 2.5 } } }}
       >
         {SUPPORTED_LOCALES.map((option) => (
           <MenuItem

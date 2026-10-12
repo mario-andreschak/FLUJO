@@ -1,8 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { contextUsageFromCompletion } from './contextUsage';
+import { toAnthropicToolSchema } from './anthropicToolSchema';
 import { createLogger } from '@/utils/logger';
-import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import {
   extractText,
   extractMediaParts,
@@ -127,6 +128,7 @@ export const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-opus-4-9',
+  'claude-opus-5',
   'claude-fable-4',
   'claude-fable-5',
   'claude-sonnet-5',
@@ -166,7 +168,7 @@ export async function anthropicModelSupportsTemperature(
   modelName: string,
   client?: Anthropic
 ): Promise<boolean> {
-  const key = modelName.toLowerCase();
+  const key = modelName.toLowerCase().replace(/\./g, '-');
 
   // 1. Cache hit
   const cached = modelCapabilityCache.get(key);
@@ -341,10 +343,10 @@ export function toAnthropicTools(
     .map(t => ({
       name: t.function.name,
       description: t.function.description,
-      input_schema: (t.function.parameters as Anthropic.Tool.InputSchema) ?? {
+      input_schema: toAnthropicToolSchema(t.function.parameters ?? {
         type: 'object',
         properties: {},
-      },
+      }) as Anthropic.Tool.InputSchema,
     }));
 }
 
@@ -588,6 +590,7 @@ export class AnthropicAdapter implements CompletionAdapter {
    * them — which was the whole point of adding this method.
    */
   async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
+    if (input.readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     const liveMessageId = `stream_${uuidv4()}`;
     return this.complete(input, 'createStreamCompletion', async (client, params, options) => {
       const stream = client.messages.stream(
@@ -647,7 +650,7 @@ export class AnthropicAdapter implements CompletionAdapter {
    *     cache and Models API lookup already handle that per model.
    */
   private async complete(
-    { model, apiKey, messages, tools, temperature, maxTokens, signal, onSdkRequest, onSdkRequestResult }: CompletionInput,
+    input: CompletionInput,
     label: string,
     send: (
       client: Anthropic,
@@ -655,14 +658,19 @@ export class AnthropicAdapter implements CompletionAdapter {
       options?: { signal: AbortSignal }
     ) => Promise<{ message: Anthropic.Message; liveMessageId?: string }>
   ): Promise<CompletionResult> {
+    assertReadOnlyAssessmentInput(input);
+    const { model, apiKey, messages, tools, temperature, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment } = input;
     const client = new Anthropic({
-      apiKey,
+      ...(model.provider === 'openrouter'
+        ? { apiKey: null, authToken: apiKey }
+        : { apiKey, authToken: null }),
       // Honour a custom base URL if one was configured; otherwise the SDK
       // default (api.anthropic.com) is used.
       ...(model.baseUrl ? { baseURL: model.baseUrl } : {}),
       // The SDK defaults to a ~10-minute per-request timeout; raise it so a slow
       // turn in a long flow isn't aborted (see shared timeouts config).
       timeout: LLM_REQUEST_TIMEOUT_MS,
+      ...(readOnlyAssessment ? { maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : {}),
     });
 
     const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
@@ -671,7 +679,7 @@ export class AnthropicAdapter implements CompletionAdapter {
     // NOTE: anthropicModelSupportsTemperature is now async (issue #275): it first
     // checks a short-lived cache, then queries the Anthropic Models API for
     // live capability data, and finally falls back to the static denylist.
-    const includeTemperature = await anthropicModelSupportsTemperature(model.name, client);
+    const includeTemperature = readOnlyAssessment ? false : await anthropicModelSupportsTemperature(model.name, client);
     const endpoint = endpointKey(model.provider, model.baseUrl);
 
     // Each attempt builds its own body from the untouched translation output, so
@@ -698,7 +706,7 @@ export class AnthropicAdapter implements CompletionAdapter {
       return { params, breakpoints: shaped.breakpoints };
     };
 
-    let useCache = !rejectedCacheControl.has(endpoint);
+    let useCache = !readOnlyAssessment && !rejectedCacheControl.has(endpoint);
     let useTemperature = includeTemperature;
     // The abort signal (Stop button) cancels the in-flight HTTP request.
     const options = signal ? { signal } : undefined;
@@ -733,6 +741,7 @@ export class AnthropicAdapter implements CompletionAdapter {
           liveMessageId: result.liveMessageId,
         };
       } catch (err) {
+        if (readOnlyAssessment) throw err;
         if (useCache && breakpoints > 0 && isCacheControlRejection(err)) {
           rejectedCacheControl.add(endpoint);
           log.warn(

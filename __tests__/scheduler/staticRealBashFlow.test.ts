@@ -1,11 +1,22 @@
+import { installPrivateProfileFixture, unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
+import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
 /** Real FlowSpec/engine/scheduler -> production MCP service -> built Bash stdio
  * server -> harmless OS process. Only app storage/flow/model lookup are fixtures.
  * This fixture completes the real nonzero-process reproduction requested in #538. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { Flow } from '@/shared/types/flow';
 import type { RunRecord } from '@/shared/types/plannedExecution';
+import type { MCPStdioConfig } from '@/shared/types/mcp';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
+import { saveConfig } from '@/backend/services/mcp/config';
+import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 
 const store = new Map<string, unknown>();
 let fixtureFlow: Flow;
@@ -46,11 +57,7 @@ const quote = (value: string) => process.platform === 'win32'
   ? "'" + value.replace(/'/g, "''") + "'" : "'" + value.replace(/'/g, "'\\''") + "'";
 const command = (code: number) => (process.platform === 'win32' ? '& ' : '')
   + quote(process.execPath) + ' ' + quote(program) + ' ' + code;
-const bashConfig = {
-  name: 'bash', transport: 'stdio', command: process.execPath, args: [binary],
-  cwd: scratch, rootPath: scratch, disabled: false, source: { type: 'local' },
-  env: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch },
-};
+let bashConfig: MCPStdioConfig;
 
 function flow(code: number, policy?: 'continue' | 'fail', output = true): Flow {
   const compiled = compileFlowSpec({ name: 'Real Bash Static probe', nodes: [
@@ -76,17 +83,76 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   let unsubscribe: () => void;
   let toolCall: jest.SpyInstance;
   let expectedErrors: jest.SpyInstance;
+  let firstCase = true;
+  let reviewedBashDigest: string;
+  const preparationEpoch = performance.now();
+  const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready' | 'connection-enter' | 'connection-ready') => {
+    console.info(JSON.stringify({ shippedFixture: 'real-bash', stage, elapsedMs: performance.now() - preparationEpoch }));
+  };
+  let priorConsentTrace: string | undefined;
+
+  async function approveBash() {
+    const approvalStarted = performance.now();
+    owner = installBundledFixtureOwner();
+    // The same reviewed proposal may be approved again; the protected writer
+    // still rechecks the full current proposal and its final publication fence.
+    if (reviewedBashDigest === undefined) {
+      phase('preview-enter');
+      reviewedBashDigest = (await previewBundledHostConsent('bash', { runtimeHome: 'host' })).policyDigest;
+      phase('preview-ready');
+    }
+    phase('grant-enter');
+    bashConfig = (await approveBundledHostConsent(owner.request('bash'), 'bash', {
+      runtimeHome: 'host', reviewedDigest: reviewedBashDigest, expiresAt: owner.expiresAt,
+    })).config;
+    phase('grant-ready');
+    console.info(JSON.stringify({ bashFixturePhase: 'protected-approval', elapsedMs: performance.now() - approvalStarted }));
+  }
 
   beforeAll(async () => {
+    priorConsentTrace = process.env.FLUJO_BUNDLED_CONSENT_TRACE;
+    process.env.FLUJO_BUNDLED_CONSENT_TRACE = '1';
     expect(fs.existsSync(binary)).toBe(true); // CI builds MCP packages before Jest.
-    store.set('mcp_servers', { bash: bashConfig });
+    phase('private-profile-enter');
+    privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
+    phase('private-profile-ready');
+    phase('provisioning-enter');
+    await ensureShippedWorkspacePackages(getWorkspaceDataDir(), undefined, ['bash']);
+    phase('provisioning-ready');
+    const config: MCPStdioConfig = { ...createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'bash')!),
+      name: 'bash', disabled: false, roots: [scratch], env: { FLUJO_BASH_ROOTS: scratch, FLUJO_FS_ROOTS: scratch } };
+    phase('config-enter');
+    expect((await saveConfig(new Map([['bash', config]]))).success).toBe(true);
+    phase('config-ready');
+    await approveBash();
+    phase('connection-enter');
     const connected = await mcpService.connectServer('bash');
+    phase('connection-ready');
     expect(connected).toMatchObject({ success: true });
   }, 60_000);
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    const preparationStarted = performance.now();
+    process.env.FLUJO_DATA_DIR = privateFixture.root;
+    delete process.env.FLUJO_PARENT_DATA_DIR;
+    if (!firstCase) {
+      const disconnectStarted = performance.now();
+      expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true });
+      expect(mcpService.getClient('bash')).toBeUndefined();
+      owner!.restore();
+      owner = undefined;
+      console.info(JSON.stringify({ bashFixturePhase: 'disconnect-and-owner-cleanup', elapsedMs: performance.now() - disconnectStarted }));
+    }
     store.clear();
+    const unlockStarted = performance.now();
+    await unlockPrivateFixtureInCurrentWorkspace(metadata => { store.set('encryption_key', metadata); });
+    console.info(JSON.stringify({ bashFixturePhase: 'unlock', elapsedMs: performance.now() - unlockStarted }));
     store.set('mcp_servers', { bash: bashConfig });
+    if (!firstCase) await approveBash();
+    firstCase = false;
+    expect(Date.now()).toBeLessThan(owner!.expiresAt);
+    console.info(JSON.stringify({ bashFixtureGrantRemainingMs: owner!.expiresAt - Date.now(),
+      bashFixturePreparationMs: performance.now() - preparationStarted }));
     FlowExecutor.clearFlowCache();
     FlowExecutor.conversationStates.clear();
     scheduler = new SchedulerService();
@@ -106,13 +172,24 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
   });
   afterAll(async () => {
     try {
+      if (privateFixture) process.env.FLUJO_DATA_DIR = privateFixture.root;
+      delete process.env.FLUJO_PARENT_DATA_DIR;
       expect(await mcpService.disconnectServer('bash')).toMatchObject({ success: true });
       expect(mcpService.getClient('bash')).toBeUndefined();
     } finally {
-      const resolved = path.resolve(scratch);
-      expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
-      expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
-      fs.rmSync(resolved, { recursive: true, force: true });
+      try { owner?.restore(); } finally {
+        try { await privateFixture?.restore(); } finally {
+          try {
+            const resolved = path.resolve(scratch);
+            expect(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)).toBe(true);
+            expect(path.basename(resolved).startsWith('flujo-static-real-bash-')).toBe(true);
+            fs.rmSync(resolved, { recursive: true, force: true });
+          } finally {
+            if (priorConsentTrace === undefined) delete process.env.FLUJO_BUNDLED_CONSENT_TRACE;
+            else process.env.FLUJO_BUNDLED_CONSENT_TRACE = priorConsentTrace;
+          }
+        }
+      }
     }
   });
 

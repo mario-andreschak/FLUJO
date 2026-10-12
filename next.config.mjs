@@ -10,6 +10,10 @@ const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Workload capabilities bind the exact loopback origin and Host. NextURL
+  // normalizes numeric loopback hosts to localhost unless Proxy sees the
+  // original URL; preserve it so the existing strict guards can verify it.
+  skipProxyUrlNormalize: true,
   /* config options here */
   // Production installs check application code; CI's root config still checks
   // the test suite. Next otherwise checks tests before hiding their diagnostics.
@@ -36,7 +40,9 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
-  serverExternalPackages: ['@openai/codex-sdk'],
+  // Both SDKs locate their native executables relative to import.meta.url.
+  // Keep Node's installed-package lookup when the built app moves machines.
+  serverExternalPackages: ['@openai/codex-sdk', '@anthropic-ai/claude-agent-sdk'],
   // Runtime workspace data can contain Windows junctions such as the legacy
   // Content.IE5 cache link. It is never a deployable application dependency,
   // so keep it out of Next's output traces.
@@ -78,6 +84,7 @@ const nextConfig = {
     ];
   },
   transpilePackages: [
+    '@flujo-ai/avatar-sdk',
     '@mui/material',
     '@mui/icons-material',
     '@mui/system',
@@ -85,6 +92,7 @@ const nextConfig = {
     '@emotion/react',
     '@emotion/styled',
     'mcp-stdio-oauth',
+    '@modelcontextprotocol/ext-tasks',
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {

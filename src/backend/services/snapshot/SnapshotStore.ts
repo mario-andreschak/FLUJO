@@ -35,8 +35,8 @@ let snapshotRootForTests: string | null = null;
 let lastCleanupAt: string | undefined;
 
 export class SnapshotStoreBusyError extends SnapshotLeaseBusyError {
-  constructor() {
-    super();
+  constructor(detail?: SnapshotLeaseBusyError['detail']) {
+    super(detail);
     this.name = 'SnapshotStoreBusyError';
   }
 }
@@ -82,7 +82,8 @@ function parseCountObjects(output: string, fallback: number): number {
 }
 
 function gitForSnapshot(gitDir: string): SimpleGit {
-  // Only the computed shadow repository may supply this blocked environment key.
+  // v4 permits this otherwise blocked environment key only on an explicit
+  // client. The value is the computed shadow repository path, never caller input.
   return simpleGit({ baseDir: path.dirname(gitDir), allowEnvironment: ['GIT_DIR'] })
     .env('GIT_DIR', gitDir);
 }
@@ -212,7 +213,7 @@ export class SnapshotStore {
         ? await access()
         : await withWorkspaceMutation(access);
     } catch (error) {
-      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError();
+      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError(error.detail);
       throw error;
     }
   }
@@ -231,7 +232,7 @@ export class SnapshotStore {
         () => withSnapshotMigrationLeases(roots, operation),
       );
     } catch (error) {
-      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError();
+      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError(error.detail);
       throw error;
     }
   }

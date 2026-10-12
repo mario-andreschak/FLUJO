@@ -10,7 +10,7 @@ describe('bounded immutable Persona recovery inputs', () => {
     await fs.mkdir(path.join(root, 'data'));
     await fs.writeFile(path.join(root, 'data', 'one.txt'), 'one');
   });
-  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+  afterEach(async () => { jest.restoreAllMocks(); await fs.rm(root, { recursive: true, force: true }); });
 
   it('reads exact bytes and checks directory inventories including empty directories', async () => {
     await fs.mkdir(path.join(root, 'data', 'empty'));
@@ -20,6 +20,22 @@ describe('bounded immutable Persona recovery inputs', () => {
     await reader.verifyUnchanged();
     await fs.writeFile(path.join(root, 'data', 'empty', 'appeared.txt'), 'changed');
     await expect(reader.verifyUnchanged()).rejects.toThrow('inventory changed');
+  });
+
+  it('rejects a directory substituted between inspection and descriptor open', async () => {
+    const file = path.join(root, 'data', 'one.txt');
+    const originalOpen = fs.open.bind(fs);
+    let swapped = false;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === file && !swapped) {
+        swapped = true;
+        await fs.unlink(file);
+        await fs.mkdir(file);
+      }
+      return originalOpen(...args);
+    });
+    await expect(new PersonaRecoveryFileReader(root).read('data/one.txt')).rejects.toThrow();
+    expect(swapped).toBe(true);
   });
 
   it('rejects files changed or created after inspection', async () => {

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parseReleaseArguments } from './release-arguments.mjs';
+import { readReleaseState, writeReleaseState } from './release-state.mjs';
 
 const entrypoint = fileURLToPath(new URL('./release.mjs', import.meta.url));
 const stubs = new URL('./fixtures/release-command-stubs.mjs', import.meta.url).href;
@@ -37,6 +38,57 @@ function runRelease(t, args, overrides = {}) {
 }
 
 const attemptedPublish = (command) => /^(npm (version|publish)|git push|npm run dockerbuild|gh workflow run)/.test(command);
+
+function stateFixture(t) {
+  const parent = path.resolve(tmpdir());
+  const directory = mkdtempSync(path.join(parent, 'flujo-release-state-'));
+  t.after(() => {
+    const resolved = path.resolve(directory);
+    assert.equal(path.dirname(resolved), parent);
+    assert.ok(path.basename(resolved).startsWith('flujo-release-state-'));
+    rmSync(resolved, { recursive: true, force: true });
+  });
+  return { directory, filename: path.join(directory, 'pending.json') };
+}
+
+test('pending release records read absence directly and reject malformed content without exposing it', t => {
+  const { filename } = stateFixture(t);
+  assert.equal(readReleaseState(filename), null);
+  writeFileSync(filename, 'private malformed content');
+  assert.throws(() => readReleaseState(filename), { message: 'The pending release record is invalid; resolve it before continuing.' });
+  writeFileSync(filename, 'null');
+  assert.throws(() => readReleaseState(filename), /pending release record is invalid/);
+});
+
+test('first release record cannot overwrite one created after the absence read', t => {
+  const { directory, filename } = stateFixture(t);
+  assert.equal(readReleaseState(filename), null);
+  const previous = { sha: 'a'.repeat(40), version: '1.2.3' };
+  writeReleaseState(filename, previous, { createOnly: true });
+  assert.throws(() => writeReleaseState(filename, { sha: 'b'.repeat(40), version: '1.2.4' }, { createOnly: true }), { code: 'EEXIST' });
+  assert.deepEqual(readReleaseState(filename), previous);
+  assert.deepEqual(readdirSync(directory), ['pending.json']);
+});
+
+test('atomic release updates preserve a linked target instead of truncating its contents', t => {
+  const { directory, filename } = stateFixture(t);
+  const victim = path.join(directory, 'other-record.json');
+  const original = { version: 'keep-me' };
+  writeFileSync(victim, JSON.stringify(original));
+  linkSync(victim, filename);
+  const replacement = { sha: 'a'.repeat(40), version: '1.2.3', runId: 123 };
+  writeReleaseState(filename, replacement);
+  assert.deepEqual(readReleaseState(filename), replacement);
+  assert.deepEqual(JSON.parse(readFileSync(victim, 'utf8')), original);
+  assert.deepEqual(readdirSync(directory).sort(), ['other-record.json', 'pending.json']);
+});
+
+test('failed release record replacement leaves the destination and cleans its owned temporary directory', t => {
+  const { directory, filename } = stateFixture(t);
+  mkdirSync(filename);
+  assert.throws(() => writeReleaseState(filename, { version: '1.2.3' }));
+  assert.deepEqual(readdirSync(directory), ['pending.json']);
+});
 
 for (const setting of ['true', 'TRUE', '1']) {
   test(`npm environment dry-run ${setting} cannot version, push, or publish`, (t) => {

@@ -429,6 +429,41 @@ export const API_GROUPS: ApiGroup[] = [
       },
       {
         method: 'POST',
+        path: '/api/mcp/security-review',
+        summary: 'Optional on-demand SkillSpector static review of an immutable public GitHub source snapshot. Never installs or launches the candidate, calls a model, or grants consent.',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'repositoryUrl', type: 'string', required: true, description: 'Public https://github.com/owner/repository URL.' },
+          { name: 'revision', type: 'string', description: 'Optional complete 40-character commit SHA; otherwise resolves HEAD once.' },
+        ],
+        response: '{ success: true, review: { status, source?, scanner?, risk?, findings?, limitations } }. Unsupported, unavailable, cancelled and partial reviews are explicit evidence states.',
+        notes: [
+          'Use Review source in Marketplace server details or the GitHub tab. Review is optional; existing trust and runtime consent remain separate.',
+          'Operator setup: build docker/skillspector.Dockerfile with Docker, then set FLUJO_SKILLSPECTOR_IMAGE to the full local sha256 image ID and restart FLUJO. Review never pulls an image or installs its engine. See docs/guides/mcp-security-review.md for exact commands and container deployment limits.',
+          'At most 256 files, 1 MiB per file and 8 MiB total; unsupported links, submodules, LFS pointers and truncated trees are refused. Private repositories and non-GitHub sources are unsupported. Public GitHub API rate limits apply.',
+          'Static analysis has no network or model credentials. Offline dependency lookup and absent skill manifests limit coverage. A repository report does not certify Registry package bytes, downloaded dependencies, runtime tools or future revisions.',
+        ],
+      },
+      {
+        method: 'POST',
+        path: '/api/mcp/model-risk-assessment',
+        summary: 'Explicit advisory risk assessment of public GitHub evidence using a selected saved text model. No installation, model tools or execution consent.',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'repositoryUrl', type: 'string', required: true, description: 'Public https://github.com/owner/repository URL; captures HEAD once.' },
+          { name: 'modelId', type: 'string', required: true, description: 'Saved request-response text connection ID in this workspace.' },
+          { name: 'includeSource', type: 'boolean', required: true, description: 'Explicit opt-in to send bounded README/entry excerpts; false sends public signals only.' },
+        ],
+        response: '{ success: true, review: { status, reason?, model?, source?, assessment?: { score, rationale, flags } } }. A score is advisory and never grants trust.',
+        notes: [
+          'The action runs only after model selection and an explicit assessment click. Public evidence goes to that provider; fees and privacy terms apply. See docs/guides/mcp-model-risk-assessment.md.',
+          'GitHub issue ratios exclude pull requests; missing signals remain unknown. Optional samples cover at most six files and 48 KiB, with pinned Git blob verification and visible truncation.',
+          'Restricted adapter mode permits one physical tool-free request, no retries or redirects. CLI agents, fallback policies and non-text or mixed media models are unsupported.',
+          'Source/model deadlines are 30/45 seconds with a 90-second overall deadline and 2,048 output tokens. One global slot remains occupied until cancelled work settles. Reports are not persisted.',
+        ],
+      },
+      {
+        method: 'POST',
         path: '/api/mcp/test-connection',
         summary: 'Run a real MCP handshake against an unsaved config (tests custom CAs and headers) without registering it.',
         paramsLabel: 'Body',

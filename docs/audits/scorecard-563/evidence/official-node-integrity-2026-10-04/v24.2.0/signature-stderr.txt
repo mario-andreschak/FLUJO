@@ -1,0 +1,6 @@
+gpg: Signature made Mon Jun  9 16:48:06 2025 WSN
+gpg:                using RSA key C0D6248439F1D5604AAFFB4021D900FFDB233756
+gpg: Good signature from "Antoine du Hamel <duhamelantoine1995@gmail.com>" [unknown]
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: C0D6 2484 39F1 D560 4AAF  FB40 21D9 00FF DB23 3756

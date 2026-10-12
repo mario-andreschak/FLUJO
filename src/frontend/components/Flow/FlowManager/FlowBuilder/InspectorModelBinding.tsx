@@ -16,6 +16,7 @@ import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import type { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ModelCard from '@/frontend/components/models/list/ModelCard';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import type { CardGroup } from '@/utils/shared/cardGrouping';
 import type { Model } from '@/shared/types';
@@ -73,7 +74,7 @@ const InspectorModelBinding: React.FC<InspectorModelBindingProps> = ({
       >
         <SmartToyRoundedIcon color="primary" sx={{ mr: 1.25 }} />
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" fontWeight={800} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>
             {model.displayName || model.name}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -110,8 +111,8 @@ const InspectorModelBinding: React.FC<InspectorModelBindingProps> = ({
         backgroundColor: selectedModelId ? 'transparent' : alpha(theme.palette.error.main, 0.07),
       })}
     >
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, py: 0.75 }}>
-        <Typography variant="caption" fontWeight={800}>
+      <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between",  px: 1.25, py: 0.75 }}>
+        <Typography variant="caption" sx={{ fontWeight: 800 }}>
           {heading}
         </Typography>
         <Tooltip title={chooseLabel}>
@@ -126,16 +127,15 @@ const InspectorModelBinding: React.FC<InspectorModelBindingProps> = ({
         </Tooltip>
       </Stack>
 
+      {selectedModelId && <AllowanceBar modelIds={selectedModel?.fallbackPolicy?.modelIds ?? [selectedModelId]} />}
       {!selectedModelId ? (
-        <Typography variant="caption" color="error.main" fontWeight={700} display="block" sx={{ px: 1.25, pb: 1.25 }}>
+        <Typography variant="caption" color="error.main" sx={{ fontWeight: 700, display: "block",  px: 1.25, pb: 1.25 }}>
           {beginnerMode ? t('flows.inspector.noStepAi') : t('flows.inspector.noBoundModel')}
         </Typography>
       ) : (
         <Stack
           direction="row"
-          alignItems="center"
-          gap={0.75}
-          sx={{ minHeight: 42, px: 1, borderTop: 1, borderColor: 'divider' }}
+          sx={{ alignItems: "center", gap: 0.75,  minHeight: 42, px: 1, borderTop: 1, borderColor: 'divider' }}
         >
           <SmartToyRoundedIcon color="primary" sx={{ fontSize: 17 }} />
           <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>

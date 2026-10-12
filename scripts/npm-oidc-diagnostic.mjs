@@ -39,7 +39,7 @@ export async function diagnoseOidc({ env = process.env, request = fetch } = {}) 
       }
       const claims = JSON.parse(Buffer.from(identityBody.value.split('.')[1], 'base64url').toString('utf8'));
       publicClaims = Object.fromEntries(['aud', 'repository', 'repository_owner', 'ref', 'sha', 'workflow', 'workflow_ref', 'job_workflow_ref', 'environment', 'event_name'].filter(key => key in claims).map(key => [key, claims[key]]));
-      const escaped = name.replace('/', '%2f');
+      const escaped = encodeURIComponent(name);
       stage = 'npm-exchange';
       status = null;
       const exchange = await request(`${REGISTRY}/-/npm/v1/oidc/token/exchange/package/${escaped}`, {

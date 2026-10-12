@@ -48,10 +48,10 @@ async function readArtifact(relative: string): Promise<Buffer | undefined> {
   if (!entry.stats.isFile() || entry.stats.nlink !== 1 || entry.stats.size > 64 * 1024 * 1024) {
     throw new Error('Flow artifact is linked, not a regular file, or exceeds the 64 MiB inspection limit.');
   }
-  const handle = await fs.open(entry.target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const handle = await fs.open(entry.target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat();
-    if (opened.ino !== entry.stats.ino || opened.dev !== entry.stats.dev || opened.nlink !== 1) {
+    if (!opened.isFile() || opened.ino !== entry.stats.ino || opened.dev !== entry.stats.dev || opened.nlink !== 1) {
       throw new Error('Flow artifact changed during inspection.');
     }
     const bytes = await handle.readFile();

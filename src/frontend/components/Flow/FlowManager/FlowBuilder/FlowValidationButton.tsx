@@ -18,7 +18,7 @@ import {
   Popper,
 } from '@mui/material';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { FlowNode } from '@/frontend/types/flow/flow';
@@ -265,7 +265,7 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.5 }}>
-              <Typography id={dialogTitleId} variant="subtitle1" fontWeight={800}>{t('flows.validation.title')}</Typography>
+              <Typography id={dialogTitleId} variant="subtitle1" sx={{ fontWeight: 800 }}>{t('flows.validation.title')}</Typography>
               {issues && (
                 <Box sx={{ display: 'flex', gap: 0.75, ml: 0.5 }}>
                   {errorCount > 0 && <Chip size="small" color="error" label={tp('flows.validation.error', errorCount)} />}
@@ -284,7 +284,7 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, py: 2, px: 1 }}>
                   <ErrorOutlineIcon color="error" />
                   <Box>
-                    <Typography fontWeight={700}>{t('flows.validation.unavailable')}</Typography>
+                    <Typography sx={{ fontWeight: 700 }}>{t('flows.validation.unavailable')}</Typography>
                     <Typography variant="body2" color="text.secondary">{checkError}</Typography>
                   </Box>
                 </Box>

@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Regression test for the Flow REST API.
  *
@@ -73,13 +76,14 @@ const flowFixture = (over: Partial<Flow> = {}): Flow => ({
   ...over,
 } as unknown as Flow);
 
-beforeEach(() => {
+beforeEach(async () => {
   for (const k of Object.keys(store)) delete store[k];
   for (const k of Object.keys(collections)) delete collections[k];
   // flowService is a singleton with a global-backed cache + migration guard;
   // reset them so tests are isolated.
   (flowService as unknown as { flowsCache: Flow[] | null }).flowsCache = null;
   (global as unknown as { __flujo_flowsMigration: unknown }).__flujo_flowsMigration = undefined;
+    privateFixture = await installPrivateProfileFixture(metadata => { store['encryption_key'] = metadata; });
 });
 
 describe('Flow REST API', () => {

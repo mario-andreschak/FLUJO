@@ -4,8 +4,7 @@ import path from 'node:path';
 import type { Model } from '@/shared/types/model';
 import { getProviderProfileById } from '@/shared/types/model/provider';
 import type { AvatarConnectionDiscovery, AvatarConnectionCandidate } from '@/shared/types/avatar';
-import { userCodexHome } from '@/backend/services/model/adapters/codexAuth';
-import { inspectCodexLogin } from './codexLoginInspection';
+import { inspectCodexLogin, userCodexHome } from '@/backend/services/model/adapters/codexAuth';
 import { readStableFile } from '@/utils/readStableFile';
 
 type Runtime = AvatarConnectionCandidate['runtime'];
