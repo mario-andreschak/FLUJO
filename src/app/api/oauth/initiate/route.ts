@@ -62,7 +62,7 @@ async function POST_handler(request: NextRequest) {
     const provider = createOAuthClientProvider(serverConfig, redirectUri);
 
     try {
-      const result = await auth(provider, { serverUrl: serverConfig.serverUrl });
+      const result = await auth(provider, { serverUrl: serverConfig.serverUrl, fetchFn: provider.oauthFetch });
 
       if (result === 'AUTHORIZED') {
         // We already held a usable (or successfully refreshed) token - no user interaction

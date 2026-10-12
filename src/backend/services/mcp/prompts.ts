@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { mcpProtocolError, mcpErrorStatus } from './protocolErrors';
+import { listPromptPages } from './catalogPagination';
 import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import {
@@ -29,11 +30,11 @@ export async function listServerPrompts(
 
   try {
     log.info(`Listing prompts for server ${serverName}`);
-    const response = await client.listPrompts();
+    const response = await listPromptPages(client);
     const prompts = (response.prompts || []) as MCPPrompt[];
     return { prompts };
   } catch (error) {
-    if (error instanceof McpError && error.code === -32601) {
+    if (mcpProtocolError(error)?.code === -32601) {
       log.debug(`Server ${serverName} does not support prompts/list`);
       return { prompts: [] };
     }
@@ -87,14 +88,15 @@ export async function getPrompt(
     let errorMessage = error instanceof Error ? error.message : 'Unknown error';
     let statusCode = 500;
 
-    if (error instanceof McpError) {
-      errorMessage = `Failed to get prompt: ${errorMessage} (Code: ${error.code})`;
-      if (error.code === -32601) statusCode = 404; // Method not found
-      else if (error.code === -32602) statusCode = 400; // Invalid params
+    const protocolError = mcpProtocolError(error);
+    if (protocolError) {
+      errorMessage = `Failed to get prompt: ${errorMessage} (Code: ${protocolError.code})`;
+      if (protocolError.code === -32601) statusCode = 404; // Method not found
+      else if (protocolError.code === -32602) statusCode = 400; // Invalid params
     } else {
       errorMessage = `Failed to get prompt: ${errorMessage}`;
     }
 
-    return { success: false, error: errorMessage, statusCode };
+    return { success: false, error: errorMessage, statusCode: protocolError ? mcpErrorStatus(protocolError.code) : statusCode, ...(protocolError ? { protocolError } : {}) };
   }
 }

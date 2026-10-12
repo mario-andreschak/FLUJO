@@ -1,3 +1,7 @@
+import { mcpProtocolError } from './protocolErrors';
+import { taskToolOutputValidator } from './tasksExtensionSession';
+import { listCompleteTools } from './toolDiscovery';
+import type { Tool as ModernTool } from '@modelcontextprotocol/client';
 /**
  * Client-side MCP task lifecycle (issue #404, plan steps 4 & 5).
  *
@@ -547,10 +551,31 @@ export async function runRemoteTaskLifecycle(
       await assertCurrent();
       pollSignal.throwIfAborted();
       if (task.generation === '2026-07-28' && !payload) throw new Error('Modern completed task omitted its result');
+      if (task.generation === '2026-07-28') {
+        const output = payload as { structuredContent?: unknown; isError?: boolean };
+        const extension = getTasksExtensionSession(client);
+        if (!extension?.validateToolResult?.(task.taskId, output)) {
+          // Restarted sessions have no in-memory declaration; revalidate against
+          // the currently authorized server catalog before publishing the result.
+          const remaining = Math.max(1, Math.min(60_000, lifetimeMs - (Date.now() - startedAt)));
+          const signal = AbortSignal.any([pollSignal, AbortSignal.timeout(remaining)]);
+          const listed = await listCompleteTools(client, { signal, timeout: remaining, maxTotalTimeout: remaining });
+          const declaration = listed.tools.find(tool => tool.name === toolName);
+          taskToolOutputValidator(declaration as unknown as ModernTool | undefined)(output);
+        }
+        await assertCurrent();
+      }
       await patch({ ...(record?.status === 'completed' ? {} : { status: 'completed' as const }), resultRetrieved: true });
       onProgress?.({ progress: 100, message: `Task ${task.taskId}: completed` });
       return terminalResponseFor(task, toolName, payload);
     } catch (error) {
+      const validationFailure = task.generation === '2026-07-28' && mcpProtocolError(error) !== undefined;
+      if (validationFailure) {
+        await patch({ ...(record?.status === 'completed' ? {} : { status: 'completed' as const }), resultRetrieved: false,
+          diagnostic: 'protocol-invalid', errorMessage: 'Remote completed task output does not match its tool schema.' });
+        return { success: false, error: 'Remote completed task output does not match its tool schema.',
+          errorType: 'task-protocol-invalid', statusCode: 502, progressToken: task.taskId, toolName };
+      }
       await patch({
         ...(record?.status === 'completed' ? {} : { status: 'completed' as const }),
         resultRetrieved: false,
