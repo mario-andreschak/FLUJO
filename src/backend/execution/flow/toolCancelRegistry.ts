@@ -1,7 +1,8 @@
 /**
- * Registry of AbortControllers for tool calls that are currently IN FLIGHT
+ * Registry of AbortControllers for external calls that are currently IN FLIGHT
  * (issue #357). It lets the user cancel a single stalling tool call from the
- * chat UI without killing the whole run.
+ * chat UI without killing the whole run. Provider completions register private
+ * model-prefixed ids here too, so whole-run Stop interrupts network I/O directly.
  *
  * Keyed by scope (the conversation id when the run is conversation-bound, the
  * logical run id for ephemeral/subflow runs) + toolCallId, so ids from

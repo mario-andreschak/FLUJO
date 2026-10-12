@@ -1440,7 +1440,8 @@ const Chat: React.FC = () => {
       return;
     }
     let disposed = false;
-    void chatService.getSubflowRecoveryOptions(conversationId)
+    const controller = new AbortController();
+    void chatService.getSubflowRecoveryOptions(conversationId, controller.signal)
       .then((options) => {
         if (!disposed) setSubflowRecoveryOptions(options.hasRecoverableFamily ? options : null);
       })
@@ -1448,7 +1449,7 @@ const Chat: React.FC = () => {
         log.warn('Could not load subflow recovery options', { conversationId, err });
         if (!disposed) setSubflowRecoveryOptions(null);
       });
-    return () => { disposed = true; };
+    return () => { disposed = true; controller.abort(); };
   }, [
     detailedConversation?.id,
     detailedConversation?.parentConversationId,

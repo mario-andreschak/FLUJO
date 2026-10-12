@@ -1,5 +1,5 @@
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
-import { OpenRouterAgentAdapter } from '@/backend/services/model/adapters/openrouterAgentAdapter';
+import { OpenRouterAgentAdapter, mapOpenRouterEnvelopeKeys } from '@/backend/services/model/adapters/openrouterAgentAdapter';
 import { __resetReasoningStore } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
@@ -35,12 +35,14 @@ let callModel: jest.Mock;
 let events: any[];
 let nativeResponse: any;
 let failure: Error | undefined;
+let failureResponse: Response | undefined;
 
 beforeEach(() => {
   jest.clearAllMocks();
   __resetReasoningStore();
   events = [];
   failure = undefined;
+  failureResponse = undefined;
   nativeResponse = response();
   sdk.OpenRouter.mockImplementation((options: any) => {
     callModel = jest.fn((request: any) => {
@@ -51,7 +53,22 @@ beforeEach(() => {
             max_output_tokens: request.maxOutputTokens, stream: true, tools: [{ name: 'bash_run', parameters: {} }] }),
         }));
         requestBody = await outgoing.json();
-        if (failure) throw failure;
+        if (failure) {
+          if (failureResponse) await options.hooks.afterError({}, failureResponse, failure);
+          throw failure;
+        }
+        if (events.length && options.hooks.afterSuccess) {
+          const wire = events.map(event => `data: ${JSON.stringify(mapOpenRouterEnvelopeKeys(event, true))}\r\n\r\n`).join('');
+          const bytes = new TextEncoder().encode(wire);
+          const observed = await options.hooks.afterSuccess({}, new Response(new ReadableStream({
+            start(controller) {
+              // Exercise CRLF, UTF-8 and SSE frame boundaries split across chunks.
+              for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+              controller.close();
+            },
+          }), { headers: { 'content-type': 'text/event-stream' } }));
+          await observed.arrayBuffer();
+        }
         return nativeResponse;
       };
       let promise: Promise<any> | undefined;
@@ -90,7 +107,7 @@ it('uses one SDK turn, preserves MCP schemas, returns canonical calls, and archi
 
 it('emits live text and separate parallel tool argument deltas with stable ids', async () => {
   events = [
-    { type: 'response.output_text.delta', delta: 'Working' },
+    { type: 'response.output_text.delta', delta: 'Working café' },
     { type: 'response.output_item.added', outputIndex: 2, item: nativeResponse.output[0] },
     { type: 'response.output_item.added', outputIndex: 4, item: { ...nativeResponse.output[0], callId: 'call-2', arguments: '' } },
     { type: 'response.function_call_arguments.delta', outputIndex: 4, delta: '{"command":' },
@@ -98,7 +115,7 @@ it('emits live text and separate parallel tool argument deltas with stable ids',
   ];
   const onModelDelta = jest.fn();
   const result = await new OpenRouterAgentAdapter().createStreamCompletion({ ...input(), onModelDelta });
-  expect(onModelDelta).toHaveBeenCalledWith({ messageId: result.liveMessageId, contentDelta: 'Working' });
+  expect(onModelDelta).toHaveBeenCalledWith({ messageId: result.liveMessageId, contentDelta: 'Working café' });
   expect(onModelDelta).toHaveBeenCalledWith({ messageId: result.liveMessageId,
     toolCallDelta: { index: 1, argumentsDelta: '{"command":' } });
   expect(onModelDelta.mock.calls.every(([delta]) => delta.messageId === result.liveMessageId)).toBe(true);
@@ -163,6 +180,60 @@ it('refuses archive memory pressure before the provider dispatch', async () => {
   await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
     onSdkRequest: async () => { throw refused; },
   })).rejects.toBe(refused);
+});
+
+it('preserves the actual upstream rejection and HTTP status without exposing credentials', async () => {
+  failure = new Error('Provider returned error');
+  failureResponse = new Response(JSON.stringify({ error: {
+    message: 'Provider returned error', code: 400,
+    metadata: { raw: JSON.stringify({ error: { message: 'temperature is unsupported', api_key: 'secret-never-archive' } }) },
+  } }), { status: 400 });
+  let rejection: unknown;
+  try { await new OpenRouterAgentAdapter().createCompletion(input()); }
+  catch (error) { rejection = error; }
+  expect(rejection).toMatchObject({ status: 400, message: 'Provider returned error: temperature is unsupported' });
+  expect(JSON.stringify(rejection)).not.toContain('secret-never-archive');
+});
+
+it('omits temperature when the selected OpenRouter model does not accept it', async () => {
+  await new OpenRouterAgentAdapter().createCompletion({ ...input(), temperature: 0,
+    model: { ...model, supportedParameters: ['reasoning', 'tools', 'max_tokens'] },
+  });
+  expect(callModel.mock.calls[0][0]).not.toHaveProperty('temperature');
+  expect(callModel.mock.calls[0][0]).toHaveProperty('reasoning');
+});
+
+it('refuses a large escaped payload at the final request boundary before archive or provider I/O', async () => {
+  const onSdkRequest = jest.fn();
+  await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(), onSdkRequest,
+    model: { ...model, contextWindow: 5000 },
+    messages: [{ role: 'user', content: 'a'.repeat(4000) }],
+  })).rejects.toMatchObject({ status: 413, code: 'context_length_exceeded' });
+  expect(onSdkRequest).not.toHaveBeenCalled();
+});
+
+it('fails closed when the output reservation consumes the entire configured context', async () => {
+  await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
+    model: { ...model, contextWindow: 100000 }, maxTokens: 100000,
+  })).rejects.toMatchObject({ status: 413, code: 'context_length_exceeded' });
+});
+
+it('projects root compositions for Claude while preserving nested schemas and MCP arguments', async () => {
+  const composed = { ...schema, anyOf: [
+    { properties: { mode: { const: 'run' } }, required: ['mode'] },
+    { properties: { mode: { const: 'inspect' } }, required: ['mode'] },
+  ], properties: { ...schema.properties, options: { anyOf: [{ type: 'string' }, { type: 'number' }] } } };
+  const data = input();
+  data.tools![0].function.parameters = composed;
+  await new OpenRouterAgentAdapter().createCompletion(data);
+  const projected = requestBody.tools[0].parameters;
+  expect(projected).not.toHaveProperty('anyOf');
+  expect(projected).toMatchObject({ type: 'object', required: ['command', 'mode'],
+    properties: { command: schema.properties.command, options: composed.properties.options } });
+  expect(projected.description).toContain('Arguments must also satisfy');
+  expect(data.tools![0].function.parameters).toBe(composed);
+  await new OpenRouterAgentAdapter().createCompletion({ ...data, model: { ...model, name: 'openai/gpt-5' } });
+  expect(requestBody.tools[0].parameters).toEqual(composed);
 });
 
 it('rejects restricted assessments and pre-aborted requests before constructing the SDK', async () => {

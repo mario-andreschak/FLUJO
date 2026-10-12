@@ -1,7 +1,7 @@
 import { reserveArchiveSnapshot, estimateArchivePayload,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
@@ -885,16 +885,23 @@ export class ModelHandler {
     const budget = Math.floor(
       (contextWindow as number) - outputReserve - ModelHandler.OUTGOING_INPUT_SAFETY_TOKENS
     );
-    return budget > 0 ? budget : undefined;
+    // A configured window is a hard bound. An impossible output reservation
+    // must fail closed, never turn into the "unknown/unbounded" fast path.
+    return Math.max(0, budget);
   }
 
   /** Estimate the complete provider payload using the same conservative
    * character-based convention as summarizing compaction. */
   private static estimateOutgoingInputTokens(
     messages: readonly OpenAI.ChatCompletionMessageParam[],
-    tools?: OpenAI.ChatCompletionFunctionTool[]
+    tools?: OpenAI.ChatCompletionFunctionTool[],
+    model?: Pick<Model, 'provider' | 'adapter' | 'name'>
   ): number {
-    return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
+    const json = JSON.stringify({ messages, tools: tools ?? [] });
+    // Escaped MCP JSON was measured at far more tokens than chars/4 on Claude
+    // through OpenRouter. Use a conservative byte bound before paid dispatch.
+    return (model?.provider === 'openrouter' || model?.adapter === 'openrouter-agent') && model?.name.startsWith('anthropic/')
+      ? Buffer.byteLength(json, 'utf8') : Math.ceil(json.length / 4);
   }
 
   /**
@@ -1991,7 +1998,12 @@ export class ModelHandler {
     // provider call is in flight and fires this controller, which every adapter
     // forwards to its SDK's abort mechanism. Declared outside the try so the
     // catch can distinguish a user cancellation from a genuine provider error.
-    const abortController = new AbortController();
+    // Use the same global, workspace-scoped registry that Stop wakes directly.
+    // The polling guard remains for ancestry and non-conversation callers.
+    const completionScope = opts?.conversationId ?? opts?.runId;
+    const completionCallId = `model-${randomUUID()}`;
+    const abortController = completionScope
+      ? registerToolCall(completionScope, completionCallId) : new AbortController();
     let cancelWatch: ReturnType<typeof setInterval> | undefined;
     const stopCancelWatch = () => {
       if (cancelWatch) {
@@ -2316,7 +2328,12 @@ export class ModelHandler {
         opts?.maxTokens
       );
       if (inputBudget !== undefined) {
-        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
+        if (inputBudget === 0) return {
+          success: false,
+          error: createModelError('context_budget_exceeded',
+            'The configured output limit leaves no room for input in the context window. Lower the output-token limit.', modelId),
+        };
+        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model);
         if (estimatedInputTokens > inputBudget) {
           // A constrained private run cannot introduce resource tools or persist
           // model content while recovering from an oversized provider request.
@@ -2367,7 +2384,7 @@ export class ModelHandler {
             });
           }
           const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
-          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools);
+          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools, model);
 
           if (estimatedInputTokens <= inputBudget) {
             log.warn('Refitted outgoing model request to its advertised input budget', {
@@ -2381,7 +2398,7 @@ export class ModelHandler {
             const priorSourceIds = apiSourceIds;
             let emergency = emergencyRefitMessages(refittedMessages, {
               target: inputBudget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools),
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools, model),
               keepRecentMessages,
             });
             let emergencyTools = refittedTools;
@@ -2393,7 +2410,7 @@ export class ModelHandler {
               emergencyTools = undefined;
               emergency = emergencyRefitMessages(refittedMessages, {
                 target: inputBudget,
-                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined, model),
                 keepRecentMessages,
               });
             }
@@ -3463,7 +3480,7 @@ export class ModelHandler {
           recordContextCompaction(modelInputForArchive, {
             kind: 'content-truncation',
             reason: 'One automatic retry after provider context rejection.',
-            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model),
             unit: 'tokens',
             truncatedMessages: reactiveChangedIndexes.length,
             injectedMarker: '[truncated',
@@ -3473,22 +3490,22 @@ export class ModelHandler {
         let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
         const retryTarget = inputBudget ?? Math.max(
           1_024,
-          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools) * 0.7),
+          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
         );
-        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools);
+        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools, model);
         const priorSourceIds = apiSourceIds;
         let retrySourceIds = apiSourceIds;
         if (retryEstimate > retryTarget) {
           let emergency = emergencyRefitMessages(retryMessages, {
             target: retryTarget,
-            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools),
+            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
             keepRecentMessages,
           });
           if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
             retryTools = undefined;
             emergency = emergencyRefitMessages(retryMessages, {
               target: retryTarget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined, model),
               keepRecentMessages,
             });
           }
@@ -3554,6 +3571,7 @@ export class ModelHandler {
       // A native attempt keeps Stop polling through terminal persistence. Every
       // outer return path, including a held invocation, must then release it.
       stopCancelWatch();
+      if (completionScope) releaseToolCall(completionScope, completionCallId);
       archiveSnapshotReservation?.release();
     }
   }

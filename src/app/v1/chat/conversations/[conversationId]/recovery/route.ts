@@ -36,7 +36,7 @@ async function GET_handler(
         { status: 409 },
       );
     }
-    return NextResponse.json(await getSubflowRecoveryOptions(conversationId));
+    return NextResponse.json(await getSubflowRecoveryOptions(conversationId, request.signal));
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;
     return NextResponse.json(

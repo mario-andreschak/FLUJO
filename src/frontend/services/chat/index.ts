@@ -609,8 +609,8 @@ class ChatService {
     return items;
   }
 
-  async getSubflowRecoveryOptions(id: string): Promise<SubflowRecoveryOptions> {
-    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`);
+  async getSubflowRecoveryOptions(id: string, signal?: AbortSignal): Promise<SubflowRecoveryOptions> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`, { signal });
     return parse<SubflowRecoveryOptions>(response);
   }
 

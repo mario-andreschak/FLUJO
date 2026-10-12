@@ -179,7 +179,8 @@ export function compactForWire(
           content:
             canUseTools
               ? `${head}\n…\n[tool result truncated for context — the full ${total}-character result ` +
-                `is stored as run resource ${uri}; call read_resource with this uri to read all of it]`
+                `is stored as run resource ${uri}. This result was already received earlier; ` +
+                `call read_resource with this uri only if a missing detail is needed for the current action]`
               : `${head}\n…\n[tool result truncated for context — ${total} characters; full content is stored server-side]`,
         };
       }

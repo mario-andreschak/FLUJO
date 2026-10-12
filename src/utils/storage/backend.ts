@@ -340,7 +340,9 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
  * The descriptor is closed before parsing/consumer work so recovery writes can rename on Windows.
  */
 export async function withConversationSnapshot<T, R>(conversationId: string,
-  consume: (state: T | undefined, reservation: ConversationReadReservation) => Promise<R>): Promise<R> {
+  consume: (state: T | undefined, reservation: ConversationReadReservation) => Promise<R>,
+  options: { signal?: AbortSignal } = {}): Promise<R> {
+  options.signal?.throwIfAborted();
   assertSafeCollectionId(conversationId);
   const key = `conversations/${conversationId}` as StorageKey;
   const filePath = getFilePath(key);
@@ -356,7 +358,8 @@ export async function withConversationSnapshot<T, R>(conversationId: string,
   }
   const size = Number(expected.size);
   return withConversationLogReadAdmission(size, async reservation => {
-    const content = (await readPlainFile(filePath, { expected })).toString('utf8');
+    const content = (await readPlainFile(filePath, { expected, signal: options.signal })).toString('utf8');
+    options.signal?.throwIfAborted();
     if (!content.trim()) return consume(undefined, reservation);
     let state: T;
     try { state = JSON.parse(content) as T; }
