@@ -9,6 +9,7 @@ import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '
 import { ownerPolicySchema } from '../security/ownerCredentials';
 import { readPrivateApproval, trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
 import { getManagedTrustedHost } from './trustedHost';
+import { getLocalHostLaunch, localHostMcpAllowed } from './localHost';
 import {
   createIsolatedMcpLaunch, isolatedMcpPolicyDigest, isolatedMcpPolicySchema, McpIsolationError,
   type IsolatedMcpLaunch,
@@ -52,6 +53,7 @@ export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getC
 
 /** A private isolation grant cannot be bypassed by omitting it from an imported config. */
 export function assertHostMcpLaunchAllowed(config: MCPStdioConfig): void {
+  if (localHostMcpAllowed(config)) return;
   if (process.env.FLUJO_MCP_ISOLATION_FILE === undefined) {
     trustedHostMcpApproval(config);
     return;
@@ -192,6 +194,18 @@ async function currentServerConfig(serverName: string): Promise<MCPServerConfig 
 }
 
 export async function assertMcpIsolationDispatch(client: Client, serverName: string, config?: MCPServerConfig | null): Promise<void> {
+  const localLaunch = getLocalHostLaunch(client.transport);
+  if (localLaunch) {
+    try {
+      const current = await currentServerConfig(serverName);
+      if (!current || current.name !== serverName) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      localLaunch.assertCurrent(current);
+    } catch (error) {
+      try { await client.close(); } catch { /* lifecycle receipts retain unknown cleanup */ }
+      throw error;
+    }
+    return;
+  }
   const host = getManagedTrustedHost(client.transport);
   if (host) {
     try {
