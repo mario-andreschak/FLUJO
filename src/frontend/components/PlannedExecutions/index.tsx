@@ -99,6 +99,7 @@ const PlannedExecutionsManager = () => {
   const requestId = useRef(0);
   const refreshingRef = useRef(false);
   const pausePendingRef = useRef(false);
+  const failedPauseTarget = useRef<boolean | null>(null);
   const deletePendingRef = useRef(false);
   const failedDeleteId = useRef<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -147,6 +148,11 @@ const PlannedExecutionsManager = () => {
       setPaused(response.paused);
       setLoaded(true);
       setLoadError(false);
+      // A lost write response is recovered only by a fresh, matching read.
+      if (failedPauseTarget.current === response.paused) {
+        failedPauseTarget.current = null;
+        setPauseRetry(null);
+      }
       // The delete may have committed even when its response was lost.
       if (failedDeleteId.current && !response.executions.some(entry => entry.execution.id === failedDeleteId.current)) {
         failedDeleteId.current = null;
@@ -194,6 +200,7 @@ const PlannedExecutionsManager = () => {
     refreshingRef.current = false;
     setRefreshing(false);
     setChangingPause(true);
+    failedPauseTarget.current = null;
     setPauseRetry(null);
     try {
       const result = await plannedExecutionsService.setPaused(nextPaused);
@@ -201,6 +208,7 @@ const PlannedExecutionsManager = () => {
       setPaused(nextPaused);
     } catch (error) {
       log.warn('Failed to toggle pause', error);
+      failedPauseTarget.current = nextPaused;
       setPauseRetry(nextPaused);
     } finally {
       pausePendingRef.current = false;
