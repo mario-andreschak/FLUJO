@@ -777,6 +777,9 @@ export interface FlowParams {
 
 /** Durable Codex SDK thread metadata, scoped to one Process node. */
 export interface CodexSessionMetadata {
+    /** Protocol totals permit restart-safe accounting without reading rollout files. */
+    totalUsage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number;
+        cache_write_input_tokens?: number; reasoning_output_tokens?: number };
     adapter: string;
     provider: string;
     threadId: string;

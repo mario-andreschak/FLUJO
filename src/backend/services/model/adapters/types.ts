@@ -159,6 +159,8 @@ export interface CompletionInput {
   sessionResume?: boolean;
   /** Persisted Codex thread metadata supplied by the conversation owner. */
   codexSession?: CodexSessionMetadata;
+  /** Released Codex app-server structured-output constraint for this turn. */
+  outputSchema?: Record<string, unknown>;
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */

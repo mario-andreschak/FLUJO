@@ -5,11 +5,14 @@ import { execFileSync } from 'node:child_process';
 import { collectCodexAllowance, normalizeCodexAllowance, readOwnedCodexAllowance } from '@/backend/services/model/allowance/codex';
 import { readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { prepareCodexRuntimeEnvironment } from '@/backend/services/model/adapters/codexRuntimeHome';
+import { acquireOrdinaryCodexExecutable } from '@/backend/services/model/adapters/codexRuntimeUpdate';
 import * as ownedTransport from '@/backend/services/model/adapters/codexAppServerProcess';
 
 jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => { const actual = jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess'); return { ...actual, startOwnedCodexAppServer: jest.fn(actual.startOwnedCodexAppServer) }; });
 jest.mock('@/backend/services/model/adapters/codexAuth', () => ({ readCodexAuthForTransfer: jest.fn() }));
 jest.mock('@/backend/services/model/adapters/codexRuntimeHome', () => ({ prepareCodexRuntimeEnvironment: jest.fn() }));
+const mockRelease = jest.fn();
+jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({ acquireOrdinaryCodexExecutable: jest.fn() }));
 jest.mock('@openai/codex-sdk', () => ({ Codex: class { exec = { executablePath: process.execPath }; } }), { virtual: true });
 
 const fixture = `const fs=require('node:fs'),rl=require('node:readline');
@@ -22,7 +25,13 @@ let result={};if(m.method==='account/read')result={account:{type:mode==='api'?'a
 if(m.method==='account/rateLimits/read')result={accountId:mode==='changed'?'other-account':'synthetic-account',rateLimits:{primary:{usedPercent:25,resetsAt:1791600000,windowDurationMins:300}}};
 process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');});`;
 let root: string;
-beforeEach(async () => { jest.clearAllMocks(); jest.mocked(ownedTransport.startOwnedCodexAppServer).mockImplementation(jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess').startOwnedCodexAppServer); root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-allowance-')); });
+beforeEach(async () => {
+  jest.clearAllMocks();
+  mockRelease.mockReset().mockResolvedValue(undefined);
+  jest.mocked(acquireOrdinaryCodexExecutable).mockReset().mockResolvedValue({ executable: process.execPath, release: mockRelease });
+  jest.mocked(ownedTransport.startOwnedCodexAppServer).mockImplementation(jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess').startOwnedCodexAppServer);
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-allowance-'));
+});
 afterEach(async () => {
   jest.restoreAllMocks();
   if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('flujo-codex-allowance-')) throw new Error('Unsafe allowance fixture cleanup');
@@ -92,6 +101,7 @@ test('pre-aborted refresh never reads credentials or starts a process', async ()
   const controller = new AbortController(); controller.abort();
   await expect(collectCodexAllowance({ signal: controller.signal })).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
   expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  expect(acquireOrdinaryCodexExecutable).not.toHaveBeenCalled();
 });
 
 function syntheticLogin() {
@@ -101,6 +111,7 @@ function syntheticLogin() {
 
 test('production wrapper binds opaque login revision and closes its synthetic child', async () => {
   syntheticLogin();
+  mockRelease.mockImplementation(async () => { await assertClosed(); });
   const start = jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess').startOwnedCodexAppServer as typeof ownedTransport.startOwnedCodexAppServer;
   jest.mocked(ownedTransport.startOwnedCodexAppServer).mockImplementation(input => {
     expect(path.isAbsolute(input.executable)).toBe(true);
@@ -112,6 +123,8 @@ test('production wrapper binds opaque login revision and closes its synthetic ch
   expect(JSON.stringify(result)).not.toMatch(/synthetic-account|synthetic-only|never-export/);
   expect(result.snapshot.windows[0].remainingPercent).toBe(75);
   expect(prepareCodexRuntimeEnvironment).toHaveBeenCalledWith(true);
+  expect(acquireOrdinaryCodexExecutable).toHaveBeenCalledTimes(1);
+  expect(mockRelease).toHaveBeenCalledTimes(1);
   await assertClosed();
 });
 
@@ -128,6 +141,7 @@ test('production wrapper refuses observations after authoritative login changes'
   const start = jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess').startOwnedCodexAppServer as typeof ownedTransport.startOwnedCodexAppServer;
   jest.mocked(ownedTransport.startOwnedCodexAppServer).mockImplementation(input => start({ ...input, executable: process.execPath, args: options().args }));
   await expect(collectCodexAllowance({ timeoutMs: 5000 })).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
+  expect(mockRelease).toHaveBeenCalledTimes(1);
   await assertClosed();
 });
 
@@ -141,4 +155,69 @@ test('deadline drains uncancellable preparation and never spawns after it expire
   await new Promise(resolve => setTimeout(resolve, 25));
   release(); await pending;
   expect(start).not.toHaveBeenCalled();
+  expect(acquireOrdinaryCodexExecutable).not.toHaveBeenCalled();
+});
+
+test('allowance uses the ordinary managed executable lease and releases it after child closure', async () => {
+  syntheticLogin();
+  const executable = path.join(root, 'qualified-managed-codex');
+  jest.mocked(acquireOrdinaryCodexExecutable).mockResolvedValue({ executable, release: mockRelease });
+  mockRelease.mockImplementation(async () => { await assertClosed(); });
+  const start = jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess').startOwnedCodexAppServer as typeof ownedTransport.startOwnedCodexAppServer;
+  jest.mocked(ownedTransport.startOwnedCodexAppServer).mockImplementation(input => {
+    expect(input.executable).toBe(executable);
+    expect(input.args).toEqual(['app-server', '--listen', 'stdio://']);
+    return start({ ...input, executable: process.execPath, args: options().args });
+  });
+  expect((await collectCodexAllowance({ timeoutMs: 5000 })).snapshot.windows[0].remainingPercent).toBe(75);
+  expect(mockRelease).toHaveBeenCalledTimes(1);
+});
+
+test('failed transport admission still releases the ordinary lease and redacts its error', async () => {
+  syntheticLogin();
+  jest.mocked(ownedTransport.startOwnedCodexAppServer).mockRejectedValue(new Error('private-path-details'));
+  await expect(collectCodexAllowance({ timeoutMs: 5000 })).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
+  expect(mockRelease).toHaveBeenCalledTimes(1);
+});
+
+test('deadline drains noncancellable lease acquisition, releases it and never spawns afterward', async () => {
+  syntheticLogin();
+  let finish!: () => void;
+  const acquiring = new Promise<void>(resolve => { finish = resolve; });
+  jest.mocked(acquireOrdinaryCodexExecutable).mockImplementation(async () => {
+    await acquiring;
+    return { executable: process.execPath, release: mockRelease };
+  });
+  const pending = expect(collectCodexAllowance({ timeoutMs: 10 })).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
+  await new Promise(resolve => setTimeout(resolve, 25));
+  finish(); await pending;
+  expect(ownedTransport.startOwnedCodexAppServer).not.toHaveBeenCalled();
+  expect(mockRelease).toHaveBeenCalledTimes(1);
+});
+
+test('abort during quota observation closes the owned child before releasing its ordinary lease', async () => {
+  syntheticLogin();
+  const controller = new AbortController();
+  mockRelease.mockImplementation(async () => { await assertClosed(); });
+  const start = jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess').startOwnedCodexAppServer as typeof ownedTransport.startOwnedCodexAppServer;
+  jest.mocked(ownedTransport.startOwnedCodexAppServer).mockImplementation(input => start({ ...input, executable: process.execPath, args: options('silent').args }));
+  const pending = expect(collectCodexAllowance({ signal: controller.signal, timeoutMs: 5000 })).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
+  for (let n = 0; n < 100; n++) {
+    const wire = await fs.readFile(path.join(root, 'wire'), 'utf8').catch(() => '');
+    if (wire.includes('account/rateLimits/read')) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  controller.abort(); await pending;
+  expect(mockRelease).toHaveBeenCalledTimes(1);
+});
+
+test('lease selection and release failures retain the public unavailable error', async () => {
+  syntheticLogin();
+  jest.mocked(acquireOrdinaryCodexExecutable).mockRejectedValueOnce(new Error('private-selection-details'));
+  await expect(collectCodexAllowance()).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
+  expect(mockRelease).not.toHaveBeenCalled();
+  jest.mocked(ownedTransport.startOwnedCodexAppServer).mockRejectedValue(new Error('private-spawn-details'));
+  mockRelease.mockRejectedValue(new Error('private-lease-file-details'));
+  await expect(collectCodexAllowance()).rejects.toThrow('CODEX_ALLOWANCE_UNAVAILABLE');
+  expect(mockRelease).toHaveBeenCalledTimes(1);
 });

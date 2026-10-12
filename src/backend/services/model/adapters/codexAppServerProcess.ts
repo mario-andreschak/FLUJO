@@ -18,9 +18,16 @@ export function assertCodexOwnedProcessRegistration(value: unknown, owner: objec
 
 type Message = {id?: number | string; method?: string; params?: unknown; result?: unknown; error?: unknown};
 type Pending = {resolve(value: unknown): void; reject(error: unknown): void; timer: NodeJS.Timeout};
+/** A received rejection is distinct from an uncertain transport submission. */
+export class CodexAppServerRpcError extends Error {
+  constructor(readonly code: number) {
+    super(`Codex rejected the request (${code}).`);
+    this.name = 'CodexAppServerRpcError';
+  }
+}
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 32;
-const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt']);
+const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'turn/start', 'turn/steer', 'turn/interrupt']);
 
 /** Own the public app-server child at birth. Registration precedes all wire input.
  * This transport does not by itself qualify a model, tool inventory, or Original.
@@ -90,7 +97,14 @@ export async function startOwnedCodexAppServer(input: {
         const entry=typeof message.id==='number' ? pending.get(message.id) : undefined;
         if (!entry) {rejectPending(unavailable());requestStop();return;}
         pending.delete(message.id as number);clearTimeout(entry.timer);
-        if (message.error !== undefined) entry.reject(new Error('Codex app-server request was rejected.'));
+        if (Object.hasOwn(message, 'result') === Object.hasOwn(message, 'error')) {
+          entry.reject(unavailable()); rejectPending(unavailable()); requestStop(); return;
+        }
+        if (message.error !== undefined) {
+          const error = message.error as { code?: unknown; message?: unknown } | null;
+          if (!error || Array.isArray(error) || !Number.isSafeInteger(error.code) || typeof error.message !== 'string') { entry.reject(unavailable()); rejectPending(unavailable()); requestStop(); return; }
+          entry.reject(new CodexAppServerRpcError(error.code as number));
+        }
         else entry.resolve(message.result);
       } else if (message.id !== undefined && message.method) {
         // An unimplemented server request must never acquire owner authority.
