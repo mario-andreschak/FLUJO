@@ -132,3 +132,29 @@ See the [official overview](https://modelcontextprotocol.io/extensions/tasks/ove
 and [SDK migration guide](https://github.com/modelcontextprotocol/ext-tasks/blob/5246bc3d0253c1c4b09e682f690b7e8b97362500/typescript/migrating-from-the-sdk.md).
 The upstream `/receiver` facade implements client-side 2025 task-backed
 sampling/elicitation; it is not a modern tools server implementation.
+
+
+## October 12 request-adapter reconciliation (#1093)
+
+Initial modern `input_required` is handled before task creation with at most 32
+rounds and one overall deadline. The original arguments/metadata stay fixed;
+opaque state is echoed verbatim and each retry gets a fresh JSON-RPC ID. Host
+sampling/elicitation/roots handlers retain their policy, attendance and abort
+context. A retry occurs only for an explicit protocol input request; ambiguous
+transport failures are never replayed.
+
+Schema-declared `x-mcp-header` values become `Mcp-Param-*` headers, with UTF8 Base64
+encoding when inline values would be ambiguous or unsafe. HTTP transport supplies
+mandatory method/name framing. Immediate and completed task outputs use the declared
+JSON schema, including scalar/array JSON. The creation generation retains a validator;
+restart retrieval checks the currently authorized catalog before publishing. Invalid
+completed output retains remote completion and records a protocol-invalid retrieval.
+
+Modern Flows HTTP can be enabled through the existing protocol-beta setting without
+turning on optional Tasks. The same strict owner bearer/workspace admission remains
+in front of parsing and effects. Stdio stays on its process-owned legacy negotiation;
+modern-only stdio rollout needs its own lifecycle and release qualification.
+
+See [support and qualification matrix](mcp-conformance-1093-2026-10-12.md). These
+source/focused checks do not replace durable restart/revocation, installed or genuine
+provider acceptance required for release.

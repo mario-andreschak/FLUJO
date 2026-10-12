@@ -16,7 +16,7 @@ import { DEFAULT_MCP_REMOTE_TASK_SETTINGS, type McpRemoteTaskRecord } from '@/sh
 
 const release = jest.fn();
 function options(extra: Partial<RemoteTaskLifecycleOptions> = {}): RemoteTaskLifecycleOptions {
-  return { client: {} as Client, serverName: 'synthetic', serverIdentity: 'identity', toolName: 'tool',
+  return { client: { listTools: jest.fn().mockResolvedValue({ tools: [{ name: 'tool', inputSchema: { type: 'object' } }] }) } as unknown as Client, serverName: 'synthetic', serverIdentity: 'identity', toolName: 'tool',
     task: { taskId: 'task', status: 'working', createdAt: new Date().toISOString(), lastUpdatedAt: new Date().toISOString(), ttl: 60000, generation: '2026-07-28' },
     generation: '2026-07-28', timeoutMs: 60000, ownership: { conversationId: 'owner' }, persist: true, supportsCancel: true, ...extra };
 }

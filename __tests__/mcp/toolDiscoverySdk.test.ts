@@ -1,3 +1,4 @@
+import { listServerTools } from '@/backend/services/mcp/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -52,6 +53,13 @@ describe('complete discovery with the installed MCP SDK transport and validators
       expect(page.tools).toHaveLength(32);
       expect(page.nextCursor).toBe('64');
       expect(cursors).toHaveLength(5);
+      await client.listTools();
+      const proxyPage = await listServerTools(client, 'fixture', 'all', '32');
+      expect(proxyPage.tools).toHaveLength(32);
+      expect(proxyPage.nextCursor).toBe('64');
+      // A proxy page must not evict first/last-page dispatch validators.
+      await expect(client.callTool({ name: tools[1].name })).rejects.toThrow("tool's output schema");
+      await expect(client.callTool({ name: tools[126].name })).rejects.toThrow("tool's output schema");
     } finally {
       await client.close();
       await server.close();

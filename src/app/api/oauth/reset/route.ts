@@ -63,6 +63,7 @@ async function POST_handler(request: NextRequest) {
     serverConfig.oauthState = undefined;
     serverConfig.oauthStateWorkspace = undefined;
     serverConfig.oauthStateCreatedAt = undefined;
+    serverConfig.oauthStateDiscovery = undefined;
 
     // Optionally clear client information to force re-registration
     // serverConfig.oauthClientInformation = undefined;

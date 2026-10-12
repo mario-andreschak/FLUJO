@@ -16,12 +16,14 @@ interface CallbackParams {
   state: string | null;
   error: string | null;
   errorDescription: string | null;
+  issuer: string | null;
 }
 
 interface CallbackBinding {
   serverName: string;
   workspace: string;
   config: MCPStreamableConfig;
+  discovery: NonNullable<MCPStreamableConfig['oauthStateDiscovery']>;
 }
 
 function redirectToMcp(
@@ -76,10 +78,10 @@ async function handleCallback(
   const redirectUrl = new URL('/api/oauth/callback', requestOrigin(request));
   redirectUrl.searchParams.set('workspace', workspace);
   const redirectUri = redirectUrl.toString();
-  const provider = createOAuthClientProvider(serverConfig, redirectUri);
+  const provider = createOAuthClientProvider(serverConfig, redirectUri, binding.discovery);
 
   try {
-    const result = await auth(provider, { serverUrl: serverConfig.serverUrl, authorizationCode: code });
+    const result = await auth(provider, { serverUrl: serverConfig.serverUrl, authorizationCode: code, fetchFn: provider.oauthFetch });
     if (result !== 'AUTHORIZED') {
       throw new Error(`Unexpected authorization result: ${result}`);
     }
@@ -133,10 +135,24 @@ async function handleWorkspaceCallback(
     });
   }
 
+  const discovery = serverConfig.oauthStateDiscovery;
+  const expectedIssuer = discovery?.authorizationServerMetadata?.issuer ?? discovery?.authorizationServerUrl;
+  const requireIssuer = (discovery?.authorizationServerMetadata as { authorization_response_iss_parameter_supported?: unknown } | undefined)?.authorization_response_iss_parameter_supported === true;
+  // Exact issuer comparison precedes provider error handling and every exchange.
+  if (typeof expectedIssuer !== 'string' || !expectedIssuer
+      || (params.issuer !== null && params.issuer !== expectedIssuer)
+      || (requireIssuer && params.issuer === null)) {
+    return redirectToMcp(request, workspace, {
+      oauth_error: 'invalid_issuer',
+      error_description: 'Authorization issuer could not be verified. Start authentication again.',
+    });
+  }
+
   // Consume before exchange. A failed/replayed callback must start a new flow.
   serverConfig.oauthState = undefined;
   serverConfig.oauthStateWorkspace = undefined;
   serverConfig.oauthStateCreatedAt = undefined;
+  serverConfig.oauthStateDiscovery = undefined;
   const saveResult = await saveConfig(new Map(configsResult.map(config => [config.name, config])));
   if (!saveResult.success) {
     log.error('Failed to consume OAuth callback state', saveResult);
@@ -150,6 +166,7 @@ async function handleWorkspaceCallback(
     serverName: serverConfig.name,
     workspace,
     config: serverConfig,
+    discovery: discovery!,
   });
 }
 
@@ -162,6 +179,7 @@ async function GET_handler(request: NextRequest) {
       state: searchParams.get('state'),
       error: searchParams.get('error'),
       errorDescription: searchParams.get('error_description'),
+      issuer: searchParams.get('iss'),
     });
   } catch (error) {
     log.error('Unexpected error in OAuth callback', error);
@@ -181,6 +199,7 @@ async function POST_handler(request: NextRequest) {
       state: formData.get('state')?.toString() ?? null,
       error: formData.get('error')?.toString() ?? null,
       errorDescription: formData.get('error_description')?.toString() ?? null,
+      issuer: formData.get('iss')?.toString() ?? null,
     });
   } catch (error) {
     log.error('Unexpected error in OAuth callback POST', error);
