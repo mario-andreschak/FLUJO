@@ -349,36 +349,36 @@ export function createAppTheme(mode: PaletteMode): Theme {
               outline: `3px solid ${alpha(primary, 0.28)}`,
               outlineOffset: 2,
             },
+            '&.MuiButton-contained.MuiButton-colorPrimary': {
+              color: primaryContrastText,
+              backgroundColor: primary,
+              backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 46%, ${primaryButtonEnd} 100%)`,
+              boxShadow: `0 10px 26px ${alpha(primary, isDark ? 0.28 : 0.22)}`,
+              '&:hover': {
+                backgroundColor: primaryButtonEnd,
+                backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 38%, ${primaryButtonEnd} 100%)`,
+                boxShadow: `0 15px 34px ${alpha(primary, isDark ? 0.38 : 0.3)}`,
+                transform: 'translateY(-1px)',
+              },
+              '&.Mui-disabled': {
+                backgroundImage: 'none',
+              },
+            },
+            '&.MuiButton-outlined.MuiButton-colorPrimary': {
+              borderColor: alpha(primary, 0.42),
+              backgroundColor: alpha(primary, isDark ? 0.08 : 0.045),
+              '&:hover': {
+                borderColor: primary,
+                backgroundColor: alpha(primary, isDark ? 0.15 : 0.09),
+                transform: 'translateY(-1px)',
+              },
+            },
           },
           sizeLarge: {
             minHeight: 48,
             paddingInline: 22,
             borderRadius: 14,
             fontSize: '0.95rem',
-          },
-          containedPrimary: {
-            color: primaryContrastText,
-            backgroundColor: primary,
-            backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 46%, ${primaryButtonEnd} 100%)`,
-            boxShadow: `0 10px 26px ${alpha(primary, isDark ? 0.28 : 0.22)}`,
-            '&:hover': {
-              backgroundColor: primaryButtonEnd,
-              backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 38%, ${primaryButtonEnd} 100%)`,
-              boxShadow: `0 15px 34px ${alpha(primary, isDark ? 0.38 : 0.3)}`,
-              transform: 'translateY(-1px)',
-            },
-            '&.Mui-disabled': {
-              backgroundImage: 'none',
-            },
-          },
-          outlinedPrimary: {
-            borderColor: alpha(primary, 0.42),
-            backgroundColor: alpha(primary, isDark ? 0.08 : 0.045),
-            '&:hover': {
-              borderColor: primary,
-              backgroundColor: alpha(primary, isDark ? 0.15 : 0.09),
-              transform: 'translateY(-1px)',
-            },
           },
         },
       },

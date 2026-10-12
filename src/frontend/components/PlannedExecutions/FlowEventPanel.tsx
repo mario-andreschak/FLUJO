@@ -350,7 +350,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
               })
             }
             helperText={t('automations.event.maxDepthHelp')}
-            inputProps={{ min: 1 }}
+            slotProps={{ htmlInput: { min: 1 } }}
           />
           <TextField
             label={t('automations.event.cooldown')}
@@ -363,7 +363,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
               })
             }
             helperText={t('automations.event.cooldownHelp')}
-            inputProps={{ min: 0 }}
+            slotProps={{ htmlInput: { min: 0 } }}
           />
         </Box>
       )}

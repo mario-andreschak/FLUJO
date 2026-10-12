@@ -226,7 +226,7 @@ export default function SnapshotStorageSettings({
               label="Workspace limit (GiB)"
               type="number"
               value={draft.maxBytes / GIB}
-              inputProps={{ min: 0, step: 0.1 }}
+              slotProps={{ htmlInput: { min: 0, step: 0.1 } }}
               onChange={(event) => setPolicyNumber('maxBytes', event.target.value, GIB)}
               fullWidth
             />
@@ -234,7 +234,7 @@ export default function SnapshotStorageSettings({
               label="Maximum age (days)"
               type="number"
               value={draft.maxAgeMs / DAY}
-              inputProps={{ min: 0, step: 1 }}
+              slotProps={{ htmlInput: { min: 0, step: 1 } }}
               onChange={(event) => setPolicyNumber('maxAgeMs', event.target.value, DAY)}
               fullWidth
             />
@@ -242,7 +242,7 @@ export default function SnapshotStorageSettings({
               label="Captures per root"
               type="number"
               value={draft.maxCapturesPerRoot}
-              inputProps={{ min: 0, step: 1 }}
+              slotProps={{ htmlInput: { min: 0, step: 1 } }}
               onChange={(event) => setPolicyNumber('maxCapturesPerRoot', event.target.value)}
               fullWidth
             />
@@ -255,7 +255,7 @@ export default function SnapshotStorageSettings({
             control={<Switch checked={draft.automaticCleanup} onChange={(event) => setDraft({ ...draft, automaticCleanup: event.target.checked })} />}
             label="Clean after capture when limits are exceeded"
           />
-          <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
             <Button variant="outlined" onClick={() => { void savePolicy(); }} disabled={busy}>Save retention</Button>
             <Button color="warning" variant="outlined" onClick={() => { void cleanup('clean-old'); }} disabled={busy || storageBusy}>
               Clean old snapshots

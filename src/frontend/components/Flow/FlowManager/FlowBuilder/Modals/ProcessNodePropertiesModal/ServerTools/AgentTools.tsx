@@ -129,7 +129,7 @@ const AgentTools: React.FC<AgentToolsProps> = ({
           <Typography color="text.secondary" align="center">
             {t('flows.agentTools.none')}
           </Typography>
-          <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
+          <Typography variant="caption" color="text.secondary" align="center" sx={{ display: "block",  mt: 1 }}>
             {t('flows.agentTools.connectHelp')}
           </Typography>
         </Box>
@@ -144,13 +144,13 @@ const AgentTools: React.FC<AgentToolsProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             sx={{ mb: 2 }}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
           />
           
           {/* Tool list */}

@@ -84,10 +84,10 @@ export default function BreakoutPanel({ meeting, events }: BreakoutPanelProps) {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center",  mb: 2 }}>
         <GroupsRounded color="secondary" />
         <Box>
-          <Typography variant="h6" fontWeight={780}>{t('meetings.breakout.title')}</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 780 }}>{t('meetings.breakout.title')}</Typography>
           <Typography variant="body2" color="text.secondary">{t('meetings.breakout.description')}</Typography>
         </Box>
       </Stack>
@@ -100,10 +100,10 @@ export default function BreakoutPanel({ meeting, events }: BreakoutPanelProps) {
           const hasRejoined = rejoined.has(room.id);
           return (
             <Paper key={room.id} variant="outlined" sx={{ p: 2, bgcolor: alpha(theme.palette.secondary.main, 0.025) }}>
-              <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
+              <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start" }} spacing={1}>
                 <Box>
                   <Typography variant="overline" color="secondary.main">{t('meetings.breakout.room', { count: roomIndex + 1 })}</Typography>
-                  <Typography variant="subtitle1" fontWeight={760}>{room.topic}</Typography>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 760 }}>{room.topic}</Typography>
                 </Box>
                 <Chip size="small" color={room.status === 'live' ? 'success' : 'default'} label={t(`meetings.breakout.${room.status}`)} />
               </Stack>
@@ -119,18 +119,18 @@ export default function BreakoutPanel({ meeting, events }: BreakoutPanelProps) {
               </Stack>
               <Paper variant="outlined" sx={{ minHeight: 130, maxHeight: 240, overflowY: 'auto', p: 1.25, bgcolor: 'background.default' }}>
                 {room.childMeetingId && detail === undefined ? (
-                  <Stack alignItems="center" justifyContent="center" sx={{ minHeight: 105 }}><CircularProgress size={22} /></Stack>
+                  <Stack sx={{ alignItems: "center", justifyContent: "center",  minHeight: 105 }}><CircularProgress size={22} /></Stack>
                 ) : speech.length ? (
                   <Stack spacing={1.2}>
                     {speech.map((event) => (
                       <Box key={event.eventId}>
-                        <Typography variant="caption" fontWeight={760} color="primary.main">{event.participantName}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 760 }} color="primary.main">{event.participantName}</Typography>
                         <Box sx={{ fontSize: '0.82rem', '& p': { my: 0.4 } }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{event.content}</ReactMarkdown></Box>
                       </Box>
                     ))}
                   </Stack>
                 ) : (
-                  <Stack alignItems="center" justifyContent="center" spacing={0.7} sx={{ minHeight: 105, textAlign: 'center' }}>
+                  <Stack spacing={0.7} sx={{ alignItems: "center", justifyContent: "center",  minHeight: 105, textAlign: 'center' }}>
                     <ForumRounded color="disabled" />
                     <Typography variant="caption" color="text.secondary">{t('meetings.breakout.noTranscript')}</Typography>
                   </Stack>

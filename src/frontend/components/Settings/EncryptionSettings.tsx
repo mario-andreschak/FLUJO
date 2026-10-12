@@ -220,7 +220,7 @@ export default function EncryptionSettings() {
         : isInitialized && !isUserEncryption ? <Alert severity="warning">{t('settings.encryption.migrationRequired')}</Alert>
         : !isInitialized || !isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3, mb: 4 }}>
-          <Typography variant="subtitle1" gutterBottom fontWeight="bold">
+          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: "bold" }}>
             {t('settings.encryption.setTitle')}
           </Typography>
           
@@ -236,7 +236,7 @@ export default function EncryptionSettings() {
               value={newKey}
               onChange={(e) => setNewKey(e.target.value)}
               type={showNewKey ? 'text' : 'password'}
-              InputProps={{
+              slotProps={{ input: {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
@@ -248,7 +248,7 @@ export default function EncryptionSettings() {
                     </IconButton>
                   </InputAdornment>
                 ),
-              }}
+              } }}
               sx={{ mb: 2 }}
             />
             
@@ -274,7 +274,7 @@ export default function EncryptionSettings() {
         </Paper>
       ) : isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3 }}>
-          <Typography variant="subtitle1" gutterBottom fontWeight="bold">
+          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: "bold" }}>
             {t('settings.encryption.changeTitle')}
           </Typography>
           
@@ -290,7 +290,7 @@ export default function EncryptionSettings() {
               value={currentKey}
               onChange={(e) => setCurrentKey(e.target.value)}
               type={showCurrentKey ? 'text' : 'password'}
-              InputProps={{
+              slotProps={{ input: {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
@@ -302,7 +302,7 @@ export default function EncryptionSettings() {
                     </IconButton>
                   </InputAdornment>
                 ),
-              }}
+              } }}
               sx={{ mb: 2 }}
             />
             
@@ -313,7 +313,7 @@ export default function EncryptionSettings() {
               value={changeNewKey}
               onChange={(e) => setChangeNewKey(e.target.value)}
               type={showChangeNewKey ? 'text' : 'password'}
-              InputProps={{
+              slotProps={{ input: {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
@@ -325,7 +325,7 @@ export default function EncryptionSettings() {
                     </IconButton>
                   </InputAdornment>
                 ),
-              }}
+              } }}
               sx={{ mb: 3 }}
             />
             
@@ -344,7 +344,7 @@ export default function EncryptionSettings() {
       {/* Security information */}
       <Box sx={{ mt: 4 }}>
         <Alert severity={isUserEncryption ? "warning" : "info"}>
-          <Typography variant="subtitle2" fontWeight="bold">
+          <Typography variant="subtitle2" sx={{ fontWeight: "bold" }}>
             {t(isUserEncryption ? 'settings.encryption.securityTitle' : 'settings.encryption.defaultTitle')}
           </Typography>
           {isUserEncryption ? (

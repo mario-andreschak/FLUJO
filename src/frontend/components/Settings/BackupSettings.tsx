@@ -274,7 +274,7 @@ export default function BackupSettings() {
 
       {/* Backup Section */}
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="subtitle1" component="h3" gutterBottom fontWeight="bold">
+        <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: "bold" }}>
           {t('settings.backup.create')}
         </Typography>
         
@@ -334,7 +334,7 @@ export default function BackupSettings() {
 
       {/* Restore Section */}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="subtitle1" component="h3" gutterBottom fontWeight="bold">
+        <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: "bold" }}>
           {t('settings.backup.restore')}
         </Typography>
         

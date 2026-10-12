@@ -280,7 +280,7 @@ export default function McpAiConnectionPanel({
             placeholder={t('mcp.ai.placeholder')}
             label={t('mcp.ai.requestLabel')}
             disabled={working || installing}
-            inputProps={{ maxLength: 400 }}
+            slotProps={{ htmlInput: { maxLength: 400 } }}
           />
           <Box sx={{ display: 'flex', gap: 1.2, alignItems: 'center', flexWrap: 'wrap' }}>
             <FormControl size="small" sx={{ minWidth: 230, flex: { xs: '1 1 100%', sm: '0 1 300px' } }}>
@@ -439,7 +439,7 @@ export default function McpAiConnectionPanel({
                       }}
                       error={!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(serverName)}
                       helperText={t('mcp.ai.connectionNameHelper')}
-                      inputProps={{ maxLength: 64 }}
+                      slotProps={{ htmlInput: { maxLength: 64 } }}
                     />
                     <Box>
                       <Typography variant="caption" color="text.secondary">

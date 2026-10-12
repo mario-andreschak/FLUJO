@@ -248,7 +248,7 @@ export default function QuickActionsMenu({
   } else if (servers.length === 0) {
     mcpItems.push(
       <Box key="empty" component="li" sx={staticItemSx}>
-        <Typography variant="body2" fontWeight={600} color="text.primary">
+        <Typography variant="body2" sx={{ fontWeight: 600 }} color="text.primary">
           {t('nav.quickActions.empty')}
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -301,7 +301,7 @@ export default function QuickActionsMenu({
             <ListItemText
               primary={app.name}
               secondary={app.uri}
-              secondaryTypographyProps={{ sx: { overflowWrap: 'anywhere' } }}
+              slotProps={{ secondary: { sx: { overflowWrap: 'anywhere' } } }}
             />
             {app.toolNames.length > 0 && (
               <Box
@@ -394,12 +394,11 @@ export default function QuickActionsMenu({
         onClose={closeMenu}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        MenuListProps={{
+        slotProps={{ list: {
           'aria-labelledby': triggerId,
           dense: false,
           onKeyDown: handleMenuListKeyDown,
-        }}
-        slotProps={{
+        },
           paper: {
             ref: paperRef,
             sx: { minWidth: 288, maxWidth: 380, maxHeight: '70vh', borderRadius: 3 },
@@ -415,11 +414,11 @@ export default function QuickActionsMenu({
         onClose={closeToolsMenu}
         anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-        MenuListProps={{
+        slotProps={{ list: {
           'aria-label': toolsMenu
             ? t('nav.quickActions.linkedTools', { app: toolsMenu.app.name })
             : undefined,
-          onKeyDown: (event) => {
+          onKeyDown: (event: React.KeyboardEvent<HTMLUListElement>) => {
             if (event.key !== 'Escape' && event.key !== 'ArrowLeft') return;
             event.preventDefault();
             event.stopPropagation();
@@ -427,8 +426,7 @@ export default function QuickActionsMenu({
             closeToolsMenu();
             returnTarget?.focus();
           },
-        }}
-        slotProps={{ paper: { sx: { minWidth: 240, maxWidth: 360, borderRadius: 2.5 } } }}
+        },  paper: { sx: { minWidth: 240, maxWidth: 360, borderRadius: 2.5 } } }}
       >
         {toolsMenu?.app.toolNames.map((toolName) => (
           <MenuItem

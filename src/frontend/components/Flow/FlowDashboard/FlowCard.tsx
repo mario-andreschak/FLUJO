@@ -25,7 +25,7 @@ import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ChatIcon from '@mui/icons-material/Chat';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Flow, NodeType } from '@/frontend/types/flow/flow';
 import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
@@ -335,7 +335,7 @@ const FlowCard = ({
           onChange={handleSelect}
           disabled={disabled}
           onClick={(event) => event.stopPropagation()}
-          inputProps={{ 'aria-label': t('flows.card.select', { name: flow.name }) }}
+          slotProps={{ input: { 'aria-label': t('flows.card.select', { name: flow.name }) } }}
           sx={{
             position: 'absolute',
             top: 2,

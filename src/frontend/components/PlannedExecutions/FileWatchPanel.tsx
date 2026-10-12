@@ -55,7 +55,7 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
         onChange={(e) => onChange({ ...config, path: e.target.value })}
         placeholder={t('automations.file.pathPlaceholder')}
         margin="normal"
-        InputProps={{
+        slotProps={{ input: {
           endAdornment: (
             <InputAdornment position="end">
               <Tooltip title={t('automations.file.browse')}>
@@ -65,7 +65,7 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
               </Tooltip>
             </InputAdornment>
           ),
-        }}
+        } }}
       />
       <FolderPickerDialog
         open={pickerOpen}
@@ -120,7 +120,7 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
               onChange({ ...config, debounceMs: Math.max(0, Number(e.target.value) || 0) })
             }
             helperText={t('automations.file.quietWindowHelp')}
-            inputProps={{ min: 0, step: 500 }}
+            slotProps={{ htmlInput: { min: 0, step: 500 } }}
             sx={{ width: 220 }}
           />
         </AccordionDetails>

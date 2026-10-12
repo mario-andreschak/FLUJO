@@ -31,7 +31,7 @@ export default function McpAgentJourney({ servers, onConnect, onInspect }: McpAg
   return (
     <Accordion disableGutters sx={{ mx: { xs: 2, md: 3, lg: 4 }, mt: 2, borderRadius: 2 }}>
       <AccordionSummary expandIcon={<ExpandMoreIcon />} id={`${guideId}-summary`} aria-controls={`${guideId}-details`}>
-        <Typography fontWeight={600}>{t('mcp.journey.title')}</Typography>
+        <Typography sx={{ fontWeight: 600 }}>{t('mcp.journey.title')}</Typography>
       </AccordionSummary>
       <AccordionDetails id={`${guideId}-details`}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{t('mcp.journey.description')}</Typography>
@@ -44,7 +44,7 @@ export default function McpAgentJourney({ servers, onConnect, onInspect }: McpAg
           <Box component="li" sx={{ minWidth: 0 }}>
             <Typography component="h3" variant="subtitle2">{t('mcp.journey.appTitle')}</Typography>
             <Typography variant="body2" sx={{ my: 1 }}>{t('mcp.journey.appBody')}</Typography>
-            <Stack spacing={1} alignItems="flex-start">
+            <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
               <Button onClick={onConnect} variant="outlined">{t('mcp.server.connectApp')}</Button>
               {enabledServers.length > 0 && (
                 <TextField select fullWidth size="small" label={t('mcp.journey.savedApp')} value={selectedServer?.name ?? ''}

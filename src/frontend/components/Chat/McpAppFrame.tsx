@@ -1829,7 +1829,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         {consentStatus === 'prompt' && (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>{t('chat.app.consentPrompt')}</Typography>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{serverName} — {uri}</Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mb: 1 }}>{serverName} — {uri}</Typography>
             <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-once'); }}>{t('chat.app.consentAllowOnce')}</Button>
             <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
             <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void decideConsent('deny-always'); }}>{t('chat.app.consentNeverAllow')}</Button>
@@ -1944,6 +1944,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
               <Button
                 size="small"
                 disabled={!canToggleFullscreen}
+                aria-label={displayMode === 'fullscreen' ? t('chat.app.exitFullscreen') : t('chat.app.fullscreen')}
                 onClick={() => {
                   const next = displayMode === 'fullscreen' ? 'inline' : 'fullscreen';
                   if (!canUseDisplayMode(next, hostDisplayModes, appDisplayModes)) return;
@@ -1970,7 +1971,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       {expanded && consentStatus === 'prompt' && (
         <Box sx={{ p: 1 }}>
           <Typography variant="body2" sx={{ mb: 1 }}>{t('chat.app.consentPrompt')}</Typography>
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{uri}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mb: 1 }}>{uri}</Typography>
           <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-once'); }}>{t('chat.app.consentAllowOnce')}</Button>
           <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
           <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void decideConsent('deny-always'); }}>{t('chat.app.consentNeverAllow')}</Button>

@@ -261,8 +261,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                   : isDefault
                     ? t('nav.workspaces.default')
                     : undefined}
-                primaryTypographyProps={{ fontSize: '0.84rem', fontWeight: isActive ? 750 : 600 }}
-                secondaryTypographyProps={{ fontSize: '0.7rem' }}
+                slotProps={{ primary: { sx: { fontSize: '0.84rem', fontWeight: isActive ? 750 : 600 } }, secondary: { sx: { fontSize: '0.7rem' } } }}
               />
               {isActive && <CheckRounded color="primary" fontSize="small" aria-hidden="true" />}
               <Stack direction="row" spacing={0.1}>
@@ -325,8 +324,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                 ? t('nav.workspaces.nameExists')
                 : t('nav.workspaces.nameHelp')}
               disabled={saving}
-              slotProps={{ input: { readOnly: editor?.mode === 'edit' && editor.isDefault } }}
-              inputProps={{ maxLength: 64 }}
+              slotProps={{ htmlInput: { maxLength: 64 },  input: { readOnly: editor?.mode === 'edit' && editor.isDefault } }}
               onBlur={() => setNameTouched(true)}
               onChange={event => {
                 setName(event.target.value);

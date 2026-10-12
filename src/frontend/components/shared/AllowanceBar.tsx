@@ -78,7 +78,7 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
           </Typography>)}
         </Box>
         {accounts.map(row => <Box key={`${row.provider}:${row.accountGroup ?? row.modelId}`}>
-          <Typography variant="body2" fontWeight={700}>{row.provider}</Typography>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{row.provider}</Typography>
           <Typography variant="caption" component="div">{t('models.allowance.observed', { time: row.observedAt ?? t('models.allowance.unknown') })}</Typography>
           {row.provider === 'claude' && <Typography variant="caption" component="div">{t('models.allowance.claudeNote')}</Typography>}
           {row.windows.map(window => <Typography key={`${window.id}:${window.modelFamily ?? ''}`} variant="caption" component="div">

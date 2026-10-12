@@ -330,7 +330,7 @@ export default function MeetingsManager() {
         {!selectedId && error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         {selectedId ? (
           detailLoading && !selectedMeeting ? (
-            <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ minHeight: 430 }}>
+            <Stack spacing={1.5} sx={{ alignItems: "center", justifyContent: "center",  minHeight: 430 }}>
               <CircularProgress />
               <Typography color="text.secondary">{t('meetings.detail.loading')}</Typography>
             </Stack>

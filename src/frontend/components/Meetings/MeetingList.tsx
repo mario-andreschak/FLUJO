@@ -39,7 +39,7 @@ export default function MeetingList({ meetings, loading, onSelect, onCreate }: M
   const theme = useTheme();
 
   if (loading) {
-    return <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ minHeight: 360 }}><CircularProgress /><Typography color="text.secondary">{t('meetings.list.loading')}</Typography></Stack>;
+    return <Stack spacing={1.5} sx={{ alignItems: "center", justifyContent: "center",  minHeight: 360 }}><CircularProgress /><Typography color="text.secondary">{t('meetings.list.loading')}</Typography></Stack>;
   }
 
   if (meetings.length === 0) {
@@ -58,7 +58,7 @@ export default function MeetingList({ meetings, loading, onSelect, onCreate }: M
           background: `radial-gradient(circle at 50% 25%, ${alpha(theme.palette.primary.main, 0.13)}, transparent 38%), ${alpha(theme.palette.background.paper, 0.76)}`,
         }}
       >
-        <Stack alignItems="center" spacing={2} sx={{ position: 'relative', zIndex: 1, maxWidth: 560 }}>
+        <Stack spacing={2} sx={{ alignItems: "center",  position: 'relative', zIndex: 1, maxWidth: 560 }}>
           <Box sx={{ position: 'relative', width: 150, height: 80 }} aria-hidden="true">
             {[-1, 0, 1].map((offset, index) => (
               <Avatar
@@ -84,7 +84,7 @@ export default function MeetingList({ meetings, loading, onSelect, onCreate }: M
             <Typography color="text.secondary" sx={{ mt: 1, maxWidth: 520 }}>{t('meetings.empty.description')}</Typography>
           </Box>
           <Button variant="contained" size="large" startIcon={<AddRounded />} onClick={onCreate}>{t('meetings.new')}</Button>
-          <Stack direction="row" flexWrap="wrap" justifyContent="center" gap={1}>
+          <Stack direction="row" sx={{ flexWrap: "wrap", justifyContent: "center", gap: 1 }}>
             <Chip size="small" variant="outlined" label={t('meetings.empty.parallel')} />
             <Chip size="small" variant="outlined" label={t('meetings.empty.private')} />
             <Chip size="small" variant="outlined" label={t('meetings.empty.moderated')} />
@@ -96,7 +96,7 @@ export default function MeetingList({ meetings, loading, onSelect, onCreate }: M
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center",  mb: 2 }}>
         <HistoryRounded color="action" />
         <Typography variant="h6" sx={{ fontWeight: 730 }}>{t('meetings.list.recent')}</Typography>
         <Chip size="small" label={meetings.length} />
@@ -114,7 +114,7 @@ export default function MeetingList({ meetings, loading, onSelect, onCreate }: M
           >
             <CardActionArea onClick={() => onSelect(meeting.id)} sx={{ p: 2.2, height: '100%' }}>
               <Stack spacing={2} sx={{ height: '100%' }}>
-                <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start" }} spacing={1}>
                   <MeetingStatusChip status={meeting.status} />
                   <Typography variant="caption" color="text.secondary">
                     {formatDate(meeting.updatedAt, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -126,12 +126,12 @@ export default function MeetingList({ meetings, loading, onSelect, onCreate }: M
                     {t('meetings.list.roundSummary', { current: meeting.roundNumber, total: meeting.participantCount })}
                   </Typography>
                 </Box>
-                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
                   <AvatarGroup max={5} sx={{ justifyContent: 'flex-end', '& .MuiAvatar-root': { width: 30, height: 30, fontSize: '0.68rem', fontWeight: 750 } }}>
                     {meeting.participantNames.map((name) => <Avatar key={name}>{initials(name)}</Avatar>)}
                   </AvatarGroup>
-                  <Stack direction="row" spacing={0.5} alignItems="center" color="primary.light">
-                    <Typography variant="caption" fontWeight={750}>{t('meetings.list.open')}</Typography>
+                  <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", color: "primary.light" }}>
+                    <Typography variant="caption" sx={{ fontWeight: 750 }}>{t('meetings.list.open')}</Typography>
                     <ArrowForwardRounded fontSize="small" />
                   </Stack>
                 </Stack>

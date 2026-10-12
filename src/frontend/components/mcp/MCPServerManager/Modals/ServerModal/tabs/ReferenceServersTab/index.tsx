@@ -624,7 +624,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
             
             <Grid container spacing={2}>
               {servers.map((server) => (
-                <Grid item xs={12} sm={6} md={4} key={server.name}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={server.name}>
                   <Card 
                     sx={{ 
                       height: '100%', 

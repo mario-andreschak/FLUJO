@@ -41,11 +41,11 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
             type="number"
             label={property.label}
             value={typeof value === 'number' || typeof value === 'string' ? value : ''}
-            inputProps={{
+            slotProps={{ htmlInput: {
               min: property.min,
               max: property.max,
               step: property.step,
-            }}
+            } }}
             onChange={(e) => {
               // Empty input clears the property (undefined) so it can mean
               // "inherit / unset" rather than 0; otherwise store the number.

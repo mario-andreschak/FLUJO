@@ -243,7 +243,7 @@ function IdentifierFilter({ label, values, onChange }: IdentifierFilterProps) {
       size="small"
       fullWidth
       helperText={t('statistics.commaSeparated')}
-      inputProps={{ 'aria-label': t('statistics.commaSeparatedAria', { label }) }}
+      slotProps={{ htmlInput: { 'aria-label': t('statistics.commaSeparatedAria', { label }) } }}
     />
   );
 }
@@ -493,7 +493,7 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect, credentials = 
                   }}
                 >
                   <TableCell>
-                    <Typography variant="body2" fontWeight={600}>{label}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{label}</Typography>
                     {!credentials && row.name && (
                       <Typography variant="caption" color="text.secondary">{row.id}</Typography>
                     )}
@@ -810,8 +810,7 @@ export default function Statistics() {
             }))}
             size="small"
             fullWidth
-            InputLabelProps={{ shrink: true }}
-            inputProps={{ 'aria-label': t('statistics.startDateAria') }}
+            slotProps={{ inputLabel: { shrink: true }, htmlInput: { 'aria-label': t('statistics.startDateAria') } }}
           />
           <TextField
             label={t('statistics.toUtc')}
@@ -823,8 +822,7 @@ export default function Statistics() {
             }))}
             size="small"
             fullWidth
-            InputLabelProps={{ shrink: true }}
-            inputProps={{ 'aria-label': t('statistics.endDateAria') }}
+            slotProps={{ inputLabel: { shrink: true }, htmlInput: { 'aria-label': t('statistics.endDateAria') } }}
           />
           <FormControl size="small" fullWidth>
             <InputLabel id="statistics-source-label">{t('statistics.sources')}</InputLabel>
@@ -974,11 +972,8 @@ export default function Statistics() {
         </Box>
         <Stack
           direction="row"
-          flexWrap="wrap"
-          gap={1}
-          alignItems="center"
           aria-label={t('statistics.activeFiltersAria')}
-          sx={{ mt: activeFilters.length > 0 ? 2 : 1 }}
+          sx={{ flexWrap: "wrap", gap: 1, alignItems: "center",  mt: activeFilters.length > 0 ? 2 : 1 }}
         >
           {activeFilters.length === 0 ? (
             <Typography variant="body2" color="text.secondary">{t('statistics.noDimensionFilters')}</Typography>
@@ -1009,7 +1004,7 @@ export default function Statistics() {
       )}
 
       {loading && !data ? (
-        <Stack alignItems="center" spacing={1.5} sx={{ py: 8 }}>
+        <Stack spacing={1.5} sx={{ alignItems: "center",  py: 8 }}>
           <Spinner size="large" />
           <Typography>{t('statistics.loading')}</Typography>
         </Stack>
@@ -1120,7 +1115,7 @@ export default function Statistics() {
                     onSelectDate={selectDate}
                   />
                 </Box>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                   <Button variant="outlined" size="small" onClick={() => openDetails('runs')}>
                     {`${t('statistics.openDetails')}: ${t('statistics.detailKind.runs')}`}
                   </Button>
@@ -1362,7 +1357,7 @@ export default function Statistics() {
                                   : t('statistics.compare.warning.ranges')}
                           </Alert>
                         ))}
-                        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+                        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
                           <Typography variant="body2">
                             {`${t('statistics.compare.baseline')}: ${t('statistics.compare.samples', {
                               count: formatNumber(comparison.baseline.samples),
@@ -1429,13 +1424,11 @@ export default function Statistics() {
         anchor="right"
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        PaperProps={{ sx: { width: { xs: '100%', md: 720 }, p: 2 } }}
+        slotProps={{ paper: { sx: { width: { xs: '100%', md: 720 }, p: 2 } } }}
       >
         <Stack
           direction="row"
-          justifyContent="space-between"
-          alignItems="center"
-          sx={{ mb: 1 }}
+          sx={{ justifyContent: "space-between", alignItems: "center",  mb: 1 }}
         >
           <Typography component="h2" variant="h6">
             {`${t('statistics.details')} · ${t(`statistics.detailKind.${detailKind}` as TranslationKey)}`}
@@ -1459,7 +1452,7 @@ export default function Statistics() {
               ) : detailRows.map((row, index) => (
                 <TableRow key={`${row.runId}-${row.timestamp}-${index}`}>
                   <TableCell>
-                    <Typography variant="body2" fontWeight={600}>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {row.kind === 'run'
                         ? `${row.flowName ?? row.flowId ?? row.runId} · ${row.status}`
                         : row.kind === 'tool'
@@ -1494,7 +1487,7 @@ export default function Statistics() {
             </TableBody>
           </Table>
         </TableContainer>
-        <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 2 }}>
+        <Stack direction="row" spacing={2} sx={{ alignItems: "center",  mt: 2 }}>
           <Typography variant="body2" color="text.secondary">
             {t('statistics.showingRows', {
               shown: formatNumber(detailRows.length),

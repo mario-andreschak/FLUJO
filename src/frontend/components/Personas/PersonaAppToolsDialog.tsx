@@ -93,7 +93,7 @@ export default function PersonaAppToolsDialog({
           <Typography id={helpId} color="text.secondary">{t('personas.apps.toolsHelp')}</Typography>
           {saveFailure && <Alert severity="error" ref={saveErrorRef} tabIndex={-1}>{saveError || saveFailure}</Alert>}
           {isLoading && (
-            <Stack direction="row" spacing={1.5} alignItems="center" role="status">
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }} role="status">
               <CircularProgress size={22} aria-hidden="true" />
               <Typography color="text.secondary">{t('personas.apps.loadingTools')}</Typography>
             </Stack>

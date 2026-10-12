@@ -56,14 +56,14 @@ export const NodeTechnicalDetailsModal = ({
       maxWidth="sm"
       fullWidth
       aria-labelledby={TITLE_ID}
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           m: { xs: 1, sm: 4 },
           width: { xs: 'calc(100% - 16px)', sm: '100%' },
           maxWidth: { xs: 'calc(100% - 16px)', sm: 600 },
           maxHeight: { xs: 'calc(100dvh - 16px)', sm: '85vh' },
         },
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={t('flows.nodeInfo.technicalTitle', { name: information?.label ?? '' })}

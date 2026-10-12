@@ -49,8 +49,8 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
   };
   return <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3, minWidth: 0, overflowWrap: 'anywhere' }}>
     <Stack spacing={1.5}>
-      <Stack direction="row" justifyContent="space-between" gap={1} flexWrap="wrap">
-        <Typography variant="h6" fontWeight={760}>{item.title}</Typography>
+      <Stack direction="row" sx={{ justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+        <Typography variant="h6" sx={{ fontWeight: 760 }}>{item.title}</Typography>
         <Chip label={t(`personas.goal.${goal.state}`)} color={goal.state === 'active' ? 'info' : goal.state === 'completed' ? 'success' : goal.state === 'needs_input' ? 'warning' : 'default'} />
       </Stack>
       {item.description && <Typography color="text.secondary">{item.description}</Typography>}
@@ -60,7 +60,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
         {goal.state === 'active' && <Typography variant="subtitle2">{t('personas.goal.workingAroundDependency')}</Typography>}
         {goal.interventionReason}
       </Alert>}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
         {goal.completionPolicy === 'until_stopped' && <Chip size="small" variant="outlined" label={t('personas.goal.untilStopped')} />}
         <Chip size="small" label={t('personas.goal.rounds', { count: goal.rounds })} />
         <Typography variant="body2" color="text.secondary">{t('personas.goal.dailyUsage', { count: goal.roundsInWindow, limit: goal.maxRoundsPerDay })}</Typography>
@@ -70,7 +70,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
           : goal.nextRunAt !== undefined && <Typography variant="body2">{t(goal.pendingTaskId ? 'personas.goal.nextAttempt' : 'personas.goal.nextWake', { date: formatDate(goal.nextRunAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</Typography>)}
         {goal.lastProgressAt !== undefined && <Typography variant="body2" color="text.secondary">{t('personas.goal.lastProgress', { date: formatDate(goal.lastProgressAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</Typography>}
       </Stack>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
         {goal.state === 'active' && <Button disabled={busy} startIcon={<PauseCircleOutlineRounded />} onClick={() => void mutate(() => personasService.controlWorkItem(item.personaId, item.id, 'pause'), t('personas.tasks.paused'))}>{t('personas.tasks.pause')}</Button>}
         {(goal.state === 'paused' || goal.state === 'needs_input') && <Button disabled={busy || dirty} startIcon={<ReplayRounded />} onClick={() => void mutate(() => personasService.controlWorkItem(item.personaId, item.id, 'retry'), t('personas.tasks.restarted'))}>{t('personas.goal.continue')}</Button>}
         {!terminal && <Button color="error" disabled={busy} startIcon={<StopCircleRounded />} onClick={() => void mutate(() => personasService.controlWorkItem(item.personaId, item.id, 'stop'), t('personas.tasks.stopped'))}>{t('personas.tasks.stop')}</Button>}
@@ -88,7 +88,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
       </Box>
       {dirty && <Stack spacing={1}>
         <Typography role="status" color="text.secondary">{t('personas.settings.unsaved')}</Typography>
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
           <Button variant="contained" disabled={busy || !valid} onClick={() => void save()}>{t('personas.action.save')}</Button>
           <Button disabled={busy} onClick={() => setDirty(false)}>{t('personas.goal.discardChanges')}</Button>
         </Stack>
