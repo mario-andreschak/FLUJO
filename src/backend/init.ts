@@ -597,6 +597,10 @@ async function startWorkerRuntime(): Promise<void> {
     throw new Error('Worker MCP startup failed. Every enabled server must connect before jobs are accepted.');
   }
   setWorkerBootstrapStatus({ state: 'ready', error: undefined });
+  // This entry point preserves snapshot/Persona suppression and admits only
+  // separately enrolled installation-local ordinary schedule generations.
+  const { isWorkerLocalRecoveryConfigured } = await import('@/backend/services/scheduler/workerLocalRecovery');
+  if (isWorkerLocalRecoveryConfigured()) await getSchedulerService().start();
 }
 
 /**

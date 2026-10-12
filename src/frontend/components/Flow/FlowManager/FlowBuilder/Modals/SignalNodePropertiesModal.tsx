@@ -84,7 +84,7 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogHeaderActions title={t('flows.signal.title')} onClose={onClose} />
       <DialogContent>
-        <Box display="flex" flexDirection="column" gap={2} mt={1}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
           <TextField
             label={t('flows.signal.name')}
             value={topic}

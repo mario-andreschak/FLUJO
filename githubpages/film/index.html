@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080c17">
+  <link rel="icon" type="image/svg+xml" href="brand.svg">
+  <title>Build a website with FLUJO — Guided walkthrough</title>
+  <meta name="description" content="Follow a silent guided walkthrough: connect your AI and tools, save a reusable Website Builder, and use it to create a website in FLUJO.">
+  <link rel="canonical" href="https://flujo.com.co/film/">
+  <meta property="og:title" content="Build a website with FLUJO">
+  <meta property="og:description" content="Connect your AI and tools, save a reusable Website Builder, and use it to create a website. A silent guided walkthrough.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://flujo.com.co/film/">
+  <meta property="og:image" content="https://flujo.com.co/film/poster.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="The FLUJO workspace at the start of the guided walkthrough">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="film.css?v=ac2b97966607">
+  <script type="module" src="player.js?v=4fad06e5bf83"></script>
+</head>
+<body>
+  <a class="skip-link" href="#player">Skip to the walkthrough</a>
+  <header class="page-header">
+    <a class="wordmark" href="../" aria-label="FLUJO home"><img src="brand.svg" width="30" height="30" alt="">FLUJO<span aria-hidden="true">.</span></a>
+    <a class="primary-cta" href="../start/">Try FLUJO <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <div class="intro">
+      <p class="eyebrow">Guided walkthrough <span data-film-stage hidden></span></p>
+      <h1 data-film-title>Build a website with FLUJO</h1>
+      <p>Connect your AI and tools, save a reusable Website Builder, and use it to create a website.</p>
+    </div>
+    <section id="player" class="player" aria-label="Build a website with FLUJO — guided walkthrough" tabindex="0" aria-describedby="viewing-help">
+      <div class="screen">
+        <canvas id="film-canvas" width="1600" height="1000" aria-label="Build a website with FLUJO. A full text description follows the player." role="img"></canvas>
+        <button id="start-overlay" class="start-overlay" type="button" aria-label="Play the walkthrough"><span class="play-disc" aria-hidden="true">▶</span><span>Play walkthrough<small>No audio needed</small></span></button>
+      </div>
+      <div class="controls">
+        <button id="play" type="button" aria-label="Play walkthrough"><span class="play-icon" aria-hidden="true">▶</span><span class="play-label">Play</span></button>
+        <button id="replay" type="button" aria-label="Replay from the beginning" title="Replay from the beginning"><span class="replay-icon" aria-hidden="true">↺</span><span>Replay</span></button>
+        <label class="sr-only" for="seek">Walkthrough position in seconds</label>
+        <input id="seek" type="range" min="0" max="1" step="0.1" value="0" aria-valuetext="Beginning of walkthrough">
+        <output id="time" aria-hidden="true">0:00</output>
+        <label class="speed-control" for="playback-speed"><span>Speed</span><select id="playback-speed" aria-label="Playback speed"><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select></label>
+        <button id="motion" class="motion-button" type="button" aria-pressed="false" title="Reduce animated movement">Gentle motion</button>
+        <button id="fullscreen" class="icon-button" type="button" aria-label="Enter fullscreen" title="Fullscreen">⛶</button>
+      </div>
+      <div id="media-error-panel" class="media-error-panel" role="alert" hidden>
+        <p id="media-error-message">The recording couldn’t finish loading. Reload to try again, or download the video below.</p>
+        <button id="retry-media" type="button">Reload walkthrough</button>
+      </div>
+      <p id="scene-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+    </section>
+    <div class="under-film">
+      <p><span class="film-duration"></span><span>No audio needed.</span></p>
+      <p id="viewing-help" class="viewing-help">Use fullscreen or turn your phone sideways for small interface text.</p>
+      <a href="../guides/website-builder/">Follow the written steps</a>
+      <a class="download-link" data-film-download hidden download>Download video (84 MB) <span aria-hidden="true">↓</span></a>
+    </div>
+    <section class="chapter-list" aria-labelledby="chapter-heading">
+      <h2 id="chapter-heading">Follow the walkthrough</h2>
+      <nav id="chapter-nav" aria-label="Walkthrough chapters"></nav>
+    </section>
+    <details class="transcript">
+      <summary>Transcript &amp; recording notes</summary>
+      <ol id="chapters"></ol>
+      <div class="recording-notes">
+        <p>Follow the recorded FLUJO workspace with on-screen explanations. Routine operator pauses are trimmed; actions play at normal speed at 1×. The pointer guides your eye to recorded click positions. Private provider-key entry and correction are omitted; the connection test shown is the successful retry. Pause at any step or revisit a chapter.</p>
+        <p>The tool setup uses a GitHub clone and build, then a manual connection that reuses those files. An earlier save click missed the dialog. The operator reopened setup and corrected a folder entry before the final test and Add server action shown here. Those recovery operations are omitted; the earlier error remains visible until the new test passes.</p>
+        <p>The agent instructions and name are pasted in the recorded app. Clipboard preparation is omitted; the text appears at once as it did in the real session.</p>
+        <p>First Pour was reviewed and improved in the same chat. The first revision reported success, but the operator found the old footer year and duplicate trailing markup. A follow-up requested a read, one complete <code>write_file</code> correction, then a readback. The final agent response reports its checks; the operator separately checked the served file and browser behavior.</p>
+        <p>The final desktop check uses fictional signup details, shows the local confirmation, then reloads to the empty labeled form. This signup is a local demo: it sends no data, makes no reservation and delivers no email.</p>
+        <p>The website brief, revision, repair and demo details are pasted in the real browser. Routine pauses, clipboard preparation, preliminary inspection and unsuccessful navigation are omitted; actual pastes and actions play at normal speed at 1×. The recording does not claim unassisted first-attempt success.</p>
+        <p>Two approved stills show the first draft's hero and signup before the revision. The later preview and signup sequences show the repaired site. The closing tour presents brief recorded views of Meetings, Automations and Personas.</p>
+        <p>Connected models and tools may receive data and have their own costs. <a href="../guides/website-builder/#recorded-setup">About this recording and its evidence <span aria-hidden="true">↗</span></a></p>
+        <p class="keyboard-help">Choose 1×, 2× or 5× playback speed. Player shortcuts: Space to play or pause, ← / → to move five seconds, Home / End to jump to either end, and F for fullscreen. The timeline also supports its native arrow keys.</p>
+      </div>
+    </details>
+    <noscript><p class="no-script">Enable JavaScript for the interactive walkthrough and chapters, or <a href="flujo-guided-walkthrough.mp4" download="flujo-guided-walkthrough.mp4">download the video (84 MB)</a>.</p></noscript>
+  </main>
+  <footer><span>FLUJO</span><span>Runs on your computer. Open source.</span></footer>
+</body>
+</html>

@@ -9,6 +9,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import { Model } from '../types';
 import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ModelCard from '@/frontend/components/models/list/ModelCard';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -51,6 +52,8 @@ const ModelBinding: React.FC<ModelBindingProps> = ({
     : null;
 
   return (
+    <>
+    {selectedModelId && <AllowanceBar modelIds={models.find(model => model.id === selectedModelId)?.fallbackPolicy?.modelIds ?? [selectedModelId]} />}
     <Box sx={{ mt: 4 }}>
       <Typography variant="subtitle1" gutterBottom>
         {t('flows.process.bindModel')}
@@ -101,6 +104,7 @@ const ModelBinding: React.FC<ModelBindingProps> = ({
         </>
       )}
     </Box>
+    </>
   );
 };
 

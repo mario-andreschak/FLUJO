@@ -18,7 +18,8 @@
  * `code_challenge` — the registry's real GoTrue tokens never appear in a
  * redirect URL.
  */
-import { resolveRegistryBaseUrl, oauthExchange } from '@/backend/utils/packageRegistryClient';
+import { oauthExchange } from '@/backend/utils/packageRegistryClient';
+import { requireRegistryBaseUrl } from '@/backend/utils/registryDestination';
 import type { RegistryOAuthProvider } from '@/shared/types/registry';
 
 /**
@@ -31,8 +32,8 @@ export async function buildAuthorizeUrl(params: {
   redirectUri: string;
   state: string;
   codeChallenge: string;
-}): Promise<string> {
-  const base = await resolveRegistryBaseUrl();
+}, registryBaseUrl: string): Promise<string> {
+  const base = requireRegistryBaseUrl(registryBaseUrl);
   const url = new URL(`${base}/v1/auth/oauth/${params.provider}/authorize`);
   url.searchParams.set('redirect_uri', params.redirectUri);
   url.searchParams.set('state', params.state);
@@ -51,6 +52,6 @@ export function exchangeAuthorizationCode(params: {
   codeVerifier: string;
   redirectUri: string;
   provider: RegistryOAuthProvider;
-}) {
-  return oauthExchange(params);
+}, registryBaseUrl: string) {
+  return oauthExchange(params, registryBaseUrl);
 }

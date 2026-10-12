@@ -1,3 +1,4 @@
+import { unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
 import { NextRequest } from 'next/server';
 
 import { DELETE as deletePersona, GET as getPersona } from '@/app/v1/personas/[personaId]/route';
@@ -40,6 +41,7 @@ describe('enduring-agent production routes', () => {
     ]);
     await Promise.all([workspaceA, workspaceB].map((workspace) => (
       runWithWorkspace(workspace, async () => {
+        await unlockPrivateFixtureInCurrentWorkspace();
         await saveItem(StorageKey.MODELS, [{
           id: 'model-test',
           name: 'test-model',

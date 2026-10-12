@@ -195,8 +195,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
             key={index}
             direction={{ xs: 'column', sm: 'row' }}
             spacing={1}
-            alignItems={{ xs: 'stretch', sm: 'flex-start' }}
-            sx={{ minWidth: 0 }}
+            sx={{ alignItems: { xs: 'stretch', sm: 'flex-start' },  minWidth: 0 }}
           >
             <TextField
               size="small"
@@ -220,7 +219,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
                   ? t('mcp.local.headers.reenterHelp')
                   : (row.isMasked ? t('mcp.local.headers.storedSecret') : '')
               }
-              InputProps={{
+              slotProps={{ input: {
                 readOnly: row.isBound,
                 endAdornment: row.isBound ? (
                   <InputAdornment position="end">
@@ -235,7 +234,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
                     />
                   </InputAdornment>
                 ) : null
-              }}
+              } }}
               fullWidth
               sx={{ flex: 1, minWidth: 0 }}
             />

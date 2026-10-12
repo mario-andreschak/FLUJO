@@ -11,7 +11,7 @@ export default function RoleCard({ role }: { role: PublicRole }) {
     <Card variant="outlined" sx={{ height: '100%' }}>
       <CardActionArea component={Link} href={`/roles/${encodeURIComponent(role.id)}`} sx={{ height: '100%' }}>
         <CardContent>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+          <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
             <Typography variant="h6" component="h2">{role.name}</Typography>
             {role.archived && <Chip size="small" label={t('roles.archived')} />}
           </Stack>

@@ -4,6 +4,7 @@ import path from 'node:path';
 import CryptoJS from 'crypto-js';
 import { StorageKey } from '@/shared/types/storage';
 import type { EncryptionMetadata } from '@/utils/encryption/format';
+import { seedLegacyDefault } from './fixtures/legacyDefault';
 
 jest.setTimeout(60_000);
 let root: string;
@@ -59,24 +60,36 @@ function legacyFixture(password?: string) {
   };
 }
 
-it('keeps the data key stable through default-to-user migration and password changes', async () => {
+it('retires the public-default key through full migration and keeps the private key stable through password changes', async () => {
   const { secure, session, storage, format } = await modules();
+  await seedLegacyDefault();
   expect(await secure.initializeDefaultEncryption()).toBe(true);
   const before = (await storage.loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null))!;
   const ring = await format.unwrapKeyring(before, 'FLUJO~');
   expect(Buffer.from(ring.activeKey, 'hex')).toHaveLength(32);
   const ciphertext = (await secure.encryptWithPassword('preserved-secret'))!;
   expect(ciphertext).toMatch(/^v2:/);
-  expect(await secure.migrateToUserEncryption('first-password')).toBe(true);
-  expect(await secure.decryptWithPassword(ciphertext, 'first-password')).toBe('preserved-secret');
-  expect(await secure.authenticate('first-password')).toBeTruthy();
-  expect(await secure.changeEncryptionPassword('first-password', 'second-password')).toBe(true);
+  await storage.saveItem(StorageKey.MODELS, [{ id: 'preserved', ApiKey: `encrypted:${ciphertext}` }]);
+  await expect(secure.migrateToUserEncryption('first-private-password')).rejects.toBeInstanceOf(secure.CredentialMigrationRequiredError);
+  const migration = await import('@/backend/services/workspace/credentialMigration');
+  const options = { recoveryPassphrase: 'first-private-password' };
+  const plan = await migration.preflightCredentialMigration(options);
+  await migration.migrateCredentials(options, plan.planToken);
+  const privateMetadata = (await storage.loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null))!;
+  const privateRing = await format.unwrapKeyring(privateMetadata, 'first-private-password');
+  expect(privateRing.activeKey).not.toBe(ring.activeKey);
+  const records = await storage.loadItem<Array<{ ApiKey: string }>>(StorageKey.MODELS, []);
+  const migratedCiphertext = records[0].ApiKey.slice('encrypted:'.length);
+  expect(await secure.decryptWithPassword(migratedCiphertext, 'first-private-password')).toBe('preserved-secret');
+  expect(() => format.open(migratedCiphertext, ring.activeKey, 'flujo:secret:v2')).toThrow();
+  expect(await secure.authenticate('first-private-password')).toBeTruthy();
+  expect(await secure.changeEncryptionPassword('first-private-password', 'second-password')).toBe(true);
   const after = (await storage.loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null))!;
-  expect((await format.unwrapKeyring(after, 'second-password')).activeKey).toBe(ring.activeKey);
+  expect((await format.unwrapKeyring(after, 'second-password')).activeKey).toBe(privateRing.activeKey);
   session.lockServer();
-  expect(await secure.authenticate('first-password')).toBeNull();
+  expect(await secure.authenticate('first-private-password')).toBeNull();
   expect(await secure.authenticate('second-password')).toBeTruthy();
-  expect(await secure.decryptWithPassword(ciphertext)).toBe('preserved-secret');
+  expect(await secure.decryptWithPassword(migratedCiphertext)).toBe('preserved-secret');
 });
 
 it.each(['default', 'user'])('upgrades %s v1 metadata, reads mixed ciphertext after restart and backup restore', async (type) => {
@@ -157,9 +170,12 @@ it('does not rotate an initialized USER key when initialization is called again'
 
 it('serializes competing first writes so all ciphertext uses the committed key', async () => {
   const { secure } = await modules();
+  await secure.initializeEncryption('concurrent-write-password');
+  await secure.authenticate('concurrent-write-password');
   const values = ['first', 'second', 'third'];
   const ciphertexts = await Promise.all(values.map(value => secure.encryptWithPassword(value)));
   restart();
+  await secure.authenticate('concurrent-write-password');
   for (let index = 0; index < values.length; index++) {
     expect(await secure.decryptWithPassword(ciphertexts[index]!)).toBe(values[index]);
   }

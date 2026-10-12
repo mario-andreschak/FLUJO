@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import McpAppFrame from '@/frontend/components/Chat/McpAppFrame';
 import { TextDecoder, TextEncoder } from 'util';
 
@@ -62,6 +62,12 @@ beforeEach(() => {
   } as Response));
 });
 afterEach(() => { global.fetch = originalFetch; });
+
+it('names the full-screen control even before the App declares display capabilities', () => {
+  render(<McpAppFrame conversationId="accessible-frame" serverName="browser"
+    uri="ui://browser/owner-handshake" defaultExpanded toolOwnerScope="run:accessible" />);
+  expect(screen.getByRole('button', { name: 'chat.app.fullscreen' })).toBeDisabled();
+});
 
 async function readyLatestProxy(container: HTMLElement, expectedBridgeCount: number) {
   await waitFor(() => expect(container.querySelector('iframe')?.src).toContain(sandboxOrigin));

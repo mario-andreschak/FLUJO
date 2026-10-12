@@ -1,4 +1,5 @@
 import type { UsageTotals } from '@/shared/types/execution/events';
+import type { WorkerRecoveryStatus } from './workerRecovery';
 
 /**
  * Planned Executions (#10): flows that run headlessly on triggers.
@@ -434,6 +435,7 @@ export interface TriggerFirePayload {
 /** Live (non-persisted) status of an execution's armed trigger, for the UI. */
 export interface PlannedExecutionStatus {
   armed: boolean;
+  workerRecovery?: WorkerRecoveryStatus;
   /**
    * When NOT armed, why — so the UI can show a truthful reason instead of a
    * bare "Not armed" (issue #118). 'paused' = the global pause switch gates

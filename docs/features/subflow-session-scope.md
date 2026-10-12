@@ -18,6 +18,13 @@ Session memory works immediately from the node's saved scope. No Experimental
 settings switch is required. New nodes already default to one conversation per
 session key; nodes without a saved scope retain their fresh-child behavior.
 
+Inline `call_subflow_*` calls honor the saved memory choice inside a persisted
+parent run. For keyed memory they accept the same optional `sessionKey` as a graph
+handoff; the caller's key overrides the saved template. Summary mode and turn caps
+also apply. A fresh visit, an unresolved key, an ephemeral parent, or explicitly
+disabled conversation saving keeps an inline child ephemeral. Inline calls still
+have no checkpointed graph join: an interrupted call must be retried.
+
 For messages while a child is running, see [Subflow communication](../SUBFLOW_COMMUNICATION.md).
 
 ## Session scope options
@@ -87,12 +94,12 @@ one child while different keys remain isolated. If a registered child conversati
 missing or its transcript is corrupt, FLUJO initializes a fresh replacement and swaps
 only that registry entry after initialization succeeds.
 
-Combined with the experimental flag being enabled, every visit to this node within the
-same parent run will now resume the same child conversation.
+Every visit to this node within the same parent run resumes the same child
+conversation.
 
 For caller-addressed child chats, configure `"sessionScope": "per-key"` and leave
-`sessionKey` absent. With the experiment enabled, an incoming Process node then receives
-this additional handoff-tool argument:
+`sessionKey` absent. An incoming Process node then receives this additional
+handoff-tool argument:
 
 ```json
 {
@@ -135,16 +142,21 @@ the result, and — on failure — hands back to "Produce" for another attempt.
 
 - **First visit:** no prior session exists. A new child conversation is created and the
   full task is sent.
-- **Second (and later) visits:** with `sessionScope: 'per-run'` and the experimental flag
-  on, the same child conversation is resumed. The child already knows every file path,
+- **Second (and later) visits:** with `sessionScope: 'per-run'`, the same child
+  conversation is resumed. The child already knows every file path,
   command, and prior decision from its own transcript, so the parent only needs to send
   the QC findings ("scene 3's audio is out of sync") rather than the entire task again.
 
-On one reference flow (`Website_Promo_Video_Producer`), this pattern was **observed** to
-eliminate several expensive 900-frame recaptures per retry loop and save roughly
-700K prompt tokens across a run. This is a single observed data point on one flow, not a
-guarantee for every use case — actual savings depend on how much of the retry work is
-genuinely redundant.
+The [2026-10-12 reference-flow acceptance](../audits/reference-subflow-sessions-2026-10-12.md)
+completed two real `Website_Promo_Video_Producer` delivery reruns with identical
+verified media. The repeated researcher retained one child conversation, while the
+fresh-child baseline created two. The reuse run used 313,854 fewer prompt tokens
+(9.9%) in that one paired warm rerun. This is an observation, not a general savings
+guarantee or a measurement of cold 900-frame recaptures.
+
+Earlier notes reported roughly 700K prompt-token savings from avoided recaptures,
+but no recoverable paired receipt supports that historical anecdote. The recorded
+comparison above does not verify that value or its reported workload.
 
 ## Trade-offs and troubleshooting
 

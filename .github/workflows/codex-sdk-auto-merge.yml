@@ -1,0 +1,73 @@
+name: Enable qualified Codex SDK updates
+
+on:
+  workflow_run:
+    workflows: [verify]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  enable:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.actor.login == 'dependabot[bot]' && github.event.workflow_run.pull_requests[0].number
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Read only trusted main; never check out the dependency PR in this job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Select an exact Codex-only manifest change
+        id: qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json author,headRepository,headRefOid,baseRefName,state > "$RUNNER_TEMP/codex-update-pr.json"
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate > "$RUNNER_TEMP/codex-update-files.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const { REPOSITORY, HEAD_SHA, PR_NUMBER, GITHUB_OUTPUT } = process.env;
+          if (!/^[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*$/i.test(REPOSITORY ?? '') || !/^[a-f0-9]{40}$/.test(HEAD_SHA ?? '') || !/^[1-9]\d*$/.test(PR_NUMBER ?? '') || !GITHUB_OUTPUT) throw new Error('Invalid trusted workflow inputs.');
+          const pr = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/codex-update-pr.json', 'utf8'));
+          const files = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/codex-update-files.json', 'utf8'));
+          if (!pr || typeof pr !== 'object' || typeof pr.author?.login !== 'string' || !['OPEN', 'CLOSED', 'MERGED'].includes(pr.state) || typeof pr.baseRefName !== 'string' || !/^[a-f0-9]{40}$/.test(pr.headRefOid ?? '') || typeof pr.headRepository?.nameWithOwner !== 'string') throw new Error('Invalid pull request evidence.');
+          if (!Array.isArray(files) || files.some(f => !f || typeof f.filename !== 'string' || !f.filename) || new Set(files.map(f => f.filename)).size !== files.length) throw new Error('Invalid changed-file evidence.');
+          let eligible = false;
+          if (['app/dependabot', 'dependabot[bot]'].includes(pr.author.login) && pr.state === 'OPEN' && pr.baseRefName === 'main' && pr.headRefOid === HEAD_SHA && pr.headRepository.nameWithOwner === REPOSITORY
+              && files.length === 2 && files.every(f => ['package.json', 'package-lock.json'].includes(f.filename))) {
+            const manifest = files.find(f => f.filename === 'package.json');
+            if (typeof manifest.patch !== 'string') throw new Error('Missing manifest patch evidence.');
+            const changed = manifest.patch.split('\n').filter(line => /^[+-]/.test(line) && !/^([+]{3}|[-]{3})/.test(line));
+            eligible = changed.length === 2 && changed.some(line => line.startsWith('-')) && changed.some(line => line.startsWith('+'))
+              && changed.every(line => /^[+-]\s*"@openai\/codex-sdk": "\d+\.\d+\.\d+",?$/.test(line));
+          }
+          fs.appendFileSync(GITHUB_OUTPUT, `eligible=${eligible}\n`);
+          console.log(eligible ? 'Exact Codex SDK update selected.' : 'No eligible Codex SDK update; leaving this pull request unchanged.');
+          NODE
+      - name: Enable automatic merge after the normal required checks
+        if: steps.qualification.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --auto --squash --match-head-commit "$HEAD_SHA"

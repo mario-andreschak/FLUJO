@@ -59,14 +59,14 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
           {attempt.error?.message}
         </Typography>
         {(attempt.error?.code || attempt.error?.type) && (
-          <Typography variant="caption" color="text.secondary" display="block">
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
             {attempt.error?.type ? `type: ${attempt.error.type}` : ''}
             {attempt.error?.type && attempt.error?.code ? ' · ' : ''}
             {attempt.error?.code ? `code: ${attempt.error.code}` : ''}
           </Typography>
         )}
         {attempt.error?.retryAfter && (
-          <Typography variant="caption" color="text.secondary" display="block">
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
             retry-after: {attempt.error.retryAfter}s
           </Typography>
         )}
@@ -101,9 +101,18 @@ export const ModelTestDialog = ({
   onRetry,
 }: ModelTestDialogProps) => {
   const { t } = useI18n();
-  const sdkTitle = result?.provider === 'codex'
+  // The resolved route owns transport selection; a gateway's provider label
+  // does not establish that this check used the OpenAI SDK.
+  const adapterId = result?.adapterRoute?.adapterId;
+  const sdkTitle = adapterId === 'codex-cli'
     ? t('models.test.codexSdk')
-    : t('models.test.openaiSdk');
+    : adapterId === 'antigravity-cli'
+      ? t('models.test.antigravityCli')
+      : adapterId === 'openai' || adapterId === 'openai-responses'
+        ? t('models.test.openaiSdk')
+        : adapterId
+          ? t('models.test.resolvedTransport', { adapter: adapterId })
+          : t('models.test.connectionAttempt');
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -123,7 +132,7 @@ export const ModelTestDialog = ({
             <Alert severity={result.ok ? 'success' : 'warning'} sx={{ mb: 2 }}>
               {result.diagnosis}
             </Alert>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mb: 2 }}>
               {t('models.test.modelLabel', { model: result.model })}
               {result.baseUrl ? ` · ${result.baseUrl}` : ''}
               {result.provider ? ` · ${result.provider}` : ''}
@@ -141,7 +150,7 @@ export const ModelTestDialog = ({
                     label={t('models.test.adapterEndpoint', { endpoint: result.adapterRoute.endpoint })}
                   />
                 </Box>
-                <Typography variant="caption" color="text.secondary" display="block">
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                   {t('models.test.adapterReason', { reason: result.adapterRoute.reason })}
                 </Typography>
               </Box>

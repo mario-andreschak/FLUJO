@@ -122,4 +122,34 @@ describe('resolveRunResourceRefs', () => {
     RES_REF_SCAN.lastIndex = 0;
     expect(RES_REF_SCAN.exec('${res:my-name}')?.[1]).toBe('my-name');
   });
+
+  it.each(['', 'ordinary prompt', '${res:report}'])(
+    'never performs a sensitive read on a no-reference or no-conversation return (%s)', async text => {
+      await resolveRunResourceRefs(text, undefined, jest.fn());
+      expect(findByNameMock).not.toHaveBeenCalled();
+      expect(readMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not read bytes or emit lineage when ownership is lost during name lookup', async () => {
+    let current = true;
+    const assertCurrent = jest.fn(async () => {
+      if (!current) throw new Error('Activity lease lost');
+    });
+    findByNameMock.mockImplementation(async () => {
+      current = false;
+      return textEntry;
+    });
+    const emit = jest.fn();
+    await expect(resolveRunResourceRefs('${res:report}', 'conv-1', emit, undefined, {
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+      executionAuthority: {
+        signal: new AbortController().signal,
+        assertCurrent,
+        commitWhileCurrent: async task => { await assertCurrent(); return task(); },
+      },
+    })).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    expect(readMock).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
 });

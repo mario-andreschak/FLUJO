@@ -229,14 +229,14 @@ const TriggerNodePropertiesModal = ({
         onClose={onClose}
         maxWidth="md"
         fullWidth
-        PaperProps={{
+        slotProps={{ paper: {
           sx: {
             borderTop: 5,
             borderColor: '#E91E63',
             maxWidth: '95vw',
             maxHeight: '90vh',
           },
-        }}
+        } }}
       >
         <DialogHeaderActions title={t('flows.trigger.title')} onClose={onClose} />
 

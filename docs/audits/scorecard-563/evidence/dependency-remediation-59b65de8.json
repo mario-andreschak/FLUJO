@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "dependency-remediation-59b65de8",
+  "capturedAt": "2026-10-03T22:52:35.070Z",
+  "sourceSha": "59b65de81b52db2e29cde2d5848436661d04e631",
+  "sourceStatus": "unintegrated-proposal-at-public-PR-head",
+  "sourceFiles": [
+    {
+      "path": "package.json",
+      "gitBlobOid": "b136ee2172a52702c13d2b8ff70f27a7ad8a31f7",
+      "sha256": "0e6d3e0c504c5fcc1d0ed593113c71728b1693513a243b30d9e7715f75559285"
+    },
+    {
+      "path": "package-lock.json",
+      "gitBlobOid": "acb112fc294a93c0d4b11ce54ca054f899f67d2c",
+      "sha256": "b3c06cb4034ba107fcb5704f30e6174db7e45b049f99155f559316a20ad6e290"
+    },
+    {
+      "path": "tooling/next-lint-glob/package.json",
+      "gitBlobOid": "365e5e8c60a57fb268cf08f8b6edd42c93a9d76e",
+      "sha256": "282c28df4b15f20f84145bf0ff2be6d3f5231610cca00baeb4cb013ced7ea664"
+    },
+    {
+      "path": "tooling/next-lint-glob/index.cjs",
+      "gitBlobOid": "ae32159a92ecee744fc4090b31431ddfe6c2c846",
+      "sha256": "fca1879d8c715d3081b3d4e777350f73b09bdade043cc356ef304d6baae7787a"
+    },
+    {
+      "path": "scripts/next-lint-glob.test.mjs",
+      "gitBlobOid": "6652853c81f8001ad0319371693b5557ec2f0b4e",
+      "sha256": "81a588f71fa16b85f0a2183f9a13c800a59e9f4f9f75d6ab0f54d07be4cf7e22"
+    }
+  ],
+  "proposal": {
+    "number": 600,
+    "url": "https://github.com/mario-andreschak/FLUJO/pull/600",
+    "state": "open",
+    "draft": false,
+    "headSha": "59b65de81b52db2e29cde2d5848436661d04e631",
+    "baseSha": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+    "body": "The current lockfile has 10 audited affected packages (one critical, eight high and one moderate). This updates Next/ESLint to 16.3.8, axios to 1.20.0, undici to 7.29.1, and compatible brace-expansion/ip-address resolutions. It also removes the unpatched braces/micromatch/fast-glob lint chain. Fresh production-only and development-inclusive audits at 59b65de81b52db2e29cde2d5848436661d04e631 both exit 0 with zero findings.\n\nNext's pinned lint plugin is the only locked consumer of fast-glob and uses its directory-root globSync API. The private 0.0.0-flujo.1 adapter delegates to pinned tinyglobby 0.2.17 with literal-directory expansion disabled and absolute-root behavior preserved. It is explicitly a local adapter, not an upstream fast-glob release. Tests reject new consumers or unsupported caller APIs and exercise the actual Next root lookup and navigation lint rule, including dotted/space-containing Windows paths, root arrays, brace patterns and directory-only results. No lint rule or audit gate is disabled.\n\nValidation on Windows/Node 22:\n- Fresh locked npm ci, local dependency verification and npm ls passed.\n- Five actual-caller/lint-rule assertions passed; seven focused model/request-boundary suites passed 159 assertions with no skips.\n- Full lint:all and explicit adapter lint passed; git diff --check passed.\n- The runtime-patch precursor 10d581ba74bcaa7d4d14469deddac51fe5af613a passed root typecheck and the default-heap production build. The build retained createRequire parsing warnings in codexRestrictedProfile; it is not an installed-worker/model qualification.\n- Fresh CI must build/test the final exact revision on Windows/Linux before integration/release. Local audit receipts and raw test output are retained for #583's evidence ledger.\n\nUpstream references: [Next advisory](https://github.com/vercel/next.js/security/advisories/GHSA-vcvr-r3jv-pc5j), [braces advisory with no published fix](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm), [tinyglobby API](https://github.com/SuperchupuDev/tinyglobby). Earlier failed audits and incompatible-alias probes remain retained.\n\nRefs #565 and #563. This removes a dependency gate blocker; it does not close the full scorecard or qualify a deployed release."
+  },
+  "producer": "Scorecard coordinator",
+  "auditReports": [
+    {
+      "location": "docs/audits/scorecard-563/evidence/npm-audit-59b65de8-production.json",
+      "sha256": "1866e25b30b3c684a069e7cfac3698a9b799a04fd0d539e199d21f16c31467e2",
+      "verification": "local",
+      "mode": "production",
+      "result": "passed",
+      "exitCode": 0,
+      "executionAndSourceBinding": "producer-reported; exact raw payload bytes reverified by Docs"
+    },
+    {
+      "location": "docs/audits/scorecard-563/evidence/npm-audit-59b65de8-all.json",
+      "sha256": "1866e25b30b3c684a069e7cfac3698a9b799a04fd0d539e199d21f16c31467e2",
+      "verification": "local",
+      "mode": "development-inclusive",
+      "result": "passed",
+      "exitCode": 0,
+      "executionAndSourceBinding": "producer-reported; exact raw payload bytes reverified by Docs"
+    }
+  ],
+  "limits": [
+    "The audit execution/mode/source association is supplied by the coordinator and public PR description; this capture checks retained bytes and exact Git source blobs, not independent command execution at that pin.",
+    "A clean advisory audit is not an independent threat model, final exact-head build, installed-release acceptance or an all-nine-dimension grade.",
+    "Precursor build/typecheck and source-test counts in the PR description are author reports; final CI/image/release remain pending.",
+    "Planning main 3511ba49514fe8cf525f5a22c16c3806bf3886ba retains the failed original lockfile audit. The assessed release must integrate and repeat its audit.",
+    "The independent replay returned zero findings but failed its source binding during concurrent integration. Its standalone receipt and raw bytes are retained as a failed capture; they do not qualify the proposal source."
+  ],
+  "independentReplayBindingFailure": {
+    "schemaVersion": 1,
+    "evidenceId": "dependency-audit-replay-unbound",
+    "capturedAt": "2026-10-03T22:52:35.070Z",
+    "command": "npm audit --json --package-lock-only --ignore-scripts --include=dev --audit-level=high",
+    "auditExitCode": 0,
+    "auditResult": "passed-zero-findings",
+    "intendedSourceSha": "59b65de81b52db2e29cde2d5848436661d04e631",
+    "sourceBindingResult": "rejected",
+    "laterObservedSourceSha": "9f0406959dbacac7b31d648fdf6874e56ef30eb4",
+    "laterObservedBranch": "codex/scorecard-integration",
+    "laterObservedWorkingTree": "staged integration changes and a merge conflict",
+    "reason": "The pre-execution check saw clean 59b65de8, but the coordinator started integration while this capture was in progress. No atomic before/after lockfile identity was retained. The zero-finding replay cannot be attributed to 59b65de8 or a completed integration/release.",
+    "raw": {
+      "location": "docs/audits/scorecard-563/evidence/npm-audit-replay-unbound-2026-10-03.json",
+      "sha256": "b8af7490d4040b02a648f2eef1839ca16bf974021b57073e99564a228cdff160"
+    }
+  }
+}

@@ -127,12 +127,14 @@ function tlsTrustHint(): string {
  * relevant error code(s) and, when the failure is TLS-related, an actionable hint.
  */
 export function formatErrorChain(error: unknown): string {
+  // Unknown thrown values can expose internals or execute hostile getters/stringifiers.
+  if (!(error instanceof Error)) return 'Unknown MCP connection failure.';
   const { messages, codes } = collectErrorChain(error);
   const uniqueMessages = Array.from(new Set(messages.filter(Boolean)));
   let combined = uniqueMessages.join(': ');
 
   if (!combined) {
-    combined = error instanceof Error ? (error.message || error.name) : String(error);
+    combined = error.message || error.name;
   }
 
   const uniqueCodes = Array.from(new Set(codes));
@@ -153,13 +155,25 @@ export function formatErrorChain(error: unknown): string {
 /**
  * Enhance error messages for common MCP connection issues
  */
-export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[]): string {
-  log.debug('Entering enhanceConnectionErrorMessage method');
+export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[], redact?: (message: string) => string): string {
+  const sanitize = redact ?? ((message: string) => message);
+  return sanitize(buildConnectionErrorMessage(error, config, stderrLogs.map(sanitize), redact));
+}
+
+function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[], redact?: (message: string) => string): string {
+  const diagnosticLog = redact ? {
+    debug: (message: string) => log.debug(redact(message)),
+    info: (message: string) => log.info(redact(message)),
+    warn: (message: string, cause?: unknown) => cause === undefined
+      ? log.warn(redact(message))
+      : log.warn(redact(message), redact(formatErrorChain(cause))),
+  } : log;
+  diagnosticLog.debug('Entering enhanceConnectionErrorMessage method');
   
   // Log the stderr logs we received
-  log.info(`Received ${stderrLogs.length} stderr log entries for ${config.name}`);
+  diagnosticLog.info(`Received ${stderrLogs.length} stderr log entries for ${config.name}`);
   if (stderrLogs.length > 0) {
-    log.info(`Stderr logs for ${config.name}:\n${stderrLogs.join('\n')}`);
+    diagnosticLog.info(`Stderr logs for ${config.name}:\n${stderrLogs.join('\n')}`);
   }
   
   // Get any stderr logs for this server
@@ -167,18 +181,18 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
   
   // If we have stderr output, it should be the primary error information
   if (stderrOutput) {
-    log.info(`Using stderr output as primary error information for ${config.name}: ${stderrOutput}`);
+    diagnosticLog.info(`Using stderr output as primary error information for ${config.name}: ${stderrOutput}`);
     return stderrOutput;
   } else {
-    log.warn(`No stderr output available for ${config.name}`);
+    diagnosticLog.warn(`No stderr output available for ${config.name}`);
   }
   
   if (!(error instanceof Error)) {
-    return formatErrorChain(error);
+    return 'Failed to connect to MCP server.';
   }
 
   const errorMessage = error.message;
-  log.debug(`Enhancing error message for: ${errorMessage}`);
+  diagnosticLog.debug(`Enhancing error message for: ${errorMessage}`);
 
   // Check if it's a timeout error
   if (errorMessage.includes('Connection timeout')) {
@@ -187,7 +201,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
   // Enhance error message for MCP errors
   if (error instanceof McpError) {
-    log.debug(`MCP Error code: ${error.code}`);
+    diagnosticLog.debug(`MCP Error code: ${error.code}`);
 
     if (error.code === ErrorCode.ConnectionClosed) {
       // Check if files exist
@@ -198,22 +212,22 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
         if (config.transport === 'stdio') {
           const execPath = config.command;
 
-          log.debug(`Server directory: ${serverDir}`);
-          log.debug(`Executable path: ${execPath}`);
+          diagnosticLog.debug(`Server directory: ${serverDir}`);
+          diagnosticLog.debug(`Executable path: ${execPath}`);
 
           // For cmd.exe (which we use for .bat files), we need to check the actual .bat file
           if (execPath === 'cmd.exe' && config.args && config.args.length > 1 && config.args[0] === '/c') {
             const batFile = config.args[1];
-            log.debug(`Checking .bat file: ${batFile}`);
+            diagnosticLog.debug(`Checking .bat file: ${batFile}`);
 
             // Check if the .bat file exists
             const batFilePath = path.isAbsolute(batFile)
               ? batFile
               : path.join(getWorkspaceDataDir(), serverDir, batFile);
 
-            log.debug(`Full .bat file path: ${batFilePath}`);
+            diagnosticLog.debug(`Full .bat file path: ${batFilePath}`);
             const batFileExists = fs.existsSync(batFilePath);
-            log.debug(`.bat file exists: ${batFileExists}`);
+            diagnosticLog.debug(`.bat file exists: ${batFileExists}`);
 
             if (!batFileExists) {
               return `MCP connection closed: ${errorMessage}. The .bat file does not exist: ${batFilePath}${stderrOutput ? '\n\nStderr output:\n' + stderrOutput : ''}`;
@@ -221,16 +235,16 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
           }
           // Check if the command is a path (not just 'node' or 'npm')
           else if (isLikelyFilePath(execPath)) {
-            log.debug(`Checking if executable exists: ${execPath}`);
+            diagnosticLog.debug(`Checking if executable exists: ${execPath}`);
             const execExists = fs.existsSync(execPath);
-            log.debug(`Executable exists: ${execExists}`);
+            diagnosticLog.debug(`Executable exists: ${execExists}`);
 
             if (!execExists) {
               // Try checking in the server directory
               const fullExecPath = path.join(getWorkspaceDataDir(), serverDir, execPath);
-              log.debug(`Checking in server directory: ${fullExecPath}`);
+              diagnosticLog.debug(`Checking in server directory: ${fullExecPath}`);
               const fullExecExists = fs.existsSync(fullExecPath);
-              log.debug(`Executable exists in server directory: ${fullExecExists}`);
+              diagnosticLog.debug(`Executable exists in server directory: ${fullExecExists}`);
 
               if (!fullExecExists) {
                 return `MCP connection closed: ${errorMessage}. The executable file does not exist: ${execPath} or ${fullExecPath}${stderrOutput ? '\n\nStderr output:\n' + stderrOutput : ''}`;
@@ -242,15 +256,15 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
           if (config.args && config.args.length > 0) {
             const scriptPath = config.args[0];
             if (isLikelyFilePath(scriptPath)) {
-              log.debug(`Checking script file: ${scriptPath}`);
+              diagnosticLog.debug(`Checking script file: ${scriptPath}`);
 
               const fullPath = isAbsolutePath(scriptPath)
                 ? scriptPath
                 : path.join(getWorkspaceDataDir(), serverDir, scriptPath);
 
-              log.debug(`Full script path: ${fullPath}`);
+              diagnosticLog.debug(`Full script path: ${fullPath}`);
               const scriptExists = fs.existsSync(fullPath);
-              log.debug(`Script exists: ${scriptExists}`);
+              diagnosticLog.debug(`Script exists: ${scriptExists}`);
 
               if (!scriptExists) {
                 return `MCP connection closed: ${errorMessage}. The script file does not exist: ${fullPath}${stderrOutput ? '\n\nStderr output:\n' + stderrOutput : ''}`;
@@ -273,7 +287,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
         return `MCP connection closed: ${errorMessage}. Check if the server is running and accessible.`;
       } catch (fsError) {
-        log.warn('Error checking file existence:', fsError);
+        diagnosticLog.warn('Error checking file existence:', fsError);
         return `MCP connection closed: ${errorMessage}. Error checking files: ${fsError instanceof Error ? fsError.message : 'Unknown error'}${stderrOutput ? '\n\nStderr output:\n' + stderrOutput : ''}`;
       }
     }

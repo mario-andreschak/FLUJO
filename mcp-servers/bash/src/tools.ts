@@ -31,6 +31,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -1431,9 +1432,36 @@ function isMissingCommandCandidate(head: string, shell: EffectiveShell): boolean
   return !/[\\/]/.test(head) && !/^\.?\.?$/.test(head);
 }
 
-/** Blank out quoted spans so operators inside string literals never trip us. */
-function stripQuotedSegments(command: string): string {
-  return command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, (match) => ' '.repeat(match.length));
+/**
+ * Mask complete quoted spans in one forward pass. This is advisory parsing,
+ * never command rewriting; an unfinished span remains visible to warnings.
+ */
+function stripQuotedSegments(command: string, includeSingleQuotes = true): string {
+  const parts: string[] = [];
+  let unquotedStart = 0;
+  let index = 0;
+  while (index < command.length) {
+    const quote = command[index];
+    if (quote !== '"' && !(includeSingleQuotes && quote === "'")) {
+      index += 1;
+      continue;
+    }
+    const start = index++;
+    let closed = false;
+    while (index < command.length) {
+      if (quote === '"' && command[index] === '\\') {
+        index += 2;
+      } else if (command[index++] === quote) {
+        closed = true;
+        break;
+      }
+    }
+    if (!closed) break;
+    parts.push(command.slice(unquotedStart, start), ' '.repeat(index - start));
+    unquotedStart = index;
+  }
+  parts.push(command.slice(unquotedStart));
+  return parts.join('');
 }
 
 function commandSegmentHeads(stripped: string): string[] {
@@ -1509,7 +1537,7 @@ export function detectDialectMismatch(
   }
 
   if (shell === 'cmd') {
-    if (/'/.test(command.replace(/"(?:\\.|[^"\\])*"/g, ''))) {
+    if (stripQuotedSegments(command, false).includes("'")) {
       warnings.push('cmd.exe does not treat single quotes as string delimiters; use double quotes.');
     }
     if (/\$\(|`/.test(stripped)) {
@@ -2287,7 +2315,7 @@ async function startTool(
     return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellPath }, true);
   }
 
-  const id = `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const id = `bash-${Date.now()}-${randomUUID()}`;
   const session: BashSession = {
     id,
     ownerScope,
@@ -2738,7 +2766,7 @@ async function openTerminalTool(
   }
 
   registerExitCleanup();
-  const id = `terminal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const id = `terminal-${Date.now()}-${randomUUID()}`;
   const session: TerminalSession = {
     id,
     ownerScope,

@@ -180,9 +180,9 @@ function McpAppConsentManager() {
               : 'settings.experimental.mcpAppConsentAllowed';
           return (
             <Box key={key} sx={{ p: 1.25, border: 1, borderColor: 'divider', borderRadius: 1 }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} alignItems={{ sm: 'center' }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gap: 1, alignItems: { sm: 'center' } }}>
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Stack direction="row" gap={1} alignItems="center">
+                  <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>{entry.serverName}</Typography>
                     <Chip
                       size="small"
@@ -194,7 +194,7 @@ function McpAppConsentManager() {
                     {entry.uri}
                   </Typography>
                 </Box>
-                <Stack direction="row" gap={0.5} flexWrap="wrap">
+                <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap" }}>
                   <Button size="small" disabled={busy || entry.decision === 'allow-always'} onClick={() => { void updateEntry(entry, 'allow-always'); }}>
                     {t('settings.experimental.mcpAppConsentAllow')}
                   </Button>

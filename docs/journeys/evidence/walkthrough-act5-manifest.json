@@ -1,0 +1,461 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "scope": "Final Act 5 reviewed stills for a genuine feature tour: Meetings setup, Automations trigger options, the existing Maya Persona desk and Waves. No meeting, trigger or Persona is created during this segment.",
+  "runtime": {
+    "package": "flujo-ai",
+    "version": "3.46.2"
+  },
+  "recordingStartedAtUtc": "2026-10-11T17:16:22.778790843Z",
+  "captureMethod": "Actual application UI operated and captured through the ai-computer MCP. PNGs are the original returned pixels, copied unchanged through the flujo-bash MCP.",
+  "timestampMeaning": "Each asset's UTC interval comes from the capture call's beforeUtc and afterUtc in the private action log. capturedAtUtc is call completion, not a separately measured exposure time. Click points are actual recorded UI actions.",
+  "coordinateSystem": {
+    "width": 1600,
+    "height": 1000,
+    "pointFormat": "[x, y]",
+    "rectangleFormat": "[x, y, width, height]",
+    "targetRectangleSource": "Control bounds read from reviewed UI images; they identify controls and do not assert additional clicks."
+  },
+  "stillReview": {
+    "status": "reviewed",
+    "reviewedAssetCount": 8,
+    "result": "No visible credentials, personal host paths or private account details. Maya's existing workshop records are visible as previously established demo content.",
+    "edits": "No crops, redraws, synthetic UI, cursor additions or pixel changes."
+  },
+  "observedOutcome": {
+    "meetingsOverviewViewed": true,
+    "meetingSetupViewed": true,
+    "meetingCreated": false,
+    "meetingRunVerified": false,
+    "automationsOverviewViewed": true,
+    "triggerOptionsViewed": true,
+    "triggerCreated": false,
+    "triggerExecutionVerified": false,
+    "existingPersonaOverviewViewed": true,
+    "existingPersonaDeskViewed": true,
+    "personaCreatedInThisSegment": false,
+    "existingWorkOrMemoryCountsAreNewResults": false,
+    "wavesOverviewViewed": true,
+    "wavesVisibleFlowCount": 6,
+    "wavesVisibleConnectionCount": 0,
+    "wavesEdited": false
+  },
+  "publicFootage": {
+    "status": "not-reviewed-or-finalized",
+    "rawPublicationAllowed": false,
+    "note": "This manifest approves only the listed still images. The raw recording remains private and requires separate review."
+  },
+  "disclosures": [
+    "Agent Meetings is visibly marked Experimental.",
+    "The meeting wizard and trigger dialog were opened and closed without saving.",
+    "Maya and her workshop memories and finished work were created during an earlier session; this segment only views their current state.",
+    "Loading or unsettled frames are excluded from this still selection.",
+    "Waves is a read-only overview. Six existing flows are visible, including Website Builder; the connection count is zero."
+  ],
+  "targets": {
+    "more": {
+      "label": "More navigation",
+      "rect": [
+        681,
+        15,
+        82,
+        42
+      ]
+    },
+    "meetings": {
+      "label": "Meetings navigation",
+      "rect": [
+        390,
+        74,
+        108,
+        43
+      ]
+    },
+    "new-meeting": {
+      "label": "New meeting",
+      "rect": [
+        712,
+        549,
+        166,
+        48
+      ]
+    },
+    "close-meeting": {
+      "label": "Close meeting setup",
+      "rect": [
+        1197,
+        61,
+        41,
+        40
+      ]
+    },
+    "automations": {
+      "label": "Automations navigation",
+      "rect": [
+        248,
+        74,
+        136,
+        43
+      ]
+    },
+    "add-trigger": {
+      "label": "Add trigger",
+      "rect": [
+        1230,
+        146,
+        134,
+        41
+      ]
+    },
+    "close-trigger": {
+      "label": "Close trigger setup",
+      "rect": [
+        1127,
+        72,
+        40,
+        39
+      ]
+    },
+    "personas": {
+      "label": "Personas navigation",
+      "rect": [
+        499,
+        74,
+        113,
+        43
+      ]
+    },
+    "open-maya-desk": {
+      "label": "Open Maya desk",
+      "rect": [
+        71,
+        560,
+        96,
+        40
+      ]
+    },
+    "waves": {
+      "label": "Waves navigation",
+      "rect": [
+        1055,
+        74,
+        97,
+        43
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "act5-action-01",
+      "label": "Open More navigation",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:17:40.841Z",
+      "completedAtUtc": "2026-10-11T17:17:41.156Z",
+      "recordedPoint": [
+        732,
+        36
+      ],
+      "targetId": "more",
+      "targetRect": [
+        681,
+        15,
+        82,
+        42
+      ],
+      "afterImage": "act5-more-navigation.png"
+    },
+    {
+      "id": "act5-action-02",
+      "label": "Open Meetings",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:18:34.573Z",
+      "completedAtUtc": "2026-10-11T17:18:34.911Z",
+      "recordedPoint": [
+        450,
+        94
+      ],
+      "targetId": "meetings",
+      "targetRect": [
+        390,
+        74,
+        108,
+        43
+      ],
+      "beforeImage": "act5-more-navigation.png",
+      "afterImage": "act5-meetings-overview.png"
+    },
+    {
+      "id": "act5-action-03",
+      "label": "Preview meeting setup",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:19:24.656Z",
+      "completedAtUtc": "2026-10-11T17:19:25.128Z",
+      "recordedPoint": [
+        802,
+        575
+      ],
+      "targetId": "new-meeting",
+      "targetRect": [
+        712,
+        549,
+        166,
+        48
+      ],
+      "beforeImage": "act5-meetings-overview.png",
+      "afterImage": "act5-meeting-setup.png"
+    },
+    {
+      "id": "act5-action-04",
+      "label": "Close the blank meeting setup",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:20:13.519Z",
+      "completedAtUtc": "2026-10-11T17:20:13.921Z",
+      "recordedPoint": [
+        1217,
+        80
+      ],
+      "targetId": "close-meeting",
+      "targetRect": [
+        1197,
+        61,
+        41,
+        40
+      ],
+      "beforeImage": "act5-meeting-setup.png"
+    },
+    {
+      "id": "act5-action-05",
+      "label": "Open Automations",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:20:14.625Z",
+      "completedAtUtc": "2026-10-11T17:20:15.057Z",
+      "recordedPoint": [
+        325,
+        94
+      ],
+      "targetId": "automations",
+      "targetRect": [
+        248,
+        74,
+        136,
+        43
+      ],
+      "afterImage": "act5-automations-overview.png"
+    },
+    {
+      "id": "act5-action-06",
+      "label": "Preview the trigger options",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:20:41.326Z",
+      "completedAtUtc": "2026-10-11T17:20:41.697Z",
+      "recordedPoint": [
+        1298,
+        166
+      ],
+      "targetId": "add-trigger",
+      "targetRect": [
+        1230,
+        146,
+        134,
+        41
+      ],
+      "beforeImage": "act5-automations-overview.png",
+      "afterImage": "act5-trigger-options.png"
+    },
+    {
+      "id": "act5-action-07",
+      "label": "Close the unsaved trigger setup",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:21:59.644Z",
+      "completedAtUtc": "2026-10-11T17:22:01.382Z",
+      "recordedPoint": [
+        1148,
+        92
+      ],
+      "targetId": "close-trigger",
+      "targetRect": [
+        1127,
+        72,
+        40,
+        39
+      ],
+      "beforeImage": "act5-trigger-options.png"
+    },
+    {
+      "id": "act5-action-08",
+      "label": "Open Personas",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:22:01.384Z",
+      "completedAtUtc": "2026-10-11T17:22:02.110Z",
+      "recordedPoint": [
+        560,
+        94
+      ],
+      "targetId": "personas",
+      "targetRect": [
+        499,
+        74,
+        113,
+        43
+      ],
+      "afterImage": "act5-personas-overview.png",
+      "afterImageMeaning": "The listed after image is a later settled frame after loading."
+    },
+    {
+      "id": "act5-action-09",
+      "label": "Open the existing Maya desk",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:23:35.461Z",
+      "completedAtUtc": "2026-10-11T17:23:35.894Z",
+      "recordedPoint": [
+        118,
+        580
+      ],
+      "targetId": "open-maya-desk",
+      "targetRect": [
+        71,
+        560,
+        96,
+        40
+      ],
+      "beforeImage": "act5-personas-overview.png",
+      "afterImage": "act5-maya-desk.png",
+      "afterImageMeaning": "The listed after image is a later settled frame after loading."
+    },
+    {
+      "id": "act5-action-10",
+      "label": "Open the read-only Waves overview",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T17:25:17.519Z",
+      "completedAtUtc": "2026-10-11T17:25:18.066Z",
+      "recordedPoint": [
+        1105,
+        94
+      ],
+      "targetId": "waves",
+      "targetRect": [
+        1055,
+        74,
+        97,
+        43
+      ],
+      "beforeImage": "act5-maya-desk.png",
+      "afterImage": "act5-waves-overview.png",
+      "afterImageMeaning": "The listed after image is a later settled frame after loading."
+    }
+  ],
+  "assets": [
+    {
+      "file": "githubpages/film/media/walkthrough/act5-more-navigation.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 762728,
+      "sha256": "ef0dbf26137dfc5ccc4cf0b3d71b9a859fb2f5fb3019d85c76cda4ff54cd7a9f",
+      "captureCallStartedAtUtc": "2026-10-11T17:17:41.946Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:17:42.497Z",
+      "capturedAtUtc": "2026-10-11T17:17:42.497Z",
+      "caption": "Opening More reveals the additional navigation row and the Automations page, which currently has no triggers.",
+      "evidenceStage": "setup-preview"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-meetings-overview.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 697150,
+      "sha256": "694991878318b844ecdd5f13e3f57fe5d90dd458c1581fffd40189d4dfe9c506",
+      "captureCallStartedAtUtc": "2026-10-11T17:18:35.683Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:18:36.325Z",
+      "capturedAtUtc": "2026-10-11T17:18:36.325Z",
+      "caption": "The experimental Agent Meetings overview is open, with New meeting available; no meeting has been created in this tour.",
+      "evidenceStage": "setup-preview"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-meeting-setup.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 447360,
+      "sha256": "cbedd3aa01090fd16798ae6c37bfdc424337a465cec1af03280843dd6aab9dfb",
+      "captureCallStartedAtUtc": "2026-10-11T17:19:25.762Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:19:26.373Z",
+      "capturedAtUtc": "2026-10-11T17:19:26.373Z",
+      "caption": "The blank meeting setup wizard shows Topic, Participants, Facilitation and Review steps. The operator only previews this form and closes it.",
+      "evidenceStage": "setup-preview"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-automations-overview.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 727358,
+      "sha256": "cb58666cd0ba5f12c83af073bc746c52f7fef5bb933a408ec146d25116be7e22",
+      "captureCallStartedAtUtc": "2026-10-11T17:20:15.730Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:20:16.358Z",
+      "capturedAtUtc": "2026-10-11T17:20:16.358Z",
+      "caption": "The Automations overview shows no triggers and offers Add trigger; the global Active switch is visible.",
+      "evidenceStage": "setup-preview"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-trigger-options.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 529987,
+      "sha256": "368533477f11edc5818deb535ff327ae298c1b58a9fe9ca4f770929a0fda8e9f",
+      "captureCallStartedAtUtc": "2026-10-11T17:20:42.429Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:20:42.881Z",
+      "capturedAtUtc": "2026-10-11T17:20:42.881Z",
+      "caption": "The New trigger form displays six choices: schedule, webhook, file changes, watch a tool, website changes and another flow finishing. These are setup options, not executed or saved triggers.",
+      "evidenceStage": "setup-preview"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-personas-overview.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 650540,
+      "sha256": "4b2f872a2e96b22e47ce9778155cb96feb7195c34260033a8f69a5acd6ace0c0",
+      "captureCallStartedAtUtc": "2026-10-11T17:22:46.687Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:22:48.174Z",
+      "capturedAtUtc": "2026-10-11T17:22:48.174Z",
+      "caption": "The Personas overview shows the existing Maya workshop-planner card, Ready status, zero queued items and five memories. This tour did not create Maya or those memories.",
+      "evidenceStage": "existing-persona-read-only"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-maya-desk.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 572255,
+      "sha256": "3d807d57c05d501eed9742805a43e96b1937ff6eadb7e807703de898d9f0bb6d",
+      "captureCallStartedAtUtc": "2026-10-11T17:24:47.215Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:24:47.897Z",
+      "capturedAtUtc": "2026-10-11T17:24:47.897Z",
+      "caption": "Maya's existing desk shows Overview, setup and work tabs, a goal entry point, idle status, recently learned information and recently finished workshop work. These records predate this tour segment.",
+      "evidenceStage": "existing-persona-read-only"
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act5-waves-overview.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 465580,
+      "sha256": "016d24ed2b3a6b1890dfae4823d72cdee077d87d3a5e34904294e209c0906b68",
+      "captureCallStartedAtUtc": "2026-10-11T17:27:44.547Z",
+      "captureCallCompletedAtUtc": "2026-10-11T17:27:45.371Z",
+      "capturedAtUtc": "2026-10-11T17:27:45.371Z",
+      "caption": "Waves displays six existing flows, including Website Builder, in Simple view. The UI marks this overview read-only and reports zero connections.",
+      "evidenceStage": "existing-flows-read-only"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ export * from './memoryLifecycle';
 export * from './memoryMaintenance';
 export * from './leaseHistoryPruning';
 export * from './workItems';
+export * from './goalCreate';
 export * from './domainMutation';
 export * from './ids';
 export * from './namespaces';

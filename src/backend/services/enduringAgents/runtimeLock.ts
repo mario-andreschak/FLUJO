@@ -206,6 +206,18 @@ export class PersonaRuntimeLockLostError extends Error {
   }
 }
 
+export class PersonaRuntimeLockCorruptError extends Error {
+  readonly code = 'PERSONA_RUNTIME_LOCK_CORRUPT' as const;
+
+  constructor(readonly lockPath: string) {
+    super(
+      `Persona runtime lock ${JSON.stringify(lockPath)} is malformed. `
+      + 'Stop processes using this workspace and restore or quarantine the damaged lock before restarting.',
+    );
+    this.name = 'PersonaRuntimeLockCorruptError';
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return clockForLock().sleep(ms);
 }
@@ -231,7 +243,7 @@ async function readLockRecord(lockPath: string): Promise<Record<string, unknown>
   try {
     const parsed = JSON.parse(await fs.readFile(lockPath, 'utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`Persona runtime lock ${JSON.stringify(lockPath)} is malformed.`);
+      throw new PersonaRuntimeLockCorruptError(lockPath);
     }
     return parsed as Record<string, unknown>;
   } catch (error) {
@@ -240,6 +252,7 @@ async function readLockRecord(lockPath: string): Promise<Record<string, unknown>
     // A canonical lock is installed from a fully-written candidate through an
     // atomic hard link. Malformed content is therefore corruption, not a stale
     // acquisition that can be stolen safely.
+    if (error instanceof SyntaxError) throw new PersonaRuntimeLockCorruptError(lockPath);
     throw error;
   }
 }
@@ -266,7 +279,7 @@ function parseOwnerRecord(
     || typeof parsed.workspace !== 'string'
     || typeof parsed.acquiredAt !== 'number'
   ) {
-    throw new Error(`Persona runtime lock ${JSON.stringify(lockPath)} is malformed.`);
+    throw new PersonaRuntimeLockCorruptError(lockPath);
   }
   return parsed as unknown as LockOwnerRecord;
 }
@@ -288,7 +301,7 @@ async function readRecoveryOwner(lockPath: string): Promise<RecoveryOwnerRecord 
     || !Number.isInteger(parsed.targetPid)
     || parsed.targetPid <= 0
   ) {
-    throw new Error(`Persona runtime recovery lock ${JSON.stringify(lockPath)} is malformed.`);
+    throw new PersonaRuntimeLockCorruptError(lockPath);
   }
   return { ...owner, ...parsed } as unknown as RecoveryOwnerRecord;
 }
@@ -296,9 +309,10 @@ async function readRecoveryOwner(lockPath: string): Promise<RecoveryOwnerRecord 
 async function listRecoveryOwners(
   lockRoot: string,
   lockPath: string,
+  directoryNames: readonly string[],
 ): Promise<Array<{ path: string; owner: RecoveryOwnerRecord }>> {
   const prefix = `${path.basename(lockPath)}.recovery.`;
-  const names = (await fs.readdir(lockRoot)).filter(
+  const names = directoryNames.filter(
     (name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)),
   );
   const records = await Promise.all(names.map(async (name) => {
@@ -326,15 +340,38 @@ function abandonmentMarkerPath(lockPath: string, ownerId: string): string {
   return markerPath;
 }
 
+function abandonedOwnerIdsFromNames(
+  lockPath: string,
+  directoryNames: readonly string[],
+): Set<string> {
+  const prefix = `${path.basename(lockPath)}.abandoned.`;
+  const ownerIds = directoryNames
+    .filter((name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)))
+    .map((name) => name.slice(prefix.length));
+  return new Set(ownerIds);
+}
+
 async function listAbandonedOwnerIds(
   lockRoot: string,
   lockPath: string,
 ): Promise<Set<string>> {
-  const prefix = `${path.basename(lockPath)}.abandoned.`;
-  const ownerIds = (await fs.readdir(lockRoot))
-    .filter((name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)))
-    .map((name) => name.slice(prefix.length));
-  return new Set(ownerIds);
+  return abandonedOwnerIdsFromNames(lockPath, await fs.readdir(lockRoot));
+}
+
+async function listLockCoordinationState(
+  lockRoot: string,
+  lockPath: string,
+): Promise<{
+  recoveries: Array<{ path: string; owner: RecoveryOwnerRecord }>;
+  abandonedOwnerIds: Set<string>;
+}> {
+  // This listing belongs only to this acquisition phase. Scan again after
+  // installing the canonical owner and on every contention-loop iteration.
+  const directoryNames = await fs.readdir(lockRoot);
+  return {
+    recoveries: await listRecoveryOwners(lockRoot, lockPath, directoryNames),
+    abandonedOwnerIds: abandonedOwnerIdsFromNames(lockPath, directoryNames),
+  };
 }
 
 async function publishOwnerAbandoned(
@@ -380,7 +417,10 @@ async function getLinuxBootId(): Promise<string | null> {
   return bootId;
 }
 
-async function queryWindowsProcessBirthMarker(pid: number): Promise<string | null> {
+async function queryWindowsProcessBirthMarker(
+  pid: number,
+  timeoutMs = pid === process.pid ? OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS : WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
+): Promise<string | null> {
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) return null;
   const normalizedSystemRoot = path.win32.normalize(systemRoot);
@@ -399,9 +439,7 @@ async function queryWindowsProcessBirthMarker(pid: number): Promise<string | nul
     `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`,
   ], {
     encoding: 'utf8',
-    timeout: pid === process.pid
-      ? OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS
-      : WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
+    timeout: timeoutMs,
     windowsHide: true,
   });
   const value = stdout.trim();
@@ -457,9 +495,11 @@ interface ProcessBirthObservation {
   failure?: string;
 }
 
-async function observeProcessBirthMarker(pid: number): Promise<ProcessBirthObservation> {
+async function observeProcessBirthMarker(pid: number, ownedStartup = false): Promise<ProcessBirthObservation> {
   try {
-    const marker = await processBirthMarkerProbe(pid);
+    const marker = ownedStartup && process.platform === 'win32' && processBirthMarkerProbe === queryPlatformProcessBirthMarker
+      ? await queryWindowsProcessBirthMarker(pid, OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS)
+      : await processBirthMarkerProbe(pid);
     return marker ? { marker } : { marker: null, failure: 'probe returned no valid birth identity' };
   } catch (error) {
     // Probe failures and timeouts are uncertainty. Callers must remain fail
@@ -475,8 +515,8 @@ async function observeProcessBirthMarker(pid: number): Promise<ProcessBirthObser
   }
 }
 
-async function queryProcessBirthMarker(pid: number): Promise<string | null> {
-  return (await observeProcessBirthMarker(pid)).marker;
+async function queryProcessBirthMarker(pid: number, ownedStartup = false): Promise<string | null> {
+  return (await observeProcessBirthMarker(pid, ownedStartup)).marker;
 }
 
 async function establishOwnProcessBirthMarkerV2(): Promise<string | null> {
@@ -685,6 +725,17 @@ export interface RuntimeProcessIdentity {
   processBirthMarkerV2?: string;
 }
 
+/** Bind a newly spawned child to an OS birth observation, never to PID alone. */
+export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeProcessIdentity> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid child PID.');
+  // Fresh owned-child admission must establish a real incarnation before any
+  // protocol traffic. It can incur the same cold shell startup as our own PID;
+  // contention-loop observations keep their short uncertainty/fail-closed bound.
+  const birth = await queryProcessBirthMarker(pid, true);
+  if (!birth || !birthMarkerVersion(birth)) throw new Error('Child process birth identity is unavailable.');
+  return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
+}
+
 export async function getRuntimeProcessIdentity(): Promise<RuntimeProcessIdentity> {
   const birth = await getOwnProcessBirthMarkerV2();
   return {
@@ -729,7 +780,16 @@ async function installCandidateLock(
     `${path.basename(lockPath)}.candidate.${randomUUID()}`,
   );
   try {
-    await fs.writeFile(candidatePath, JSON.stringify(owner), { encoding: 'utf8', flag: 'wx' });
+    const candidate = await fs.open(candidatePath, 'wx', 0o600);
+    try {
+      await candidate.writeFile(JSON.stringify(owner), 'utf8');
+      // Publishing buffered bytes is atomic for readers but can leave a
+      // zero-filled canonical lock after a crash. Flush before publishing the
+      // hard link so owner identity is durable before protected work starts.
+      await candidate.sync();
+    } finally {
+      await candidate.close();
+    }
     try {
       // Hard-link installation is an atomic create-if-absent operation on the
       // shared local filesystem. Unlike an empty lock directory, the canonical
@@ -858,6 +918,24 @@ async function retireOwnedCanonical(
   lockPath: string,
   owner: LockOwnerRecord,
 ): Promise<void> {
+  // Keep a healthy logical owner live until its unlink completes. Other
+  // processes cannot recover this owner while it is live, and acquisition has
+  // already drained predecessor recovery intents before protected work began.
+  // Publishing abandonment first would require another intent to guard this
+  // unlink; that slower protocol is reserved for failed/uncertain retirement.
+  if (ACTIVE_OWNER_IDS.has(owner.ownerId)) {
+    try {
+      const current = await readOwner(lockPath);
+      if (current?.ownerId === owner.ownerId
+          && current.processInstanceId === owner.processInstanceId
+          && current.pid === owner.pid) {
+        await unlinkWithRetry(lockPath);
+        return;
+      }
+    } catch {
+      // Preserve the intent/abandonment protocol and deferred cleanup below.
+    }
+  }
   await withRecoveryIntent(lockRoot, lockPath, owner, async () => {
     let markerPath: string | null = null;
     try {
@@ -938,10 +1016,7 @@ async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE
 
   try {
     while (true) {
-      const [recoveries, abandonedOwnerIds] = await Promise.all([
-        listRecoveryOwners(lockRoot, lockPath),
-        listAbandonedOwnerIds(lockRoot, lockPath),
-      ]);
+      const { recoveries, abandonedOwnerIds } = await listLockCoordinationState(lockRoot, lockPath);
       const recoveryStates = await Promise.all(recoveries.map(async (recovery) => ({
         ...recovery,
         alive: await isOwnerProcessAlive(recovery.owner, abandonedOwnerIds),
@@ -979,10 +1054,10 @@ async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE
         // installation. Do not enter the critical section until every live
         // recovery syscall has finished, then verify none deleted this lock from
         // a stale view of its predecessor.
-        const [afterInstall, abandonedAfterInstall] = await Promise.all([
-          listRecoveryOwners(lockRoot, lockPath),
-          listAbandonedOwnerIds(lockRoot, lockPath),
-        ]);
+        const {
+          recoveries: afterInstall,
+          abandonedOwnerIds: abandonedAfterInstall,
+        } = await listLockCoordinationState(lockRoot, lockPath);
         const liveAfterInstall = await Promise.all(afterInstall.map(
           ({ owner: recovery }) => isOwnerProcessAlive(recovery, abandonedAfterInstall),
         ));
@@ -1255,15 +1330,62 @@ const WORKSPACE_WRITER_LOCK = /^\.workspace-capture-writer-[0-9a-f-]{36}\.lock$/
 const workspaceWriterAdmissionChains = globalThis.__flujo_workspace_writer_admission_chains
   ??= new Map<string, Promise<void>>();
 
-/** Only one local registration needs to contend for the filesystem gate. */
-function registerWorkspaceWriter(task: () => Promise<void>): Promise<void> {
+interface WorkspaceWriterRegistration {
+  task: (admission: PersonaRuntimeLock) => Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+interface WorkspaceWriterRegistrationBatch { requests: WorkspaceWriterRegistration[] }
+const writerBatchRuntime = globalThis as typeof globalThis & {
+  __flujoWorkspaceWriterRegistrationBatches?: Map<string, WorkspaceWriterRegistrationBatch>;
+};
+const writerBatches = writerBatchRuntime.__flujoWorkspaceWriterRegistrationBatches ??= new Map();
+export const WORKSPACE_WRITER_REGISTRATION_BATCH_SIZE = 8;
+
+/** Coalesce bounded local registrations, never mutation bodies, under one physical admission lease. */
+function registerWorkspaceWriter(task: WorkspaceWriterRegistration['task']): Promise<void> {
   const key = getWorkspaceDbDir();
-  const previous = workspaceWriterAdmissionChains.get(key) ?? Promise.resolve();
-  const pending = previous.catch(() => undefined).then(task);
-  workspaceWriterAdmissionChains.set(key, pending);
-  return pending.finally(() => {
-    if (workspaceWriterAdmissionChains.get(key) === pending) workspaceWriterAdmissionChains.delete(key);
-  });
+  let batch = writerBatches.get(key);
+  const created = !batch;
+  if (!batch) { batch = { requests: [] }; writerBatches.set(key, batch); }
+  const pending = new Promise<void>((resolve, reject) => batch!.requests.push({ task, resolve, reject }));
+  if (created) {
+    const current = batch;
+    const draining = Promise.resolve().then(async () => {
+      while (current.requests.length) {
+        const requests = current.requests.splice(0, WORKSPACE_WRITER_REGISTRATION_BATCH_SIZE);
+        const outcomes = new Map<WorkspaceWriterRegistration, unknown>();
+        let admission: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+        let failure: unknown;
+        try {
+          admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
+          for (const request of requests) {
+            try {
+              await admission.lock.assertOwned();
+              await request.task(admission.lock);
+            } catch (error) { outcomes.set(request, error); }
+          }
+        } catch (error) { failure = error; }
+        finally {
+          try { await admission?.release(); }
+          catch (error) { failure = error; }
+        }
+        // No mutation starts before the physical capture-admission lease is released.
+        for (const request of requests) {
+          if (failure !== undefined) request.reject(failure);
+          else if (outcomes.has(request)) request.reject(outcomes.get(request));
+          else request.resolve();
+        }
+      }
+      // Detach synchronously before resolved callers can enqueue the next burst.
+      if (writerBatches.get(key) === current) writerBatches.delete(key);
+    }).finally(() => {
+      if (writerBatches.get(key) === current) writerBatches.delete(key);
+      if (workspaceWriterAdmissionChains.get(key) === draining) workspaceWriterAdmissionChains.delete(key);
+    });
+    workspaceWriterAdmissionChains.set(key, draining);
+  }
+  return pending;
 }
 
 /**
@@ -1281,13 +1403,7 @@ export async function withWorkspaceProcessMutation<T>(task: () => Promise<T>): P
     let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
     try {
       await registerWorkspaceWriter(async () => {
-        const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
-        try {
-          await admission.lock.assertOwned();
-          writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
-        } finally {
-          await admission.release();
-        }
+        writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
       });
       await writer!.lock.assertOwned();
       return await task();

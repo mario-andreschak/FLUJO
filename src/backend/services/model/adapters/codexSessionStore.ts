@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { readCodexAuthForTransfer } from './codexAuth';
 
 interface ToolFingerprint {
   name: string;
@@ -46,7 +47,8 @@ function stableStringify(value: unknown): string {
  * a thread can safely receive only the newly appended FLUJO messages.
  */
 export function computeCodexPrefixHash(
-  configuration: { adapter: string; provider: string; model: string; reasoningEffort?: string },
+  configuration: { adapter: string; provider: string; model: string; reasoningEffort?: string;
+    accountScope?: string; runtimeIdentity?: string; serviceTier?: string; workingDirectory?: string; developerInstructions?: string },
   systemPrompt: string | undefined,
   tools: readonly ToolFingerprint[],
 ): string {
@@ -64,6 +66,21 @@ export function computeCodexPrefixHash(
       })),
   }));
   return hash.digest('hex');
+}
+
+/** Stable account scope, never credentials; refresh within one account preserves resume. */
+export async function codexSessionAccountScope(apiKey?: string): Promise<string> {
+  if (apiKey) return createHash('sha256').update('api-key\0').update(apiKey).digest('hex');
+  const bytes = await readCodexAuthForTransfer();
+  try {
+    const auth = JSON.parse(bytes.toString('utf8')) as { tokens?: { account_id?: unknown; id_token?: unknown } };
+    const account = auth.tokens?.account_id;
+    if (typeof account !== 'string' || !account) {
+      // Unknown identity must be conservatively scoped to the login revision.
+      return createHash('sha256').update('chatgpt-revision\0').update(bytes).digest('hex');
+    }
+    return createHash('sha256').update('chatgpt-account\0').update(account).digest('hex');
+  } finally { bytes.fill(0); }
 }
 
 export function findReusableCodexSession(

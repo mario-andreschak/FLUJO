@@ -1,6 +1,8 @@
 import path from 'path';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 import {
   GOAL_ENDURANCE_FIXTURE_TOKEN_ENV,
   resolveGoalEnduranceFixtureToken,
@@ -88,21 +90,37 @@ const configuredTokenRejectionCases: Array<{
 ];
 
 describe('goal endurance fixture runtime authorization', () => {
+  let approved: ReturnType<typeof installTrustedHostProfile>;
+  beforeEach(() => {
+    approved = installTrustedHostProfile({ name: 'goal-endurance', nodeSource: '// Fixed owned fixture; these admission tests do not execute it.',
+      args: [fixtureUrl, agentRoot, runId], environmentNames: [GOAL_ENDURANCE_FIXTURE_TOKEN_ENV] });
+  });
+  afterEach(() => approved.restore());
+  function approvedConfig(overrides: Partial<MCPStdioConfig> = {}) {
+    const config: MCPStdioConfig = { ...approved.config, rootPath: process.cwd(), source: { type: 'local' }, ...overrides };
+    approved.approve(config);
+    return config;
+  }
+  function approvedEnvironment(environment: Record<string, string | undefined> = runnerEnv) {
+    const policy = trustedHostMcpPolicySchema.parse(approved.config.trustedHost);
+    return { ...environment, PERSONA_GOAL_ENDURANCE_FIXTURE_ENTRY: policy.entryPoint,
+      PERSONA_GOAL_ENDURANCE_FIXTURE_SOURCE_DIGEST: policy.sourceDigest };
+  }
   it('attaches only the fixture token at the final stdio launch boundary', () => {
-    const config = fixtureConfig();
-    const runtimeToken = resolveGoalEnduranceFixtureToken(config, runnerEnv);
+    const config = approvedConfig();
+    const runtimeToken = resolveGoalEnduranceFixtureToken(config, approvedEnvironment());
 
     expect(runtimeToken).toBe(token);
-    expect(config.env).toEqual({});
+    expect(config.env).toEqual(approved.config.env);
     expect(JSON.stringify(config)).not.toContain(token);
 
-    const launch = withProcessEnvironment(runnerEnv, () =>
+    const launch = withProcessEnvironment(approvedEnvironment(), () =>
       resolveStdioLaunch(config),
     );
 
     expect(launch.env[GOAL_ENDURANCE_FIXTURE_TOKEN_ENV]).toBe(token);
     expect(launch.env).not.toHaveProperty('UNRELATED_PARENT_SECRET');
-    expect(config.env).toEqual({});
+    expect(config.env).toEqual(approved.config.env);
   });
 
   it.each(['terminal-only', 'public-services', ''])(
@@ -112,12 +130,12 @@ describe('goal endurance fixture runtime authorization', () => {
         ...runnerEnv,
         PERSONA_GOAL_ENDURANCE_PROFILE: profile,
       };
-      const config = fixtureConfig();
+      const config = approvedConfig();
       expect(
-        resolveGoalEnduranceFixtureToken(config, unsupportedEnvironment),
+        resolveGoalEnduranceFixtureToken(config, approvedEnvironment(unsupportedEnvironment)),
       ).toBeUndefined();
 
-      const launch = withProcessEnvironment(unsupportedEnvironment, () =>
+      const launch = withProcessEnvironment(approvedEnvironment(unsupportedEnvironment), () =>
         resolveStdioLaunch(config),
       );
       expect(launch.env).not.toHaveProperty(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV);
@@ -125,29 +143,22 @@ describe('goal endurance fixture runtime authorization', () => {
   );
 
   it.each(configuredTokenRejectionCases)(
-    'strips persisted spellings of the reserved token for $description',
+    'refuses persisted spellings of the reserved token for $description',
     ({ overrides, environment }) => {
       const configuredToken = 'persisted-token-must-not-reach-child';
       const lowerCaseName = GOAL_ENDURANCE_FIXTURE_TOKEN_ENV.toLowerCase();
-      const config = fixtureConfig({
-        ...overrides,
-        env: {
+      const consented = approvedConfig({ ...overrides, env: approved.config.env });
+      const config: MCPStdioConfig = { ...consented,
+        env: { ...consented.env,
           [GOAL_ENDURANCE_FIXTURE_TOKEN_ENV]: configuredToken,
           [lowerCaseName]: configuredToken,
         },
-      });
+      };
 
-      const launch = withProcessEnvironment(environment, () =>
-        resolveStdioLaunch(config),
-      );
-
-      expect(
-        Object.keys(launch.env).filter(
-          (name) =>
-            name.toUpperCase() === GOAL_ENDURANCE_FIXTURE_TOKEN_ENV,
-        ),
-      ).toEqual([]);
-      expect(JSON.stringify(launch.env)).not.toContain(configuredToken);
+      expect(resolveGoalEnduranceFixtureToken(config, approvedEnvironment(environment))).toBeUndefined();
+      const launch = () => withProcessEnvironment(approvedEnvironment(environment), () => resolveStdioLaunch(config));
+      expect(launch).toThrow();
+      try { launch(); } catch (error) { expect(String(error)).not.toContain(configuredToken); }
     },
   );
 

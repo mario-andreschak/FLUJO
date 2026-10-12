@@ -18,7 +18,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import { createLogger } from '@/utils/logger';
@@ -119,7 +119,7 @@ export default function InstalledPackagesList() {
 
   return (
     <Box sx={{ maxWidth: { xs: '100%', md: 1100 }, mx: 'auto', mt: 3 }}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center",  mb: 1 }}>
         <Typography variant="h6">{t('packages.installed.title')}</Typography>
         <Button size="small" startIcon={<RefreshIcon />} onClick={() => void load()} disabled={loading}>
           {t('packages.installed.refresh')}
@@ -133,13 +133,13 @@ export default function InstalledPackagesList() {
           placeholder={t('packages.installed.search')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          InputProps={{
+          slotProps={{ input: {
             startAdornment: (
               <InputAdornment position="start">
                 <SearchIcon fontSize="small" />
               </InputAdornment>
             ),
-          }}
+          } }}
           sx={{ mb: 2 }}
         />
       )}
@@ -176,7 +176,7 @@ export default function InstalledPackagesList() {
           {filteredPackages.map((pkg) => (
             <Paper key={pkg.packageName} variant="outlined" sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <Box>
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                   <Typography variant="subtitle1">{pkg.packageName}</Typography>
                   <Chip label={`v${pkg.version}`} size="small" variant="outlined" />
                 </Stack>

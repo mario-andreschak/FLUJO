@@ -128,21 +128,20 @@ export function AllTicketsDialog({ open, onClose, onChanged }: AllTicketsDialogP
               {t('tickets.untrustedHint')}
             </Typography>
 
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={1}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gap: 1 }}>
               <TextField
                 size="small"
                 sx={{ flex: 1 }}
                 placeholder={t('tickets.search.placeholder')}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                inputProps={{ 'aria-label': t('tickets.search.placeholder') }}
-                InputProps={{
+                slotProps={{ htmlInput: { 'aria-label': t('tickets.search.placeholder') }, input: {
                   startAdornment: (
                     <InputAdornment position="start">
                       <SearchIcon fontSize="small" />
                     </InputAdornment>
                   ),
-                }}
+                } }}
               />
               <ToggleButtonGroup
                 size="small"
@@ -170,7 +169,7 @@ export function AllTicketsDialog({ open, onClose, onChanged }: AllTicketsDialogP
               </FormControl>
             </Stack>
 
-            <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
               <FormControlLabel
                 control={
                   <Checkbox

@@ -173,6 +173,14 @@ export async function proxyListResourceTemplates(serverName: string): Promise<{ 
  *   and is closer to the MCP 2026-07-28 spec intent (which introduces -32002 ResourceNotFound;
  *   update when that code is exported by whichever SDK version is in use).
  */
+export async function getProxyCapabilities(serverName: string): Promise<{
+  skillsCapability?: McpSkillsExtensionCapability;
+  appsCapability?: Record<string, unknown>;
+}> {
+  if (await isLocked()) return {};
+  return mcpService.getServerProxyCapabilities(serverName);
+}
+
 export async function getProxySkillsCapability(
   serverName: string,
 ): Promise<McpSkillsExtensionCapability | undefined> {

@@ -15,6 +15,8 @@ export const PERSONA_NATIVE_ABILITY_IDS = [
   'unpin',
   'work_item_list',
   'work_item_create',
+  'work_item_goal_create',
+  'work_item_runtime_read',
   'work_item_update',
   'work_item_complete',
   'work_item_promote_todo',
@@ -26,8 +28,8 @@ export type PersonaNativeAbilityId = (typeof PERSONA_NATIVE_ABILITY_IDS)[number]
 
 /** Safe defaults for newly materialized Persona Core Flows. */
 export const DEFAULT_PERSONA_NATIVE_ABILITY_IDS = PERSONA_NATIVE_ABILITY_IDS.filter(
-  (ability): ability is Exclude<PersonaNativeAbilityId, 'forget' | 'resolve_conflict'> => (
-    ability !== 'forget' && ability !== 'resolve_conflict'
+  (ability): ability is Exclude<PersonaNativeAbilityId, 'forget' | 'resolve_conflict' | 'work_item_goal_create' | 'work_item_runtime_read'> => (
+    ability !== 'forget' && ability !== 'resolve_conflict' && ability !== 'work_item_goal_create' && ability !== 'work_item_runtime_read'
   ),
 );
 
@@ -206,6 +208,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'behaviors.replace',
       'behaviors.activate',
       'behaviors.remove',
+      'behaviors.reconcile-core',
     ],
     backendEndpoints: [
       'GET /v1/personas/[personaId]/composition',
@@ -213,6 +216,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'POST /v1/personas/[personaId]/composition/copy',
       'POST /v1/personas/[personaId]/composition/behaviors',
       'POST /v1/personas/[personaId]/behaviors/[behaviorId]/activate',
+      'POST /v1/personas/[personaId]/core/reconcile',
     ],
     ui: {
       area: 'setup',

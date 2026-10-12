@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   Alert,
   Box,
@@ -28,6 +29,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import type { Model } from '@/shared/types/model';
+import { materializeFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -42,6 +44,7 @@ interface ServerPick {
   /** Tool names the server exposes, loaded lazily on expand. undefined = not yet loaded. */
   available?: string[];
   loading?: boolean;
+  loadError?: boolean;
 }
 
 export interface QuickChatStartSelection {
@@ -69,6 +72,8 @@ interface QuickChatDialogProps {
   submittingLabel?: string;
   /** Saved-agent conversion only permits servers confirmed connected now. */
   connectedServersOnly?: boolean;
+  /** Saved-agent authoring retains explicit app/tool selection. */
+  selectApps?: boolean;
 }
 
 const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
@@ -86,12 +91,17 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   submitLabel,
   submittingLabel,
   connectedServersOnly = false,
+  selectApps = false,
 }) => {
   const { t, tp } = useI18n();
   const [models, setModels] = useState<Model[]>([]);
+  const [needsToolModel, setNeedsToolModel] = useState(false);
   const [serverNames, setServerNames] = useState<string[]>([]);
   const [loadingLists, setLoadingLists] = useState(false);
+  const [listsLoaded, setListsLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  const [listAttempt, setListAttempt] = useState(0);
+  const toolLoadGeneration = useRef(0);
 
   const [modelId, setModelId] = useState<string>('');
   const [flowName, setFlowName] = useState<string>('');
@@ -100,27 +110,26 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
-  // Load models + configured (non-disabled) servers when the dialog opens.
+  // Ordinary chat only needs a model. Saved-agent authoring also loads apps.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoadingLists(true);
+    setListsLoaded(false);
     setListError(null);
     (async () => {
       try {
         const [loadedModels, serverConfigs] = await Promise.all([
-          modelService.loadModels(),
-          mcpService.loadServerConfigs(),
+          modelService.tryLoadModels(),
+          selectApps ? mcpService.loadServerConfigs() : Promise.resolve([]),
         ]);
         if (cancelled) return;
-        setModels(loadedModels);
-        const configuredNames = Array.isArray(serverConfigs)
-          ? serverConfigs.flatMap((server) => {
-              if (!server || typeof server !== 'object') return [];
-              const record = server as Record<string, unknown>;
-              return record.disabled !== true && typeof record.name === 'string' ? [record.name] : [];
-            })
-          : [];
+        if (!Array.isArray(loadedModels) || !Array.isArray(serverConfigs)) throw new Error('Chat setup unavailable');
+        const configuredNames = serverConfigs.flatMap((server) => {
+          if (!server || typeof server !== 'object') return [];
+          const record = server as Record<string, unknown>;
+          return record.disabled !== true && typeof record.name === 'string' ? [record.name] : [];
+        });
         const names = connectedServersOnly
           ? (await Promise.all(configuredNames.map(async (name) => ({
               name,
@@ -130,9 +139,17 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
               .map(({ name }) => name)
           : configuredNames;
         if (cancelled) return;
+        const availableModels = selectApps ? loadedModels : loadedModels.filter(model =>
+          materializeFallbackPolicy(model, loadedModels).supportsTools !== false);
+        setModels(availableModels);
+        setNeedsToolModel(loadedModels.length > 0 && availableModels.length === 0);
         setServerNames(names);
+        setListsLoaded(true);
         // Default the model to the first available one so a user can start in two clicks.
-        setModelId(prev => initialModelId || prev || loadedModels[0]?.id || '');
+        setModelId(prev => {
+          const preferred = initialModelId || prev;
+          return availableModels.some(model => model.id === preferred) ? preferred : availableModels[0]?.id || '';
+        });
       } catch (err) {
         if (!cancelled) {
           log.warn('Failed to load models/servers for quick chat', err);
@@ -143,7 +160,10 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [connectedServersOnly, initialModelId, open, t]);
+  }, [connectedServersOnly, initialModelId, listAttempt, open, selectApps, t]);
+
+  // A response from a closed dialog must not replace a later session's choices.
+  useEffect(() => () => { toolLoadGeneration.current += 1; }, [open]);
 
   // Initialize conversion defaults on open and reset transient state on close.
   useEffect(() => {
@@ -170,28 +190,36 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
     });
   }, []);
 
-  const toggleExpand = useCallback(async (name: string) => {
+  const loadTools = useCallback(async (name: string) => {
+    const generation = toolLoadGeneration.current;
+    setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: true, loadError: false } }));
+    try {
+      const { tools, error } = await mcpService.listServerTools(name);
+      if (error) throw new Error('App actions unavailable');
+      if (generation !== toolLoadGeneration.current) return;
+      const names = tools.map((tool) => tool.name);
+      setPicks(prev => ({
+        ...prev,
+        [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: names, loading: false },
+      }));
+    } catch (err) {
+      if (generation !== toolLoadGeneration.current) return;
+      log.warn(`Failed to load tools for ${name}`, err);
+      setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: false, loadError: true } }));
+    }
+  }, []);
+
+  const toggleExpand = useCallback((name: string) => {
     setPicks(prev => {
       const current = prev[name] ?? { selected: false, tools: null, expanded: false };
       return { ...prev, [name]: { ...current, expanded: !current.expanded } };
     });
-    // Lazily load the server's tools the first time it is expanded.
+    // Only a successful result is cached; a failed listing remains retryable.
     const existing = picks[name];
-    if (!existing?.available && !existing?.loading) {
-      setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: true } }));
-      try {
-        const { tools } = await mcpService.listServerTools(name);
-        const names = tools.map((tool) => tool.name);
-        setPicks(prev => ({
-          ...prev,
-          [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: names, loading: false },
-        }));
-      } catch (err) {
-        log.warn(`Failed to load tools for ${name}`, err);
-        setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: [], loading: false } }));
-      }
+    if (!existing?.expanded && !existing?.available && !existing?.loading) {
+      void loadTools(name);
     }
-  }, [picks]);
+  }, [loadTools, picks]);
 
   const toggleTool = useCallback((name: string, tool: string, available: string[]) => {
     setPicks(prev => {
@@ -206,10 +234,13 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   }, []);
 
   const needsFlowName = initialFlowName !== undefined;
-  const canStart = Boolean(modelId)
+  const needsAi = listsLoaded && !loadingLists && !listError && models.length === 0;
+  const hasSelectedModel = models.some(model => model.id === modelId);
+  const canStart = hasSelectedModel
     && (!needsFlowName || Boolean(flowName.trim()))
     && !starting
-    && !loadingLists;
+    && !loadingLists
+    && !listError;
 
   const handleStart = async () => {
     if (!modelId) {
@@ -250,160 +281,183 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       />
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {helpText ?? t('chat.quick.help')}
+          {needsAi ? t(needsToolModel ? 'chat.quick.toolModelRequired' : 'chat.quick.noModels') : (helpText ?? t('chat.quick.help'))}
         </Typography>
 
-        {listError && <Alert severity="error" sx={{ mb: 2 }}>{listError}</Alert>}
-
-        <FormControl
-          fullWidth
-          size="small"
-          sx={{ mb: 2 }}
-          disabled={loadingLists || lockModelSelection}
-        >
-          <InputLabel id="quick-chat-model-label">{t('chat.quick.model')}</InputLabel>
-          <Select
-            labelId="quick-chat-model-label"
-            label={t('chat.quick.model')}
-            value={modelId}
-            onChange={e => setModelId(e.target.value)}
-          >
-            {models.length === 0 && (
-              <MenuItem value="" disabled>
-                {loadingLists ? t('common.loading') : t('chat.quick.noModels')}
-              </MenuItem>
-            )}
-            {models.map(m => (
-              <MenuItem key={m.id} value={m.id}>
-                {m.displayName || m.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-
-        {needsFlowName && (
-          <TextField
-            fullWidth
-            size="small"
-            label={flowNameLabel}
-            value={flowName}
-            onChange={e => setFlowName(e.target.value)}
-            inputProps={{ maxLength: 160 }}
-            required
-            sx={{ mb: 2 }}
-          />
-        )}
-
-        <TextField
-          fullWidth
-          size="small"
-          multiline
-          minRows={2}
-          maxRows={6}
-          label={t('chat.quick.systemPrompt')}
-          placeholder={t('chat.quick.systemPlaceholder')}
-          value={systemPrompt}
-          onChange={e => setSystemPrompt(e.target.value)}
-          inputProps={{ maxLength: 20_000 }}
-          sx={{ mb: 2 }}
-        />
-
-        <Divider sx={{ mb: 1 }} />
-        <Typography variant="subtitle2" gutterBottom>
-          {serversLabel ?? t('chat.quick.servers')}
-        </Typography>
-
-        {loadingLists ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
-            <CircularProgress size={22} />
-          </Box>
-        ) : serverNames.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            {noServersText ?? t('chat.quick.noServers')}
-          </Typography>
+        {needsAi ? (
+          <Button component={Link} href="/models?add=1" variant="contained" fullWidth sx={{ minHeight: 48 }}>
+            {t('models.connectAi')}
+          </Button>
         ) : (
-          serverNames.map(name => {
-            const pick = picks[name];
-            const selected = Boolean(pick?.selected);
-            const available = pick?.available;
-            const activeTools = pick?.tools;
-            return (
-              <Box key={name} sx={{ mb: 0.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <FormControlLabel
-                    sx={{ flexGrow: 1, mr: 0 }}
-                    control={
-                      <Checkbox size="small" checked={selected} onChange={() => toggleServer(name)} />
-                    }
-                    label={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Typography variant="body2">{name}</Typography>
-                        {selected && (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={
-                              !activeTools
-                                ? t('chat.quick.allTools')
-                                : tp('chat.quick.tool', activeTools.size)
-                            }
-                          />
+          <>
+            {listError && (
+              <Alert severity="error" sx={{ mb: 2 }} action={
+                <Button color="inherit" sx={{ minHeight: 44 }} onClick={() => setListAttempt(attempt => attempt + 1)}>
+                  {t('common.tryAgain')}
+                </Button>
+              }>{listError}</Alert>
+            )}
+
+            <FormControl
+              fullWidth
+              size="small"
+              sx={{ mb: 2, '& .MuiSelect-select': { minHeight: '24px', py: 1.25 } }}
+              disabled={loadingLists || lockModelSelection}
+            >
+              <InputLabel id="quick-chat-model-label">{t('chat.quick.model')}</InputLabel>
+              <Select
+                labelId="quick-chat-model-label"
+                label={t('chat.quick.model')}
+                value={hasSelectedModel ? modelId : ''}
+                onChange={e => setModelId(e.target.value)}
+              >
+                {models.length === 0 && (
+                  <MenuItem value="" disabled>
+                    {loadingLists ? t('common.loading') : t('chat.quick.noModels')}
+                  </MenuItem>
+                )}
+                {models.map(m => (
+                  <MenuItem key={m.id} value={m.id}>
+                    {m.displayName || m.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {needsFlowName && (
+              <TextField
+                fullWidth
+                size="small"
+                label={flowNameLabel}
+                value={flowName}
+                onChange={e => setFlowName(e.target.value)}
+                slotProps={{ htmlInput: { maxLength: 160 } }}
+                required
+                sx={{ mb: 2 }}
+              />
+            )}
+
+            <TextField
+              fullWidth
+              size="small"
+              multiline
+              minRows={2}
+              maxRows={6}
+              label={t('chat.quick.systemPrompt')}
+              placeholder={t('chat.quick.systemPlaceholder')}
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              slotProps={{ htmlInput: { maxLength: 20_000 } }}
+              sx={{ mb: 2 }}
+            />
+
+            {selectApps && <>
+            <Divider sx={{ mb: 1 }} />
+            <Typography variant="subtitle2" gutterBottom>
+              {serversLabel ?? t('chat.quick.servers')}
+            </Typography>
+
+            {loadingLists ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                <CircularProgress size={22} />
+              </Box>
+            ) : listError ? null : serverNames.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                {noServersText ?? t('chat.quick.noServers')}
+              </Typography>
+            ) : (
+              serverNames.map(name => {
+                const pick = picks[name];
+                const selected = Boolean(pick?.selected);
+                const available = pick?.available;
+                const activeTools = pick?.tools;
+                return (
+                  <Box key={name} sx={{ mb: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <FormControlLabel
+                        sx={{ flexGrow: 1, mr: 0 }}
+                        control={
+                          <Checkbox size="small" checked={selected} onChange={() => toggleServer(name)} />
+                        }
+                        label={
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography variant="body2">{name}</Typography>
+                            {selected && (
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                label={
+                                  !activeTools
+                                    ? t('chat.quick.allTools')
+                                    : tp('chat.quick.tool', activeTools.size)
+                                }
+                              />
+                            )}
+                          </Box>
+                        }
+                      />
+                      <IconButton size="small" onClick={() => toggleExpand(name)} aria-label={t('chat.quick.customize', { server: name })}>
+                        {pick?.expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                      </IconButton>
+                    </Box>
+                    <Collapse in={Boolean(pick?.expanded)} unmountOnExit>
+                      <Box sx={{ pl: 4, pb: 1 }}>
+                        {pick?.loading ? (
+                          <CircularProgress size={16} />
+                        ) : pick?.loadError ? (
+                          <Alert severity="error" action={
+                            <Button color="inherit" sx={{ minHeight: 44 }} onClick={() => void loadTools(name)}>
+                              {t('common.tryAgain')}
+                            </Button>
+                          }>{t('chat.quick.toolsLoadFailed')}</Alert>
+                        ) : available && available.length > 0 ? (
+                          available.map(tool => {
+                            const on = activeTools ? activeTools.has(tool) : true;
+                            return (
+                              <FormControlLabel
+                                key={tool}
+                                sx={{ display: 'flex' }}
+                                control={
+                                  <Checkbox
+                                    size="small"
+                                    checked={on}
+                                    onChange={() => toggleTool(name, tool, available)}
+                                  />
+                                }
+                                label={<Typography variant="caption">{tool}</Typography>}
+                              />
+                            );
+                          })
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            {available ? t('chat.quick.noTools') : ''}
+                          </Typography>
                         )}
                       </Box>
-                    }
-                  />
-                  <IconButton size="small" onClick={() => toggleExpand(name)} aria-label={t('chat.quick.customize', { server: name })}>
-                    {pick?.expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-                  </IconButton>
-                </Box>
-                <Collapse in={Boolean(pick?.expanded)} unmountOnExit>
-                  <Box sx={{ pl: 4, pb: 1 }}>
-                    {pick?.loading ? (
-                      <CircularProgress size={16} />
-                    ) : available && available.length > 0 ? (
-                      available.map(tool => {
-                        const on = activeTools ? activeTools.has(tool) : true;
-                        return (
-                          <FormControlLabel
-                            key={tool}
-                            sx={{ display: 'flex' }}
-                            control={
-                              <Checkbox
-                                size="small"
-                                checked={on}
-                                onChange={() => toggleTool(name, tool, available)}
-                              />
-                            }
-                            label={<Typography variant="caption">{tool}</Typography>}
-                          />
-                        );
-                      })
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">
-                        {available ? t('chat.quick.noTools') : ''}
-                      </Typography>
-                    )}
+                    </Collapse>
                   </Box>
-                </Collapse>
-              </Box>
-            );
-          })
-        )}
+                );
+              })
+            )}
+            </>}
 
-        {startError && <Alert severity="error" sx={{ mt: 2 }}>{startError}</Alert>}
+            {startError && <Alert severity="error" sx={{ mt: 2 }}>{startError}</Alert>}
+          </>
+        )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={starting}>{t('common.cancel')}</Button>
-        <Button
+        <Button onClick={onClose} disabled={starting} sx={{ minHeight: 44 }}>{t('common.cancel')}</Button>
+        {!needsAi && <Button
           variant="contained"
           onClick={handleStart}
           disabled={!canStart}
+          sx={{ minHeight: 44 }}
           startIcon={starting ? <CircularProgress size={16} color="inherit" /> : undefined}
         >
           {starting
             ? (submittingLabel ?? t('chat.quick.starting'))
             : (submitLabel ?? t('chat.quick.start'))}
-        </Button>
+        </Button>}
       </DialogActions>
     </Dialog>
   );

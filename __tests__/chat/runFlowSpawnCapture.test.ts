@@ -95,6 +95,7 @@ jest.mock('@/backend/services/flow/index', () => ({
 
 jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
+  validateFlowObjectForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
 jest.mock('@/backend/execution/flow/handlers/ModelHandler', () => ({

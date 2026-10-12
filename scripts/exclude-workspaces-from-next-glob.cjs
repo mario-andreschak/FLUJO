@@ -14,9 +14,17 @@
 const path = require('node:path');
 const Module = require('node:module');
 const fs = require('node:fs');
+const os = require('node:os');
 const { fileURLToPath } = require('node:url');
 
 const WORKSPACES_ROOT = path.resolve(process.cwd(), 'workspaces');
+// Host login/config/cache is runtime user data, never an application asset.
+// Dynamic Codex reads otherwise expand into its protected sandbox markers.
+const CODEX_RUNTIME_ROOT = path.resolve(process.env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex'));
+const PROJECT_ROOT = path.resolve(process.cwd());
+if (path.relative(CODEX_RUNTIME_ROOT, PROJECT_ROOT) === '') {
+  throw new Error('The Codex runtime home cannot be the build project.');
+}
 const TRACE_MODULES = new Set([
   require.resolve('next/dist/compiled/@vercel/nft'),
   require.resolve('next/dist/compiled/glob'),
@@ -27,12 +35,21 @@ function directoryPath(candidate) {
 }
 
 function isInsideWorkspaces(candidate) {
-  const relative = path.relative(WORKSPACES_ROOT, path.resolve(directoryPath(candidate)));
-  return relative === '' || (
+  const target = path.resolve(directoryPath(candidate));
+  const inside = (root, value) => {
+    const relative = path.relative(root, value);
+    return relative === '' || (
     relative !== '..'
     && !relative.startsWith(`..${path.sep}`)
     && !path.isAbsolute(relative)
-  );
+    );
+  };
+  if (inside(WORKSPACES_ROOT, target)) return true;
+  // Managed checkouts can live under ~/.codex/worktrees. Preserve the project
+  // and the directory chain leading to it, while pruning private siblings.
+  return inside(CODEX_RUNTIME_ROOT, target)
+    && !(inside(CODEX_RUNTIME_ROOT, PROJECT_ROOT)
+      && (inside(PROJECT_ROOT, target) || inside(target, PROJECT_ROOT)));
 }
 
 function withoutWorkspaces(candidate, entries) {

@@ -1,4 +1,5 @@
 import { ProcessNode } from '@/backend/execution/flow/nodes';
+import { createHash } from 'node:crypto';
 import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
 import { ResourceHandler } from '@/backend/execution/flow/handlers/ResourceHandler';
 import { mcpService } from '@/backend/services/mcp';
@@ -66,6 +67,33 @@ describe('protected Process preparation has no foreign MCP effects', () => {
       jest.spyOn(mcpService, 'subscribeToResource'),
     ];
   }
+
+  test('protected config equality tokens hide raw secret digests and change on credential rotation', () => {
+    const config = { name: 'protected-fixture', transport: 'streamable',
+      serverUrl: 'https://protected.example/mcp', headers: { Authorization: 'Bearer low-entropy-fixture' } };
+    const token = protectedConfigFingerprint(config as never);
+    expect(token).toBe(protectedConfigFingerprint({ ...config } as never));
+    expect(token).not.toBe(createHash('sha256').update(JSON.stringify(config)).digest('hex'));
+    expect(token).not.toBe(protectedConfigFingerprint({ ...config,
+      headers: { Authorization: 'Bearer rotated-fixture' } } as never));
+  });
+
+  test('protected connection failure never falls through to OAuth discovery or config persistence', async () => {
+    const { state } = setup();
+    const config = { name: 'protected-fixture', transport: 'streamable', disabled: false,
+      serverUrl: 'https://protected.example/mcp', headers: {} };
+    jest.spyOn(mcpService, 'loadServerConfigs').mockResolvedValue([config as never]);
+    jest.spyOn(mcpService, 'isServerDisabled').mockResolvedValue(false);
+    jest.spyOn(mcpConnection, 'resolveConfigHeaders').mockResolvedValue(config as never);
+    const transport = mcpConnection.createTransport as jest.Mock;
+    transport.mockImplementationOnce(() => { throw Object.assign(new Error('Unauthorized'), { status: 401 }); });
+    const providerFetch = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected OAuth discovery'));
+    const persist = jest.spyOn(mcpService, 'updateServerConfig');
+    const result = await mcpService.connectServer('protected-fixture', state.executionExtensionContext);
+    expect(result).toMatchObject({ success: false, error: 'execution_mcp_connect_failed', errorType: 'execution-authorization' });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+  });
 
   test('owned state without live context is refused before prompt preparation', async () => {
     const { state, params } = setup();

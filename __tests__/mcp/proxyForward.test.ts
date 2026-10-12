@@ -1,3 +1,7 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Tests for the FLUJO-as-MCP-server proxy forwarding (#17A).
  * The route's transport plumbing is the official SDK Web transport and is

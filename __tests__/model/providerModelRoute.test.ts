@@ -36,6 +36,11 @@ const invoke = (body: unknown): Promise<Response> =>
   });
 
 describe('provider model discovery route', () => {
+  it('admits Codex subscription discovery without a provider URL', async () => {
+    const response = await invoke({ baseUrl: '', profileId: 'codex' });
+    expect(response.status).toBe(200);
+    expect(mockFetchProviderModels).toHaveBeenCalledWith('', undefined, undefined, undefined, 'codex');
+  });
   beforeEach(() => {
     mockAssertUnlocked.mockReset().mockResolvedValue(null);
     mockFetchProviderModels.mockReset().mockResolvedValue([]);

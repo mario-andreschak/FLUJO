@@ -1,0 +1,86 @@
+{
+  "repository": "https://github.com/flujo-app/flujo-avatar",
+  "revision": "35c9b79613d0ad456a9c44e1efcc78205ecde122",
+  "sourceDirty": false,
+  "canonicalWorld": {
+    "sourceRepository": "https://github.com/mario-andreschak/FLUJO",
+    "sourceCommit": "3d85f2df3070d1b92aea68732cdeda028d30e6ac",
+    "files": [
+      {
+        "sourcePath": "src/frontend/components/AvatarWorld/WorldScene.tsx",
+        "path": "src/world/canonical/src/frontend/components/AvatarWorld/WorldScene.tsx",
+        "bytes": 13757,
+        "sha256": "311e3354347cb6a261572503366f458b2abe5acac6892514c00c62e65ebe83da"
+      },
+      {
+        "sourcePath": "src/frontend/components/AvatarWorld/Watershed.tsx",
+        "path": "src/world/canonical/src/frontend/components/AvatarWorld/Watershed.tsx",
+        "bytes": 2447,
+        "sha256": "5e600190d5ac6c31aa4a1a5637e5f5fadbacb8689835e262f486d2fddcaa37d9"
+      },
+      {
+        "sourcePath": "src/frontend/components/AvatarWorld/Eyes.tsx",
+        "path": "src/world/canonical/src/frontend/components/AvatarWorld/Eyes.tsx",
+        "bytes": 143,
+        "sha256": "29a238c72b623796ceacea6ac90f8408a4d2650e3b94112e233d8c0c89605df3"
+      },
+      {
+        "sourcePath": "src/frontend/components/AvatarWorld/copy.ts",
+        "path": "src/world/canonical/src/frontend/components/AvatarWorld/copy.ts",
+        "bytes": 9703,
+        "sha256": "f576fdfab5f4d74d1c9dbe0b234d8c46d1bb20bcd2fcabcdb07efc1274ab8075"
+      },
+      {
+        "sourcePath": "src/frontend/components/AvatarWorld/world.module.css",
+        "path": "src/world/canonical/src/frontend/components/AvatarWorld/world.module.css",
+        "bytes": 21784,
+        "sha256": "30bd5ce000f0768c69984d5ddcf11f96443b1ca8821961a409daac5d1cf7cb54"
+      },
+      {
+        "sourcePath": "src/shared/types/avatar.ts",
+        "path": "src/world/canonical/src/shared/types/avatar.ts",
+        "bytes": 1438,
+        "sha256": "2bd292b8d093b2b1b9bdebd698f6af7072547d48bac74269b9273797cfa9ba21"
+      }
+    ]
+  },
+  "files": {
+    "dist/client/acceptedTaskNarrationTransport.d.ts": "d8f83cda6458791eb97efc5db7c10677033c7bfe4f1616bb995696d7a5813993",
+    "dist/client/audio.d.ts": "9ca995c120141e32f8fcb08ef52235545f3dc9ef73524a1a8b4e236bcffa083d",
+    "dist/client/domain.d.ts": "087d85e48cb0da85d3525c194300131ee586248e8ead063f535497070fbae586",
+    "dist/client/Eyes.d.ts": "f7d007fc56b0e4ac115380cedad3f11fbb2098b13bd597fe8fe5a04c3ce732fe",
+    "dist/client/locale.d.ts": "af1f5ff46c29fffffb047137fb0be77d04607982793e0e2643515ff93165efdb",
+    "dist/client/nativeRouterPlayback.d.ts": "a0a6d529f7bc80ef3aa47d2554d1a501f079897e548a64ab34759d0d28d66724",
+    "dist/client/nativeVoiceTransport.d.ts": "a13d106cf56e7d3fa08533625b4b23e12a5b4d4828fa4c448cac273275212565",
+    "dist/client/qwenPlayback.d.ts": "019d7da840d8e8604526acd0ca031e5e67b150c378af416ec07fb1e09cd94f6c",
+    "dist/client/useNativeRouterVoice.d.ts": "890ecae3fad92014e8dd56d90cb9d2a472e3c79ef0d585c4c5c68718b8d316a3",
+    "dist/client/usePocketSpeech.d.ts": "47745e81531c19e9755b433aac5d380593b39f76b7ee531a85720aa8b6044fa9",
+    "dist/client/utteranceObserver.d.ts": "ca7d1c75aa709eb3a09aee5e66c43d31d2130998262e46e46b0a615ee23b3ebe",
+    "dist/client/voiceLocale.d.ts": "242ba845d3a5b70d2d19047dd6bfbd2fbc1a7471c23560352dc4bc72a3293907",
+    "dist/factory/FactoryAvatar.d.ts": "d407eec755ef04978eaca26ffac1f1c92986cce7cd3daf9660cac578f6b7f5c2",
+    "dist/index.css": "ffb3bd64a07622cc3d874f3678785715a3fa464ce481c9434e7830b5bd3aaae6",
+    "dist/index.d.ts": "5b27fc13b27e053beec43d6bff00ece7268419b2804a9b7042835c290dbf30dc",
+    "dist/index.js": "93f90bad27e8d9017ef2d7252c0cb6be55841dd96b0d9374b22b6f57c1d7af40",
+    "dist/native-voice.js": "8127f1d9e8e6d37944a7ea9e556b980244c38ccbf57c326568727b8690de79b8",
+    "dist/sdk/index.d.ts": "c66e8a5737e8df88d699ce898cdac7314f45f86d0d5cf71a1788b78a87ad2b0d",
+    "dist/sdk/native-voice.d.ts": "22a874bed919e948f8f6c3162019d6eaf23be2b4dd144356f035715f39b0f662",
+    "dist/sdk.css": "745b91f3fb15d8a3db9fefcf3006e0fd7fd0ea7ffe1ca2fcb50df99d023d6bbb",
+    "dist/sdk.js": "21f51a8c5064e8aff19c6d20c3204c13ea5c026308a3812822da48c7c1c8f746",
+    "dist/styles.css.d.ts": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+    "dist/world/canonical/src/frontend/components/AvatarWorld/copy.d.ts": "bc5215d89a5f5a7b4d9caf8c62fe44a3657feea1656aedbb37e8bab57cec1838",
+    "dist/world/canonical/src/frontend/components/AvatarWorld/Eyes.d.ts": "cedc209debad103b740233259e8166eb82f63ab105acbdf3c689581364482a41",
+    "dist/world/canonical/src/frontend/components/AvatarWorld/Watershed.d.ts": "2fedece137e739b781abe1faff2ecfd16e8e549a7bead7a0e35af3c020c951b3",
+    "dist/world/canonical/src/frontend/components/AvatarWorld/WorldScene.d.ts": "c081ee7ab3708382001c8e04f679bb528828d7ca8968e9aef708555c1a656968",
+    "dist/world/canonical/src/shared/types/avatar.d.ts": "f7388d3d685f44b7bd0499adfb41577c45c649a71133a6a97fb5d042435b841b",
+    "dist/world/index.d.ts": "354de7719541b4ad1360b0eabb79113b1c6323d79a2f88211f6365b28da629ff",
+    "dist/world/selection.d.ts": "ffe3f8911cdc4c0b971250c7d749d986d9e164d22ec1a20b25734c2e838dab81",
+    "dist/world/WorldSky.d.ts": "728b99907e184bf17ed226cbc67ddbc77cbaa8d5cde3244d1d8b7c11591926c9",
+    "dist/world.css": "c471ed03e15b649c69ab0ee0ae9c66eabe8d5f276a8c9547d2ab82de0df1945d",
+    "dist/world.css.d.ts": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+    "dist/world.js": "4224a63c94a1df8434f2085974f95111a7d249fe1bcf8304dfd73e728f64657a",
+    "public/avatar-audio-capture.js": "00d53b3152f780b2b9f51d6d9738ef67196bf32b70e9a1220c9d47c194f2432c",
+    "server/pocket-speech.d.mts": "9109ea223eac26195ab04ecc9f5bcfbec2cee4c97fdea13d00be8d097ecdd6f1",
+    "server/pocket-speech.mjs": "2a6107f130f662adf213669157821bf3e255982d4b313a2913b5370292f8966b",
+    "server/support.mjs": "62ad379a8d4f581e930bef1114c403cf434d1b268b9a3496f60af146a832ab14"
+  }
+}

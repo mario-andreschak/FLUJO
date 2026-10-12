@@ -8,6 +8,7 @@ import {
   PersonaDeletionNotFoundError,
   deletePersona,
   listPersonaFlowDispatches,
+  listPersonaRuntimeRecordsStrict,
   pumpPersonaFlowDispatches,
   projectPersonaPresentation,
   readPersonaRuntimeSnapshot,
@@ -62,9 +63,10 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: 'Persona not found.' }, { status: 404 });
   }
   try {
-    const [snapshot, dispatches] = await Promise.all([
+    const [snapshot, dispatches, records] = await Promise.all([
       readPersonaRuntimeSnapshot(personaId),
       listPersonaFlowDispatches(personaId),
+      listPersonaRuntimeRecordsStrict(personaId),
     ]);
     const resultByActivityId = new Map<string, string>();
     for (const dispatch of dispatches) {
@@ -86,6 +88,48 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     return snapshot
       ? NextResponse.json({
           ...snapshot.bundle,
+          // Complete owner-scoped record projection. This read is not an atomic
+          // quiescence certificate; guarded mutations recheck under the runtime lock.
+          runtimeRecords: {
+            complete: true,
+            readConsistency: 'non_atomic',
+            dispatches: dispatches.map((dispatch) => ({
+              id: dispatch.id,
+              state: dispatch.state,
+              source: {
+                kind: dispatch.admission.source.kind,
+                sourceId: dispatch.admission.source.sourceId,
+              },
+              mailboxItemId: dispatch.mailboxItemId,
+              activityId: dispatch.activityId ?? dispatch.outcome?.activityId,
+              createdAt: dispatch.createdAt,
+              updatedAt: dispatch.updatedAt,
+            })),
+            mailboxQueue: records.mailboxItems.map((item) => ({
+              id: item.id,
+              status: item.status,
+              sequence: item.sequence,
+              source: { kind: item.source.kind, sourceId: item.source.sourceId },
+              claimedActivityId: item.claimedActivityId,
+              targetActivityId: item.targetActivityId,
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+            })),
+            activities: records.activities.map((activity) => ({
+              id: activity.id,
+              status: activity.status,
+              source: { kind: activity.source.kind, sourceId: activity.source.sourceId },
+              leaseId: activity.leaseId,
+              conversationId: activity.conversationId,
+              runId: activity.runId,
+              updatedAt: activity.updatedAt,
+            })),
+            lease: snapshot.bundle.lease ? {
+              activityId: snapshot.bundle.lease.activityId,
+              status: snapshot.bundle.lease.status,
+              expiresAt: snapshot.bundle.lease.expiresAt,
+            } : null,
+          },
           runtime: snapshot.runtime,
           presentation: projectPersonaPresentation(snapshot.bundle, {
             activeActivityId: snapshot.runtime.projection.active?.activityId,

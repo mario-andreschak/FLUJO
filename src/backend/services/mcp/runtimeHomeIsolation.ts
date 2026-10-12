@@ -2,6 +2,7 @@ import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
+import { assertMcpTransport } from './transportAdmission';
 
 const log = createLogger('backend/services/mcp/runtimeHomeIsolation');
 
@@ -35,6 +36,7 @@ export async function resolveRuntimeHomeIsolation(
   config: MCPServerConfig,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<boolean> {
+  assertMcpTransport(config);
   if (config.transport !== 'stdio') return false;
 
   const processOverride = parseRuntimeHomeIsolationOverride(

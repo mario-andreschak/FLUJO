@@ -8,6 +8,16 @@ import {
 } from '@/frontend/utils/workspaceSelection';
 
 describe('WorkspaceBootstrap deep links', () => {
+  it('offers owner sign-in on unauthorized discovery without retrying or mounting providers', async () => {
+    window.history.replaceState({}, '', '/chat?workspace=team-b');
+    const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 401 });
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+    render(<WorkspaceBootstrap><div>private data mounted</div></WorkspaceBootstrap>);
+    const link = await screen.findByRole('link', { name: 'Owner sign in' });
+    expect(link).toHaveAttribute('href', '/owner/login?returnTo=%2Fchat%3Fworkspace%3Dteam-b');
+    expect(screen.queryByText('private data mounted')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   beforeEach(() => {
     __resetWorkspaceSelectionForTests();
     window.localStorage.clear();

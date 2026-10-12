@@ -58,6 +58,7 @@ const CollapsibleCardSection = ({
         data-scroll-group-key={scrollAnchorKey}
         onClick={onToggle}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             onToggle();
@@ -99,7 +100,7 @@ const CollapsibleCardSection = ({
         </Typography>
         <Chip label={count} size="small" sx={{ height: 20, fontSize: '0.7rem' }} />
       </Box>
-      <Collapse in={expanded} unmountOnExit>
+      <Collapse in={expanded} unmountOnExit inert={!expanded || undefined} aria-hidden={!expanded || undefined}>
         <Box sx={{ pt: 1.5 }}>{children}</Box>
       </Collapse>
     </Box>

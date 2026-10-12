@@ -25,7 +25,7 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import PackageInstallWizard from '@/frontend/components/Packages/PackageInstallWizard';
 import { packageService, type RegistryPackageSearchResult } from '@/frontend/services/packages';
 import { registryService } from '@/frontend/services/registry';
@@ -123,7 +123,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
 
   return (
     <Box sx={{ maxWidth: { xs: '100%', md: 1100 }, mx: 'auto', mt: 3 }}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center",  mb: 1 }}>
         <CloudDownloadOutlinedIcon color="action" />
         <Typography variant="h6">{t('packages.browse.title')}</Typography>
       </Stack>
@@ -137,7 +137,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         onKeyDown={(e) => {
           if (e.key === 'Enter') void runSearch(query);
         }}
-        InputProps={{
+        slotProps={{ input: {
           startAdornment: (
             <InputAdornment position="start">
               <SearchIcon fontSize="small" />
@@ -148,7 +148,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
               <CircularProgress size={16} />
             </InputAdornment>
           ) : undefined,
-        }}
+        } }}
         sx={{ mb: 2 }}
       />
 
@@ -166,15 +166,15 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
 
       <Grid container spacing={2}>
         {results.map((pkg) => (
-          <Grid item xs={12} sm={6} md={4} key={pkg.id}>
+          <Grid size={{ xs: 12, sm: 6, md: 4 }} key={pkg.id}>
             <Card variant="outlined" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <CardActionArea onClick={() => setSelected(pkg)} sx={{ flex: 1 }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="baseline" justifyContent="space-between">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "baseline", justifyContent: "space-between" }}>
                     <Typography variant="subtitle1" noWrap>{pkg.name}</Typography>
                     <Chip size="small" variant="outlined" label={`v${pkg.latestVersion}`} />
                   </Stack>
-                  <Typography variant="caption" color="text.secondary" display="block">
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                     {pkg.handle}
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, minHeight: '2.5em' }}>
@@ -185,7 +185,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                       <Chip key={tag} size="small" label={tag} />
                     ))}
                   </Stack>
-                  <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 1 }}>
+                  <Stack direction="row" spacing={0.5} sx={{ alignItems: "center",  mt: 1 }}>
                     <DownloadIcon fontSize="inherit" color="disabled" />
                     <Typography variant="caption" color="text.secondary">{formatNumber(pkg.downloads)}</Typography>
                   </Stack>

@@ -22,6 +22,7 @@ artifacts
 test-outputs
 .codex
 **/node_modules
+**/.cache
 
 # Docs / site assets not needed at runtime.
 docs/images

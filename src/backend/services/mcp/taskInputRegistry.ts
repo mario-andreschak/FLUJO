@@ -2,7 +2,7 @@
  * Bridge between MCP task `input_required` states and FLUJO's existing
  * elicitation UX (issue #404, plan step 5).
  *
- * PROTOCOL NOTE. The resolved SDK/spec (`@modelcontextprotocol/sdk` 1.30.0)
+ * PROTOCOL NOTE. The resolved SDK/spec (`@modelcontextprotocol/sdk` 1.x)
  * has no `tasks/update` method and no `inputRequests` array. A task that needs
  * input is expressed by the server issuing an ordinary related request —
  * `elicitation/create` (or `sampling/createMessage`) carrying

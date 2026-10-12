@@ -327,8 +327,8 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
 
       <Stack spacing={3}>
         {variables.map((variable, index) => (
-          <Grid container key={index} spacing={2} alignItems="flex-start">
-            <Grid item xs={12} sm={5}>
+          <Grid container key={index} spacing={2} sx={{ alignItems: "flex-start" }}>
+            <Grid size={{ xs: 12, sm: 5 }}>
               <TextField
                 fullWidth
                 placeholder={t('mcp.env.name')}
@@ -339,14 +339,14 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                 size="small"
               />
             </Grid>
-            <Grid item xs={12} sm={5}>
+            <Grid size={{ xs: 12, sm: 5 }}>
               <TextField
                 fullWidth
                 type={variable.isSecret ? 'password' : 'text'}
                 placeholder={variable.showWarning ? t('mcp.env.reenter') : t('mcp.env.value')}
                 value={variable.value}
                 onChange={(e) => handleVariableChange(index, 'value', e.target.value)}
-                InputProps={{
+                slotProps={{ input: {
                   readOnly: variable.isBound,
                   startAdornment: variable.isEncrypted ? (
                     <InputAdornment position="start">
@@ -365,7 +365,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                       />
                     </InputAdornment>
                   ) : null
-                }}
+                } }}
                 error={variable.showWarning}
                 helperText={variable.showWarning ? t('mcp.env.reenterHelp') : ''}
                 size="small"
@@ -376,7 +376,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
                 }}
               />
             </Grid>
-            <Grid item xs={12} sm={2}>
+            <Grid size={{ xs: 12, sm: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
                 <FormControlLabel
                   control={

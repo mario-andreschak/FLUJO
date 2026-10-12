@@ -8,6 +8,18 @@ An MCP server exposes tools, resources, prompts, or interactive Apps to FLUJO. A
 4. Connect and inspect its discovered capabilities.
 5. Test one harmless operation, then explicitly add the needed tools to your agent.
 
+Open **Your first AI + app agent** on Connected Apps for the normal first-use
+path. It links to AI Setup, the existing connection wizard and tool inspector,
+then Agents in the Easy authoring mode. Select a saved enabled app to inspect;
+disabled apps must first be enabled from their cards.
+
+A saved connection is not a successful test. Even a connected MCP server still
+needs a successful test of the operation you want. In Agents, choose **Start
+simple**, bind the tested AI and the specific tool, save, and use **Try my agent**.
+Confirm an actual tool result and assistant reply. Tool approvals, the Expert
+graph, debugger and proxy/API reuse remain available; the guide opens existing
+controls and does not invoke a model or tool for you.
+
 Local servers run as processes with the host user's permissions. Installing a repository can execute its installation/build scripts. A remote server receives requests at its configured URL. Tool approvals help review actions but do not turn arbitrary local processes into a sandbox.
 
 Use [local server setup](local-servers.md), [GitHub server setup](github-servers.md), or [launch-and-connect](launch-and-connect.md) for the relevant transport. See [MCP Apps](apps.md) for the separate sandbox origin used by interactive interfaces.

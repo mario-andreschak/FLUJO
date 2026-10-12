@@ -571,7 +571,7 @@ const ConfigureTab: React.FC<TabProps> = ({
       <Grid container spacing={2}>
         {/* Phone/tablet layouts keep the form full width and push the console
             below it; the 8/4 split only applies from `md` up (#394). */}
-        <Grid item xs={12} md={isConsoleVisible ? 8 : 12}>
+        <Grid size={{ xs: 12, md: isConsoleVisible ? 8 : 12 }}>
           <Stack spacing={3}>
             {/* Launch-and-connect (#392): read-only. FLUJO does not start this
                 process yet — the user does, then FLUJO connects to serverUrl. */}
@@ -879,9 +879,7 @@ const ConfigureTab: React.FC<TabProps> = ({
         
         {isConsoleVisible && (
           <Grid
-            item
-            xs={12}
-            md={4}
+            size={{ xs: 12, md: 4 }}
             // Stacked below the form the console has no row height to fill, so
             // give it a bounded mobile height and let it scroll internally.
             sx={{ height: { xs: 320, md: 'auto' }, minHeight: { xs: 240, md: 0 } }}
@@ -917,7 +915,7 @@ const ConfigureTab: React.FC<TabProps> = ({
           variant="contained"
           color="primary"
         >
-          {initialConfig ? t('mcp.local.updateServer') : t('mcp.local.addServer')}
+          {initialConfig && onUpdate ? t('mcp.local.updateServer') : t('mcp.local.addServer')}
         </Button>
       </Box>
 

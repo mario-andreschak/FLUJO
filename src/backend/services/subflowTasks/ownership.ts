@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '@/utils/paths';
 import { getCurrentWorkspace } from '@/utils/workspace';
@@ -16,13 +16,36 @@ async function readInstallationId(directory: string): Promise<string> {
   const info = await fs.lstat(directory);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Invalid detached task installation directory.');
   const marker = path.join(directory, 'identity.json');
-  const stat = await fs.lstat(marker);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > 4096) {
-    throw new Error('Invalid detached task installation identity.');
+  // Pin the file before inspecting it. O_NOFOLLOW is unavailable on Windows,
+  // where the post-open lstat/handle identity comparison rejects links too.
+  // O_NONBLOCK prevents a substituted FIFO from blocking before fstat rejects it.
+  const handle = await fs.open(marker, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const [stat, markerInfo, directoryInfo] = await Promise.all([
+      handle.stat(), fs.lstat(marker), fs.lstat(directory),
+    ]);
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > 4096
+      || markerInfo.isSymbolicLink() || markerInfo.dev !== stat.dev || markerInfo.ino !== stat.ino
+      || !directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()
+      || directoryInfo.dev !== info.dev || directoryInfo.ino !== info.ino) {
+      throw new Error('Invalid detached task installation identity.');
+    }
+    // A writer can grow an already-open file. Bound the read itself as well as
+    // checking its earlier size; never allocate from a mutable pathname/size.
+    const bytes = Buffer.alloc(4097);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > 4096) throw new Error('Invalid detached task installation identity.');
+    const identity = JSON.parse(bytes.toString('utf8', 0, length)) as { version?: number; id?: string };
+    if (identity.version !== 1 || !UUID.test(identity.id ?? '')) throw new Error('Invalid detached task installation identity.');
+    return identity.id!;
+  } finally {
+    await handle.close();
   }
-  const identity = JSON.parse(await fs.readFile(marker, 'utf8')) as { version?: number; id?: string };
-  if (identity.version !== 1 || !UUID.test(identity.id ?? '')) throw new Error('Invalid detached task installation identity.');
-  return identity.id!;
 }
 
 async function prepareInstallationId(root: string): Promise<string> {

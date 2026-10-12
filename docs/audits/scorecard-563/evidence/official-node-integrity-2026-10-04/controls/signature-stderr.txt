@@ -1,0 +1,3 @@
+gpg: Signature made Wed Sep 23 12:18:30 2026 WSN
+gpg:                using EDDSA key 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356
+gpg: BAD signature from "Antoine du Hamel <antoine.duhamel@platformatic.dev>" [unknown]

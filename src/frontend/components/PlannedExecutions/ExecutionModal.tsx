@@ -432,7 +432,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           borderTop: 5,
           borderColor: 'primary.main',
@@ -443,7 +443,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           maxHeight: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
           overflow: 'hidden',
         },
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={execution ? t('automations.modal.editTitle') : t('automations.modal.newTitle')}
@@ -1005,7 +1005,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                   checked={superExclusive}
                   onClick={(event) => event.stopPropagation()}
                   onChange={(event) => setSuperExclusive(event.target.checked)}
-                  inputProps={{ 'aria-hidden': true, tabIndex: -1 }}
+                  slotProps={{ input: { 'aria-hidden': true, tabIndex: -1 } }}
                 />
                 <Box>
                   <Typography
@@ -1060,7 +1060,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                   checked={emergency}
                   onClick={(event) => event.stopPropagation()}
                   onChange={(event) => setEmergency(event.target.checked)}
-                  inputProps={{ 'aria-hidden': true, tabIndex: -1 }}
+                  slotProps={{ input: { 'aria-hidden': true, tabIndex: -1 } }}
                 />
                 <Box>
                   <Typography

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -31,15 +31,24 @@ import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import PlaygroundCanvas from './PlaygroundCanvas';
 import DayView from './DayView';
+import FactoryObservatoryPanel from './FactoryObservatoryPanel';
 import type { PlaygroundMode } from './playgroundGraph';
 
 const log = createLogger('frontend/components/Waves');
 const POLL_INTERVAL_MS = 30_000;
+const LOAD_TIMEOUT_MS = 60_000;
 const VIEW_PREF_KEY = 'flujo-ui:waves:view';
 const MODE_PREF_KEY = 'flujo-ui:waves:playground-mode';
 const ACTIVE_WAVE_PREF_KEY = 'flujo-ui:waves:active-wave';
+const RECOVERY_ALERT_SX = {
+  flexShrink: 0,
+  overflowWrap: 'anywhere',
+  flexDirection: { xs: 'column', sm: 'row' },
+  '& .MuiAlert-message': { minWidth: 0, py: { xs: 0, sm: 1 } },
+  '& .MuiAlert-action': { ml: 0, pl: { xs: 0, sm: 2 }, alignSelf: { xs: 'stretch', sm: 'center' } },
+} as const;
 
-type WavesView = 'playground' | 'day';
+type WavesView = 'playground' | 'day' | 'factory';
 
 export type WavesManagerHeight = number | string | {
   xs: number | string;
@@ -67,42 +76,68 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [data, setData] = useState<AutomationMapResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [view, setView] = useWorkspaceUiPreference<WavesView>(VIEW_PREF_KEY, 'playground');
+  const loadRequest = useRef(0);
+  const activeLoad = useRef<{ controller: AbortController; timeout: number } | null>(null);
+  const [view, setView] = useWorkspaceUiPreference<WavesView>(VIEW_PREF_KEY, 'day');
   const [mode, setMode] = useWorkspaceUiPreference<PlaygroundMode>(MODE_PREF_KEY, 'simple');
   const [activeWaveId, setActiveWaveId] = useWorkspaceUiPreference<string | null>(ACTIVE_WAVE_PREF_KEY, null);
   const [visiblePackageNames, setVisiblePackageNames] = useState<string[]>([]);
   const [packageMenuAnchor, setPackageMenuAnchor] = useState<HTMLElement | null>(null);
+  // Inspecting an item switches views and remounts DayView on return.
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
 
   const refresh = useCallback(async () => {
-    const response = await automationMapService.load();
-    setData(response);
-    setLoadError(false);
-    setLoading(false);
+    // Slow requests get time to finish instead of being superseded every poll.
+    if (activeLoad.current) return;
+    const request = ++loadRequest.current;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
+    activeLoad.current = { controller, timeout };
+    setLoading(true);
+    try {
+      const response = await automationMapService.load(controller.signal);
+      if (request !== loadRequest.current) return;
+      setData(response);
+      setLoadError(false);
+    } catch (error) {
+      if (request !== loadRequest.current) return;
+      log.warn('Automation map load failed', error);
+      setLoadError(true);
+    } finally {
+      window.clearTimeout(timeout);
+      if (request === loadRequest.current) {
+        activeLoad.current = null;
+        setLoading(false);
+      }
+    }
   }, []);
 
   const retryLoad = useCallback(() => {
-    setLoading(true);
-    refresh().catch((error) => {
-      log.warn('Automation map retry failed', error);
-      setLoadError(true);
-      setLoading(false);
-    });
+    void refresh();
   }, [refresh]);
 
   useEffect(() => {
-    refresh().catch((error) => {
-      log.warn('Initial automation map load failed', error);
-      setLoadError(true);
-      setLoading(false);
-    });
-    const timer = window.setInterval(() => {
-      refresh().catch((error) => {
-        log.warn('Automation map refresh failed', error);
-        setLoadError(true);
-      });
-    }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    if (view === 'factory') return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      await refresh();
+      // Wait after completion, including timeouts, so recovery stays usable.
+      if (!cancelled) timer = window.setTimeout(() => { void poll(); }, POLL_INTERVAL_MS);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      // A previous poll or departed view cannot replace this view's details.
+      loadRequest.current++;
+      if (activeLoad.current) {
+        window.clearTimeout(activeLoad.current.timeout);
+        activeLoad.current.controller.abort();
+        activeLoad.current = null;
+      }
+    };
+  }, [refresh, view]);
 
   useEffect(() => {
     if (!data || !activeWaveId) return;
@@ -146,18 +181,28 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
       aria-label="Waves view"
       sx={{
         bgcolor: 'background.paper',
-        '& .MuiToggleButton-root': { px: { xs: 1.15, sm: 1.75 }, gap: 0.7, textTransform: 'none', fontWeight: 700 },
+        '& .MuiToggleButton-root': { minHeight: 44, px: { xs: 1.15, sm: 1.75 }, gap: 0.7, textTransform: 'none', fontWeight: 700 },
       }}
     >
-      <ToggleButton value="playground" aria-label={t('waves.playground')}>
-        <HubRoundedIcon sx={{ fontSize: 18 }} />
-        {t('waves.playground')}
-      </ToggleButton>
       <ToggleButton value="day" aria-label={t('waves.day')}>
         <CalendarViewDayRoundedIcon sx={{ fontSize: 18 }} />
         {t('waves.day')}
       </ToggleButton>
+      <ToggleButton value="playground" aria-label={t('waves.playground')}>
+        <HubRoundedIcon sx={{ fontSize: 18 }} />
+        {t('waves.playground')}
+      </ToggleButton>
+      <ToggleButton value="factory" aria-label="FACTORY swarm">
+        <HubRoundedIcon sx={{ fontSize: 18 }} />
+        FACTORY
+      </ToggleButton>
     </ToggleButtonGroup>
+  );
+
+  const retryAction = (
+    <Button color="inherit" onClick={retryLoad} disabled={loading} sx={{ minHeight: 44, width: { xs: '100%', sm: 'auto' } }}>
+      {t('common.tryAgain')}
+    </Button>
   );
 
   return (
@@ -167,8 +212,8 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
         icon={WavesRoundedIcon}
         eyebrowKey="waves.mapEyebrow"
         titleKey="waves.title"
-        descriptionKey="waves.playgroundDescription"
-        badge={data?.paused ? <Chip size="small" color="warning" label={t('waves.schedulerPaused')} /> : undefined}
+        descriptionKey={view === 'day' ? 'waves.dayDescription' : 'waves.playgroundDescription'}
+        badge={data?.paused && view !== 'day' ? <Chip size="small" color="warning" label={t('waves.schedulerPaused')} /> : undefined}
         actions={headerActions}
       />
 
@@ -184,27 +229,34 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
           pb: { xs: 1, sm: 1.5 },
         }}
       >
-        {loading && (
+        {view !== 'factory' && data && loadError && (
+          <Alert severity="warning" icon={false} aria-busy={loading} sx={RECOVERY_ALERT_SX} action={retryAction}>
+            {t('waves.staleMap')}
+            {loading && <Typography variant="body2" role="status" aria-live="polite">{t('waves.refreshing')}</Typography>}
+          </Alert>
+        )}
+        {view !== 'factory' && loading && !data && (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
-            <Stack spacing={1.25} alignItems="center">
-              <CircularProgress size={34} />
-              <Typography variant="body2" color="text.secondary">{t('waves.buildingMap')}</Typography>
+            <Stack role="status" aria-live="polite" aria-busy="true" spacing={1.25} sx={{ alignItems: "center" }}>
+              <CircularProgress size={34} aria-hidden="true" />
+              <Typography variant="body2" color="text.secondary">{t(view === 'day' ? 'waves.loadingDay' : 'waves.buildingMap')}</Typography>
             </Stack>
           </Box>
         )}
 
-        {!loading && !data && loadError && (
+        {view !== 'factory' && !loading && !data && loadError && (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 2 }}>
             <Alert
               severity="error"
-              action={<Button color="inherit" size="small" onClick={retryLoad}>{t('common.tryAgain')}</Button>}
+              sx={{ ...RECOVERY_ALERT_SX, width: '100%', maxWidth: 520 }}
+              action={retryAction}
             >
-              {t('waves.loadError')}
+              {t(view === 'day' ? 'waves.loadDayError' : 'waves.loadError')}
             </Alert>
           </Box>
         )}
 
-        {!loading && data && view === 'playground' && (
+        {data && view === 'playground' && (
           <>
             <Paper
               variant="outlined"
@@ -273,7 +325,6 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
               </Menu>
 
               <Box sx={{ flex: 1 }} />
-              {loadError && <Chip size="small" color="warning" variant="outlined" label={t('waves.staleMap')} />}
               <Chip size="small" variant="outlined" label={tp('waves.flowCount', data.flows.length)} />
               <Chip size="small" variant="outlined" label={tp('waves.connectionCount', data.relations.length)} />
               {data.orphanExecutionIds.length > 0 && (
@@ -310,16 +361,19 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
           </>
         )}
 
-        {!loading && data && view === 'day' && (
+        {data && view === 'day' && (
           <Box data-testid="waves-day-view" sx={{ flex: 1, minHeight: 0 }}>
             <DayView
               data={data}
+              selectedDate={selectedDate}
+              onSelectedDateChange={setSelectedDate}
               height="100%"
               onSelectWave={selectWaveFromDay}
               onSelectExecution={selectExecutionFromDay}
             />
           </Box>
         )}
+        {view === 'factory' && <FactoryObservatoryPanel />}
       </Box>
     </Box>
   );

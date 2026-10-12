@@ -68,7 +68,8 @@ interface ServerCardProps {
     | "error"
     | "connecting"
     | "initialization"
-    | "requires_authentication";
+    | "requires_authentication"
+    | "requires_approval";
   path: string;
   enabled: boolean;
   transport: "stdio" | "websocket" | "sse" | "streamable";
@@ -318,6 +319,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
     connecting: "info.main",
     initialization: "info.main",
     requires_authentication: "warning.main",
+    requires_approval: "warning.main",
   }[status];
 
   // Poll for status updates when server is connecting or initializing
@@ -644,6 +646,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         return t("mcp.status.initialization");
       case "requires_authentication":
         return t("mcp.card.requiresAuth");
+      case "requires_approval":
+        return t("mcp.status.requiresApproval");
     }
   };
 
@@ -672,7 +676,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
     if (status === "error") {
       return <ErrorIcon color="error" fontSize="small" />;
     }
-    if (status === "requires_authentication") {
+    if (status === "requires_authentication" || status === "requires_approval") {
       return <LockIcon color="warning" fontSize="small" />;
     }
     return <Spinner size="small" color="primary" />;
@@ -1076,7 +1080,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   checked={exposed}
                   onChange={(e) => handleToggleExpose(e.target.checked)}
                   size="small"
-                  inputProps={{ "aria-label": t("mcp.card.expose") }}
+                  slotProps={{ input: { "aria-label": t("mcp.card.expose") } }}
                 />
               </Box>
             </Tooltip>
@@ -1118,7 +1122,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   onChange={(e) => handleToggleApps(e.target.checked)}
                   size="small"
                   color="secondary"
-                  inputProps={{ "aria-label": t("mcp.card.apps") }}
+                  slotProps={{ input: { "aria-label": t("mcp.card.apps") } }}
                 />
               </Box>
             </Tooltip>
@@ -1160,7 +1164,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   onChange={(e) => handleToggleSkills(e.target.checked)}
                   size="small"
                   color="warning"
-                  inputProps={{ "aria-label": t("mcp.card.skills") }}
+                  slotProps={{ input: { "aria-label": t("mcp.card.skills") } }}
                 />
               </Box>
             </Tooltip>
@@ -1332,6 +1336,11 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </>
         ))}
 
+        {status === "requires_approval" && (
+          <Alert severity="warning" sx={{ mt: 1, overflowWrap: "anywhere" }}>
+            {error || t("mcp.status.requiresApproval")}
+          </Alert>
+        )}
         {status === "error" && modern && (
           <Box
             sx={{
@@ -1376,7 +1385,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                 mb: 0.5,
               }}
             >
-              <Typography variant="body2" fontWeight="medium" color="error">
+              <Typography variant="body2" sx={{ fontWeight: "medium" }} color="error">
                 {t("mcp.card.errorLabel")}
               </Typography>
               <Button
@@ -1424,7 +1433,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
               >
                 <Typography
                   variant="body2"
-                  fontWeight="medium"
+                  sx={{ fontWeight: "medium" }}
                   color="warning.main"
                 >
                   {requiredAuthorization
@@ -1652,7 +1661,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           <Typography variant="caption" color="text.secondary">
             {t("mcp.card.externalAuthDestination")}
           </Typography>
-          <Typography variant="body2" fontWeight={700} sx={{ mt: 0.5 }}>
+          <Typography variant="body2" sx={{ fontWeight: 700,  mt: 0.5 }}>
             {authorizationPrompt?.origin}
           </Typography>
           {authorizationPrompt?.hasPunycode && (

@@ -20,7 +20,6 @@ import {
   ArrowForwardRounded,
   AutoAwesomeRounded,
   ChatBubbleRounded,
-  CheckCircleRounded,
   CloseRounded,
   HubRounded,
   LockRounded,
@@ -73,8 +72,8 @@ interface WorkspaceStatus {
 export default function HomePage() {
   const theme = useTheme();
   const { t, tp } = useI18n();
-  const { settings, updateSettings } = useStorage();
-  const { startTour } = useTour();
+  const { settings } = useStorage();
+  const { startTour, canStartTour, saveDashboardDismissals, isActive: tourActive = false, dashboardRestoreId = 0 } = useTour();
   const [encryptionKeySet, setEncryptionKeySet] = useState(true);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ behindBy: number; branch: string } | null>(null);
@@ -211,6 +210,7 @@ export default function HomePage() {
     }
   };
 
+  // Saved records establish configuration, not successful model or agent use.
   const aiReady = workspaceStatus.models !== null && workspaceStatus.models > 0;
   const aiCheckUnavailable = !workspaceStatus.loading && workspaceStatus.models === null;
   const assistantReady = workspaceStatus.assistants > 0;
@@ -220,19 +220,19 @@ export default function HomePage() {
       id: 'ai',
       number: 1,
       title: t('home.connectAi.title'),
-      description: t('home.connectAi.description'),
+      description: aiReady ? t('home.connectAi.savedDescription') : t('home.connectAi.description'),
       icon: MemoryRounded,
       complete: aiReady,
       available: true,
       status: workspaceStatus.loading
         ? t('home.checking')
         : aiReady
-          ? t('home.connected')
+          ? t('home.saved')
           : aiCheckUnavailable
             ? t('home.openToCheck')
             : t('home.required'),
       href: aiReady || aiCheckUnavailable ? '/models' : '/models?add=1',
-      action: aiReady ? t('home.connectAi.manage') : aiCheckUnavailable ? t('home.connectAi.open') : t('home.connectAi.action'),
+      action: aiReady ? t('home.connectAi.test') : aiCheckUnavailable ? t('home.connectAi.open') : t('home.connectAi.action'),
     },
     {
       id: 'assistant',
@@ -242,9 +242,9 @@ export default function HomePage() {
       icon: AutoAwesomeRounded,
       complete: assistantReady,
       available: aiReady,
-      status: assistantReady ? tp('home.readyCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
+      status: assistantReady ? tp('home.createdCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
       href: aiReady ? '/flows?create=assistant' : undefined,
-      action: assistantReady ? t('home.agent.another') : aiReady ? t('home.agent.openBuilder') : t('home.agent.connectFirst'),
+      action: !aiReady ? t('home.agent.connectFirst') : assistantReady ? t('home.agent.another') : t('home.agent.openBuilder'),
     },
     {
       id: 'talk',
@@ -257,11 +257,11 @@ export default function HomePage() {
       status: workspaceStatus.conversationsLoading
         ? t('home.checking')
         : talkReady
-        ? t('home.completed')
+        ? t('home.started')
         : !aiReady
           ? t('home.afterAi')
           : assistantReady
-            ? t('home.ready')
+            ? t('home.notStarted')
             : t('home.afterAgent'),
       href: aiReady && assistantReady ? '/chat' : undefined,
       action: !aiReady ? t('home.talk.finishAi') : assistantReady ? t('home.talk.start') : t('home.talk.createFirst'),
@@ -282,46 +282,39 @@ export default function HomePage() {
   // Dismissals applied in this session are merged with the persisted list so a
   // quick sequence of clicks cannot overwrite an earlier dismissal while the
   // asynchronous settings write is still in flight.
-  const [sessionDismissedCards, setSessionDismissedCards] = useState<DashboardCardId[]>([]);
+  const [sessionDismissals, setSessionDismissals] = useState<{ restoreId: number; cards: DashboardCardId[] }>({
+    restoreId: dashboardRestoreId,
+    cards: [],
+  });
   const dismissedCards = useMemo(
-    () => new Set<DashboardCardId>([...persistedDismissedCards, ...sessionDismissedCards]),
-    [persistedDismissedCards, sessionDismissedCards],
+    () => new Set<DashboardCardId>([
+      // Replay can navigate here before the settings write finishes.
+      ...persistedDismissedCards.filter((id) => !tourActive || !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+      ...sessionDismissals.cards.filter((id) => sessionDismissals.restoreId === dashboardRestoreId
+        || !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+    ]),
+    [persistedDismissedCards, sessionDismissals, tourActive, dashboardRestoreId],
   );
 
   const persistDismissedCards = (nextDismissed: Set<DashboardCardId>) => {
-    void updateSettings({
-      ...settings,
-      onboarding: {
-        ...(settings.onboarding ?? {}),
-        completed: settings.onboarding?.completed ?? false,
-        // Neutralize the legacy collective flag once explicit state exists.
-        dashboardCardsHidden: false,
-        dashboardDismissedCards: DASHBOARD_CARD_IDS.filter((id) => nextDismissed.has(id)),
-      },
-    });
+    saveDashboardDismissals(DASHBOARD_CARD_IDS.filter((id) => nextDismissed.has(id)));
   };
 
   const dismissDashboardCard = (cardId: DashboardCardId) => {
     if (dismissedCards.has(cardId)) return;
-    setSessionDismissedCards((current) => (current.includes(cardId) ? current : [...current, cardId]));
+    setSessionDismissals((current) => ({
+      restoreId: dashboardRestoreId,
+      cards: [...new Set([
+        ...current.cards.filter((id) => current.restoreId === dashboardRestoreId
+          || !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+        cardId,
+      ])],
+    }));
     persistDismissedCards(new Set<DashboardCardId>([...dismissedCards, cardId]));
   };
 
   const visibleSetupSteps = setupSteps.filter((step) => !dismissedCards.has(step.id));
   const showConnectedAppsCard = !dismissedCards.has('connectedApps');
-
-  const handleStartTour = () => {
-    // The guided tour points at the setup cards, so restore them before it runs.
-    const restored = new Set<DashboardCardId>(dismissedCards);
-    const restoredAny = LEGACY_HIDDEN_DASHBOARD_CARD_IDS.filter((id) => restored.delete(id)).length > 0;
-    if (restoredAny) {
-      setSessionDismissedCards((current) =>
-        current.filter((id) => !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
-      );
-      persistDismissedCards(restored);
-    }
-    startTour();
-  };
 
   return (
     <Container maxWidth={false} disableGutters>
@@ -371,8 +364,7 @@ export default function HomePage() {
         <Box component="section" sx={{ pt: { xs: 5, md: 7 }, pb: { xs: 4, md: 5 } }}>
           <Stack
             direction={{ xs: 'column', md: 'row' }}
-            justifyContent="space-between"
-            alignItems={{ xs: 'flex-start', md: 'flex-end' }}
+            sx={{ justifyContent: "space-between", alignItems: { xs: 'flex-start', md: 'flex-end' } }}
             spacing={2.5}
           >
             <Box sx={{ maxWidth: 760 }}>
@@ -384,8 +376,8 @@ export default function HomePage() {
                 {t('home.intro')}
               </Typography>
             </Box>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-              <Button variant="outlined" onClick={handleStartTour} startIcon={<AutoAwesomeRounded />}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: "stretch" }}>
+              <Button variant="outlined" onClick={startTour} disabled={!canStartTour} startIcon={<AutoAwesomeRounded />}>
                 {t('home.openGuide')}
               </Button>
             </Stack>
@@ -420,11 +412,7 @@ export default function HomePage() {
                   overflow: 'hidden',
                   flexDirection: 'column',
                   border: 1,
-                  borderColor: step.complete
-                    ? alpha(theme.palette.success.main, 0.45)
-                    : highlighted
-                      ? alpha(theme.palette.primary.main, 0.48)
-                      : 'divider',
+                  borderColor: highlighted ? alpha(theme.palette.primary.main, 0.48) : 'divider',
                   borderRadius: 4,
                   bgcolor: alpha(theme.palette.background.paper, step.available ? 0.78 : 0.5),
                   opacity: step.available ? 1 : 0.7,
@@ -443,13 +431,13 @@ export default function HomePage() {
                     borderRadius: '50%',
                     content: '""',
                     background: `radial-gradient(circle, ${alpha(
-                      step.complete ? theme.palette.success.main : theme.palette.primary.main,
-                      step.available ? 0.18 : 0.07,
+                      theme.palette.primary.main,
+                      highlighted ? 0.18 : 0.07,
                     )}, transparent 68%)`,
                   },
                 }}
               >
-                <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }} spacing={1}>
                   <Box
                     sx={{
                       display: 'grid',
@@ -457,16 +445,16 @@ export default function HomePage() {
                       height: 46,
                       placeItems: 'center',
                       borderRadius: 3,
-                      color: step.complete ? 'success.main' : step.available ? 'primary.main' : 'text.disabled',
-                      bgcolor: alpha(step.complete ? theme.palette.success.main : theme.palette.primary.main, 0.1),
+                      color: step.available ? 'primary.main' : 'text.disabled',
+                      bgcolor: alpha(theme.palette.primary.main, step.available ? 0.1 : 0.05),
                     }}
                   >
-                    {step.complete ? <CheckCircleRounded /> : <Icon />}
+                    <Icon />
                   </Box>
-                  <Stack direction="row" alignItems="center" spacing={0.5}>
+                  <Stack direction="row" sx={{ alignItems: "center" }} spacing={0.5}>
                     <Chip
                       size="small"
-                      color={step.complete ? 'success' : highlighted ? 'primary' : 'default'}
+                      color={highlighted ? 'primary' : 'default'}
                       variant="outlined"
                       label={step.status}
                     />
@@ -558,12 +546,12 @@ export default function HomePage() {
             <HubRounded />
           </Box>
           <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle1" fontWeight={760}>{t('home.apps.title')}</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 760 }}>{t('home.apps.title')}</Typography>
             <Typography variant="body2" color="text.secondary">
               {t('home.apps.description')}
             </Typography>
           </Box>
-          <Stack direction="row" alignItems="center" spacing={0.5}>
+          <Stack direction="row" sx={{ alignItems: "center" }} spacing={0.5}>
             <Button component={Link} href="/mcp" variant="text" endIcon={<ArrowForwardRounded />}>
               {t('nav.connectedApps')}
             </Button>
@@ -586,15 +574,15 @@ export default function HomePage() {
           spacing={{ xs: 1, sm: 3 }}
           sx={{ mt: 3.5, color: 'text.secondary' }}
         >
-          <Stack direction="row" spacing={0.8} alignItems="center">
+          <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
             <LockRounded sx={{ fontSize: 17, color: 'primary.main' }} />
             <Typography variant="caption">{t('home.trait.private')}</Typography>
           </Stack>
-          <Stack direction="row" spacing={0.8} alignItems="center">
+          <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
             <AccountTreeRounded sx={{ fontSize: 17, color: 'primary.main' }} />
             <Typography variant="caption">{t('home.trait.simple')}</Typography>
           </Stack>
-          <Stack direction="row" spacing={0.8} alignItems="center">
+          <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
             <ShieldRounded sx={{ fontSize: 17, color: 'primary.main' }} />
             <Typography variant="caption">{t('home.trait.expert')}</Typography>
           </Stack>

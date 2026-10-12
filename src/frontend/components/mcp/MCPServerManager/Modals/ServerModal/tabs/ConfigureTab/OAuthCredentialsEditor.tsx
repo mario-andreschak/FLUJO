@@ -100,7 +100,7 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
         placeholder={t('mcp.local.oauth.secretPlaceholder')}
         variant="outlined"
         autoComplete="off"
-        InputProps={{
+        slotProps={{ input: {
           readOnly: isBound,
           endAdornment: isBound ? (
             <Tooltip title={t('mcp.local.oauth.unbind')}>
@@ -115,7 +115,7 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
               </IconButton>
             </Tooltip>
           ),
-        }}
+        } }}
         helperText={
           isBound
             ? t('mcp.local.oauth.bound', { variable: boundVar ?? '' })

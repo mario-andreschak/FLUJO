@@ -54,9 +54,9 @@ export default function MeetingMotions({ meeting, motions = meeting.motions }: M
   return (
     <>
       <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Stack direction="row" spacing={0.8} alignItems="center" sx={{ mb: 1.2 }}>
+        <Stack direction="row" spacing={0.8} sx={{ alignItems: "center",  mb: 1.2 }}>
           <HowToVoteRounded color="secondary" fontSize="small" />
-          <Typography variant="subtitle2" fontWeight={750}>{t('meetings.motions')}</Typography>
+          <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{t('meetings.motions')}</Typography>
           <Chip size="small" variant="outlined" label={motions.length} sx={{ ml: 'auto' }} />
         </Stack>
         <Stack spacing={1}>
@@ -78,8 +78,8 @@ export default function MeetingMotions({ meeting, motions = meeting.motions }: M
                 '&:hover': { borderColor: 'secondary.main', bgcolor: alpha(theme.palette.secondary.main, 0.075) },
               }}
             >
-              <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
-                <Typography variant="body2" fontWeight={700} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start" }} spacing={1}>
+                <Typography variant="body2" sx={{ fontWeight: 700,  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {summarizeMotion(motion)}
                 </Typography>
                 <Chip size="small" color={motion.status === 'accepted' ? 'success' : motion.status === 'open' ? 'secondary' : 'default'} label={motion.status} />
@@ -96,7 +96,7 @@ export default function MeetingMotions({ meeting, motions = meeting.motions }: M
           <DialogContent dividers>
             <Stack spacing={2.2}>
               <Box>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
                   <Chip size="small" color="secondary" label={selected.kind} />
                   <Chip size="small" variant="outlined" label={selected.status} />
                   <Typography variant="caption" color="text.secondary">
@@ -108,8 +108,8 @@ export default function MeetingMotions({ meeting, motions = meeting.motions }: M
               </Box>
               <Divider />
               <Box>
-                <Stack direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
-                  <Typography variant="subtitle2" fontWeight={750}>{t('meetings.motion.voteBreakdown')}</Typography>
+                <Stack direction="row" sx={{ justifyContent: "space-between",  mb: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{t('meetings.motion.voteBreakdown')}</Typography>
                   <Typography variant="caption" color="text.secondary">{t('meetings.motion.votes', { count: selected.votes.length })}</Typography>
                 </Stack>
                 <Stack direction="row" spacing={1}>
@@ -129,10 +129,10 @@ export default function MeetingMotions({ meeting, motions = meeting.motions }: M
                   const vote = selected.votes.find((item) => item.participantId === participant.id);
                   return (
                     <Paper key={participant.id} variant="outlined" sx={{ p: 1.2 }}>
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                         <Avatar sx={{ width: 30, height: 30, fontSize: '0.65rem' }}>{participant.name.slice(0, 2).toUpperCase()}</Avatar>
                         <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Typography variant="body2" fontWeight={700}>{participant.name}</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>{participant.name}</Typography>
                           {vote?.rationale && <Typography variant="caption" color="text.secondary">{vote.rationale}</Typography>}
                         </Box>
                         <Chip size="small" color={vote ? voteColors[vote.choice] : 'default'} variant={vote ? 'filled' : 'outlined'} label={vote ? t(`meetings.motion.${vote.choice}`) : t('meetings.motion.pending')} />

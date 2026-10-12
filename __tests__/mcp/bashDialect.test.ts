@@ -82,6 +82,16 @@ describe('commandUsesPosixChaining', () => {
     expect(commandUsesPosixChaining('a && b')).toBe(true);
     expect(commandUsesPosixChaining('echo "a && b"')).toBe(false);
   });
+
+  it('ignores escaped double quotes and preserves operators outside complete spans', () => {
+    expect(commandUsesPosixChaining(String.raw`echo "a \" && b"`)).toBe(false);
+    expect(commandUsesPosixChaining(String.raw`echo "a \" && b" && next`)).toBe(true);
+    expect(commandUsesPosixChaining(`echo 'a || b'\nnext`)).toBe(false);
+    expect(commandUsesPosixChaining('echo "unfinished && next')).toBe(true);
+    expect(detectDialectMismatch(`echo "it's a literal"`, 'cmd', allAvailable)).toEqual([]);
+    expect(detectDialectMismatch(`echo "literal" 'argument'`, 'cmd', allAvailable).join(' '))
+      .toMatch(/single quotes/);
+  });
 });
 
 describe('detectInteractiveHangRisk', () => {

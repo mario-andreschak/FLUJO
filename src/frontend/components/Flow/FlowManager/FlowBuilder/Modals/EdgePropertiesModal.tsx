@@ -117,7 +117,7 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
       onClose={onClose}
       maxWidth="sm"
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           borderTop: 5,
           borderColor: 'primary.main',
@@ -125,7 +125,7 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
           maxWidth: '95vw',
           maxHeight: '90vh',
         },
-      }}
+      } }}
     >
       <DialogHeaderActions title={t('flows.edgeModal.title')} onClose={onClose} />
 
@@ -198,7 +198,7 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
               </Select>
             </FormControl>
 
-            <Box display="flex" gap={2} flexWrap="wrap">
+            <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               {needsValue && (
                 <FormControlLabel
                   control={

@@ -130,7 +130,7 @@ const renderTab = (
   />,
 );
 
-describe('ConfigureTab run and troubleshooting behavior', () => {
+describe('ConfigureTab run, save and troubleshooting behavior', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     handleSubmitMock.mockImplementation((
@@ -161,6 +161,43 @@ describe('ConfigureTab run and troubleshooting behavior', () => {
       const setRunCompleted = args[8] as (completed: boolean) => void;
       setMessage({ type: 'success', text: 'Connected' });
       setRunCompleted(true);
+    });
+  });
+
+  describe('save intent', () => {
+    beforeEach(() => {
+      const { handleSubmit } = jest.requireActual<typeof import('@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/utils/formHandlers')>(
+        '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/utils/formHandlers',
+      );
+      handleSubmitMock.mockImplementation(handleSubmit);
+    });
+
+    it('labels a prefilled draft as Add and creates it through the real submit handler', () => {
+      const onAdd = jest.fn();
+      const onClose = jest.fn();
+      render(<ConfigureTab initialConfig={initialConfig} onAdd={onAdd} onClose={onClose} />);
+
+      expect(screen.queryByRole('button', { name: 'mcp.local.updateServer' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'mcp.local.addServer' }));
+
+      expect(onAdd).toHaveBeenCalledTimes(1);
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining(initialConfig));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('labels an existing server as Update and updates it through the real submit handler', () => {
+      const onAdd = jest.fn();
+      const onUpdate = jest.fn();
+      const onClose = jest.fn();
+      render(<ConfigureTab initialConfig={initialConfig} onAdd={onAdd} onUpdate={onUpdate} onClose={onClose} />);
+
+      expect(screen.queryByRole('button', { name: 'mcp.local.addServer' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'mcp.local.updateServer' }));
+
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining(initialConfig));
+      expect(onAdd).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
 

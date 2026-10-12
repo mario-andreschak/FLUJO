@@ -11,12 +11,12 @@ import type {
   PackageMetadataInput,
   PackageSelection,
   ResolvedSelection,
-} from '@/backend/services/packages/buildPackage';
+} from '@/shared/types/package/build';
 import type { PackageSecret } from '@/shared/types/package/secrets';
 import type { SecretProposal } from '@/shared/types/package/secretProposal';
-import type { InstallSummary } from '@/backend/services/packages/installPackage';
+import type { InstallSummary } from '@/shared/types/package/install';
 import type { PackageGlobal } from '@/shared/types/package/package';
-import type { RegistryPackageSearchResult } from '@/backend/utils/packageRegistryClient';
+import type { RegistryPackageSearchResult } from '@/shared/types/package/registry';
 
 const log = createLogger('frontend/services/packages');
 

@@ -1,0 +1,287 @@
+# Feature-surface acceptance fixture
+
+This synthetic MCP server supports the candidate checks for #517 (form drafts
+resetting during refresh), #526 (128-tool discovery) and #572 (first MCP agent).
+It echoes arguments; it never fetches URLs, opens a browser, runs a command,
+reads workspace files, calls a model or connects to a provider. Its schemas are
+shaped like URL/options and element/ref tools, but it is neither Firecrawl nor
+Playwright. Passing this fixture does not resolve a provider-specific report.
+
+## Run and connect
+
+Use Node 22+ and this checkout's installed lockfile dependencies. Run the small
+protocol check independently of the full FLUJO build:
+
+```powershell
+node --test scripts/feature-surface-acceptance/fixture-server.test.mjs
+node scripts/feature-surface-acceptance/fixture-server.mjs --transport=http --port=9317
+```
+
+The HTTP process binds **127.0.0.1 only**. Its one startup line on stderr contains
+the URL, an ephemeral control token and definition SHA-256. Use the printed URL
+if `--port=0` chooses a free port. Connect a disposable candidate profile using
+Streamable HTTP at `http://127.0.0.1:9317/mcp`. Legacy SSE at `/sse` is available
+to verify FLUJO's advertised compatibility; the SDK deprecates that transport.
+For stdio use the absolute Node executable as the command and separate args:
+
+```text
+C:/absolute/checkout/scripts/feature-surface-acceptance/fixture-server.mjs
+--transport=stdio
+```
+
+Do not add quotes inside individual argument-array entries. Stdio stdout is
+reserved for JSON-RPC. Plain stdio starts no HTTP listener. To control failed or
+delayed refreshes while FLUJO owns the stdio child, add `--control-port=9317` (or
+`--control-port=0`). This starts the same guarded loopback service sharing that
+child's state. Its startup line and ephemeral token appear on the child's stderr;
+use that service's `/control` and `/receipt` endpoints. Stop only the fixture
+process you started. The fixture scripts are source-side test equipment and
+are not added to the npm release's `files` list.
+
+`GET /receipt` and MCP resource `fixture://feature-surface/receipt` expose the
+run identity, definition digest, list and call counters, and the latest 64 call
+receipts. Receipts contain tool names, acceptance flags and argument digests,
+not raw arguments. A call counter counts dispatched calls including rejected
+arguments; `acceptedCalls` counts valid echoes. Counters start at zero for each
+process. Test results echo raw arguments, so use only synthetic values.
+
+## Candidate identity and recorded evidence
+
+Run the UI steps against the coordinator's combined candidate containing #585
+and #589 plus its required security/lifecycle dependencies. Retain the exact
+source SHA, build command and exit status, package/installer/container digest,
+installed runtime version, dependency lock hash, OS, browser, viewport, language,
+profile identity and fixture definition/run identity. A source checkout, an
+in-memory SDK test, an installer that fetches unpatched `main`, or a successful
+build is not an installed-candidate UI pass. Use the agreed #564 ledger format;
+this checklist does not replace that evidence profile.
+
+For each step retain observed result, relevant logs/receipt and screenshot or
+recording. Record failures and blocked cases explicitly. Browser checks,
+assistive-technology checks and human trials remain separate from these Node
+protocol tests. Never copy the ephemeral control token into a shared receipt.
+
+## Discovery, drafts and explicit execution
+
+1. Connect the fixture, open **Inspect & test**, and open the tool selector.
+   Find all 128 unique tools in order and select both `fixture_tool_001` and
+   `fixture_tool_128`. Exercise keyboard navigation to the last tool. Check the
+   first/last schema against the server response and keep the zero-call receipt
+   before pressing **Test**. Repeat over stdio, Streamable HTTP and legacy SSE.
+2. On tool 001, enter a synthetic URL and nested options such as
+   `{"formats":["markdown"],"nested":{"marker":"draft-517"}}`. On tool 128,
+   enter element/ref, an array, a nested object, enum and false boolean. Test
+   each explicitly; verify the exact echo and one counter increment per Test.
+   Discovery, opening the form, opening the App and prompt/resource inspection
+   must not increment the call counter.
+3. Edit the form after a successful Test. Include unfinished JSON such as
+   `{"nested":` or `["Shift",`. Use **Refresh tools** in normal, delay and
+   fail-second-page modes below. Verify text, selection, focus, scroll position,
+   previous result and the App's visible **Mount** identity remain while the
+   same server refreshes. Confirm the pending/error/stale status is visible and
+   accessible. Repair the draft and Test; compare the actual echo with edits.
+4. Repeat the failed refresh with cyclic pagination. No partial 32/64-tool list
+   should replace the previously complete 128-tool list. Return to normal and
+   refresh successfully. An explicit successful empty mode must clear the
+   selector; cached tools must not masquerade as a successful empty response.
+5. Save a second fixture server entry with a different server name. Switch to
+   it with the same tool name: the first server's draft/result/App must clear.
+   Switching away and back has a different identity from same-server refresh.
+   Repeat the actual Firecrawl/Playwright report on the candidate separately
+   if those provider configurations are available; keep its outcome distinct.
+
+### Object and array shape checks
+
+These installed checks require a candidate containing the reviewed JSON shape
+guard. Component tests with a mocked tool callback do not observe the actual
+MCP connection, receipt counters or rendered installed application. Keep the
+steps below pending until the coordinator allocates the runtime/browser slot.
+
+1. Select tool 128 and fill its required `element` and `ref` with synthetic
+   values. Use a form-only marker such as `shape-form-control`; use a different
+   marker for the later agent journey. Enter valid `options` and `modifiers`,
+   then record the fixture's current `toolCalls` and `acceptedCalls` counters.
+2. Enter `[]` and then `null` in `options` (an object field), and `{}` in
+   `modifiers` (an array field). Confirm that the raw draft remains visible,
+   the field explains its expected JSON shape, **Test** is disabled, and both
+   fixture counters stay unchanged. Repeat with a syntactically incomplete
+   draft to distinguish the existing syntax feedback from shape feedback.
+3. Repair `options` while leaving `modifiers` invalid; **Test** must stay
+   disabled. Refresh the same server's tools and verify that the invalid draft
+   and feedback remain. Repair all fields, explicitly Test once, and compare
+   the real echo with the edited values, including nested objects, string arrays
+   and false booleans. Each explicit Test adds exactly one dispatched and one
+   accepted receipt; typing, repairing and refreshing add none.
+4. Enter another wrong-shaped optional draft, then clear it with whitespace.
+   Explicitly Test and confirm the echo omits that argument rather than sending
+   its previous value. A separate host-provided wrong-shaped prefill must also
+   block Test until repaired or cleared; record that case as unavailable if no
+   host action supplies such a prefill, rather than claiming it from unit tests.
+
+Record source/artifact and fixture identities, counter baselines/deltas, visible
+feedback and actual echoed values. Repeat the rendered feedback in each of the
+seven supported languages. This checks top-level object/array shape and JSON
+syntax; nested constraints and the wider JSON Schema vocabulary need separate
+cases. It does not replace the Firecrawl/Playwright, provider or novice-pilot
+observations.
+
+The App at `ui://feature-surface/receipt` displays a fresh mount UUID, initializes
+with the host and shows tool-result notifications. It makes no tool requests and
+loads no external assets. Verify its real iframe initialization and retained
+mount identity in a browser; returning its HTML over MCP does not prove those.
+
+Control the **fixture** using the token printed at startup (PowerShell):
+
+```powershell
+$fixtureUrl = 'http://127.0.0.1:9317'
+$fixtureToken = 'paste-ephemeral-startup-token'
+$fixtureHeaders = @{ 'x-fixture-control' = $fixtureToken }
+Invoke-RestMethod "$fixtureUrl/control" -Method Post -Headers $fixtureHeaders -ContentType 'application/json' -Body '{"mode":"delay","delayMs":10000}'
+Invoke-RestMethod "$fixtureUrl/control" -Method Post -Headers $fixtureHeaders -ContentType 'application/json' -Body '{"mode":"fail-second-page"}'
+Invoke-RestMethod "$fixtureUrl/control" -Method Post -Headers $fixtureHeaders -ContentType 'application/json' -Body '{"mode":"cycle"}'
+Invoke-RestMethod "$fixtureUrl/control" -Method Post -Headers $fixtureHeaders -ContentType 'application/json' -Body '{"mode":"empty"}'
+Invoke-RestMethod "$fixtureUrl/control" -Method Post -Headers $fixtureHeaders -ContentType 'application/json' -Body '{"mode":"normal"}'
+Invoke-RestMethod "$fixtureUrl/receipt"
+```
+
+Controls accept only JSON up to 64 KiB, known modes and delay 0..30000 ms. Host
+and Origin guards restrict the local HTTP fixture; these checks do not qualify
+FLUJO authentication, authorization, process isolation or resource budgets.
+
+## First MCP agent and the remaining feature matrix
+
+The [live first-use observer and external MCP client](live-journey.md) provide
+prepared commands for the genuine model/tool/assistant, approval/debugger and
+connection-reuse observations below. Their execution remains pending; component
+reports do not establish full installed, provider or human acceptance.
+
+Follow the #589 guide from a disposable fresh profile: save a model, actually
+test its answer, connect/save the fixture and explicitly test tool 128, then
+create an Easy agent with that tested model and only the chosen tool. Try it
+with a synthetic receipt task. Verify an actual tool result and assistant
+answer; a saved entry, connection badge or echoed form is not agent completion.
+A model double can check routing but cannot count as a real-provider or human
+task pass. Measure the meaningful first-use pilot with Product fit's #577 tasks
+and approved human protocol, independently of this synthetic task.
+
+Retain Expert graph editing, debugger, HITL approvals, automations, MCP Apps,
+proxy and OpenAI-compatible API access from the agreed feature matrix. Check
+desktop and 360 px layouts, 200% zoom, keyboard and screen reader, all seven
+languages, install/restart and retained upgrade configuration on the installed
+candidate. Record real provider/tool journeys and existing-user regressions.
+These steps need additional equipment/participants and are not asserted by the
+fixture. External reassessment must evaluate the full #563/#564 profile before
+Feature surface can be accepted at A-.
+
+## UI-created connection equipment
+
+The restored `playwright.features-first-use.config.mjs` equipment starts a fresh
+anonymous loopback profile with no selected fixture configuration. It joins
+backend initialization and disables existing defaults through typed updates,
+then uses **Connect App -> I have connection details -> At a remote URL ->
+Configure manually**. Each planned case enters the name/URL through their
+associated labels, tests the actual MCP handshake, saves through the UI,
+reloads, checks all 128 ordered unique tools, reaches the last tool by keyboard
+and explicitly requests one tool128 echo with an argument digest. Typing,
+setup, connection testing, save/reload and inspection must leave tool-call
+counters at zero. Only the explicit tool test adds one dispatched and accepted
+receipt. The post-save selection verifier reads configurations; it cannot save
+or repair the UI-created connection.
+
+Streamable HTTP and legacy SSE each have desktop 1280x720 and 360x800 cases:
+four prospective cases, one worker, zero retries. The helper's `seeded` mode
+remains available for separate retention equipment, while `initialConnections:
+'ui'` creates no selected fixture entry. The original 16 environment controls
+and three new selection/failure controls form a prospective 19-case suite.
+These are Source-derived counts. No import, collection, environment test or
+browser execution on the forward-port is asserted here.
+
+After Root separately qualifies and allocates the exact source/equipment and
+binds the selected compiled or installed candidate, the prepared commands are:
+
+```powershell
+node --test scripts/feature-surface-acceptance/browser-environment.test.mjs
+$env:FEATURE_BROWSER_APP_DIR = 'C:/absolute/identified/compiled-or-installed/flujo-ai'
+$env:FEATURE_BROWSER_SOURCE_SHA = 'declared-source-identity-not-an-attestation'
+node node_modules/@playwright/test/cli.js test --config=playwright.features-first-use.config.mjs
+```
+
+The test command is a separate equipment qualification, and the browser command
+starts application/Chromium processes. This procedure grants neither execution
+nor dependency installation. The candidate must contain the reviewed current
+labels/manual route and required security/runtime corrections. A declared SHA,
+package metadata and `.next/BUILD_ID` are not source-to-artifact correspondence.
+The [installed acceptance packet](installed-acceptance.md) retains admission and
+the wider profile/matrix requirements.
+
+Retain the per-step JSON receipts, actual selected server/transport/URL,
+argument digest, page errors, screenshot/traces and owned child's exit/pipe-drain
+report. Startup/cleanup errors retain both failure contexts and disposable log
+paths; a forced stop remains a failure. Preserve each attempt before another
+run so fixed report paths cannot overwrite earlier evidence. Output uses
+`feature-first-use-artifacts/` and `test-results/features-first-use/`; the
+temporary profile and application logs remain available for review.
+
+The fixture is version 1.1.0 and advertises the MCP App resource MIME type; its
+definition digest includes these capabilities. These first-use cases do not qualify Apps/refresh, stdio first use,
+seven-language browser retention, the public Firecrawl form, a genuine model or
+agent, external reuse, human/linguistic/screen-reader review, upgrade or A-.
+The restored inspector and public-form equipment below retain the distinct
+#617/#625 scopes and #654 startup isolation. The #680 real-FIFO control retains
+its own source and execution scope. Historical #693 counts and failures are
+kept separately in the [audit record](../../docs/audits/scorecard-563/connection-input-labels.md).
+
+## Inspector, App, locale and public-form checks
+
+`playwright.features.config.mjs` runs four browser cases: inspector retention
+and seven rendered locales at desktop 1280x720 and 360x800. Each project starts
+an anonymous profile with the HTTP/SSE fixtures selected after joining backend
+initialization and disabling existing defaults through typed updates. Runtime
+dotenv lookup is also bound to that profile. The final enabled names must still
+match the fixtures; this does not establish native process confinement.
+
+The inspector reaches all 128 tools by keyboard, verifies exact first/last-page
+arguments and two accepted calls, observes real sandboxed App initialization,
+and retains the same draft DOM nodes, result and App mount through delayed,
+failed and cyclic refreshes. Invalid JSON blocks Test. Successful empty discovery
+clears the selector, and switching servers clears the prior draft/result. The
+locale case opens the guide and tool selector in all seven supported languages
+without another tool call; it checks rendered labels rather than translation
+quality or human acceptance.
+
+`playwright.features-online.config.mjs` is separately opt-in. Its two cases
+discover the public keyless Firecrawl schema at `https://mcp.firecrawl.dev/v2/mcp`
+and edit the actual `firecrawl_scrape` form. Nine five-second samples cross the
+former 30-second refresh boundary, then explicit refresh checks the same DOM
+nodes, drafts, focus and selection. No credentials are supplied and Test is
+never pressed. Browser execution POSTs are refused before reaching FLUJO; any
+attempt fails the case. This guard is not a global upstream tool counter and
+the cases do not claim a successful scrape or UI connection/save acceptance.
+
+```powershell
+node --test scripts/feature-surface-acceptance/fixture-server.test.mjs scripts/feature-surface-acceptance/browser-environment.test.mjs
+$env:FEATURE_BROWSER_APP_DIR = 'C:/absolute/current/compiled-or-installed/flujo-ai'
+$env:FEATURE_BROWSER_SOURCE_SHA = 'identified-producer-source'
+$env:FEATURE_BROWSER_CHROMIUM_EXECUTABLE = 'C:/absolute/chromium-headless-shell.exe'
+$env:FEATURE_BROWSER_OUTPUT_DIR = 'C:/absolute/new-unique-inspector-attempt'
+node node_modules/@playwright/test/cli.js test --config=playwright.features.config.mjs
+$env:FEATURE_BROWSER_OUTPUT_DIR = 'C:/absolute/new-unique-public-form-attempt'
+node node_modules/@playwright/test/cli.js test --config=playwright.features-online.config.mjs
+```
+
+Both suites use one worker, zero retries and the original per-case/action limits.
+Use a new output directory and short owned TEMP/TMP directory for every attempt.
+Reports, receipts, screenshots, traces and application logs remain available
+after cleanup. The private IPC ownership handshake precedes API requests; exit
+and output drainage must complete, and a forced stop remains a failure. Recorded
+package/build metadata and a declared producer SHA do not independently attest
+source correspondence or installed-launcher acceptance.
+
+Validation on 2026-10-07: all 25 affected native checks, all four inspector/locale
+cases and both public Firecrawl form cases passed. Browser runs used the selected
+3.46.3 compiled candidate declared at `cc69b5e35f09d5cb49383e3cc0c1e79e676d77e0`,
+BUILD_ID `IhXG4rnNAIRBPnLrQ-XFO`, with Chromium at both widths. The two inspector
+profiles each recorded exactly two dispatched/accepted synthetic calls. The
+public cases recorded zero browser tester-dispatch attempts. All four owned
+application epochs exited 143, drained their output and required no forced stop.
+Earlier failed attempts and reports remain retained separately.

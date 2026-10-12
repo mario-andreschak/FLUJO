@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -106,6 +107,7 @@ async function POST_handler(
       throw new Error('questionId is required for question actions');
     }
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.warn('Invalid request body', { requestId, error: error instanceof Error ? error.message : error });
     return NextResponse.json({ error: 'Invalid request body', details: error instanceof Error ? error.message : 'Unknown error' }, { status: 400 });
   }
@@ -367,6 +369,8 @@ async function POST_handler(
     return response;
 
     } catch (error) {
+
+      if (error instanceof ConversationLogReadPressureError) throw error;
       log.error('Error processing tool response action', {
         requestId,
         conversationId,
