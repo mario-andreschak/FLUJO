@@ -1265,7 +1265,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         anchor="bottom"
         open={isPhoneLayout && mobileOptionsOpen}
         onClose={() => setMobileOptionsOpen(false)}
-        PaperProps={{
+        slotProps={{ paper: {
           role: 'dialog',
           'aria-label': t('chat.input.runOptions'),
           sx: {
@@ -1274,7 +1274,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             pt: 1.5,
             pb: 'max(16px, env(safe-area-inset-bottom))',
           },
-        }}
+        } }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
           <TuneIcon color="primary" />
@@ -1343,10 +1343,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {dialogTitle}
           {!isProcessing && (
             <Box
-              display="flex"
-              alignItems="center"
-              gap={0.5}
-              sx={{
+              sx={{ display: "flex", alignItems: "center", gap: 0.5,
                 position: 'absolute',
                 right: 8,
                 top: 8,

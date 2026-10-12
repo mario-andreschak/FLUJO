@@ -346,8 +346,7 @@ const MarketplaceTab: React.FC<TabProps & { active?: boolean }> = ({
             onChange={e => setSearchInput(e.target.value)}
             placeholder={t('mcp.marketplace.search')}
             variant="outlined"
-            inputProps={{ 'aria-label': t('mcp.marketplace.searchLabel') }}
-            InputProps={{
+            slotProps={{ htmlInput: { 'aria-label': t('mcp.marketplace.searchLabel') }, input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon />
@@ -360,7 +359,7 @@ const MarketplaceTab: React.FC<TabProps & { active?: boolean }> = ({
                   </IconButton>
                 </InputAdornment>
               ) : undefined
-            }}
+            } }}
           />
           <Button
             type="submit"
@@ -500,7 +499,7 @@ const MarketplaceTab: React.FC<TabProps & { active?: boolean }> = ({
                 const installable = getInstallOptions(server).some(isAutoInstallable);
                 const verified = isVerifiedStatus(verificationStatusOf(result));
                 return (
-                  <Grid item xs={12} sm={6} md={4} key={server.name}>
+                  <Grid size={{ xs: 12, sm: 6, md: 4 }} key={server.name}>
                     <Card
                       sx={{
                         height: '100%',

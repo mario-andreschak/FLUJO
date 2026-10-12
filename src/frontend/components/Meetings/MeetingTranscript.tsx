@@ -50,7 +50,7 @@ type TranscriptRow =
 function MediaStrip({ media }: { media?: ModelMediaPart[] }) {
   if (!media?.length) return null;
   return (
-    <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mt: 1.5 }}>
+    <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1,  mt: 1.5 }}>
       {media.map((part, index) => {
         const src = part.url ?? (part.data ? `data:${part.mimeType ?? 'application/octet-stream'};base64,${part.data}` : undefined);
         if (!src) return null;
@@ -111,7 +111,7 @@ function SystemEvent({ event }: { event: MeetingEvent }) {
     default: return null;
   }
   return (
-    <Stack direction="row" spacing={1} alignItems="center" justifyContent="center" sx={{ height: '100%' }}>
+    <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "center",  height: '100%' }}>
       <Divider sx={{ flex: 1 }} />
       <Chip size="small" variant="outlined" color={color} icon={icon} label={text} sx={{ maxWidth: '82%', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }} />
       <Divider sx={{ flex: 1 }} />
@@ -188,7 +188,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
     return (
       <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
         <Box sx={{ px: 1.5, py: 0.6 }}>
-          <Stack direction="row" spacing={1.2} alignItems="flex-start">
+          <Stack direction="row" spacing={1.2} sx={{ alignItems: "flex-start" }}>
             <Avatar sx={{ mt: 0.6, width: 36, height: 36, flexShrink: 0, fontSize: '0.72rem', fontWeight: 800, background: participant?.role === 'moderator' ? `linear-gradient(145deg, ${theme.palette.secondary.main}, ${theme.palette.primary.dark})` : `linear-gradient(145deg, ${theme.palette.primary.main}, ${theme.palette.primary.dark})` }}>{initials}</Avatar>
             <Accordion
               disableGutters
@@ -208,7 +208,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
             >
               <AccordionSummary expandIcon={<ExpandMoreRounded />} sx={{ minHeight: 50, '& .MuiAccordionSummary-content': { minWidth: 0, my: 0.8 } }}>
                 <Box sx={{ minWidth: 0 }}>
-                  <Stack direction="row" spacing={0.8} alignItems="center">
+                  <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 780 }}>{event.participantName}</Typography>
                     {participant?.role === 'moderator' && <AutoAwesomeRounded sx={{ fontSize: 14, color: 'secondary.main' }} />}
                     <Typography variant="caption" color="text.disabled">{data.formatDate(event.timestamp, { hour: '2-digit', minute: '2-digit' })}</Typography>
@@ -232,7 +232,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
     return (
       <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
         <Box sx={{ px: 1.5, py: 0.6 }}>
-          <Stack direction="row" justifyContent="flex-end">
+          <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
             <Paper
               variant="outlined"
               sx={{
@@ -245,8 +245,8 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
                 bgcolor: alpha(theme.palette.primary.main, 0.07),
               }}
             >
-              <Stack direction="row" spacing={0.8} alignItems="center" sx={{ mb: 0.45 }}>
-                <Typography variant="caption" fontWeight={780} color="primary.main">{t('meetings.transcript.you')}</Typography>
+              <Stack direction="row" spacing={0.8} sx={{ alignItems: "center",  mb: 0.45 }}>
+                <Typography variant="caption" sx={{ fontWeight: 780 }} color="primary.main">{t('meetings.transcript.you')}</Typography>
                 <Typography variant="caption" color="text.disabled">{data.formatDate(event.timestamp, { hour: '2-digit', minute: '2-digit' })}</Typography>
               </Stack>
               <Box className="meeting-markdown" sx={{ overflowWrap: 'anywhere', '& > :first-of-type': { mt: 0 }, '& > :last-child': { mb: 0 }, '& p': { my: 0.7 } }}>
@@ -265,7 +265,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
       <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
         <Box sx={{ px: 1.5, py: 0.6 }}>
           <Paper variant="outlined" sx={{ p: 1.5, ml: { sm: 6 }, borderStyle: 'dashed', bgcolor: alpha(theme.palette.secondary.main, 0.035) }}>
-            <Stack direction="row" spacing={0.8} alignItems="center" sx={{ mb: 0.7 }}><LockRounded sx={{ fontSize: 16, color: 'secondary.main' }} /><Typography variant="caption" fontWeight={750}>{t('meetings.transcript.privateFrom', { from: sender?.name ?? t('meetings.transcript.unknown'), to: recipients })}</Typography></Stack>
+            <Stack direction="row" spacing={0.8} sx={{ alignItems: "center",  mb: 0.7 }}><LockRounded sx={{ fontSize: 16, color: 'secondary.main' }} /><Typography variant="caption" sx={{ fontWeight: 750 }}>{t('meetings.transcript.privateFrom', { from: sender?.name ?? t('meetings.transcript.unknown'), to: recipients })}</Typography></Stack>
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{event.content}</Typography>
             <MediaStrip media={event.media} />
           </Paper>
@@ -367,7 +367,7 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
   return (
     <Box>
       <Paper variant="outlined" sx={{ position: 'sticky', top: 0, zIndex: 2, mb: 1, p: 1, bgcolor: alpha(theme.palette.background.paper, 0.96), backdropFilter: 'blur(14px)' }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
           <Chip
             clickable
             size="small"
@@ -397,9 +397,9 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
       )}
 
       {!rows.length ? (
-        <Stack alignItems="center" justifyContent="center" spacing={1.2} sx={{ py: 9, px: 3, textAlign: 'center' }}>
+        <Stack spacing={1.2} sx={{ alignItems: "center", justifyContent: "center",  py: 9, px: 3, textAlign: 'center' }}>
           <Avatar sx={{ width: 52, height: 52, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.light' }}><ForumRounded /></Avatar>
-          <Typography variant="h6" fontWeight={720}>{noFilters ? t('meetings.transcript.waitingTitle') : t('meetings.transcript.noMatches')}</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 720 }}>{noFilters ? t('meetings.transcript.waitingTitle') : t('meetings.transcript.noMatches')}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 420 }}>{noFilters ? t('meetings.transcript.waiting') : t('meetings.transcript.noMatchesHelp')}</Typography>
         </Stack>
       ) : (

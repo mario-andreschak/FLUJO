@@ -24,7 +24,7 @@ export default function RoleVersionCard({
   const { t, tp } = useI18n();
   const content = (
     <CardContent>
-      <Stack direction="row" spacing={1.25} alignItems="flex-start">
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
         <Box
           aria-hidden="true"
           sx={(theme) => ({
@@ -40,7 +40,7 @@ export default function RoleVersionCard({
         >
           <AutoStoriesRounded />
         </Box>
-        <Box minWidth={0} flex={1}>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="h6" noWrap title={role.name}>{role.name}</Typography>
           {!plainLanguage && (
             <Stack direction="row" spacing={0.75} sx={{ mt: 0.5 }}>
@@ -58,7 +58,7 @@ export default function RoleVersionCard({
         {role.mission}
       </Typography>
       {!plainLanguage && (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1.25 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mt: 1.25 }}>
           {tp('personas.roleCard.behaviorSlots', role.behaviorSlots.length)}
         </Typography>
       )}

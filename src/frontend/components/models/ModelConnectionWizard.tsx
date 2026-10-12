@@ -825,7 +825,7 @@ export default function ModelConnectionWizard({
           {ollamaLoading ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3 }}><CircularProgress size={22} /><Typography>{t('models.wizard.checkingOllama')}</Typography></Box> : null}
           {!ollamaLoading && ollama ? (
             <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1.5}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between" }} spacing={1.5}>
                 <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 720 }}>{t('models.wizard.recommendedModel', { model: ollamaModel })}</Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -887,7 +887,7 @@ export default function ModelConnectionWizard({
                 label={t('models.wizard.gemini.key')}
                 value={apiKey}
                 onChange={(event) => { setApiKey(event.target.value); setError(null); }}
-                InputProps={{ startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> }}
+                slotProps={{ input: { startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> } }}
                 helperText={t('models.wizard.antigravityCli.keyHelp')}
               />
               <Button href="https://antigravity.google/docs/plans/" target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ mt: 1 }}>
@@ -970,7 +970,7 @@ export default function ModelConnectionWizard({
               label={`${isClaude ? '2. ' : ''}${setup.keyLabel ? t(setup.keyLabel) : ''}`}
               value={apiKey}
               onChange={(event) => { setApiKey(event.target.value); setError(null); }}
-              InputProps={{ startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> }}
+              slotProps={{ input: { startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> } }}
               helperText={t('models.wizard.keyStorageHelp')}
               sx={{ mb: 2 }}
             />
@@ -979,7 +979,7 @@ export default function ModelConnectionWizard({
           <Alert severity="info" sx={{ mb: 2 }}>{t(setup.note)}</Alert>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>
           {!isCodex && (!isAntigravityCli || apiKey.trim()) && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
-          <Stack direction="row" gap={0.8} flexWrap="wrap" sx={{ mb: 2.5 }}>
+          <Stack direction="row" sx={{ gap: 0.8, flexWrap: "wrap",  mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
           </Stack>
           <Button
@@ -1008,7 +1008,7 @@ export default function ModelConnectionWizard({
             {created.length ? tp('models.wizard.created', created.length) : t('models.wizard.alreadyMatched')}
             {existing.length ? ` ${tp('models.wizard.kept', existing.length)}` : ''}
           </Typography>
-          <Stack direction="row" gap={0.8} justifyContent="center" flexWrap="wrap" sx={{ mb: 3 }}>
+          <Stack direction="row" sx={{ gap: 0.8, justifyContent: "center", flexWrap: "wrap",  mb: 3 }}>
             {allNames.map((name) => <Chip icon={<SmartToyRoundedIcon />} key={name} label={name} color="primary" variant="outlined" />)}
           </Stack>
           <Button variant="contained" size="large" onClick={onClose}>{t('models.wizard.seeModels')}</Button>
@@ -1036,7 +1036,7 @@ export default function ModelConnectionWizard({
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('models.wizard.progressAria')} />
             </Box>
-            <Box display="flex" alignItems="center" gap={0.5}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
               <AskFlujoButton />
               <BugReportButton variant="icon" />
               <IconButton onClick={onClose} aria-label={t('models.wizard.closeAria')} disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>

@@ -98,7 +98,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
             onChange={e => setSavePath(e.target.value)}
             variant="outlined"
             size="small"
-            InputProps={{
+            slotProps={{ input: {
               endAdornment: (
                 <InputAdornment position="end">
                   <IconButton
@@ -127,7 +127,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
                   </IconButton>
                 </InputAdornment>
               ),
-            }}
+            } }}
           />
         </Box>
       )}

@@ -82,7 +82,7 @@ export function TicketsSection() {
   return (
     <Box component="section" sx={{ mt: 3, mb: 3 }}>
       <Stack spacing={1.5}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
+        <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", gap: 1 }}>
           <Box>
             <Badge badgeContent={total} color="primary">
               <Typography variant="h6" sx={{ pr: 1.5 }}>{t('tickets.section.title')}</Typography>

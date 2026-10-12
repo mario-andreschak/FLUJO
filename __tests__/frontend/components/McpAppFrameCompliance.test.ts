@@ -396,6 +396,15 @@ describe('MCP App host policy helpers', () => {
 });
 
 describe('persistent MCP App tool delivery state', () => {
+  it.each([null, ['scene-1', 'scene-2'], 42, 'ready', true])(
+    'preserves SDK2 structuredContent %j without wrapping the result as text',
+    structuredContent => {
+      const result = { content: [], structuredContent };
+      expect(buildToolResult(JSON.stringify(result))).toEqual(result);
+      expect(buildToolResult(JSON.stringify({ structuredContent }))).toEqual(result);
+    },
+  );
+
   it('wraps non-CallToolResult text instead of dropping it', () => {
     expect(buildToolResult('plain result')).toEqual({
       content: [{ type: 'text', text: 'plain result' }],

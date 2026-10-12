@@ -629,7 +629,7 @@ export default function PersonaCreationWizard({
             )}
             {(step === 1 || step === 4) && selectedRole && (
               <Alert severity={!setupResult ? 'info' : setupResult.state === 'ready' ? 'success' : 'warning'} role="status">
-                <Typography fontWeight={700}>{t(!setupResult
+                <Typography sx={{ fontWeight: 700 }}>{t(!setupResult
                   ? 'personas.create.checkingSetup'
                   : setupResult.state === 'ready' ? 'personas.create.setupReady' : 'personas.create.setupNeedsAttention')}</Typography>
                 {setupResult?.state === 'ready' && setupResult.models.length > 0 && (
@@ -641,7 +641,7 @@ export default function PersonaCreationWizard({
                     <Box component="summary">{t('personas.create.setupDetails')}</Box>
                     {setupResult.issues.map((issue) => <Typography variant="body2" key={issue}>{issue}</Typography>)}
                   </Box>
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                  <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
                     <Button component={Link} href={withWorkspaceUrl('/models')} target="_blank">{t('personas.create.configureModels')}</Button>
                     <Button component={Link} href={withWorkspaceUrl(`/roles/${encodeURIComponent(selectedRole.roleDefinitionId)}`)} target="_blank">{t('personas.create.openRole')}</Button>
                     <Button onClick={() => setSetupRefresh((value) => value + 1)}>{t('personas.retry')}</Button>
@@ -654,11 +654,11 @@ export default function PersonaCreationWizard({
               <Stack spacing={2}>
                 <Typography variant="h5" component="h3" ref={stepHeadingRef} tabIndex={-1}>{t('personas.create.identity.title')}</Typography>
                 <Typography color="text.secondary">{t('personas.create.identity.help')}</Typography>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { sm: 'center' } }}>
                   <Avatar src={avatarUrl || undefined} sx={{ width: 88, height: 88 }}>
                     {name.trim().slice(0, 1).toUpperCase()}
                   </Avatar>
-                  <Stack spacing={2} flex={1}>
+                  <Stack spacing={2} sx={{ flex: 1 }}>
                     <TextField autoFocus required label={t('personas.create.name')} value={name} onChange={(event) => setName(event.target.value)} />
                     <TextField label={t('personas.create.picture')} helperText={avatarValid ? t('personas.create.pictureHelp') : t('personas.create.pictureInvalid')} error={!avatarValid} value={avatarUrl} onChange={(event) => setAvatarUrl(event.target.value)} />
                   </Stack>
@@ -741,11 +741,11 @@ export default function PersonaCreationWizard({
                   }}
                   aria-live="polite"
                 >
-                  <Typography variant="subtitle2" fontWeight={750}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
                     {t('personas.create.appsSelected', { count: appRefs.length })}
                   </Typography>
                   {appRefs.length > 0 && (
-                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
                       {appRefs.map((ref) => (
                         <Chip
                           key={ref}
@@ -821,7 +821,7 @@ export default function PersonaCreationWizard({
                 <Typography>{t('personas.create.reviewBehaviorTotal', { count: requiredBehaviorCount + selectedBehaviors.length })}</Typography>
                 <Typography>{appRefs.length ? t('personas.create.reviewApps', { apps: appRefs.join(', ') }) : t('personas.create.reviewNoApps')}</Typography>
                 <Typography color="text.secondary">{t('personas.create.memoryPostCreate')}</Typography>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                   {avatarUrl && <Chip avatar={<Avatar src={avatarUrl} />} label={t('personas.create.pictureChosen')} />}
                   {setupResult?.state === 'ready' && <Chip color="success" label={t('personas.create.ready')} />}
                 </Stack>
@@ -885,7 +885,7 @@ function ReadinessNotice({
       severity="warning"
       action={<Button component={Link} href={repairHref} target="_blank">{t('personas.create.repairFlow')}</Button>}
     >
-      <Typography fontWeight={700}>{t('personas.create.flowNeedsAttention', { name: name ?? '' })}</Typography>
+      <Typography sx={{ fontWeight: 700 }}>{t('personas.create.flowNeedsAttention', { name: name ?? '' })}</Typography>
       {readiness.issues.map((issue) => <Typography key={issue} variant="body2">{issue}</Typography>)}
     </Alert>
   );

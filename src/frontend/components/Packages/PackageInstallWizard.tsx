@@ -48,8 +48,8 @@ import {
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
-import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutlined';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
@@ -382,8 +382,8 @@ export default function PackageInstallWizard({
   // --- renderers -------------------------------------------------------------
 
   const renderDeclaration = (declaration: PackageDeclarationInfo) => (
-    <Stack key={declaration.name} direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
-      <Typography variant="body2" fontFamily="monospace">{declaration.name}</Typography>
+    <Stack key={declaration.name} direction="row" spacing={1} sx={{ alignItems: "center",  flexWrap: 'wrap' }}>
+      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>{declaration.name}</Typography>
       {declaration.isSecret && <Chip size="small" color="warning" variant="outlined" label={t('packages.install.secretTag')} />}
       <Typography variant="caption" color="text.secondary">
         {declaration.source === 'secret'
@@ -422,8 +422,8 @@ export default function PackageInstallWizard({
         <Stack spacing={2}>
           {visible.map((server) => (
             <Paper key={server.localName} variant="outlined" sx={{ p: 2 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
-                <Typography variant="subtitle1" fontWeight={700}>{server.localName}</Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center",  flexWrap: 'wrap' }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{server.localName}</Typography>
                 <Chip size="small" label={server.transport} />
                 <Chip size="small" variant="outlined" label={server.sourceType} />
                 {server.disabled && (
@@ -442,7 +442,7 @@ export default function PackageInstallWizard({
                   </Link>
                 )}
               </Stack>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mt: 0.5 }}>
                 {server.source}
               </Typography>
 
@@ -452,13 +452,13 @@ export default function PackageInstallWizard({
                   {server.installCommand && (
                     <Box sx={{ mb: 0.5 }}>
                       <Typography variant="caption" color="text.secondary">{t('packages.install.installCommand')}</Typography>
-                      <Typography variant="body2" fontFamily="monospace">{server.installCommand}</Typography>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>{server.installCommand}</Typography>
                     </Box>
                   )}
                   {server.buildCommand && (
                     <Box>
                       <Typography variant="caption" color="text.secondary">{t('packages.install.buildCommand')}</Typography>
-                      <Typography variant="body2" fontFamily="monospace">{server.buildCommand}</Typography>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>{server.buildCommand}</Typography>
                     </Box>
                   )}
                 </Box>
@@ -467,7 +467,7 @@ export default function PackageInstallWizard({
               {server.argTemplates.length > 0 && (
                 <Box sx={{ mt: 1.5 }}>
                   <Typography variant="caption" color="text.secondary">{t('packages.install.arguments')}</Typography>
-                  <Typography variant="body2" fontFamily="monospace">
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                     {server.argTemplates.map((a) => a.value).join(' ')}
                   </Typography>
                 </Box>
@@ -513,9 +513,9 @@ export default function PackageInstallWizard({
           const expanded = expandedFlow === flow.localId;
           return (
             <Paper key={flow.localId} variant="outlined" sx={{ p: 2 }}>
-              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
                 <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="subtitle1" fontWeight={700} noWrap>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }} noWrap>
                     {renameState.flows.names[flow.localId] ?? flow.name}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -544,7 +544,7 @@ export default function PackageInstallWizard({
       </Stack>
 
       <Divider sx={{ my: 2.5 }} />
-      <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700 }} gutterBottom>
         {t('packages.install.triggersTitle')}
       </Typography>
       {triggers.length === 0 ? (
@@ -553,15 +553,15 @@ export default function PackageInstallWizard({
         <Stack spacing={1.5}>
           {triggers.map((trigger) => (
             <Paper key={trigger.key} variant="outlined" sx={{ p: 2 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
-                <Typography variant="subtitle2" fontWeight={700}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center",  flexWrap: 'wrap' }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
                   {renameState.plannedExecutions.names[trigger.key] ?? trigger.name}
                 </Typography>
                 <Chip size="small" label={trigger.triggerType} />
                 <Chip size="small" color="warning" variant="outlined" label={t('packages.install.triggerDisabled')} />
               </Stack>
               {trigger.flowName && (
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mt: 0.5 }}>
                   {t('packages.install.runsFlow', { name: trigger.flowName })}
                 </Typography>
               )}
@@ -569,7 +569,7 @@ export default function PackageInstallWizard({
                 <Stack spacing={0.25} sx={{ mt: 1 }}>
                   {trigger.details.map((detail) => (
                     <Typography key={detail.label} variant="caption" color="text.secondary">
-                      {detail.label}: <Box component="span" fontFamily="monospace">{detail.value}</Box>
+                      {detail.label}: <Box component="span" sx={{ fontFamily: "monospace" }}>{detail.value}</Box>
                     </Typography>
                   ))}
                 </Stack>
@@ -591,7 +591,7 @@ export default function PackageInstallWizard({
     const state = renameState[kind];
     return (
       <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle1" fontWeight={700} gutterBottom>{title}</Typography>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }} gutterBottom>{title}</Typography>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 1.5 }}>
           <TextField
             select
@@ -687,7 +687,7 @@ export default function PackageInstallWizard({
                 key={candidate.key}
                 direction={{ xs: 'column', sm: 'row' }}
                 spacing={1}
-                alignItems={{ sm: 'center' }}
+                sx={{ alignItems: { sm: 'center' } }}
               >
                 <Typography
                   variant="body2"
@@ -703,7 +703,7 @@ export default function PackageInstallWizard({
                   value={value}
                   error={Boolean(itemError)}
                   helperText={itemError ?? ' '}
-                  inputProps={{ 'aria-label': t('packages.install.renameAria', { name: candidate.original }) }}
+                  slotProps={{ htmlInput: { 'aria-label': t('packages.install.renameAria', { name: candidate.original }) } }}
                   onChange={(e) =>
                     setRenameOverrides((current) => ({
                       ...current,
@@ -761,7 +761,7 @@ export default function PackageInstallWizard({
                 value={secretValues[secret.key] ?? ''}
                 onChange={(e) => setSecretValues((current) => ({ ...current, [secret.key]: e.target.value }))}
                 helperText={secret.required ? t('packages.install.requiredSecret') : t('packages.install.optional')}
-                InputProps={{
+                slotProps={{ input: {
                   endAdornment: (
                     <InputAdornment position="end">
                       <IconButton
@@ -777,7 +777,7 @@ export default function PackageInstallWizard({
                       </IconButton>
                     </InputAdornment>
                   ),
-                }}
+                } }}
               />
               {secret.usedBy.length > 0 && (
                 <Typography variant="caption" color="text.secondary">
@@ -792,7 +792,7 @@ export default function PackageInstallWizard({
       {globals.length > 0 && (
         <>
           <Divider sx={{ my: 3 }} />
-          <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700 }} gutterBottom>
             {t('packages.install.globalsTitle')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -815,8 +815,7 @@ export default function PackageInstallWizard({
                         ? t('packages.install.keepCurrent', { description: global.description ?? '' })
                         : t('packages.install.notSet', { description: global.description ?? '' })
                     }
-                    InputProps={
-                      global.isSecret
+                    slotProps={{ input: global.isSecret
                         ? {
                             endAdornment: (
                               <InputAdornment position="end">
@@ -843,8 +842,7 @@ export default function PackageInstallWizard({
                               </InputAdornment>
                             ),
                           }
-                        : undefined
-                    }
+                        : undefined }}
                   />
                   <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: 'wrap' }}>
                     <Chip
@@ -882,9 +880,9 @@ export default function PackageInstallWizard({
           {t('packages.install.replaceModels')}
         </Typography>
 
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="flex-start">
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ alignItems: "flex-start" }}>
           <Stack spacing={1} sx={{ flex: 1, minWidth: 0, width: '100%' }}>
-            <Typography variant="overline" color="text.secondary" fontWeight={700}>
+            <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700 }}>
               {t('packages.install.packageModels')}
             </Typography>
             {models.map((model) => {
@@ -905,10 +903,10 @@ export default function PackageInstallWizard({
                     aria-label={t('packages.install.configureAria', { name: model.displayName })}
                     sx={{ p: 1.5 }}
                   >
-                    <Stack direction="row" spacing={1.5} alignItems="center">
+                    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
                       <SmartToyOutlinedIcon color={isSelected ? 'primary' : 'disabled'} />
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="subtitle2" fontWeight={700} noWrap>{model.displayName}</Typography>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700 }} noWrap>{model.displayName}</Typography>
                         {isResolved && (
                           <Typography variant="caption" color="success.main" noWrap>
                             {choice
@@ -925,7 +923,7 @@ export default function PackageInstallWizard({
           </Stack>
 
           <Box sx={{ flex: 1.3, minWidth: 0, width: '100%' }}>
-            <Typography variant="overline" color="text.secondary" fontWeight={700}>
+            <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700 }}>
               {t('packages.install.whatDo')}
             </Typography>
             <Stack direction="row" spacing={1} sx={{ my: 1 }}>
@@ -996,7 +994,7 @@ export default function PackageInstallWizard({
         </Typography>
 
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-          <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }} gutterBottom>
             {t('packages.install.planTitle')}
           </Typography>
           <Stack spacing={0.5}>
@@ -1017,7 +1015,7 @@ export default function PackageInstallWizard({
 
         {models.length > 0 && (
           <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-            <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }} gutterBottom>
               {t('packages.install.modelPlan')}
             </Typography>
             <Stack spacing={1}>
@@ -1026,9 +1024,9 @@ export default function PackageInstallWizard({
                   (installed) => installed.id === modelMappings[model.id],
                 );
                 return (
-                  <Stack key={model.id} direction="row" spacing={1} justifyContent="space-between">
+                  <Stack key={model.id} direction="row" spacing={1} sx={{ justifyContent: "space-between" }}>
                     <Typography variant="body2">{model.displayName}</Typography>
-                    <Typography variant="body2" fontWeight={700}>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
                       {installedChoice?.displayName ?? model.displayName}
                     </Typography>
                   </Stack>
@@ -1094,16 +1092,16 @@ export default function PackageInstallWizard({
 
         {installSteps.length > 0 && (
           <>
-            <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }} gutterBottom>
               {t('packages.install.stepsTitle')}
             </Typography>
             <Stack spacing={0.75} sx={{ mb: 2 }}>
               {installSteps.map((step) => (
-                <Stack key={`${step.order}-${step.name}`} direction="row" spacing={1} alignItems="flex-start">
+                <Stack key={`${step.order}-${step.name}`} direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
                   <Box sx={{ pt: '2px' }}>{STATUS_ICON[step.status]}</Box>
                   <Box sx={{ minWidth: 0 }}>
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
-                      <Typography variant="body2" fontWeight={600}>{step.name}</Typography>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center",  flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{step.name}</Typography>
                       <Chip size="small" variant="outlined" label={t(STATUS_LABEL_KEY[step.status])} />
                     </Stack>
                     {step.detail && (
@@ -1152,7 +1150,7 @@ export default function PackageInstallWizard({
       onClose={busy ? undefined : onClose}
       maxWidth={false}
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           width: 'min(1200px, calc(100vw - 32px))',
           maxWidth: 'none',
@@ -1160,12 +1158,12 @@ export default function PackageInstallWizard({
           maxHeight: 'calc(100vh - 32px)',
           borderRadius: { xs: 2, md: 3 },
         },
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={(
           <Box sx={{ minWidth: 0 }}>
-            <Typography component="span" variant="h5" fontWeight={700} sx={{ display: 'block' }}>
+            <Typography component="span" variant="h5" sx={{ fontWeight: 700,  display: 'block' }}>
               {t('packages.install.title', { name: preview?.package?.name ?? packageName })}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -1192,11 +1190,9 @@ export default function PackageInstallWizard({
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               spacing={1}
-              alignItems={{ sm: 'center' }}
-              justifyContent="space-between"
-              sx={{ mb: 2 }}
+              sx={{ alignItems: { sm: 'center' }, justifyContent: "space-between",  mb: 2 }}
             >
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center",  flexWrap: 'wrap' }}>
                 <Chip size="small" variant="outlined" label={`v${preview?.package?.version ?? version ?? ''}`} />
                 {(manifest.info?.publisher || preview?.package?.publisher) && (
                   <Chip

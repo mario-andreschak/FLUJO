@@ -29,6 +29,18 @@ test('fresh stores show passphrase setup without requesting default encryption',
   expect(mockFetch).toHaveBeenCalledTimes(1);
   expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ action: 'status' });
 });
+
+test('password visibility survives form migration and Escape cannot dismiss required setup', async () => {
+  const password = await setup();
+  expect(password).toHaveAttribute('type', 'password');
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.showPassword' }));
+  expect(password).toHaveAttribute('type', 'text');
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.hidePassword' }));
+  expect(password).toHaveAttribute('type', 'password');
+  fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(mockFetch).toHaveBeenCalledTimes(1);
+});
 test('setup rejects short or mismatched confirmation before sending a passphrase', async () => {
   const password = await setup();
   fireEvent.change(password, { target: { value: 'short' } });

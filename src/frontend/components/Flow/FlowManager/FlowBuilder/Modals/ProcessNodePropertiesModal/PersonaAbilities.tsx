@@ -94,7 +94,7 @@ export default function PersonaAbilities({ value, onChange }: PersonaAbilitiesPr
 
   return (
     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, mb: 2 }}>
-      <Typography variant="subtitle1" component="h3" fontWeight={600}>
+      <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 600 }}>
         {t('flows.process.personaAbilities.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>

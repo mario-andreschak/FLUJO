@@ -68,7 +68,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
       >
         <Box>
           <Typography variant="overline" color="primary.main">{t('meetings.table.room')}</Typography>
-          <Typography variant="h6" fontWeight={790}>{t('meetings.table.agents', { count: participants.length })}</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 790 }}>{t('meetings.table.agents', { count: participants.length })}</Typography>
           <Typography variant="caption" color="text.secondary">{t('meetings.table.help')}</Typography>
         </Box>
       </Box>
@@ -99,8 +99,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
               type={participant ? 'button' : undefined}
               onClick={participant ? () => onParticipantClick?.(participant.id) : undefined}
               spacing={0.45}
-              alignItems="center"
-              sx={{
+              sx={{ alignItems: "center",
                 position: 'absolute',
                 ...position,
                 width: { xs: 82, sm: 132 },
@@ -157,7 +156,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
                     {sourceLabel}
                   </Typography>
                   {statusLabel && (
-                    <Stack direction="row" spacing={0.45} alignItems="center" sx={{ maxWidth: '100%' }}>
+                    <Stack direction="row" spacing={0.45} sx={{ alignItems: "center",  maxWidth: '100%' }}>
                       {participant.status === 'running' && <CircularProgress size={10} thickness={5} />}
                       <Typography
                         variant="caption"

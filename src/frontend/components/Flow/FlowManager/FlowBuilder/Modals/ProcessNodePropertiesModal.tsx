@@ -719,10 +719,7 @@ export const ProcessNodePropertiesModal = ({
     <Dialog
       open={open}
       onClose={onClose}
-      slotProps={{ transition: { onEntered: handleDialogEntered } }}
-      maxWidth="xl"
-      fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           borderTop: 5,
           borderColor: 'secondary.main',
@@ -732,7 +729,9 @@ export const ProcessNodePropertiesModal = ({
           maxWidth: { xs: 'calc(100% - 16px)', sm: '95vw' },
           maxHeight: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
         }
-      }}
+      },  transition: { onEntered: handleDialogEntered } }}
+      maxWidth="xl"
+      fullWidth
     >
       <DialogHeaderActions
         title={t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}

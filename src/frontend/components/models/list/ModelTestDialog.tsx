@@ -59,14 +59,14 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
           {attempt.error?.message}
         </Typography>
         {(attempt.error?.code || attempt.error?.type) && (
-          <Typography variant="caption" color="text.secondary" display="block">
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
             {attempt.error?.type ? `type: ${attempt.error.type}` : ''}
             {attempt.error?.type && attempt.error?.code ? ' · ' : ''}
             {attempt.error?.code ? `code: ${attempt.error.code}` : ''}
           </Typography>
         )}
         {attempt.error?.retryAfter && (
-          <Typography variant="caption" color="text.secondary" display="block">
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
             retry-after: {attempt.error.retryAfter}s
           </Typography>
         )}
@@ -132,7 +132,7 @@ export const ModelTestDialog = ({
             <Alert severity={result.ok ? 'success' : 'warning'} sx={{ mb: 2 }}>
               {result.diagnosis}
             </Alert>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mb: 2 }}>
               {t('models.test.modelLabel', { model: result.model })}
               {result.baseUrl ? ` · ${result.baseUrl}` : ''}
               {result.provider ? ` · ${result.provider}` : ''}
@@ -150,7 +150,7 @@ export const ModelTestDialog = ({
                     label={t('models.test.adapterEndpoint', { endpoint: result.adapterRoute.endpoint })}
                   />
                 </Box>
-                <Typography variant="caption" color="text.secondary" display="block">
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                   {t('models.test.adapterReason', { reason: result.adapterRoute.reason })}
                 </Typography>
               </Box>

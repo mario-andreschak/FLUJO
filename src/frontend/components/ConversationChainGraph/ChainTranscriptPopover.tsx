@@ -237,7 +237,7 @@ function TranscriptMessage({ step }: TranscriptMessageProps) {
   const isUser = step.role === 'user' && !step.agentMessage;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
-      <Stack direction="row" spacing={0.7} alignItems="center" sx={{ mb: 0.45, px: 0.45 }}>
+      <Stack direction="row" spacing={0.7} sx={{ alignItems: "center",  mb: 0.45, px: 0.45 }}>
         {isUser
           ? <PersonRoundedIcon sx={{ fontSize: '0.8rem', color: 'primary.main' }} />
           : <AutoAwesomeRoundedIcon sx={{ fontSize: '0.8rem', color: 'secondary.main' }} />}
@@ -405,7 +405,7 @@ export default function ChainTranscriptPopover({
         aria-label={t('chainChat.transcriptLabel', { title })}
         sx={{ display: 'flex', maxHeight: 'min(62vh, 540px)', minHeight: 0, flexDirection: 'column' }}
       >
-        <Stack direction="row" spacing={1.1} alignItems="center" sx={{ px: 1.6, py: 1.35 }}>
+        <Stack direction="row" spacing={1.1} sx={{ alignItems: "center",  px: 1.6, py: 1.35 }}>
           <Box
             aria-hidden="true"
             sx={{
@@ -449,7 +449,7 @@ export default function ChainTranscriptPopover({
           }}
         >
           {displayState === 'loading' && (
-            <Stack alignItems="center" justifyContent="center" spacing={1.2} sx={{ minHeight: 180 }}>
+            <Stack spacing={1.2} sx={{ alignItems: "center", justifyContent: "center",  minHeight: 180 }}>
               <CircularProgress size={22} thickness={4} />
               <Typography variant="caption" color="text.secondary">
                 {t('chainChat.loadingConversation')}
@@ -470,7 +470,7 @@ export default function ChainTranscriptPopover({
             </Alert>
           )}
           {displayState === 'ready' && steps.length === 0 && (
-            <Stack alignItems="center" justifyContent="center" spacing={0.5} sx={{ minHeight: 180, textAlign: 'center' }}>
+            <Stack spacing={0.5} sx={{ alignItems: "center", justifyContent: "center",  minHeight: 180, textAlign: 'center' }}>
               <Typography sx={{ fontSize: '0.8rem', fontWeight: 700 }}>{t('chainChat.noMessages')}</Typography>
               <Typography variant="caption" color="text.secondary">{t('chainChat.noMessagesBody')}</Typography>
             </Stack>

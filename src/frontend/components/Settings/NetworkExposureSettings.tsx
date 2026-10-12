@@ -156,7 +156,7 @@ export default function NetworkExposureSettings() {
             >
               <Stack spacing={1}>
                 <Icon color="primary" />
-                <Typography fontWeight={750}>{t(option.labelKey)}</Typography>
+                <Typography sx={{ fontWeight: 750 }}>{t(option.labelKey)}</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {t(option.descriptionKey)}
                 </Typography>
@@ -200,7 +200,7 @@ export default function NetworkExposureSettings() {
           }
           label={
             <Stack spacing={0.5}>
-              <Typography fontWeight={600}>
+              <Typography sx={{ fontWeight: 600 }}>
                 {t('settings.network.allowAllMcpAppContent')}
               </Typography>
               <Typography variant="body2" color="text.secondary">

@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import type { Model } from '@/shared/types/model';
 import {
   DEFAULT_FALLBACK_TRIGGERS, MAX_FALLBACK_MODELS, validateFallbackPolicy, type FallbackTrigger,
@@ -73,7 +73,7 @@ export default function FallbackPolicyDialog({ model, models, onSave, onClose }:
                 return <Paper key={id} variant="outlined" sx={{ p: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Chip label={index + 1} size="small" color={index === 0 ? 'primary' : 'default'} />
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={600} noWrap>{member?.displayName || member?.name || id}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{member?.displayName || member?.name || id}</Typography>
                     <Typography variant="caption" color="text.secondary">{index === 0 ? t('models.policy.primary') : t('models.policy.backup')}</Typography>
                   </Box>
                   <IconButton aria-label={t('models.policy.up')} size="small" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
@@ -95,7 +95,7 @@ export default function FallbackPolicyDialog({ model, models, onSave, onClose }:
                 setTriggers(checked ? [...triggers, trigger] : triggers.filter(item => item !== trigger))} />} />)}
           </Box>
           <TextField label={t('models.policy.cooldown')} type="number" value={cooldown}
-            helperText={t('models.policy.cooldownHelp')} disabled={saving} inputProps={{ min: 0, max: 3600 }}
+            helperText={t('models.policy.cooldownHelp')} disabled={saving} slotProps={{ htmlInput: { min: 0, max: 3600 } }}
             onChange={event => setCooldown(Number(event.target.value))} />
           <Alert severity="info">{t('models.policy.replay')}</Alert>
           <Typography variant="caption" color="text.secondary">{t('models.policy.apiHelp')}</Typography>

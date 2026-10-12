@@ -947,8 +947,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 <Tooltip title={conversation.title} enterDelay={500}>
                   <Typography
                     component="span"
-                    fontWeight={selected ? 760 : modern ? 650 : 'normal'}
-                    sx={{
+                    sx={{ fontWeight: selected ? 760 : modern ? 650 : 'normal',
                       // Allow the title to wrap to two lines with an
                       // ellipsis (issue #134) instead of the old single-
                       // line clamp, so longer generated titles are
@@ -1082,7 +1081,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 </Box>
               </Box>
             }
-            secondaryTypographyProps={{ component: 'div' }}
+            slotProps={{ secondary: { component: 'div' } }}
           />
         </ListItemButton>
       </ListItem>
@@ -1273,7 +1272,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               placeholder={searchDimension === 'content' ? t('chat.history.searchContent') : t('chat.history.searchTitle')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              InputProps={{
+              slotProps={{ input: {
                 startAdornment: (
                   <InputAdornment position="start">
                     <SearchIcon fontSize="small" />
@@ -1289,7 +1288,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                     )}
                   </InputAdornment>
                 ) : undefined,
-              }}
+              } }}
             />
             <FormControl size="small" sx={{ minWidth: 100 }}>
               <Select
@@ -1484,8 +1483,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <ListItemText
               primary={t('chat.history.searchFailed')}
               secondary={t('chat.history.searchFailedHelp')}
-              primaryTypographyProps={{ align: 'center' }}
-              secondaryTypographyProps={{ align: 'center' }}
+              slotProps={{ primary: { align: 'center' }, secondary: { align: 'center' } }}
             />
           </ListItem>
         ) : !searchActive && totalCount === 0 ? (
@@ -1493,8 +1491,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <ListItemText
               primary={t('chat.history.empty')}
               secondary={t('chat.history.emptyHelp')}
-              primaryTypographyProps={{ align: 'center' }}
-              secondaryTypographyProps={{ align: 'center' }}
+              slotProps={{ primary: { align: 'center' }, secondary: { align: 'center' } }}
             />
           </ListItem>
         ) : matchCount === 0 ? (
@@ -1502,8 +1499,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <ListItemText
               primary={t('chat.history.noMatch')}
               secondary={t('chat.history.noMatchHelp')}
-              primaryTypographyProps={{ align: 'center' }}
-              secondaryTypographyProps={{ align: 'center' }}
+              slotProps={{ primary: { align: 'center' }, secondary: { align: 'center' } }}
             />
           </ListItem>
         ) : groupMode === 'chain' ? (

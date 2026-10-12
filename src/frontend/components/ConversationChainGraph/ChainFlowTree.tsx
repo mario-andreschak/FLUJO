@@ -344,10 +344,9 @@ export default function ChainFlowTree({
       >
         <Stack
           direction="row"
-          alignItems="center"
           role="group"
           aria-label={t('chainChat.zoomControls')}
-          sx={{ px: 0.35, py: 0.25 }}
+          sx={{ alignItems: "center",  px: 0.35, py: 0.25 }}
         >
           <IconButton
             size="small"
@@ -445,7 +444,7 @@ export default function ChainFlowTree({
           </Box>
 
           {model.detachedIds.length > 0 && (
-            <Stack direction="row" justifyContent="center" sx={{ position: 'sticky', left: 0, px: 2, pb: 2 }}>
+            <Stack direction="row" sx={{ justifyContent: "center",  position: 'sticky', left: 0, px: 2, pb: 2 }}>
               <Chip
                 size="small"
                 variant="outlined"
