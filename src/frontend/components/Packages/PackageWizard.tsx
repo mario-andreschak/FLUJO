@@ -677,13 +677,13 @@ export default function PackageWizard({ open, onClose }: Props) {
           placeholder={t('packages.wizard.search', { category: title.toLocaleLowerCase() })}
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          InputProps={{
+          slotProps={{ input: {
             startAdornment: (
               <InputAdornment position="start">
                 <SearchIcon fontSize="small" />
               </InputAdornment>
             ),
-          }}
+          } }}
           sx={{ mb: 1 }}
         />
         {options.length === 0 ? (
@@ -724,7 +724,7 @@ export default function PackageWizard({ open, onClose }: Props) {
             <Typography variant="body2" color="text.secondary">
               {t('packages.wizard.selectHelp')}
             </Typography>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
               <Button component="label" variant="outlined" startIcon={<UploadFileIcon />}>
                 {t('packages.wizard.import')}
                 <input
@@ -778,7 +778,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                 )}
               </Alert>
             )}
-            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
               {renderList(t('packages.wizard.flows'), entities.flows, selectedFlows, toggle(setSelectedFlows), flowSearch, setFlowSearch)}
               {renderList(t('packages.wizard.models'), entities.models, selectedModels, toggle(setSelectedModels), modelSearch, setModelSearch)}
               {renderList(t('packages.wizard.servers'), entities.mcpServers, selectedServers, toggle(setSelectedServers), serverSearch, setServerSearch)}
@@ -836,7 +836,7 @@ export default function PackageWizard({ open, onClose }: Props) {
               })}
             </Typography>
             {resolveResult.mcp.servers.length > 0 && (
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                 {resolveResult.mcp.servers.map((s) => (
                   <Chip key={s.name} label={`${s.name} · ${s.sourceType}`} size="small" color="success" variant="outlined" />
                 ))}
@@ -856,7 +856,7 @@ export default function PackageWizard({ open, onClose }: Props) {
             ) : (
               <Stack spacing={1.5}>
                 {resolveResult.globals.map((entry) => (
-                  <Stack key={entry.name} direction="row" spacing={1} alignItems="flex-start">
+                  <Stack key={entry.name} direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
                     <TextField
                       size="small"
                       label={entry.name}
@@ -905,7 +905,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                           return next;
                         })
                       }
-                      inputProps={{ 'aria-label': t('packages.wizard.includeSecretAria', { name: s.name }) }}
+                      slotProps={{ input: { 'aria-label': t('packages.wizard.includeSecretAria', { name: s.name }) } }}
                     />
                     <ListItemText
                       primary={
@@ -948,7 +948,7 @@ export default function PackageWizard({ open, onClose }: Props) {
 
             {contentProposals.length > 0 && (
               <>
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap" }} useFlexGap>
                   {kindCounts.map(([kind, count]) => (
                     <Chip
                       key={kind}
@@ -958,7 +958,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                     />
                   ))}
                 </Stack>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
                   <Button size="small" onClick={() => setAllProposals(true)}>
                     {t('packages.wizard.acceptAll')}
                   </Button>
@@ -1004,7 +1004,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                       </ListItemIcon>
                       <ListItemText
                         primary={
-                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
                             <Chip label={t(`packages.wizard.kind.${g.kind}`)} size="small" />
                             <Chip
                               label={t(`packages.wizard.source.${g.source}`)}
@@ -1057,8 +1057,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                             />
                           </Stack>
                         }
-                        primaryTypographyProps={{ component: 'div' }}
-                        secondaryTypographyProps={{ component: 'div' }}
+                        slotProps={{ primary: { component: 'div' }, secondary: { component: 'div' } }}
                       />
                     </ListItem>
                   ))}
@@ -1093,7 +1092,7 @@ export default function PackageWizard({ open, onClose }: Props) {
               />
             </Typography>
             {manualError && <Alert severity="error">{manualError}</Alert>}
-            <Stack direction="row" spacing={1} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start", flexWrap: "wrap" }} useFlexGap>
               <TextField
                 size="small"
                 label={t('packages.wizard.valueRedact')}
@@ -1135,7 +1134,7 @@ export default function PackageWizard({ open, onClose }: Props) {
 
             <Divider />
             <Typography variant="subtitle2">{t('packages.wizard.advancedScan')}</Typography>
-            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
               <FormControlLabel
                 control={
                   <Switch
@@ -1170,7 +1169,7 @@ export default function PackageWizard({ open, onClose }: Props) {
             <Alert severity="info">
               {t('packages.wizard.modelScanHelp')}
             </Alert>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
               <Select
                 size="small"
                 displayEmpty
@@ -1290,7 +1289,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                       {publishResult.error || t('packages.wizard.publishFailed')}
                     </Alert>
                   )}
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                     <Button variant="outlined" onClick={() => void publishToRegistry()} disabled={publishing}>
                       {publishing ? t('packages.wizard.publishing') : t('packages.wizard.publish')}
                     </Button>
@@ -1321,7 +1320,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         maxWidth="lg"
         fullWidth
         fullScreen={fullScreen}
-        PaperProps={{ sx: { height: fullScreen ? '100%' : '90vh', maxHeight: fullScreen ? '100%' : '90vh' } }}
+        slotProps={{ paper: { sx: { height: fullScreen ? '100%' : '90vh', maxHeight: fullScreen ? '100%' : '90vh' } } }}
       >
         <DialogHeaderActions title={t('packages.wizard.title')} onClose={onClose} />
         <DialogContent dividers sx={{ overflow: 'auto' }}>
@@ -1380,13 +1379,13 @@ export default function PackageWizard({ open, onClose }: Props) {
             placeholder={t('packages.wizard.searchValues')}
             value={pickerSearch}
             onChange={(e) => setPickerSearch(e.target.value)}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
             sx={{ mb: 2 }}
           />
           {pickerLoading ? (
@@ -1413,15 +1412,14 @@ export default function PackageWizard({ open, onClose }: Props) {
                         </Box>
                       }
                       secondary={
-                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
+                        <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: "center", flexWrap: "wrap",  mt: 0.5 }}>
                           <Chip label={entityTypeLabel(c.source)} size="small" variant="outlined" />
                           <Typography variant="caption" color="text.secondary">
                             {c.location}
                           </Typography>
                         </Stack>
                       }
-                      primaryTypographyProps={{ component: 'div' }}
-                      secondaryTypographyProps={{ component: 'div' }}
+                      slotProps={{ primary: { component: 'div' }, secondary: { component: 'div' } }}
                     />
                   </ListItemButton>
                 </ListItem>

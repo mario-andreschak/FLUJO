@@ -107,7 +107,7 @@ const QuickChangeModelsDialog = ({
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
         {modelsLoading ? (
-          <Stack alignItems="center" spacing={1.5} sx={{ py: 6 }}>
+          <Stack spacing={1.5} sx={{ alignItems: "center",  py: 6 }}>
             <CircularProgress size={28} />
             <Typography color="text.secondary">{t('flows.quickModels.loading')}</Typography>
           </Stack>
@@ -117,11 +117,11 @@ const QuickChangeModelsDialog = ({
           <Alert severity="info">{t('flows.quickModels.noBindings')}</Alert>
         ) : (
           <Stack spacing={1.5}>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography variant="overline" color="text.secondary" fontWeight={700} sx={{ flex: 1 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700,  flex: 1 }}>
                 {t('flows.quickModels.currentModels')}
               </Typography>
-              <Typography variant="overline" color="text.secondary" fontWeight={700} sx={{ flex: 1 }}>
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700,  flex: 1 }}>
                 {t('flows.quickModels.replacements')}
               </Typography>
             </Stack>
@@ -137,7 +137,7 @@ const QuickChangeModelsDialog = ({
                     alignItems: 'center',
                   }}
                 >
-                  <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0 }}>
+                  <Stack direction="row" spacing={1.25} sx={{ alignItems: "center",  minWidth: 0 }}>
                     <Box
                       sx={{
                         width: 40,
@@ -153,8 +153,8 @@ const QuickChangeModelsDialog = ({
                       <SmartToyOutlinedIcon />
                     </Box>
                     <Box sx={{ minWidth: 0 }}>
-                      <Stack direction="row" spacing={0.75} alignItems="center">
-                        <Typography fontWeight={700} noWrap>{usage.label}</Typography>
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                        <Typography sx={{ fontWeight: 700 }} noWrap>{usage.label}</Typography>
                         {usage.missing && <Chip size="small" color="warning" label={t('flows.quickModels.missing')} />}
                       </Stack>
                       <Typography variant="caption" color="text.secondary">

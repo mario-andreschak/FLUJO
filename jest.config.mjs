@@ -50,6 +50,8 @@ const esmOnlyTestPackages = [
   "chokidar",
   "readdirp",
   "@modelcontextprotocol/ext-apps",
+  // SDK2's CommonJS client resolves this package's ESM browser build in jsdom.
+  "pkce-challenge",
   "@modelcontextprotocol/ext-tasks",
 ];
 

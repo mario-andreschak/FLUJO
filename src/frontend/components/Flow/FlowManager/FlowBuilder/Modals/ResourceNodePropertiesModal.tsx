@@ -215,7 +215,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogHeaderActions title={t('flows.resource.title')} onClose={onClose} />
       <DialogContent>
-        <Box display="flex" flexDirection="column" gap={2} mt={1}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
           <FormControl>
             <RadioGroup
               row
@@ -261,7 +261,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
               />
 
               {isBrowsing && (
-                <Box display="flex" alignItems="center" gap={1}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                   <CircularProgress size={18} />
                   <Typography variant="body2" color="text.secondary">{t('flows.resource.loading')}</Typography>
                 </Box>
@@ -290,7 +290,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
                       <ListItemText
                         primary={r.name || r.uri}
                         secondary={r.name ? r.uri : r.description}
-                        secondaryTypographyProps={{ sx: { wordBreak: 'break-all' } }}
+                        slotProps={{ secondary: { sx: { wordBreak: 'break-all' } } }}
                       />
                     </ListItemButton>
                   ))}
@@ -336,7 +336,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
             {showAdvanced ? t('flows.resource.hideAdvanced') : t('flows.resource.showAdvanced')}
           </Link>
           <Collapse in={showAdvanced} unmountOnExit>
-            <Box display="flex" flexDirection="column" gap={2}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
               <TextField
                 label={t('flows.resource.label')}
                 value={nodeData.label}

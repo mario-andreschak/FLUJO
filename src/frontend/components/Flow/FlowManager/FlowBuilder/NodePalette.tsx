@@ -292,7 +292,7 @@ export const NodePalette: React.FC<{
   return (
     <PaletteContainer elevation={2}>
       <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <Typography className="node-palette-title" variant="subtitle1" fontWeight={800}>
+        <Typography className="node-palette-title" variant="subtitle1" sx={{ fontWeight: 800 }}>
           {t('flows.palette.title')}
         </Typography>
         <Typography variant="caption" color="text.secondary">A</Typography>
@@ -303,21 +303,17 @@ export const NodePalette: React.FC<{
         onChange={(event) => setQuery(event.target.value)}
         size="small"
         placeholder={t('flows.palette.search')}
-        inputProps={{ 'aria-label': t('flows.palette.searchAria') }}
-        sx={{ display: { xs: 'none', md: 'flex' } }}
-        InputProps={{
+        slotProps={{ htmlInput: { 'aria-label': t('flows.palette.searchAria') }, input: {
           startAdornment: (
             <InputAdornment position="start">
               <SearchRoundedIcon fontSize="small" />
             </InputAdornment>
           ),
-        }}
+        } }}
+        sx={{ display: { xs: 'none', md: 'flex' } }}
       />
       <Box
-        display="flex"
-        flexDirection={{ xs: 'row', md: 'column' }}
-        gap={{ xs: 0.75, md: 1 }}
-        width={{ xs: 'max-content', md: '100%' }}
+        sx={{ display: "flex", flexDirection: { xs: 'row', md: 'column' }, gap: { xs: 0.75, md: 1 }, width: { xs: 'max-content', md: '100%' } }}
       >
         {visibleNodeTypes.map((node) => (
           <NodeItem
@@ -344,8 +340,7 @@ export const NodePalette: React.FC<{
                 {getNodeIcon(node.type)}
                 <Typography
                   variant="caption"
-                  fontWeight="bold"
-                  sx={{
+                  sx={{ fontWeight: "bold",
                     display: { xs: '-webkit-box', md: 'none' },
                     maxWidth: '100%',
                     overflow: 'hidden',
@@ -359,7 +354,7 @@ export const NodePalette: React.FC<{
                 >
                   {node.shortLabel}
                 </Typography>
-                <Typography variant="subtitle2" fontWeight="bold" sx={{ display: { xs: 'none', md: 'block' } }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: "bold",  display: { xs: 'none', md: 'block' } }}>
                   {node.label}
                 </Typography>
               </NodeContent>

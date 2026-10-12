@@ -585,15 +585,15 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       maxWidth="xl" 
       fullWidth
       fullScreen={isMobile}
-      PaperProps={{
-        'data-ask-flujo-model-id': model.id,
+      data-ask-flujo-model-id={model.id}
+      slotProps={{ paper: {
         sx: {
           width: isMobile ? '100%' : '95vw',
           height: isMobile ? '100dvh' : '90vh',
           maxWidth: isMobile ? '100%' : '95vw',
           maxHeight: isMobile ? '100dvh' : '90vh',
         }
-      }}
+      } }}
     >
       <form
         onSubmit={handleSubmit}
@@ -626,7 +626,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
           
           <Grid container spacing={2} sx={{ flexGrow: 1, minHeight: { md: 0 } }}>
             {/* Left Column - Model Configuration */}
-            <Grid item xs={12} md={6} sx={{ height: { xs: 'auto', md: '100%' }, minWidth: 0 }}>
+            <Grid size={{ xs: 12, md: 6 }} sx={{ height: { xs: 'auto', md: '100%' }, minWidth: 0 }}>
               <Box
                 sx={{
                   display: 'flex',
@@ -731,7 +731,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       : currentProfile.adapter === 'antigravity-cli'
                         ? t('models.modal.apiKeyOptionalAntigravityCli')
                         : t('models.modal.apiKeyRequiredProvider'))}
-                    InputProps={{
+                    slotProps={{ input: {
                       readOnly: isApiKeyBound,
                       endAdornment: (
                         <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -754,7 +754,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                           )}
                         </Box>
                       ),
-                    }}
+                    } }}
                   />
                 </Box>
 
@@ -819,12 +819,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       return inputIndex === inputValue.length;
                     });
                   }}
-                  ListboxProps={{
-                    style: { 
+                  slotProps={{ listbox: {
+                    style: {
                       maxHeight: '300px',
                       overflow: 'auto'
                     }
-                  }}
+                  } }}
                   renderInput={(params) => (
                     <TextField
                       {...params}
@@ -839,15 +839,15 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                         : currentProfile.adapter === 'antigravity-cli'
                           ? t('models.modal.antigravityCli.modelHelp')
                           : t('models.modal.technicalNameHelp'))}
-                      InputProps={{
-                        ...params.InputProps,
+                      slotProps={{ ...params.slotProps, input: {
+                        ...params.slotProps.input,
                         endAdornment: (
                           <>
                             {isLoadingModels ? <CircularProgress color="inherit" size={20} /> : null}
-                            {params.InputProps.endAdornment}
+                            {params.slotProps.input.endAdornment}
                           </>
                         ),
-                      }}
+                      } }}
                     />
                   )}
                   renderOption={(props, option) => {
@@ -857,7 +857,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     return (
                       <li key={key} {...otherProps} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)', padding: '8px 16px' }}>
                         <Box>
-                          <Typography variant="body1" fontWeight="bold">{currentProfile.adapter === 'antigravity-cli' ? getAntigravityCliModelLabel(option) : option}</Typography>
+                          <Typography variant="body1" sx={{ fontWeight: "bold" }}>{currentProfile.adapter === 'antigravity-cli' ? getAntigravityCliModelLabel(option) : option}</Typography>
                           {currentProfile.adapter === 'antigravity-cli' && <Typography variant="caption" color="text.secondary">{option}</Typography>}
                           {model?.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
@@ -893,7 +893,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     value={formState.temperature ?? ''}
                     onChange={(e) => handleChange('temperature', e.target.value)}
                     error={!!errors.temperature}
-                    inputProps={configurationCapabilities.creativity}
+                    slotProps={{ htmlInput: configurationCapabilities.creativity }}
                     helperText={errors.temperature || t('models.modal.creativityHelp', {
                       min: configurationCapabilities.creativity.min,
                       max: configurationCapabilities.creativity.max,
@@ -972,7 +972,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                           : undefined,
                       }));
                     }}
-                    inputProps={{ min: -1, step: 1 }}
+                    slotProps={{ htmlInput: { min: -1, step: 1 } }}
                     helperText={t('models.modal.thinkingBudgetHelp')}
                   />
                 )}
@@ -1032,7 +1032,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       maxTurns: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
                     }));
                   }}
-                  inputProps={{ min: 1 }}
+                  slotProps={{ htmlInput: { min: 1 } }}
                   helperText={t('models.modal.maxTurnsHelp')}
                 />
 
@@ -1052,7 +1052,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                         maxTokens: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
                       }));
                     }}
-                    inputProps={{ min: 1 }}
+                    slotProps={{ htmlInput: { min: 1 } }}
                     helperText={t('models.modal.maxOutputTokensHelp')}
                   />
                 )}
@@ -1060,7 +1060,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             </Grid>
             
             {/* Right Column - Prompt Builder */}
-            <Grid item xs={12} md={6} sx={{ height: { xs: 400, md: '100%' }, minWidth: 0 }}>
+            <Grid size={{ xs: 12, md: 6 }} sx={{ height: { xs: 400, md: '100%' }, minWidth: 0 }}>
               <Box
                 sx={{
                   display: 'flex',

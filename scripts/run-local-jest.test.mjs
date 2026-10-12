@@ -163,3 +163,37 @@ test('actual Jest cannot silently succeed after omitting one explicitly selected
   assert.notEqual(run.status, 0, 'missing selected jsdom suite must still fail the run');
   assert.match(run.stderr, /Explicitly selected suite did not run exactly once/);
 });
+
+test('local runner renders React with the test runtime when its caller uses production', (t) => {
+  const f = fixture(t);
+  const file = path.join(f.realRoot, '__tests__/productionCaller.test.ts');
+  writeFileSync(file, `
+const React = require(${JSON.stringify(require.resolve('react'))});
+const { createRoot } = require(${JSON.stringify(require.resolve('react-dom/client'))});
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+test('production caller still receives the React test runtime', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  React.act(() => root.render(React.createElement('button', null, 'Ready')));
+  expect(container.querySelector('button').textContent).toBe('Ready');
+  React.act(() => root.unmount());
+  expect(process.env.NODE_ENV).toBe('test');
+  expect(process.env.FLUJO_RUNNER_ENV_WITNESS).toBe('preserved');
+});
+`);
+  const config = {
+    rootDir: f.realRoot,
+    testEnvironment: require.resolve('jest-environment-jsdom'),
+    transform: {},
+    testMatch: [file.replaceAll('\\', '/')],
+    cacheDirectory: path.join(f.realRoot, 'jest-cache'),
+  };
+  const child = spawnSync(process.execPath, [path.join(repo, 'scripts/run-local-jest.cjs'),
+    '--config', JSON.stringify(config), '--runInBand', '--no-cache', file], {
+    cwd: repo, encoding: 'utf8', windowsHide: true, timeout: 30_000,
+    env: { ...process.env, NODE_ENV: 'production', FLUJO_RUNNER_ENV_WITNESS: 'preserved' },
+  });
+  assert.ifError(child.error);
+  assert.equal(child.status, 0, child.stdout + child.stderr);
+  assert.match(child.stderr, /Tests:\s+1 passed, 1 total/);
+});

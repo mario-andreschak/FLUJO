@@ -88,7 +88,7 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       onClose={onClose}
       maxWidth="xl" 
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           borderTop: 5, 
           borderColor: 'primary.main',
@@ -97,7 +97,7 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
           maxWidth: '95vw',
           maxHeight: '90vh',
         }
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={t('flows.modal.properties', { name: nodeData.label || t('flows.modal.startNode') })}

@@ -85,7 +85,7 @@ export default function ParticipantStatus({ participant, compact = false, onClic
         '&:focus-visible': onClick ? { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 } : undefined,
       }}
     >
-      <Stack direction="row" alignItems="center" spacing={1.2}>
+      <Stack direction="row" sx={{ alignItems: "center" }} spacing={1.2}>
         <Box sx={{ position: 'relative' }}>
           <Avatar
             sx={{
@@ -110,8 +110,8 @@ export default function ParticipantStatus({ participant, compact = false, onClic
           )}
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" spacing={0.7} alignItems="center">
-            <Typography variant="body2" fontWeight={720} noWrap>{participant.name}</Typography>
+          <Stack direction="row" spacing={0.7} sx={{ alignItems: "center" }}>
+            <Typography variant="body2" sx={{ fontWeight: 720 }} noWrap>{participant.name}</Typography>
             {participant.role === 'moderator' && (
               <Tooltip title={t('meetings.moderator')}>
                 <AutoAwesomeRounded sx={{ color: 'secondary.main', fontSize: 15 }} />

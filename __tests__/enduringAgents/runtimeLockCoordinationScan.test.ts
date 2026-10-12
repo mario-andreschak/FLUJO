@@ -74,6 +74,68 @@ afterEach(async () => {
 });
 
 describe('Persona lock acquisition directory observations', () => {
+  it('does not publish or enter protected work until candidate bytes are flushed', async () => {
+    const originalOpen = fs.open.bind(fs);
+    let signalSync!: () => void;
+    let allowSync!: () => void;
+    const syncStarted = new Promise<void>(resolve => { signalSync = resolve; });
+    const syncGate = new Promise<void>(resolve => { allowSync = resolve; });
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const sync = handle.sync.bind(handle);
+      jest.spyOn(handle, 'sync').mockImplementation(async () => {
+        signalSync();
+        await syncGate;
+        await sync();
+      });
+      return handle;
+    });
+    const protectedWork = jest.fn(async (lock: PersonaRuntimeLock) => { await lock.assertOwned(); });
+    const acquisition = withPersonaRuntimeLock(personaId, protectedWork);
+    await syncStarted;
+    try {
+      await expect(fs.access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(protectedWork).not.toHaveBeenCalled();
+    } finally { allowSync(); }
+    await acquisition;
+    expect(protectedWork).toHaveBeenCalledTimes(1);
+    await expect(fs.readdir(lockRoot)).resolves.toEqual([]);
+  });
+
+  it('refuses protected work and removes its candidate when flushing fails', async () => {
+    const originalOpen = fs.open.bind(fs);
+    const flushError = Object.assign(new Error('Could not flush owner bytes'), { code: 'EIO' });
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      jest.spyOn(handle, 'sync').mockRejectedValue(flushError);
+      return handle;
+    });
+    const protectedWork = jest.fn();
+    await expect(withPersonaRuntimeLock(personaId, protectedWork)).rejects.toBe(flushError);
+    expect(protectedWork).not.toHaveBeenCalled();
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readdir(lockRoot)).resolves.toEqual([]);
+  });
+
+  it.each(['canonical', 'recovery'])(
+    'preserves a zero-filled %s lock and reports its exact path without logging payload bytes',
+    async kind => {
+      await fs.mkdir(lockRoot, { recursive: true });
+      const damagedPath = kind === 'canonical' ? lockPath : lockPath + '.recovery.' + intentOwnerId;
+      const damagedBytes = Buffer.alloc(233);
+      await fs.writeFile(damagedPath, damagedBytes, { flag: 'wx' });
+      const protectedWork = jest.fn();
+      await expect(withPersonaRuntimeLock(personaId, protectedWork)).rejects.toMatchObject({
+        code: 'PERSONA_RUNTIME_LOCK_CORRUPT',
+        lockPath: damagedPath,
+        message: expect.stringContaining('restore or quarantine'),
+      });
+      expect(protectedWork).not.toHaveBeenCalled();
+      await expect(fs.readFile(damagedPath)).resolves.toEqual(damagedBytes);
+      await expect(fs.readdir(lockRoot)).resolves.toEqual([path.basename(damagedPath)]);
+    },
+  );
+
   it('takes separate fresh pre/post listings on every acquisition', async () => {
     const scans = jest.spyOn(fs, 'readdir');
     for (const result of ['first', 'second']) {

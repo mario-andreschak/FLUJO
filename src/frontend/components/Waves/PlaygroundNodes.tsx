@@ -81,7 +81,7 @@ function PlaygroundPackageNodeComponent({ data }: NodeProps) {
         pointerEvents: 'none',
       }}
     >
-      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ px: 2.25, pt: 1.6 }}>
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "center",  px: 2.25, pt: 1.6 }}>
         <Box
           sx={{
             width: 30,
@@ -128,7 +128,7 @@ function PlaygroundFlowFrameNodeComponent({ data }: NodeProps) {
         pointerEvents: 'none',
       }}
     >
-      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ px: 1.8, pt: 1.35 }}>
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center",  px: 1.8, pt: 1.35 }}>
         <AccountTreeRoundedIcon color="primary" sx={{ fontSize: 18 }} />
         <Typography variant="subtitle2" noWrap sx={{ fontWeight: 750 }}>
           {node.label}
@@ -200,7 +200,7 @@ function PlaygroundSimpleFlowNodeComponent({ data }: NodeProps) {
         }}
       >
         <Stack spacing={1.05} sx={{ height: '100%' }}>
-          <Stack direction="row" alignItems="flex-start" spacing={1}>
+          <Stack direction="row" sx={{ alignItems: "flex-start" }} spacing={1}>
             <Box
               sx={{
                 width: 32,
@@ -229,7 +229,7 @@ function PlaygroundSimpleFlowNodeComponent({ data }: NodeProps) {
             </Box>
           </Stack>
 
-          <Stack direction="row" spacing={0.55} alignItems="center" sx={{ minHeight: 24, overflow: 'hidden' }}>
+          <Stack direction="row" spacing={0.55} sx={{ alignItems: "center",  minHeight: 24, overflow: 'hidden' }}>
             <Typography variant="overline" sx={{ lineHeight: 1, fontSize: '0.59rem', fontWeight: 800, opacity: 0.54 }}>
               {t('flows.guided.when').toLocaleUpperCase()}
             </Typography>
@@ -282,7 +282,7 @@ function PlaygroundSimpleFlowNodeComponent({ data }: NodeProps) {
             )}
           </Stack>
 
-          <Stack direction="row" spacing={0.6} alignItems="center" sx={{ minHeight: 30, overflow: 'hidden' }}>
+          <Stack direction="row" spacing={0.6} sx={{ alignItems: "center",  minHeight: 30, overflow: 'hidden' }}>
             {steps.length === 0 ? (
               <Typography variant="caption" color="text.secondary">{t('waves.flowCompletes')}</Typography>
             ) : (
@@ -313,7 +313,7 @@ function PlaygroundSimpleFlowNodeComponent({ data }: NodeProps) {
             )}
           </Stack>
 
-          <Stack direction="row" spacing={0.55} alignItems="center" sx={{ mt: 'auto !important', minHeight: 23 }}>
+          <Stack direction="row" spacing={0.55} sx={{ alignItems: "center",  mt: 'auto !important', minHeight: 23 }}>
             <Typography variant="overline" sx={{ lineHeight: 1, fontSize: '0.59rem', fontWeight: 800, opacity: 0.54 }}>
               {t('flows.guided.then').toLocaleUpperCase()}
             </Typography>

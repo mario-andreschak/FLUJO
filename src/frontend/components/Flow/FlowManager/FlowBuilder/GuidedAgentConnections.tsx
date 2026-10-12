@@ -77,8 +77,8 @@ const GuidedAgentConnections: React.FC<GuidedAgentConnectionsProps> = ({
         overflow: 'hidden',
       })}
     >
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, py: 0.75 }}>
-        <Typography variant="caption" fontWeight={800}>
+      <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between",  px: 1.25, py: 0.75 }}>
+        <Typography variant="caption" sx={{ fontWeight: 800 }}>
           {t('flows.guided.talksToAgents')}
         </Typography>
         <Tooltip title={t('flows.guided.addAgent')}>
@@ -93,7 +93,7 @@ const GuidedAgentConnections: React.FC<GuidedAgentConnectionsProps> = ({
       </Stack>
 
       {connections.length === 0 ? (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ px: 1.25, pb: 1.25 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block",  px: 1.25, pb: 1.25 }}>
           {t('flows.guided.noAgents')}
         </Typography>
       ) : (
@@ -102,9 +102,7 @@ const GuidedAgentConnections: React.FC<GuidedAgentConnectionsProps> = ({
             <Stack
               key={connection.nodeId}
               direction="row"
-              alignItems="center"
-              gap={0.75}
-              sx={{
+              sx={{ alignItems: "center", gap: 0.75,
                 minHeight: 42,
                 px: 1,
                 borderTop: index === 0 ? 0 : 1,
@@ -116,7 +114,7 @@ const GuidedAgentConnections: React.FC<GuidedAgentConnectionsProps> = ({
                 <Typography variant="body2" noWrap>
                   {connection.flowName}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" noWrap display="block">
+                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
                   {t('flows.guided.agentIo')}
                 </Typography>
               </Box>

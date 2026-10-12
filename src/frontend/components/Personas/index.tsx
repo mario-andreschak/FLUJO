@@ -278,7 +278,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
       {actionError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>{actionError}</Alert>}
       {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice(null)}>{notice}</Alert>}
       {initialPersonaId && loading ? (
-        <Stack alignItems="center" justifyContent="center" minHeight="55vh" spacing={2}>
+        <Stack sx={{ alignItems: "center", justifyContent: "center", minHeight: "55vh" }} spacing={2}>
           <CircularProgress aria-label={t('personas.loading')} />
           <Typography color="text.secondary">{t('personas.loading')}</Typography>
         </Stack>
@@ -345,9 +345,9 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
           {(draftsLoading || draftsError || drafts.length > 0) && (
             <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 4 }}>
               <Stack spacing={2}>
-                <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1 }}>
                   <Box>
-                    <Typography variant="h6" component="h2" fontWeight={760}>{t('personas.create.savedDrafts')}</Typography>
+                    <Typography variant="h6" component="h2" sx={{ fontWeight: 760 }}>{t('personas.create.savedDrafts')}</Typography>
                     <Typography color="text.secondary">{t('personas.create.savedDraftsHelp')}</Typography>
                   </Box>
                   <Button disabled={draftsLoading} startIcon={<RefreshRounded />} onClick={() => void loadDrafts()}>
@@ -358,9 +358,9 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
                 {draftsError && <Alert severity="warning">{draftsError}</Alert>}
                 {drafts.map((item) => (
                   <Paper key={item.id} variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
-                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 2 }}>
                       <Box>
-                        <Typography fontWeight={720}>
+                        <Typography sx={{ fontWeight: 720 }}>
                           {item.payload.name.trim() || t('personas.create.untitledDraft')}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
@@ -447,8 +447,8 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
 function AreaShell({ title, icon, action, children }: { title: string; icon: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, minWidth: 0 }}>
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} spacing={2} sx={{ mb: 2.5 }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}><Box color="primary.main" sx={{ flexShrink: 0 }}>{icon}</Box><Typography variant="h5" component="h2" fontWeight={760}>{title}</Typography></Stack>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { xs: 'stretch', sm: 'center' },  mb: 2.5 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center",  minWidth: 0 }}><Box sx={{ color: "primary.main",  flexShrink: 0 }}>{icon}</Box><Typography variant="h5" component="h2" sx={{ fontWeight: 760 }}>{title}</Typography></Stack>
         {action}
       </Stack>
       {children}
@@ -458,7 +458,7 @@ function AreaShell({ title, icon, action, children }: { title: string; icon: Rea
 
 function TaskRecordLinks({ task }: { task: PersonaTaskSummary }) {
   const { t } = useI18n();
-  return <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+  return <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
     {task.recordLinks?.map((link) => <Button key={`${link.kind}:${link.id}`} size="small" component={Link}
       href={withWorkspaceUrl(link.kind === 'conversation'
         ? magicLinkPath({ kind: 'conversation', id: link.id })
@@ -569,9 +569,9 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           color: 'primary.contrastText',
         }}
       >
-        <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2} alignItems={{ md: 'center' }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 2, alignItems: { md: 'center' } }}>
           <Box>
-            <Typography variant="h4" component="h2" fontWeight={790}>{t('personas.goal.title')}</Typography>
+            <Typography variant="h4" component="h2" sx={{ fontWeight: 790 }}>{t('personas.goal.title')}</Typography>
             <Typography sx={{ mt: 0.5 }}>{t('personas.goal.help')}</Typography>
           </Box>
           <Button
@@ -595,11 +595,11 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
         <AreaShell title={t('personas.now.title')} icon={<BoltRounded />}>
           {current || activeTask ? (
             <Stack spacing={1.25}>
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                 {current && <Chip color={statusColor(current.outcome)} label={t(PERSONA_OUTCOME_KEYS[current.outcome])} />}
                 {activeTask && <Chip variant="outlined" label={t(`personas.priority.${activeTask.priority}`)} />}
               </Stack>
-              <Typography variant="h6" component="h3" fontWeight={740}>
+              <Typography variant="h6" component="h3" sx={{ fontWeight: 740 }}>
                 {activeTask?.title ?? (current?.summaryKind ? t(`personas.history.type.${current.summaryKind}`) : current?.summary)}
               </Typography>
               {activeTask?.description && <Typography color="text.secondary">{activeTask.description}</Typography>}
@@ -612,7 +612,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
                 </Typography>
               )}
               {activeWorkItem && !activeWorkItem.goal && (
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                   <Button
                     color="inherit"
                     disabled={busy}
@@ -646,8 +646,8 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           ) : (
             <Stack spacing={1.25}>
               {queuedTasks.map((task) => (
-                <Stack key={task.id} direction="row" justifyContent="space-between" gap={1}>
-                  <Typography fontWeight={700}>{task.title}</Typography>
+                <Stack key={task.id} direction="row" sx={{ justifyContent: "space-between", gap: 1 }}>
+                  <Typography sx={{ fontWeight: 700 }}>{task.title}</Typography>
                   <Chip size="small" label={t('personas.taskState.waiting')} />
                 </Stack>
               ))}
@@ -666,7 +666,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
             <Stack spacing={1}>
               {needsYou.map((task) => (
                 <Box key={task.id}>
-                  <Typography fontWeight={720}>{task.title}</Typography>
+                  <Typography sx={{ fontWeight: 720 }}>{task.title}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     {task.state === 'blocked'
                       ? task.blockerTitles.length > 0
@@ -727,7 +727,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           ) : (
             <Stack spacing={1}>{completed.map((task) => (
               <Box key={task.id}>
-                <Typography fontWeight={720}>{task.title}</Typography>
+                <Typography sx={{ fontWeight: 720 }}>{task.title}</Typography>
                 {task.resultSummary && (
                   <Typography
                     variant="body2"
@@ -743,7 +743,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
                   </Typography>
                 )}
                 {task.recordLinks && task.recordLinks.length > 0 && (
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
+                  <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap",  mt: 0.5 }}>
                     {task.recordLinks.map((link) => link.kind === 'conversation' ? (
                       <Button
                         key={`${link.kind}:${link.id}`}
@@ -782,12 +782,12 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
         {previewError ? (
           <Alert severity="warning">{t('personas.capabilities.unavailable')}</Alert>
         ) : !preview ? (
-          <Stack direction="row" alignItems="center" spacing={1}><CircularProgress size={18} aria-label={t('personas.capabilities.loading')} /><Typography color="text.secondary">{t('personas.capabilities.loading')}</Typography></Stack>
+          <Stack direction="row" sx={{ alignItems: "center" }} spacing={1}><CircularProgress size={18} aria-label={t('personas.capabilities.loading')} /><Typography color="text.secondary">{t('personas.capabilities.loading')}</Typography></Stack>
         ) : (
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
             <Box>
               <Typography variant="subtitle2" component="h3">{t('personas.capabilities.everyday')}</Typography>
-              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
                 <Chip
                   color={memoryRecall || memoryChanges ? 'success' : 'default'}
                   label={memoryChanges
@@ -807,7 +807,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
             </Box>
             <Box>
               <Typography variant="subtitle2" component="h3">{t('personas.capabilities.apps')}</Typography>
-              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
                 {preview.apps.length > 0
                   ? preview.apps.map((app) => <Chip key={app} label={app} />)
                   : <Typography variant="body2" color="text.secondary">{t('personas.capabilities.noApps')}</Typography>}
@@ -815,7 +815,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
             </Box>
             <Box>
               <Typography variant="subtitle2" component="h3">{t('personas.capabilities.behaviors')}</Typography>
-              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
                 {preview.behaviors.length > 0
                   ? preview.behaviors.map((behavior) => <Chip key={behavior.slotKey} label={behavior.name} />)
                   : <Typography variant="body2" color="text.secondary">{t('personas.capabilities.noBehaviors')}</Typography>}
@@ -837,10 +837,10 @@ function TalkArea({ detail, busy, startConversation }: { detail: PersonaDetail; 
       {conversations.length === 0 ? <Typography color="text.secondary">{t('personas.talk.empty')}</Typography> : (
         <Stack divider={<Divider flexItem />}>
           {conversations.map((conversation) => (
-            <Stack key={conversation.conversationId} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}>
+            <Stack key={conversation.conversationId} direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1.5,  py: 1.5 }}>
               <Box>
-                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-                  <Typography fontWeight={720}>{t(`personas.origin.${conversation.origin}`)}</Typography>
+                <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
+                  <Typography sx={{ fontWeight: 720 }}>{t(`personas.origin.${conversation.origin}`)}</Typography>
                   {conversation.active && <Chip size="small" color="primary" label={t('personas.conversations.active')} />}
                   {conversation.queuedInputCount > 0 && <Chip size="small" label={t('personas.conversations.queuedInput', { count: conversation.queuedInputCount })} />}
                 </Stack>
@@ -986,9 +986,9 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
               return (
                 <Card key={task.id} variant="outlined" sx={{ borderRadius: 3, minWidth: 0 }}>
                   <CardContent>
-                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'flex-start' }} gap={1}>
-                      <Typography variant="h6" component="h3" fontWeight={720}>{task.title}</Typography>
-                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", alignItems: { sm: 'flex-start' }, gap: 1 }}>
+                      <Typography variant="h6" component="h3" sx={{ fontWeight: 720 }}>{task.title}</Typography>
+                      <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }} useFlexGap>
                         <Chip size="small" color={statusColor(task.state)} label={t(`personas.taskState.${task.state}`)} />
                         <Chip size="small" variant="outlined" label={t(`personas.priority.${task.priority}`)} />
                       </Stack>
@@ -998,7 +998,7 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
                     {task.nextAction && <Typography variant="body2" sx={{ mt: 1.5 }}><strong>{t('personas.tasks.nextAction')}:</strong> {task.nextAction}</Typography>}
                     <TaskRecordLinks task={task} />
                     {task.deadline && <Typography variant="caption" color={task.state === 'overdue' ? 'error.main' : 'text.secondary'}>{t('personas.tasks.deadline', { date: formatDate(task.deadline, { dateStyle: 'medium' }) })}</Typography>}
-                    {task.blockerTitles.length > 0 && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>{task.blockerTitles.map((title) => <Chip key={title} size="small" color="warning" label={title} />)}</Stack>}
+                    {task.blockerTitles.length > 0 && <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>{task.blockerTitles.map((title) => <Chip key={title} size="small" color="warning" label={title} />)}</Stack>}
                   </CardContent>
                   <CardActions sx={{ flexWrap: 'wrap' }}>
                     <Button disabled={busy || !assignable} startIcon={<AssignmentRounded />} onClick={() => void assign(task)}>
@@ -1239,12 +1239,12 @@ function AppsArea({ detail, busy, mutate, mutationError }: {
               return (
                 <Card key={grant.id} variant="outlined" sx={{ borderRadius: 3 }}>
                   <CardContent>
-                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5}>
-                      <Box minWidth={0}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1.5 }}>
+                      <Box sx={{ minWidth: 0 }}>
                         <Typography variant="overline" color="text.secondary">
                           {t('personas.apps.account')}
                         </Typography>
-                        <Typography variant="h6" component="h3" fontWeight={760} sx={{ overflowWrap: 'anywhere' }}>
+                        <Typography variant="h6" component="h3" sx={{ fontWeight: 760,  overflowWrap: 'anywhere' }}>
                           {grant.mcpServerName}
                         </Typography>
                       </Box>
@@ -1278,9 +1278,9 @@ function AppsArea({ detail, busy, mutate, mutationError }: {
                           const launchKey = `${grant.id}:${app.uri}`;
                           return (
                             <Paper key={app.uri} variant="outlined" sx={{ p: 1.5, borderRadius: 2.5 }}>
-                              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5} alignItems={{ sm: 'center' }}>
-                                <Box minWidth={0}>
-                                  <Typography fontWeight={700}>{app.name}</Typography>
+                              <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1.5, alignItems: { sm: 'center' } }}>
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography sx={{ fontWeight: 700 }}>{app.name}</Typography>
                                   <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{app.uri}</Typography>
                                 </Box>
                                 <Button
@@ -1394,7 +1394,7 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
   return (
     <AreaShell title={t('personas.history.title')} icon={<HistoryRounded />}>
       <Stack spacing={2}>
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ alignItems: { md: 'center' } }}>
           <TextField select fullWidth label={t('personas.history.filter.type')} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} slotProps={{ inputLabel: { shrink: true }, select: { displayEmpty: true } }}>
             <MenuItem value="">{t('personas.history.filter.allTypes')}</MenuItem>
             {activityTypes.map((kind) => <MenuItem key={kind} value={kind}>{t(`personas.history.type.${kind}`)}</MenuItem>)}
@@ -1409,14 +1409,14 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
         {activities.length === 0 ? <Typography color="text.secondary">{detail.presentation.history.length === 0 ? t('personas.history.empty') : t('personas.history.noMatches')}</Typography> : (
           <Stack divider={<Divider flexItem />}>
             {activities.map((activity) => (
-              <Stack key={activity.key} direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}>
+              <Stack key={activity.key} direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 1.5,  py: 1.5 }}>
                 <Box sx={{ minWidth: 0 }}>
-                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                  <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }} useFlexGap>
                     <Chip size="small" color={statusColor(activity.outcome)} label={t(PERSONA_OUTCOME_KEYS[activity.outcome])} />
                     <Chip size="small" variant="outlined" label={t(`personas.history.type.${activity.kind}`)} />
                     <Chip size="small" variant="outlined" label={t(`personas.origin.${activity.origin}`)} />
                   </Stack>
-                  <Typography fontWeight={700} sx={{ mt: 0.75 }}>{activity.summaryKind ? t(`personas.history.type.${activity.summaryKind}`) : activity.summary}</Typography>
+                  <Typography sx={{ fontWeight: 700,  mt: 0.75 }}>{activity.summaryKind ? t(`personas.history.type.${activity.summaryKind}`) : activity.summary}</Typography>
                   {activity.outcome === 'needs_attention' && activity.advanced.status === 'completed' && (
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
                       {t('personas.history.completionUnconfirmed')}
@@ -1437,7 +1437,7 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
                     </Typography>
                   </Box>
                 </Box>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                   {activity.recordLinks.map((link) => link.kind === 'conversation' ? (
                     <Button key={`${link.kind}:${link.id}`} component={Link} href={withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: link.id }))}>{t('personas.talk.open')}</Button>
                   ) : (

@@ -130,8 +130,7 @@ function ChainConversationCardComponent({
       data-completed-preview-hidden={completedPreviewHidden ? 'true' : 'false'}
       direction={compact ? 'column' : 'row'}
       spacing={compact ? 1 : 1.4}
-      alignItems="center"
-      sx={{
+      sx={{ alignItems: "center",
         position: 'relative',
         zIndex: 2,
         width: compact ? 286 : 376,
@@ -216,7 +215,7 @@ function ChainConversationCardComponent({
           },
         }}
       >
-        <Stack direction="row" spacing={1.05} alignItems="center" sx={{ width: '100%' }}>
+        <Stack direction="row" spacing={1.05} sx={{ alignItems: "center",  width: '100%' }}>
           <Box
             aria-hidden="true"
             sx={{
@@ -279,7 +278,7 @@ function ChainConversationCardComponent({
             >
               {identityTitle}
             </Typography>
-            <Stack direction="row" spacing={0.55} alignItems="center" sx={{ mt: 0.55 }}>
+            <Stack direction="row" spacing={0.55} sx={{ alignItems: "center",  mt: 0.55 }}>
               <Typography component="span" sx={{ color: 'text.secondary', fontSize: '0.61rem', lineHeight: 1 }}>
                 {statusLabel}
               </Typography>
@@ -288,10 +287,9 @@ function ChainConversationCardComponent({
                   component="span"
                   direction="row"
                   spacing={0.25}
-                  alignItems="center"
                   title={t('chainChat.messageCount', { count: conversation.messageCount })}
                   aria-label={t('chainChat.messageCount', { count: conversation.messageCount })}
-                  sx={{ ml: 'auto !important', color: 'text.secondary' }}
+                  sx={{ alignItems: "center",  ml: 'auto !important', color: 'text.secondary' }}
                 >
                   <ChatBubbleOutlineRoundedIcon sx={{ fontSize: '0.7rem' }} />
                   <Typography component="span" sx={{ fontSize: '0.59rem', fontWeight: 730, lineHeight: 1 }}>
@@ -387,7 +385,7 @@ function ChainConversationCardComponent({
         }}
       >
         <Stack spacing={0.55} sx={{ width: '100%', minWidth: 0 }}>
-          <Stack direction="row" spacing={0.65} alignItems="center">
+          <Stack direction="row" spacing={0.65} sx={{ alignItems: "center" }}>
             <RoleIcon aria-hidden="true" sx={{ color: roleColor, fontSize: '0.84rem' }} />
             <Typography
               component="span"

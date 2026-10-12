@@ -40,12 +40,12 @@ export default function RolesGallery() {
 
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1200, mx: 'auto' }}>
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2} sx={{ mb: 3 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 2,  mb: 3 }}>
         <Box>
           <Typography variant="h4" component="h1">{t('roles.title')}</Typography>
           <Typography color="text.secondary">{t('roles.description')}</Typography>
         </Box>
-        <Stack direction="row" gap={1} alignItems="center">
+        <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
           <Button startIcon={<RefreshRounded />} onClick={() => void load()} disabled={loading}>
             {t('roles.refresh')}
           </Button>

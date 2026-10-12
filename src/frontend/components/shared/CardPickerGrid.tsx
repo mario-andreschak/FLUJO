@@ -222,9 +222,9 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
   };
 
   const renderCells = (cells: CardPickerItem[]) => (
-    <Grid container spacing={2} alignItems="stretch">
+    <Grid container spacing={2} sx={{ alignItems: "stretch" }}>
       {cells.map((item) => (
-        <Grid item xs={cols.xs} sm={cols.sm} md={cols.md} lg={cols.lg} key={item.key} sx={{ display: 'flex' }}>
+        <Grid size={{ xs: cols.xs, sm: cols.sm, md: cols.md, lg: cols.lg }} key={item.key} sx={{ display: 'flex' }}>
           <Box sx={{ width: '100%', minWidth: 0 }}>
             <Box
               data-card-picker-item="true"
@@ -315,14 +315,13 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
       value={effectiveTerm}
       onChange={(e) => handleSearch(e.target.value)}
       inputRef={setSearchInputRef}
-      InputProps={{
+      slotProps={{ input: {
         startAdornment: (
           <InputAdornment position="start">
             <SearchIcon fontSize="small" />
           </InputAdornment>
         ),
-      }}
-      inputProps={{ 'aria-label': resolvedSearchPlaceholder }}
+      }, htmlInput: { 'aria-label': resolvedSearchPlaceholder } }}
     />
   ) : null;
 
@@ -349,7 +348,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
       return withSearch(
         <Grid container spacing={2}>
           {Array.from({ length: skeletonCount }).map((_, i) => (
-            <Grid item xs={cols.xs} sm={cols.sm} md={cols.md} lg={cols.lg} key={`skeleton-${i}`}>
+            <Grid size={{ xs: cols.xs, sm: cols.sm, md: cols.md, lg: cols.lg }} key={`skeleton-${i}`}>
               {skeleton}
             </Grid>
           ))}

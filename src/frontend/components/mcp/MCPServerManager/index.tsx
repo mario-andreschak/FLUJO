@@ -917,13 +917,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             inputRef={searchInputRef}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
             sx={{ maxWidth: { sm: 300 } }}
           />
           
@@ -1200,7 +1200,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "my-mcp-server"],\n      "env": { "API_KEY": "..." }\n    }\n  }\n}'}
             variant="outlined"
             spellCheck={false}
-            InputProps={{ sx: { fontFamily: 'monospace', fontSize: '0.85rem' } }}
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.85rem' } } }}
             disabled={isImporting}
           />
           {importError && (

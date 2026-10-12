@@ -11,7 +11,8 @@ const log = createLogger('app/api/flow/quick-chat/route');
  * POST /api/flow/quick-chat  (issue #61)
  *
  * Synthesize (but do NOT run or save) an ephemeral quick-chat flow from
- * SELECTIONS: ONE model plus zero or more MCP servers / tool subsets. The
+ * SELECTIONS: ONE model plus optional additional MCP server/tool subsets. The
+ * bundled FLUJO discovery and invocation tools are attached automatically. The
  * backend builds the graph itself — it never accepts a caller-supplied node
  * graph. Unknown model/server ids are rejected and requested tools are
  * intersected with what each server exposes.

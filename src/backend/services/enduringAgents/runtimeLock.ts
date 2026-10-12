@@ -187,6 +187,18 @@ export class PersonaRuntimeLockLostError extends Error {
   }
 }
 
+export class PersonaRuntimeLockCorruptError extends Error {
+  readonly code = 'PERSONA_RUNTIME_LOCK_CORRUPT' as const;
+
+  constructor(readonly lockPath: string) {
+    super(
+      `Persona runtime lock ${JSON.stringify(lockPath)} is malformed. `
+      + 'Stop processes using this workspace and restore or quarantine the damaged lock before restarting.',
+    );
+    this.name = 'PersonaRuntimeLockCorruptError';
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return clockForLock().sleep(ms);
 }
@@ -212,7 +224,7 @@ async function readLockRecord(lockPath: string): Promise<Record<string, unknown>
   try {
     const parsed = JSON.parse(await fs.readFile(lockPath, 'utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`Persona runtime lock ${JSON.stringify(lockPath)} is malformed.`);
+      throw new PersonaRuntimeLockCorruptError(lockPath);
     }
     return parsed as Record<string, unknown>;
   } catch (error) {
@@ -221,6 +233,7 @@ async function readLockRecord(lockPath: string): Promise<Record<string, unknown>
     // A canonical lock is installed from a fully-written candidate through an
     // atomic hard link. Malformed content is therefore corruption, not a stale
     // acquisition that can be stolen safely.
+    if (error instanceof SyntaxError) throw new PersonaRuntimeLockCorruptError(lockPath);
     throw error;
   }
 }
@@ -247,7 +260,7 @@ function parseOwnerRecord(
     || typeof parsed.workspace !== 'string'
     || typeof parsed.acquiredAt !== 'number'
   ) {
-    throw new Error(`Persona runtime lock ${JSON.stringify(lockPath)} is malformed.`);
+    throw new PersonaRuntimeLockCorruptError(lockPath);
   }
   return parsed as unknown as LockOwnerRecord;
 }
@@ -269,7 +282,7 @@ async function readRecoveryOwner(lockPath: string): Promise<RecoveryOwnerRecord 
     || !Number.isInteger(parsed.targetPid)
     || parsed.targetPid <= 0
   ) {
-    throw new Error(`Persona runtime recovery lock ${JSON.stringify(lockPath)} is malformed.`);
+    throw new PersonaRuntimeLockCorruptError(lockPath);
   }
   return { ...owner, ...parsed } as unknown as RecoveryOwnerRecord;
 }
@@ -742,7 +755,16 @@ async function installCandidateLock(
     `${path.basename(lockPath)}.candidate.${randomUUID()}`,
   );
   try {
-    await fs.writeFile(candidatePath, JSON.stringify(owner), { encoding: 'utf8', flag: 'wx' });
+    const candidate = await fs.open(candidatePath, 'wx', 0o600);
+    try {
+      await candidate.writeFile(JSON.stringify(owner), 'utf8');
+      // Publishing buffered bytes is atomic for readers but can leave a
+      // zero-filled canonical lock after a crash. Flush before publishing the
+      // hard link so owner identity is durable before protected work starts.
+      await candidate.sync();
+    } finally {
+      await candidate.close();
+    }
     try {
       // Hard-link installation is an atomic create-if-absent operation on the
       // shared local filesystem. Unlike an empty lock directory, the canonical

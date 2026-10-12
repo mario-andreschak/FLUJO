@@ -12,6 +12,7 @@ declare global {
   // The migration module owns creation/retry; request handlers only await it.
   var __flujo_workspace_migration_promise: Promise<unknown> | undefined;
   var __flujo_workspace_layout_status: WorkspaceLayoutStatus | undefined;
+  var __flujo_workspace_layout_error: unknown;
 }
 
 export type WorkspaceLayoutStatus = 'not-started' | 'preparing' | 'ready' | 'failed';
@@ -36,6 +37,7 @@ export function getWorkspaceLayoutStatus(): WorkspaceLayoutStatus {
 export function setWorkspaceLayoutPreparation<T>(promise: Promise<T> | undefined): void {
   global.__flujo_workspace_migration_promise = promise;
   global.__flujo_workspace_layout_status = promise ? 'preparing' : 'not-started';
+  global.__flujo_workspace_layout_error = undefined;
   if (!promise) return;
 
   // Observe completion without replacing the shared promise. Routes can inspect
@@ -47,24 +49,31 @@ export function setWorkspaceLayoutPreparation<T>(promise: Promise<T> | undefined
         global.__flujo_workspace_layout_status = 'ready';
       }
     },
-    () => {
+    error => {
       if (global.__flujo_workspace_migration_promise === promise) {
         global.__flujo_workspace_layout_status = 'failed';
+        global.__flujo_workspace_layout_error = error;
       }
     },
   );
 }
 
 /** Record a failed attempt while allowing a later process/startup to retry it. */
-export function failWorkspaceLayoutPreparation<T>(promise: Promise<T>, _error: unknown): void {
+export function failWorkspaceLayoutPreparation<T>(promise: Promise<T>, error: unknown): void {
   if (global.__flujo_workspace_migration_promise !== promise) return;
   global.__flujo_workspace_migration_promise = undefined;
   global.__flujo_workspace_layout_status = 'failed';
+  global.__flujo_workspace_layout_error = error;
 }
 
 /** Await the startup-owned migration without importing its implementation. */
 export async function waitForWorkspaceLayoutReady(): Promise<void> {
   const promise = getWorkspaceLayoutPreparation();
-  if (!promise) throw new WorkspaceLayoutNotStartedError();
+  if (!promise) {
+    if (getWorkspaceLayoutStatus() === 'failed') {
+      throw global.__flujo_workspace_layout_error ?? new Error('Workspace layout preparation failed.');
+    }
+    throw new WorkspaceLayoutNotStartedError();
+  }
   await promise;
 }

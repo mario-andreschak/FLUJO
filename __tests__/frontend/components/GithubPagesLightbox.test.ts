@@ -26,7 +26,7 @@ beforeEach(() => {
   document.documentElement.innerHTML = page;
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
-    value: jest.fn(() => ({ matches: true })),
+    value: jest.fn(() => ({ matches: true, addEventListener: jest.fn() })),
   });
   jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: jest.fn(),
@@ -131,4 +131,38 @@ describe.each([
     expect(element('#lightboxCaption').textContent).toBe(caption);
     expect(element('#lightboxCaption').childElementCount).toBe(0);
   });
+});
+
+test('phone navigation reaches the tutorials and closes on link selection, Escape and desktop resize', () => {
+  const menu = element<HTMLButtonElement>('.menu-toggle');
+  const navigation = element('#site-nav');
+  menu.click();
+  expect(menu.getAttribute('aria-expanded')).toBe('true');
+  expect(navigation.classList.contains('is-open')).toBe(true);
+  const examples = element<HTMLAnchorElement>('#site-nav a[href="#examples"]');
+  examples.click();
+  expect(menu.getAttribute('aria-expanded')).toBe('false');
+  expect(navigation.classList.contains('is-open')).toBe(false);
+  menu.click();
+  examples.focus();
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  expect(document.activeElement).toBe(menu);
+  expect(menu.getAttribute('aria-expanded')).toBe('false');
+  menu.click();
+  const media = (window.matchMedia as jest.Mock).mock.results[1].value;
+  const onChange = media.addEventListener.mock.calls[0][1];
+  onChange({ matches: true });
+  expect(menu.getAttribute('aria-expanded')).toBe('false');
+  expect(navigation.classList.contains('is-open')).toBe(false);
+});
+
+test('installation tabs keep the command and copy payload together', () => {
+  const buttons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
+  for (const button of buttons) {
+    button.click();
+    const active = element('.tab-panel.active');
+    expect(active.getAttribute('data-panel')).toBe(button.getAttribute('data-tab'));
+    expect(document.querySelectorAll('.tab-panel.active')).toHaveLength(1);
+    expect(active.querySelector('code')!.textContent).toBe(active.querySelector<HTMLButtonElement>('.copy-btn')!.getAttribute('data-copy'));
+  }
 });

@@ -64,7 +64,7 @@ while ($null -ne $current) {
 }
 `;
 
-function traceNativeRefusal(reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'bounds' | 'exit' | 'evidence', stderr = '') {
+function traceNativeRefusal(reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'abort-before-spawn' | 'bounds' | 'exit' | 'evidence', stderr = '') {
   try {
     if (process.env.FLUJO_MCP_WORKLOAD_TRACE !== '1') return;
     const phase = /^FLUJO_AUTHORITY_REFUSED:(input|native-acl|owner-dacl|outsider-access|evidence-bounds)\s*$/.exec(stderr)?.[1];
@@ -102,14 +102,17 @@ function authorityEvidence(stdout: string): string {
 
 /** Every call obtains fresh native ACL evidence; cancellation waits for exit. */
 export async function windowsPrivateAuthorityStampAsync(filename: string | readonly string[], signal?: AbortSignal): Promise<string> {
-  if (process.platform !== 'win32' || signal?.aborted) throw new Error('Windows authority inspection unavailable');
+  if (process.platform !== 'win32' || signal?.aborted) {
+    if (process.platform === 'win32' && signal?.aborted) traceNativeRefusal('abort-before-spawn');
+    throw new Error('Windows authority inspection unavailable');
+  }
   const filenames = typeof filename === 'string' ? [filename] : filename;
   if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   if (!(await fs.promises.stat(executable)).isFile()) throw new Error('Windows authority inspection unavailable');
-  if (signal?.aborted) throw new Error('Windows authority inspection cancelled');
+  if (signal?.aborted) { traceNativeRefusal('abort-before-spawn'); throw new Error('Windows authority inspection cancelled'); }
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
       windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],

@@ -91,8 +91,7 @@ export default function PageHeader({
           data-page-header-heading
           direction="row"
           spacing={1.5}
-          alignItems="center"
-          sx={{ minWidth: 0 }}
+          sx={{ alignItems: "center",  minWidth: 0 }}
         >
           {leading}
           {Icon && (
@@ -122,8 +121,7 @@ export default function PageHeader({
                 data-page-header-meta
                 direction="row"
                 spacing={1}
-                alignItems="center"
-                sx={{ mb: 0.35 }}
+                sx={{ alignItems: "center",  mb: 0.35 }}
               >
           {resolvedEyebrow && (
                   <Typography

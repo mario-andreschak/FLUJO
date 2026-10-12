@@ -505,7 +505,8 @@ class ChatService {
 
   /**
    * POST /api/flow/quick-chat — synthesize an ephemeral quick-chat flow (issue
-   * #61) from selections (one model + optional MCP servers/tools). Returns the
+   * #61) from one model, with automatic tool/flow discovery and optional extra
+   * integrations for specialized callers. Returns the
    * flow (with its namespaced quickchat-<id> id); the caller then creates a
    * conversation seeded with it as `flowSnapshot`.
    */

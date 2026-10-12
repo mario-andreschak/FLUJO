@@ -201,7 +201,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, onHandoff }) => {
               const hasLocal = options.some(o => o.kind === 'package');
               const hasRemote = options.some(o => o.kind === 'remote');
               return (
-                <Grid item xs={12} sm={6} md={4} key={server.name}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={server.name}>
                   <Card
                     sx={{
                       height: '100%',

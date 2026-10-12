@@ -67,7 +67,7 @@
   --grad: linear-gradient(135deg, #38bdf8, #818cf8);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; scroll-padding-top: 90px; }
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
@@ -129,7 +129,8 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "Cascadia Code", C
   background-clip: text;
   color: transparent;
 }
-.nav-links { display: flex; align-items: center; gap: 26px; }
+.nav-links { display: flex; align-items: center; gap: 20px; }
+.menu-toggle { display: none; }
 .nav-links a {
   color: var(--text-dim);
   font-size: 0.92rem;
@@ -159,8 +160,16 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "Cascadia Code", C
   transition: border-color 0.25s, background 0.25s;
 }
 .nav-cta:hover { border-color: var(--border-bright); background: rgba(56, 189, 248, 0.1); }
-@media (max-width: 720px) {
-  .nav-links a:not(.nav-cta) { display: none; }
+@media (max-width: 900px) {
+  .nav { flex-wrap: wrap; gap: 16px; background: rgba(7, 11, 20, 0.95); }
+  .nav-links { width: 100%; flex-wrap: wrap; gap: 18px; }
+  .js .menu-toggle {
+    display: inline-flex; padding: 8px 14px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--panel-solid); color: var(--text);
+    font: inherit; cursor: pointer;
+  }
+  .js .nav-links { display: none; }
+  .js .nav-links.is-open { display: flex; }
 }
 
 /* ---------- layout ---------- */
@@ -180,8 +189,8 @@ section { padding: 90px 0; }
   margin: 0 auto 56px;
   font-size: 1.05rem;
 }
-.reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.7s ease, transform 0.7s ease; }
-.reveal.visible { opacity: 1; transform: none; }
+.js .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.7s ease, transform 0.7s ease; }
+.js .reveal.visible { opacity: 1; transform: none; }
 
 /* ---------- hero ---------- */
 .hero {
@@ -588,6 +597,15 @@ section { padding: 90px 0; }
 @media (max-width: 960px) { .features-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 620px) { .features-grid { grid-template-columns: 1fr; } }
 
+/* ---------- examples and tutorials ---------- */
+.example-card a { display: block; color: var(--text); }
+.example-card a:hover { text-decoration: none; }
+.example-card:focus-within { outline: 2px solid var(--accent); outline-offset: 4px; }
+.example-card img { display: block; width: 100%; height: auto; border-radius: 8px; margin-bottom: 18px; }
+.example-card .example-link { display: inline-block; color: var(--accent); font-weight: 600; margin-top: 18px; }
+.tutorial-callout { margin-top: 26px; display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.tutorial-callout p { margin-bottom: 0; max-width: 650px; }
+
 /* ---------- gallery ---------- */
 .gallery {
   display: grid;
@@ -673,6 +691,7 @@ section { padding: 90px 0; }
   margin: 0 auto;
 }
 .integrate-card {
+  min-width: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -738,7 +757,7 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .reveal { opacity: 1; transform: none; }
+  .js .reveal { opacity: 1; transform: none; }
 }
 </style>
 </head>
@@ -747,13 +766,16 @@ footer {
 <canvas id="bg-canvas" aria-hidden="true"></canvas>
 <div class="bg-grid" aria-hidden="true"></div>
 
-<nav class="nav" id="nav">
+<nav class="nav" id="nav" aria-label="Main navigation">
   <a href="#" class="nav-logo" style="text-decoration:none">FLUJO</a>
-  <div class="nav-links">
+  <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+  <div class="nav-links" id="site-nav">
     <a href="#features">Features</a>
     <a href="#screenshots">Screenshots</a>
+    <a href="#examples">Examples &amp; Tutorials</a>
     <a href="#install">Install</a>
     <a href="#integrate">Integrate</a>
+    <a href="/film/">Walkthrough</a>
     <a class="nav-cta" href="https://github.com/mario-andreschak/FLUJO" target="_blank" rel="noopener">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.15c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.75 2.69 1.25 3.34.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.7 5.38-5.26 5.67.41.35.77 1.05.77 2.12v3.15c0 .3.21.67.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
       GitHub
@@ -819,10 +841,10 @@ footer {
       <div class="tab-panel" data-panel="npx">
         <div class="codebox">
           <span class="prompt mono">$</span>
-          <code>npx flujo-ai</code>
-          <button class="copy-btn" data-copy="npx flujo-ai">Copy</button>
+          <code>npx flujo-ai@latest</code>
+          <button class="copy-btn" data-copy="npx flujo-ai@latest">Copy</button>
         </div>
-        <p class="note">Fastest start if you already have Node.js — runs a prebuilt FLUJO with no clone or build. Data lives in <code>~/.flujo</code>; some MCP servers may still need <code>git</code> / <code>python</code> / <code>uv</code> on your PATH.</p>
+        <p class="note">Fastest start with Node.js 22.17+ within 22.x or 24.2+ within 24.x — runs the latest published, prebuilt FLUJO with no clone or build. Data lives in <code>~/.flujo</code>; some MCP servers may still need <code>git</code> / <code>python</code> / <code>uv</code> on your PATH.</p>
       </div>
       <div class="tab-panel" data-panel="docker">
         <div class="codebox">
@@ -830,12 +852,13 @@ footer {
           <code>git clone https://github.com/mario-andreschak/FLUJO.git &amp;&amp; cd FLUJO &amp;&amp; docker compose up --build</code>
           <button class="copy-btn" data-copy="git clone https://github.com/mario-andreschak/FLUJO.git && cd FLUJO && docker compose up --build">Copy</button>
         </div>
-        <p class="note">Your flows, keys, and MCP servers persist in named volumes across restarts. The port is bound to localhost only — FLUJO has no auth layer, so don't publish it without a reverse proxy. To update later, <code>git pull</code> then re-run the same command — <code>--build</code> rebuilds the image with the new code (plain <code>docker compose up</code> would reuse the cached image and silently run the old version).</p>
+        <p class="note">Your flows, keys, and MCP servers persist in named volumes across restarts. The default local profile binds to localhost only. For deliberate network access, follow the <a href="https://github.com/mario-andreschak/FLUJO/blob/main/docs/start-here/network.md">network setup guide</a> and use an authenticating reverse proxy. To update later, <code>git pull</code> then re-run the same command — <code>--build</code> rebuilds the image with the new code (plain <code>docker compose up</code> would reuse the cached image and silently run the old version).</p>
       </div>
     </div>
     <p style="margin-top: 18px; color: var(--text-dim); font-size: 0.9rem;">
       The Windows / Linux / macOS installers also set up everything FLUJO needs — Git, Node.js, Python &amp; uv. Then open
       <code style="color:#a5f3fc">http://localhost:4200</code>.
+      <a href="/start/">Read the setup guide</a> for installation choices, updates, data locations, and troubleshooting.
     </p>
   </div>
   <div class="scroll-hint" aria-hidden="true">▾</div>
@@ -911,6 +934,47 @@ footer {
   </div>
 </section>
 
+<!-- ============ EXAMPLES AND TUTORIALS ============ -->
+<section id="examples" aria-labelledby="examples-title">
+  <div class="container">
+    <h2 class="section-title reveal" id="examples-title">Examples &amp; Tutorials</h2>
+    <p class="section-sub reveal">Follow a real project from setup to a useful result, with step-by-step guides and recorded demonstrations.</p>
+    <div class="features-grid">
+      <article class="feature-card example-card reveal">
+        <a href="/guides/website-builder/">
+          <img src="/film/media/walkthrough/act4-site-desktop-hero.png" alt="The workshop website built and reviewed with a FLUJO Website Builder agent" width="1600" height="1000" loading="lazy">
+          <h3>Build a website. Keep the builder.</h3>
+          <p>Connect your AI and file tools, save a reusable Website Builder agent, then give it a brief. Open the website, review it, and ask for improvements in the same chat.</p>
+          <span class="example-link">Follow the Website Builder tutorial →</span>
+        </a>
+      </article>
+      <article class="feature-card example-card reveal">
+        <a href="/guides/first-agent/">
+          <img src="/assets/journeys/07-verified-checklist.png" alt="A coffee preparation checklist made by a FLUJO reading helper" width="1600" height="1000" loading="lazy">
+          <h3>Try a coffee-reading helper.</h3>
+          <p>Make your first assistant with a model and a web-reading tool. Turn a public coffee guide into a preparation checklist and check its sources.</p>
+          <span class="example-link">Follow the first-agent tutorial →</span>
+        </a>
+      </article>
+      <article class="feature-card example-card reveal">
+        <a href="/guides/persona/">
+          <img src="/assets/journeys/08-maya-review.png" alt="Maya's workspace for planning a coffee workshop in FLUJO" width="1600" height="1000" loading="lazy">
+          <h3>Meet Maya. Keep the plan moving.</h3>
+          <p>Follow an experimental persona through three compressed demonstration sessions, from a workshop idea to a plan, invitation draft, and run sheet.</p>
+          <span class="example-link">Follow Maya’s workshop →</span>
+        </a>
+      </article>
+    </div>
+    <div class="integrate-card tutorial-callout reveal">
+      <div>
+        <h3>Watch the guided walkthrough</h3>
+        <p>See the real steps: connect your AI and tools, create a Website Builder, build and improve a website, then explore personas and automation. Choose a chapter or playback speed as you follow along.</p>
+      </div>
+      <a class="btn btn-primary" href="/film/">Watch the walkthrough</a>
+    </div>
+  </div>
+</section>
+
 <!-- ============ SCREENSHOTS ============ -->
 <section id="screenshots" style="padding-top: 40px;">
   <div class="container">
@@ -938,7 +1002,7 @@ footer {
     <div class="integrate-grid">
       <div class="integrate-card reveal">
         <h3>Flows as OpenAI-compatible models</h3>
-        <p>Point Cline, Roo Code, Cursor, or any OpenAI-SDK client at FLUJO and select your flow as the model — any API key value works.</p>
+        <p>Point Cline, Roo Code, Cursor, or any OpenAI-SDK client at FLUJO and select your flow as the model — use the credentials required by your deployment. <a href="https://github.com/mario-andreschak/FLUJO/blob/main/docs/start-here/network.md">Network access setup</a>.</p>
         <div class="codebox"><code>Base URL:&nbsp; http://localhost:4200/v1<br>Model:&nbsp;&nbsp;&nbsp;&nbsp; flow-&lt;your-flow-name&gt;</code></div>
       </div>
       <div class="integrate-card reveal">
@@ -953,6 +1017,10 @@ footer {
 <!-- ============ FOOTER ============ -->
 <footer>
   <div class="footer-links">
+    <a href="#examples">Examples &amp; Tutorials</a>
+    <a href="/start/">Setup Guide</a>
+    <a href="/film/">Guided Walkthrough</a>
+    <a href="/compare/">Compare</a>
     <a href="https://github.com/mario-andreschak/FLUJO" target="_blank" rel="noopener">GitHub</a>
     <a href="https://discord.gg/KPyrjTSSat" target="_blank" rel="noopener">Discord</a>
     <a href="https://github.com/mario-andreschak/FLUJO/issues" target="_blank" rel="noopener">Issues</a>
@@ -973,7 +1041,33 @@ footer {
 <script>
 (function () {
   "use strict";
+  document.documentElement.classList.add("js");
   var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- mobile navigation ---------- */
+  var menuButton = document.querySelector(".menu-toggle");
+  var navigation = document.getElementById("site-nav");
+  function closeMenu(restoreFocus) {
+    navigation.classList.remove("is-open");
+    menuButton.setAttribute("aria-expanded", "false");
+    menuButton.textContent = "Menu";
+    if (restoreFocus) menuButton.focus();
+  }
+  menuButton.addEventListener("click", function () {
+    var open = menuButton.getAttribute("aria-expanded") !== "true";
+    menuButton.setAttribute("aria-expanded", String(open));
+    menuButton.textContent = open ? "Close" : "Menu";
+    navigation.classList.toggle("is-open", open);
+  });
+  navigation.addEventListener("click", function (event) {
+    if (event.target.closest("a")) closeMenu(false);
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && menuButton.getAttribute("aria-expanded") === "true") closeMenu(true);
+  });
+  window.matchMedia("(min-width: 901px)").addEventListener("change", function (event) {
+    if (event.matches) closeMenu(false);
+  });
 
   /* ---------- nav scroll state ---------- */
   var nav = document.getElementById("nav");

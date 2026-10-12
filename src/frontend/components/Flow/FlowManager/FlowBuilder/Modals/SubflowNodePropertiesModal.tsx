@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
-import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutlined';
 import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
@@ -241,14 +241,14 @@ export const SubflowNodePropertiesModal = ({
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           borderTop: 5,
           borderColor: 'warning.main',
           maxWidth: '95vw',
           maxHeight: '90vh',
         },
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={t('flows.modal.properties', { name: nodeData.label || t('flows.subflow.title') })}
@@ -546,7 +546,7 @@ export const SubflowNodePropertiesModal = ({
             <TextField
               fullWidth
               type="number"
-              inputProps={{ min: 1, step: 1 }}
+              slotProps={{ htmlInput: { min: 1, step: 1 } }}
               label={t('flows.subflow.sessionTurnCap')}
               value={sessionTurnCapValue}
               onChange={(event) => {

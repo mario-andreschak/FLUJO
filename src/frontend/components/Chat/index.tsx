@@ -10,7 +10,7 @@ import { useChatScrollNav } from '@/frontend/components/Chat/hooks/useChatScroll
 import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -5057,7 +5057,7 @@ const Chat: React.FC = () => {
           open={mobileSidebarOpen}
           onClose={() => setMobileSidebarOpen(false)}
           ModalProps={{ keepMounted: true }}
-          PaperProps={{
+          slotProps={{ paper: {
             sx: {
               width: 'min(86vw, 340px)',
               maxWidth: 'calc(100vw - 28px)',
@@ -5068,7 +5068,7 @@ const Chat: React.FC = () => {
               backdropFilter: 'blur(22px) saturate(140%)',
               boxShadow: '24px 0 70px rgba(0,0,0,.45)',
             },
-          }}
+          } }}
         >
           {sidebarPanelContent}
         </Drawer>
@@ -5197,7 +5197,7 @@ const Chat: React.FC = () => {
                   size="small"
                   autoFocus
                   fullWidth
-                  inputProps={{ maxLength: 200, 'aria-label': t('chat.page.conversationTitle') }}
+                  slotProps={{ htmlInput: { maxLength: 200, 'aria-label': t('chat.page.conversationTitle') } }}
                 />
               ) : (
                 <>
@@ -5707,7 +5707,7 @@ const Chat: React.FC = () => {
                       </Button>
                     }
                   >
-                    <Typography variant="body2" fontWeight={600}>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {detailedConversation.recovery.currentCheckpoint?.nodeId
                         ? t('chat.page.recoveryAtNode', { node: detailedConversation.recovery.currentCheckpoint.nodeId })
                         : t('chat.page.recovery')}
@@ -5842,6 +5842,15 @@ const Chat: React.FC = () => {
                   ? t('chat.page.selectOrCreate')
                   : t('chat.page.createToStart')}
               </Typography>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<BoltIcon />}
+                onClick={sidebarOpenQuickChat}
+                sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
+              >
+                {t('chat.page.quickChat')}
+              </Button>
               {flows.length > 0 && (
                 <Button
                   variant="contained"

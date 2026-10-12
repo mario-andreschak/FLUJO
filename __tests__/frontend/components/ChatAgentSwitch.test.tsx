@@ -9,6 +9,7 @@ const mockLoadFlows = jest.fn();
 const mockListConversations = jest.fn();
 const mockGetConversation = jest.fn();
 const mockCreateConversation = jest.fn();
+const mockSynthesizeQuickChat = jest.fn();
 const mockUpdateConversationPersonaTarget = jest.fn();
 const mockGetModelTurns = jest.fn();
 const mockGetModelTurnInspection = jest.fn();
@@ -27,6 +28,7 @@ async function inspectionFixture(value: unknown) {
 const mockSubscribeToEvents = jest.fn();
 const mockSubscribeToSidebarEvents = jest.fn();
 let mockInitialConversationId: string | null = 'conversation-current';
+let mockPhoneLayout = false;
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
@@ -34,7 +36,7 @@ jest.mock('next/navigation', () => ({
 
 jest.mock('@mui/material', () => ({
   ...jest.requireActual('@mui/material'),
-  useMediaQuery: () => false,
+  useMediaQuery: () => mockPhoneLayout,
 }));
 
 jest.mock('@/utils/storage', () => {
@@ -95,7 +97,7 @@ jest.mock('@/frontend/services/chat', () => {
       debugContinue: jest.fn(),
       debugStep: jest.fn(),
       setBreakpoints: jest.fn(),
-      synthesizeQuickChat: jest.fn(),
+      synthesizeQuickChat: (...args: unknown[]) => mockSynthesizeQuickChat(...args),
     },
   };
 });
@@ -123,16 +125,19 @@ jest.mock('@/frontend/components/Chat/ChatTargetSelector', () => ({
     selectedPersonaBehaviorSlotKey,
     onSelectFlow,
     onSelectPersona,
+    fullScreenPicker,
   }: {
     selectedPersonaId?: string | null;
     selectedPersonaBehaviorSlotKey?: string | null;
     onSelectFlow: (id: string) => void;
     onSelectPersona: (id: string, behaviorSlotKey: string) => void;
+    fullScreenPicker?: boolean;
   }) => (
     <div
       data-testid="target-selector"
       data-persona={selectedPersonaId ?? ''}
       data-behavior={selectedPersonaBehaviorSlotKey ?? ''}
+      data-full-screen={String(Boolean(fullScreenPicker))}
     >
       <button type="button" onClick={() => onSelectFlow('flow-writing')}>Choose Writing Agent</button>
       <button type="button" onClick={() => onSelectPersona('persona-ada', 'research')}>Choose Ada Persona</button>
@@ -172,7 +177,14 @@ jest.mock('@/frontend/components/Chat/DevCanvasDock', () => ({ __esModule: true,
 jest.mock('@/frontend/components/Chat/LiveRunIndicator', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/TodoDock', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/ConversationStats', () => ({ __esModule: true, default: () => null }));
-jest.mock('@/frontend/components/Chat/QuickChatDialog', () => ({ __esModule: true, default: () => null }));
+jest.mock('@/frontend/components/Chat/QuickChatDialog', () => ({
+  __esModule: true,
+  default: ({ open, onClose }: { open: boolean; onClose: () => void }) => open ? (
+    <div role="dialog" aria-label="Quick chat">
+      <button type="button" onClick={onClose}>Close Quick chat</button>
+    </div>
+  ) : null,
+}));
 jest.mock('@/frontend/components/Chat/DebuggerCanvas', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/ExecutedFlowPanel', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/shared/Spinner', () => ({ __esModule: true, default: () => null }));
@@ -221,6 +233,7 @@ describe('Talk conversation Agent switch terminology', () => {
   beforeEach(() => {
     Object.defineProperty(globalThis, 'TextDecoder', { value: TextDecoder, configurable: true });
     mockInitialConversationId = 'conversation-current';
+    mockPhoneLayout = false;
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       value: jest.fn(),
@@ -236,6 +249,7 @@ describe('Talk conversation Agent switch terminology', () => {
     mockListConversations.mockReset().mockResolvedValue([conversationSummary]);
     mockGetConversation.mockReset().mockResolvedValue(detailedConversation);
     mockCreateConversation.mockReset();
+    mockSynthesizeQuickChat.mockReset();
     mockUpdateConversationPersonaTarget.mockReset();
     mockGetModelTurns.mockReset().mockResolvedValue({ turns: [] });
     mockGetModelTurnInspection.mockReset();
@@ -318,6 +332,58 @@ describe('Talk conversation Agent switch terminology', () => {
     expect(await screen.findByText('Create a new conversation to start chatting.')).toBeInTheDocument();
     expect(screen.queryByText('Loading chat…')).not.toBeInTheDocument();
     expect(mockGetConversation).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('opens Quick chat from an empty phone with saved agents: %s', async (hasSavedAgents) => {
+    mockPhoneLayout = true;
+    mockInitialConversationId = null;
+    mockListConversations.mockResolvedValue([]);
+    if (!hasSavedAgents) mockLoadFlows.mockResolvedValue([]);
+    render(<Chat />);
+
+    const quickChat = await screen.findByRole('button', { name: 'Quick chat' });
+    expect(screen.getByTestId('target-selector')).toHaveAttribute('data-full-screen', 'true');
+    if (hasSavedAgents) expect(screen.getByRole('button', { name: 'New conversation' })).toBeInTheDocument();
+    else expect(screen.queryByRole('button', { name: 'New conversation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Quick chat' })).not.toBeInTheDocument();
+
+    fireEvent.click(quickChat);
+    expect(await screen.findByRole('dialog', { name: 'Quick chat' })).toBeInTheDocument();
+    expect(mockCreateConversation).not.toHaveBeenCalled();
+    expect(mockSynthesizeQuickChat).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Quick chat' }));
+    expect(screen.queryByRole('dialog', { name: 'Quick chat' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Quick chat' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['New conversation', 'flow-research'],
+    ['Choose Writing Agent', 'flow-writing'],
+    ['Choose Ada Persona', null],
+  ] as const)('preserves %s from the empty phone', async (buttonName, flowId) => {
+    mockPhoneLayout = true;
+    mockInitialConversationId = null;
+    mockListConversations.mockResolvedValue([]);
+    if (flowId === null) mockLoadFlows.mockResolvedValue([]);
+    const createdSummary = {
+      ...conversationSummary,
+      id: 'conversation-phone',
+      flowId,
+      ...(flowId === null ? { personaId: 'persona-ada', personaBehaviorSlotKey: 'research' } : {}),
+    };
+    mockCreateConversation.mockResolvedValue(createdSummary);
+    mockGetConversation.mockResolvedValue({ ...createdSummary, messages: [] });
+    render(<Chat />);
+
+    fireEvent.click(await screen.findByRole('button', { name: buttonName }));
+    await waitFor(() => expect(mockCreateConversation).toHaveBeenCalledTimes(1));
+    expect(mockCreateConversation).toHaveBeenCalledWith(expect.objectContaining({
+      flowId,
+      ...(flowId === null ? { personaTargetId: 'persona-ada', personaBehaviorSlotKey: 'research' } : {}),
+    }));
+    expect(mockSynthesizeQuickChat).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: 'Quick chat' })).not.toBeInTheDocument();
+    expect(await screen.findByTestId('chat-input')).toHaveAttribute('data-disabled', 'false');
   });
 
   it('renders the current transcript in Live and the archived snapshot in History', async () => {

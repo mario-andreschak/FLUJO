@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+// The existing runtime-contract CI gate also covers the opt-in application updater.
+import './node-runtime-update.test.mjs';
 import { assertSupportedNodeRuntime, isSupportedNodeRuntime, SUPPORTED_NODE_RANGE } from '../bin/node-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,8 +65,10 @@ test('all six tracked engines and corresponding lock entries declare the closed 
   }
 });
 
-test('public entry points import the preflight before other dependencies', () => {
-  for (const file of ['bin/flujo.mjs', ...servers.map((server) => `mcp-servers/${server}/src/index.ts`)]) {
+test('public entry points import the appropriate preflight before other dependencies', () => {
+  assert.match(readFileSync(path.join(root, 'bin/flujo.mjs'), 'utf8').match(/^import .*$/m)?.[0], /^import '\.\/app-node-runtime-preflight\.mjs';\r?$/);
+  assert.match(readFileSync(path.join(root, 'scripts/launch-next.mjs'), 'utf8').match(/^import .*$/m)?.[0], /^import '\.\.\/bin\/app-node-runtime-preflight\.mjs';\r?$/);
+  for (const file of servers.map((server) => `mcp-servers/${server}/src/index.ts`)) {
     const source = readFileSync(path.join(root, file), 'utf8');
     const firstImport = source.match(/^import .*$/m)?.[0];
     assert.match(firstImport, /^import '(\.\/|\.\.\/\.\.\/\.\.\/bin\/)node-runtime-preflight\.mjs';\r?$/, file);

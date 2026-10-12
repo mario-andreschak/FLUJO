@@ -147,6 +147,7 @@ describe('direct workspace layout migration', () => {
       write('mcp-servers/bash/src/index.ts', 'canonical-source'),
       write('mcp-servers/shared/src/index.ts', 'canonical-shared'),
       write('mcp-servers/embed-shared.mjs', 'canonical-build-helper'),
+      write('mcp-servers/embed-runtime.mjs', 'canonical-runtime-helper'),
       write('mcp-servers/custom-server/config.json', 'custom-data'),
       write('workspaces/default-workspace/mcp-servers/bash/src/index.ts', 'workspace-edit'),
     ]);
@@ -159,6 +160,9 @@ describe('direct workspace layout migration', () => {
       .resolves.toBe('canonical-shared');
     await expect(fs.readFile(path.join(dataRoot, 'mcp-servers/embed-shared.mjs'), 'utf8'))
       .resolves.toBe('canonical-build-helper');
+    await expect(fs.readFile(path.join(dataRoot, 'mcp-servers/embed-runtime.mjs'), 'utf8'))
+      .resolves.toBe('canonical-runtime-helper');
+    await expect(exists(path.join(workspaceRoot(), 'mcp-servers/embed-runtime.mjs'))).resolves.toBe(false);
     await expect(fs.readFile(path.join(workspaceRoot(), 'mcp-servers/bash/src/index.ts'), 'utf8'))
       .resolves.toBe('workspace-edit');
     await expect(fs.readFile(path.join(workspaceRoot(), 'mcp-servers/custom-server/config.json'), 'utf8'))

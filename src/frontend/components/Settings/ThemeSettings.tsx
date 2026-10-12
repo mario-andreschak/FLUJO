@@ -156,7 +156,7 @@ export default function ThemeSettings() {
                     : 'none',
                 }}
               >
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                   <Box sx={{ width: 50, height: 8, borderRadius: 999, bgcolor: option.text, opacity: 0.18 }} />
                   <Box sx={{ width: 8, height: 8, ml: 'auto !important', borderRadius: '50%', bgcolor: option.accent }} />
                 </Stack>
@@ -183,10 +183,10 @@ export default function ThemeSettings() {
                 </Box>
               </Box>
 
-              <Stack direction="row" spacing={1.2} alignItems="flex-start" sx={{ p: 1.7 }}>
+              <Stack direction="row" spacing={1.2} sx={{ alignItems: "flex-start",  p: 1.7 }}>
                 <Icon sx={{ mt: 0.15, color: selected ? 'primary.main' : 'text.secondary' }} />
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Stack direction="row" spacing={0.8} alignItems="center" useFlexGap flexWrap="wrap">
+                  <Stack direction="row" spacing={0.8} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
                     <Typography variant="subtitle2" sx={{ fontWeight: visualStyle === 'modern' ? 720 : 600 }}>
                       {t(option.labelKey)}
                     </Typography>

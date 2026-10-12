@@ -502,13 +502,13 @@ export default function ModelClient() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             inputRef={searchInputRef}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -588,6 +588,7 @@ export default function ModelClient() {
           submitLabel={t('models.agent.saveAndOpen')}
           submittingLabel={t('models.agent.saving')}
           connectedServersOnly
+          selectApps
         />
       )}
 

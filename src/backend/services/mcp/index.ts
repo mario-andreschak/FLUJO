@@ -47,6 +47,9 @@ declare global {
   // able to see that a startup is in progress so it can report "connecting"
   // instead of a misleading "configured but not connected" error.
   var __mcp_connecting: Set<string> | undefined;
+  // Startup and status routes may use different service instances. Keep expected
+  // execution-approval failures visible and warning deduplication shared by both.
+  var __mcp_approval_failures: Map<string, MCPServiceResponse> | undefined;
   // True from process boot until startEnabledServers() finishes its first sweep.
   var __mcp_starting_up: boolean | undefined;
   var __mcp_starting_up_by_workspace: Map<string, boolean> | undefined;
@@ -77,6 +80,9 @@ if (typeof global.__mcp_clients === "undefined") {
 }
 if (typeof global.__mcp_connecting === "undefined") {
   global.__mcp_connecting = new Set<string>();
+}
+if (typeof global.__mcp_approval_failures === "undefined") {
+  global.__mcp_approval_failures = new Map<string, MCPServiceResponse>();
 }
 if (typeof global.__mcp_starting_up === "undefined") {
   global.__mcp_starting_up = true;
@@ -365,9 +371,8 @@ export class MCPService {
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
   private lastConnectionErrorBase: Map<string, string> = new Map();
-  private approvalFailuresBase: Map<string, MCPServiceResponse> = new Map();
   private get approvalFailures(): Map<string, MCPServiceResponse> {
-    return scopedRegistry('approvalFailures', this.approvalFailuresBase);
+    return scopedRegistry('approvalFailures', global.__mcp_approval_failures!);
   }
   private get lastConnectionError(): Map<string, string> {
     return scopedRegistry("lastConnectionError", this.lastConnectionErrorBase);

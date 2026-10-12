@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "patchright": "1.61.1"
+    "patchright": "1.63.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

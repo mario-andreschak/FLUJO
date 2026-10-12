@@ -68,7 +68,7 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
       </Typography>
 
       {/* ${var:NAME} — run-scoped scratchpad (Tier 2c) */}
-      <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start",  mb: 2 }}>
         <TextField
           fullWidth
           size="small"
@@ -96,7 +96,7 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
       </Stack>
 
       {/* ${res:NAME} — run resource (Tier 3) */}
-      <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start",  mb: 2 }}>
         <TextField
           fullWidth
           size="small"
@@ -119,7 +119,7 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
       </Stack>
 
       {/* ${kv:NAME} — cross-run persistent kv (Tier 4) */}
-      <Stack direction="row" spacing={1} alignItems="flex-start">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
         <TextField
           select
           size="small"

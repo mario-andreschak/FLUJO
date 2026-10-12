@@ -85,14 +85,20 @@ export default function McpAiConnectionPanel({
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(false);
   const installingRef = useRef(false);
+  const modelsLoadingRef = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
+    modelsLoadingRef.current = true;
     setModelsLoading(true);
     setModelsFailed(false);
-    modelService.loadModels()
+    modelService.tryLoadModels()
       .then((loaded) => {
         if (cancelled) return;
+        if (loaded === null) {
+          setModelsFailed(true);
+          return;
+        }
         const textModels = loaded.filter(supportsMcpModelRiskAssessment);
         setModels(textModels);
         setModelId((current) => textModels.some((model) => model.id === current) ? current : textModels[0]?.id ?? '');
@@ -101,7 +107,10 @@ export default function McpAiConnectionPanel({
         if (!cancelled) setModelsFailed(true);
       })
       .finally(() => {
-        if (!cancelled) setModelsLoading(false);
+        if (!cancelled) {
+          modelsLoadingRef.current = false;
+          setModelsLoading(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -122,7 +131,7 @@ export default function McpAiConnectionPanel({
   );
 
   const startResearch = async () => {
-    if (!query.trim() || installingRef.current || abortRef.current) return;
+    if (!query.trim() || modelsLoading || modelsLoadingRef.current || installingRef.current || abortRef.current) return;
     const controller = new AbortController();
     abortRef.current = controller;
     const ownsResearch = () => mountedRef.current && abortRef.current === controller && !controller.signal.aborted;
@@ -217,12 +226,14 @@ export default function McpAiConnectionPanel({
       if (!installResult.installed || !installResult.serverName) {
         throw new Error(installResult.error || t('mcp.ai.installFailed'));
       }
-      setSuccess(installResult.alreadyExisted
-        ? t('mcp.ai.alreadyConnected', { name: installResult.serverName })
-        : t('mcp.ai.connected', { name: installResult.serverName }));
       if (installResult.needsAuthentication) await onAuthenticate(installResult.serverName);
       if (!mountedRef.current) return;
       await onInstalled(installResult.serverName);
+      if (!mountedRef.current) return;
+      // Saving the connection alone does not complete sign-in or its handoff.
+      setSuccess(installResult.alreadyExisted
+        ? t('mcp.ai.alreadyConnected', { name: installResult.serverName })
+        : t('mcp.ai.connected', { name: installResult.serverName }));
     } catch (cause) {
       if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -269,7 +280,7 @@ export default function McpAiConnectionPanel({
             placeholder={t('mcp.ai.placeholder')}
             label={t('mcp.ai.requestLabel')}
             disabled={working || installing}
-            inputProps={{ maxLength: 400 }}
+            slotProps={{ htmlInput: { maxLength: 400 } }}
           />
           <Box sx={{ display: 'flex', gap: 1.2, alignItems: 'center', flexWrap: 'wrap' }}>
             <FormControl size="small" sx={{ minWidth: 230, flex: { xs: '1 1 100%', sm: '0 1 300px' } }}>
@@ -289,6 +300,7 @@ export default function McpAiConnectionPanel({
             <Button
               variant="contained"
               size="large"
+              sx={{ minHeight: 48 }}
               startIcon={working ? <CircularProgress size={18} color="inherit" /> : <SearchRoundedIcon />}
               onClick={() => void startResearch()}
               disabled={working || installing || modelsLoading || !query.trim()}
@@ -302,14 +314,18 @@ export default function McpAiConnectionPanel({
       {!modelsLoading && (modelsFailed || models.length === 0) ? (
         <Alert severity={modelsFailed ? 'error' : 'info'}>
           {t(modelsFailed ? 'mcp.ai.modelsFailed' : 'mcp.ai.noTextModels')}
-          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button onClick={() => {
-              if (installingRef.current || abortRef.current) return;
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+            <Button variant="outlined" onClick={() => {
+              if (modelsLoadingRef.current || installingRef.current || abortRef.current) return;
+              // Claim loading before the effect so Enter in the same update
+              // cannot submit a missing model while the retry is starting.
+              modelsLoadingRef.current = true;
+              setModelsLoading(true);
               setModelLoadAttempt((attempt) => attempt + 1);
-            }} disabled={working || installing}>
+            }} disabled={working || installing} sx={{ minHeight: 44 }}>
               {t('mcp.ai.retryModels')}
             </Button>
-            <Button onClick={openManual} disabled={working || installing}>{t('mcp.ai.openManual')}</Button>
+            <Button onClick={openManual} disabled={working || installing} sx={{ minHeight: 44 }}>{t('mcp.ai.openManual')}</Button>
           </Stack>
         </Alert>
       ) : null}
@@ -423,7 +439,7 @@ export default function McpAiConnectionPanel({
                       }}
                       error={!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(serverName)}
                       helperText={t('mcp.ai.connectionNameHelper')}
-                      inputProps={{ maxLength: 64 }}
+                      slotProps={{ htmlInput: { maxLength: 64 } }}
                     />
                     <Box>
                       <Typography variant="caption" color="text.secondary">

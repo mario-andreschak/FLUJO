@@ -63,7 +63,7 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
           fullWidth
           label={t('automations.webhook.url')}
           value={url}
-          InputProps={{ readOnly: true }}
+          slotProps={{ input: { readOnly: true } }}
           size="small"
         />
         <Tooltip title={t('automations.webhook.copyUrl')}>
@@ -77,7 +77,7 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
           fullWidth
           label={t('automations.webhook.secretToken')}
           value={config.token}
-          InputProps={{ readOnly: true }}
+          slotProps={{ input: { readOnly: true } }}
           size="small"
           type="password"
         />
