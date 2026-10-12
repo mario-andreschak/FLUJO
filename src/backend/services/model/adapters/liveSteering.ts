@@ -1,5 +1,14 @@
 import type { CompletionInput, ModelSteering, SteeringDelivery } from './types';
 
+/** The transport may have accepted this input. Preserve the held delivery for
+ * explicit reconciliation; returning it automatically would replay it. */
+export class UncertainSteeringSubmissionError extends Error {
+  constructor(cause: unknown) {
+    super('The correction may have reached Codex. Check the saved turn before sending it again.', { cause });
+    this.name = 'UncertainSteeringSubmissionError';
+  }
+}
+
 /** Keep the old direct-adapter seam usable; production supplies the fenced source. */
 export function steeringSource(input: CompletionInput): ModelSteering | undefined {
   if (input.steering) return input.steering;
@@ -34,7 +43,7 @@ export function watchSteering({ source, canDeliver, deliver, onError }: {
         if (!active || !canDeliver()) { batch.requeue(); return; }
         await deliver(batch);
       } catch (error) {
-        batch?.requeue();
+        if (!(error instanceof UncertainSteeringSubmissionError)) batch?.requeue();
         active = false;
         onError(error);
       } finally {

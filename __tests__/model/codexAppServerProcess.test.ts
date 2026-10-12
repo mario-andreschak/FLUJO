@@ -21,6 +21,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   if(mode==='silent')return;
   if(mode==='malformed'){process.stdout.write('{invalid\\n');return;}
   if(mode==='unknown'){process.stdout.write(JSON.stringify({id:m.id+100,result:{}})+'\\n');return;}
+  if(mode==='dualerror'){process.stdout.write(JSON.stringify({id:m.id,result:{},error:{code:-32600,message:'invalid'}})+'\\n');return;}
+  if(mode==='bareerror'){process.stdout.write(JSON.stringify({id:m.id,error:{code:-32600}})+'\\n');return;}
   if(mode==='coalesced'){
     process.stdout.write(JSON.stringify({id:m.id,result:{method:m.method}})+'\\n'+
       JSON.stringify({method:'first',params:{}})+'\\n'+JSON.stringify({method:'second',params:{}})+'\\n');return;
@@ -138,7 +140,7 @@ it('bounds stalled admission while retaining separate exit and close evidence',a
   expect(await wire()).toBe('');
 });
 
-it.each(['malformed','unknown'])('rejects %s responses and confirms owned process closure',async mode=>{
+it.each(['malformed','unknown','dualerror','bareerror'])('rejects %s responses and confirms owned process closure',async mode=>{
   const child=await startOwnedCodexAppServer(options(mode));children.push(child);
   await expect(child.request('initialize',{})).rejects.toThrow('unavailable');
   await child.registration.exit;await child.registration.close;
