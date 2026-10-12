@@ -34,7 +34,9 @@ const WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 900;
 // Allow cold Windows PowerShell startup more time without slowing foreign-PID
 // observations in the contention loop. All supported platforms share a bounded
 // retry sequence; only the Windows per-probe timeout changes for our own PID.
-const OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 3_000;
+// A cold shell can take more than three seconds on a busy Windows host. This
+// one-time bootstrap remains bounded and must still produce a valid identity.
+const OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 10_000;
 const OWN_PROCESS_BIRTH_PROBE_ATTEMPTS = 3;
 const OWN_PROCESS_BIRTH_PROBE_RETRY_MS = 100;
 const PROCESS_BIRTH_MARKER_SUPPORTED = ['darwin', 'linux', 'win32'].includes(process.platform);
