@@ -4,6 +4,27 @@ This section provides detailed documentation for Flujo's features.
 
 - **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets
 
+## Quick Chat
+
+Choose a model and describe your request. Quick Chat automatically exposes
+`discover_capabilities`, `list_mcp_servers`, `list_mcp_server_tools`,
+`call_mcp_tool`, `list_flows`, `explain_flow`, `read_flow`, and `execute_flow`.
+The model finds relevant connected apps or saved agents, inspects their schemas
+or definitions, and invokes them as needed. Setup no longer requires choosing
+servers or individual tools. Optional system instructions remain available.
+
+The backend resolves the bundled FLUJO connection by package identity, including
+renamed connections. A missing or disabled FLUJO connection produces a recovery
+message. Ordinary setup does not inventory downstream tools or flows. Each new
+conversation carries its own ephemeral flow snapshot; existing conversations
+retain their original snapshots. Execution continues through the existing MCP
+and flow runtime and the chat's tool-approval setting.
+
+Ask FLUJO and the World guide share this discovery bootstrap and retain their
+direct page-action tool. World conversations targeting a saved flow or Persona
+use that target's authored configuration. Model-to-agent conversion still uses
+explicit app/tool selections and creates a saved flow.
+
 ## Workspaces
 
 - **[Workspaces](./workspaces.md)**: Independent sets of flows, models, conversations and MCP servers inside one installation — on-disk layout, migration from a pre-workspace install, the optional `workspace` API parameter, and the navbar tabs (Issue #406)

@@ -29,6 +29,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import type { Model } from '@/shared/types/model';
+import { materializeFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -71,6 +72,8 @@ interface QuickChatDialogProps {
   submittingLabel?: string;
   /** Saved-agent conversion only permits servers confirmed connected now. */
   connectedServersOnly?: boolean;
+  /** Saved-agent authoring retains explicit app/tool selection. */
+  selectApps?: boolean;
 }
 
 const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
@@ -88,9 +91,11 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   submitLabel,
   submittingLabel,
   connectedServersOnly = false,
+  selectApps = false,
 }) => {
   const { t, tp } = useI18n();
   const [models, setModels] = useState<Model[]>([]);
+  const [needsToolModel, setNeedsToolModel] = useState(false);
   const [serverNames, setServerNames] = useState<string[]>([]);
   const [loadingLists, setLoadingLists] = useState(false);
   const [listsLoaded, setListsLoaded] = useState(false);
@@ -105,7 +110,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
-  // Load models + configured (non-disabled) servers when the dialog opens.
+  // Ordinary chat only needs a model. Saved-agent authoring also loads apps.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -116,7 +121,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       try {
         const [loadedModels, serverConfigs] = await Promise.all([
           modelService.tryLoadModels(),
-          mcpService.loadServerConfigs(),
+          selectApps ? mcpService.loadServerConfigs() : Promise.resolve([]),
         ]);
         if (cancelled) return;
         if (!Array.isArray(loadedModels) || !Array.isArray(serverConfigs)) throw new Error('Chat setup unavailable');
@@ -134,11 +139,17 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
               .map(({ name }) => name)
           : configuredNames;
         if (cancelled) return;
-        setModels(loadedModels);
+        const availableModels = selectApps ? loadedModels : loadedModels.filter(model =>
+          materializeFallbackPolicy(model, loadedModels).supportsTools !== false);
+        setModels(availableModels);
+        setNeedsToolModel(loadedModels.length > 0 && availableModels.length === 0);
         setServerNames(names);
         setListsLoaded(true);
         // Default the model to the first available one so a user can start in two clicks.
-        setModelId(prev => initialModelId || prev || loadedModels[0]?.id || '');
+        setModelId(prev => {
+          const preferred = initialModelId || prev;
+          return availableModels.some(model => model.id === preferred) ? preferred : availableModels[0]?.id || '';
+        });
       } catch (err) {
         if (!cancelled) {
           log.warn('Failed to load models/servers for quick chat', err);
@@ -149,7 +160,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [connectedServersOnly, initialModelId, listAttempt, open, t]);
+  }, [connectedServersOnly, initialModelId, listAttempt, open, selectApps, t]);
 
   // A response from a closed dialog must not replace a later session's choices.
   useEffect(() => () => { toolLoadGeneration.current += 1; }, [open]);
@@ -270,7 +281,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
       />
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {needsAi ? t('chat.quick.noModels') : (helpText ?? t('chat.quick.help'))}
+          {needsAi ? t(needsToolModel ? 'chat.quick.toolModelRequired' : 'chat.quick.noModels') : (helpText ?? t('chat.quick.help'))}
         </Typography>
 
         {needsAi ? (
@@ -290,7 +301,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
             <FormControl
               fullWidth
               size="small"
-              sx={{ mb: 2 }}
+              sx={{ mb: 2, '& .MuiSelect-select': { minHeight: '24px', py: 1.25 } }}
               disabled={loadingLists || lockModelSelection}
             >
               <InputLabel id="quick-chat-model-label">{t('chat.quick.model')}</InputLabel>
@@ -340,6 +351,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
               sx={{ mb: 2 }}
             />
 
+            {selectApps && <>
             <Divider sx={{ mb: 1 }} />
             <Typography variant="subtitle2" gutterBottom>
               {serversLabel ?? t('chat.quick.servers')}
@@ -427,17 +439,19 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
                 );
               })
             )}
+            </>}
 
             {startError && <Alert severity="error" sx={{ mt: 2 }}>{startError}</Alert>}
           </>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={starting}>{t('common.cancel')}</Button>
+        <Button onClick={onClose} disabled={starting} sx={{ minHeight: 44 }}>{t('common.cancel')}</Button>
         {!needsAi && <Button
           variant="contained"
           onClick={handleStart}
           disabled={!canStart}
+          sx={{ minHeight: 44 }}
           startIcon={starting ? <CircularProgress size={16} color="inherit" /> : undefined}
         >
           {starting
