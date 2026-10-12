@@ -55,6 +55,91 @@ function renderWizard(overrides?: Partial<React.ComponentProps<typeof ModelConne
 }
 
 describe('ModelConnectionWizard', () => {
+  it('retries a failed connection save without downloading the completed Ollama model again', async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation((url: string) => Promise.resolve(url === '/api/local-models/pull'
+      ? installerResponse('fixture-model', true)
+      : { ok: true, json: async () => url === '/api/local-models/capability'
+        ? { enabled: true, ollamaReachable: true, ollamaUrl: 'http://localhost:11434', platform: 'win32', suggestedModel: 'fixture-model', installedModels: [] }
+        : { platform: 'win32', installMode: 'git', oneClickInstall: true } }));
+    let attempts = 0;
+    const onCreateModels = jest.fn(async (models: Model[]) => ++attempts === 1
+      ? { success: false, created: [], existing: [], error: 'Connection save interrupted' }
+      : { success: true, created: models, existing: [] });
+    renderWizard({ onCreateModels });
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download fixture-model and connect' }));
+    expect(await screen.findByText('Connection save interrupted')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveFocus();
+    const retry = screen.getByRole('button', { name: 'Connect fixture-model' });
+    expect(retry).toBeEnabled();
+    expect(screen.getByText('Ollama is ready and this model is already downloaded.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect fixture-model' }));
+    expect(await screen.findByRole('heading', { name: /AI connections saved/i })).toHaveFocus();
+    expect(onCreateModels).toHaveBeenCalledTimes(2);
+    expect(onCreateModels.mock.calls[1][0]).toEqual([expect.objectContaining({
+      provider: 'ollama', name: 'fixture-model', baseUrl: 'http://localhost:11434/v1',
+    })]);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/local-models/pull')).toHaveLength(1);
+  });
+
+  it.each(['failed', 'missing result', 'broken stream'])('keeps the download retry after a %s Ollama pull', async (outcome) => {
+    const fetchMock = global.fetch as jest.Mock;
+    let pulls = 0;
+    fetchMock.mockImplementation((url: string) => Promise.resolve(url === '/api/local-models/pull'
+      ? ++pulls > 1 ? installerResponse('fixture-model', true)
+        : outcome === 'failed' ? installerResponse('fixture-model', false)
+          : { ok: true, body: new ReadableStream({ start(controller) {
+            if (outcome === 'broken stream') controller.error(new Error('Download interrupted'));
+            else { controller.enqueue(Buffer.from('{"type":"stdout","data":"still downloading"}\n')); controller.close(); }
+          } }) }
+      : { ok: true, json: async () => url === '/api/local-models/capability'
+        ? { enabled: true, ollamaReachable: true, ollamaUrl: 'http://localhost:11434', platform: 'win32', suggestedModel: 'fixture-model', installedModels: [] }
+        : { platform: 'win32', installMode: 'git', oneClickInstall: true } }));
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+    fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download fixture-model and connect' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled());
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveFocus();
+    expect(props.onCreateModels).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Connect fixture-model' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download fixture-model and connect' }));
+    expect(await screen.findByRole('heading', { name: /AI connections saved/i })).toHaveFocus();
+    expect(pulls).toBe(2);
+    expect(props.onCreateModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a successful pull from a closed session when the wizard reopens', async () => {
+    let complete!: (value: Response) => void;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => url === '/api/local-models/pull'
+      ? new Promise<Response>(resolve => { complete = resolve; })
+      : Promise.resolve({ ok: true, json: async () => url === '/api/local-models/capability'
+        ? { enabled: true, ollamaReachable: true, ollamaUrl: 'http://localhost:11434', platform: 'win32', suggestedModel: 'fixture-model', installedModels: [] }
+        : { platform: 'win32', installMode: 'git', oneClickInstall: true } }));
+    const props = renderWizard();
+    const chooseLocal = () => {
+      fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+      fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+      fireEvent.click(screen.getByRole('heading', { name: /^Offline$/i }).closest('button')!);
+    };
+    chooseLocal();
+    fireEvent.click(await screen.findByRole('button', { name: 'Download fixture-model and connect' }));
+    props.setOpen(false);
+    props.setOpen(true);
+    chooseLocal();
+    await act(async () => complete(installerResponse('fixture-model', true)));
+    expect(await screen.findByRole('button', { name: 'Download fixture-model and connect' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Connect fixture-model' })).not.toBeInTheDocument();
+    expect(props.onCreateModels).not.toHaveBeenCalled();
+  });
+
   it('focuses and names each new question immediately, including Back and reopening', () => {
     const props = renderWizard();
     const expectQuestion = () => {
