@@ -305,7 +305,16 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const handleCopyServerJson = () => {
     const base = typeof window !== "undefined" ? window.location.origin : "";
     navigator.clipboard.writeText(
-      buildSingleServerJson(name, serverConfig, base, 'claude', getSelectedWorkspace()),
+      buildSingleServerJson(
+        name,
+        // The visible controls follow local exposure state while the parent
+        // refreshes. Keep export on the same state so stale props cannot copy
+        // the upstream connection or its credentials after exposure succeeds.
+        serverConfig ? { ...serverConfig, exposeAsMcpServer: exposed } : undefined,
+        base,
+        'claude',
+        getSelectedWorkspace(),
+      ),
     );
     setToastMessage(t("mcp.card.jsonCopied"));
     setToastSeverity("success");
