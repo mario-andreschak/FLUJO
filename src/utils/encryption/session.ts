@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
+import { invalidateOperatorKeyring } from './operatorKeyringCache';
 
 const log = createLogger('utils/encryption/session');
 
@@ -70,6 +71,7 @@ function serverDeks(): Map<string, string | null> {
  * @returns The session token
  */
 export function createSession(dek: string): string {
+  invalidateOperatorKeyring();
   // Generate a unique token
   const token = uuidv4();
   const now = Date.now();
@@ -113,6 +115,7 @@ export function getDekFromSession(token: string): string | null {
   if (now - session.createdAt > SESSION_EXPIRATION_MS) {
     log.warn('Encryption session expired');
     sessions.delete(token);
+    invalidateOperatorKeyring();
     return null;
   }
   
@@ -130,6 +133,7 @@ export function invalidateSession(token: string): void {
   const sessions = sessionsForWorkspace();
   if (sessions.has(token)) {
     sessions.delete(token);
+    invalidateOperatorKeyring();
     log.info('Invalidated encryption session');
   }
 }
@@ -149,6 +153,7 @@ export function invalidateSession(token: string): void {
  * @param dek A serialized v2 keyring or effective legacy key (hex string).
  */
 export function unlockServer(dek: string): void {
+  invalidateOperatorKeyring();
   const workspace = getCurrentWorkspace();
   global.__flujo_worker_transfer_provenance?.delete(workspace);
   if (workspace === DEFAULT_WORKSPACE) global.__flujo_server_dek = dek;
@@ -160,6 +165,7 @@ export function unlockServer(dek: string): void {
  * Clear the server unlock state (re-lock the server).
  */
 export function lockServer(): void {
+  invalidateOperatorKeyring();
   const workspace = getCurrentWorkspace();
   global.__flujo_worker_transfer_provenance?.delete(workspace);
   if (workspace === DEFAULT_WORKSPACE) global.__flujo_server_dek = null;
@@ -187,6 +193,7 @@ export function getServerDek(): string | null {
 /** Internal state installed only after secure.ts validates a worker transfer. */
 export function recordWorkerTransferProvenance(value: WorkerTransferProvenance): void {
   if (value.workspace !== getCurrentWorkspace()) throw new Error('Worker transfer workspace mismatch');
+  invalidateOperatorKeyring();
   (global.__flujo_worker_transfer_provenance ??= new Map()).set(value.workspace, Object.freeze({ ...value }));
 }
 
@@ -201,17 +208,21 @@ function cleanupExpiredSessions(): void {
   const now = Date.now();
   let expiredCount = 0;
 
-  const stores = [
-    global.__flujo_encryption_sessions,
-    ...Array.from(global.__flujo_encryption_sessions_by_workspace?.values() ?? []),
-  ].filter((value): value is Map<string, EncryptionSession> => !!value);
-  for (const sessions of stores) {
+  const stores: Array<[string, Map<string, EncryptionSession> | undefined]> = [
+    [DEFAULT_WORKSPACE, global.__flujo_encryption_sessions],
+    ...Array.from(global.__flujo_encryption_sessions_by_workspace?.entries() ?? []),
+  ];
+  for (const [workspace, sessions] of stores) {
+    if (!sessions) continue;
+    let observedExpiry = false;
     for (const [token, session] of sessions.entries()) {
       if (now - session.createdAt > SESSION_EXPIRATION_MS) {
         sessions.delete(token);
         expiredCount++;
+        observedExpiry = true;
       }
     }
+    if (observedExpiry) runWithWorkspace(workspace, invalidateOperatorKeyring);
   }
   
   if (expiredCount > 0) {
