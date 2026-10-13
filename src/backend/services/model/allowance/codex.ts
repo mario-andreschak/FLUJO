@@ -4,6 +4,7 @@ import { allowanceAccountKey } from './store';
 import { readCodexAuthForTransfer } from '../adapters/codexAuth';
 import { prepareCodexRuntimeEnvironment, type CodexRuntimeEnvironment } from '../adapters/codexRuntimeHome';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration } from '../adapters/codexAppServerProcess';
+import { acquireOrdinaryCodexExecutable } from '../adapters/codexRuntimeUpdate';
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -61,7 +62,7 @@ export async function readOwnedCodexAllowance(input: {
 }): Promise<AllowanceSnapshot> {
   const owner = Object.freeze({});
   const child = await startOwnedCodexAppServer({
-    executable: input.executable, args: input.args, cwd: input.runtime.workingDirectory,
+    executable: input.executable, args: input.args ?? ['app-server', '--listen', 'stdio://'], cwd: input.runtime.workingDirectory,
     env: { ...input.runtime.env, NODE_ENV: 'production' }, owner, signal: input.signal, admissionTimeoutMs: input.timeoutMs,
     register: async registration => { assertCodexOwnedProcessRegistration(registration, owner); },
     onNotification: () => {},
@@ -92,22 +93,26 @@ export async function collectCodexAllowance(options: { signal?: AbortSignal; tim
   options.signal?.addEventListener('abort', abort, { once: true });
   if (options.signal?.aborted) abort();
   const timer = setTimeout(abort, timeoutMs);
+  let lease: Awaited<ReturnType<typeof acquireOrdinaryCodexExecutable>> | undefined;
   try {
     controller.signal.throwIfAborted();
     const before = await loginIdentity();
     controller.signal.throwIfAborted();
     const runtime = await prepareCodexRuntimeEnvironment(true);
     controller.signal.throwIfAborted();
-    const { Codex } = await import('@openai/codex-sdk');
-    const codex = new Codex();
-    // SDK's native executable resolver is private but is the same installed
-    // CLI selection used by Codex execution; never select an arbitrary PATH CLI.
-    const executable = (codex as unknown as { exec: { executablePath: string } }).exec.executablePath;
-    const snapshot = await readOwnedCodexAllowance({ executable, runtime, signal: controller.signal, timeoutMs, expectedAccountId: before.accountId });
+    lease = await acquireOrdinaryCodexExecutable();
+    controller.signal.throwIfAborted();
+    const snapshot = await readOwnedCodexAllowance({ executable: lease.executable, runtime, signal: controller.signal, timeoutMs, expectedAccountId: before.accountId });
     const after = await loginIdentity();
     controller.signal.throwIfAborted();
     if (before.accountKey !== after.accountKey) throw new Error('CODEX_ALLOWANCE_ACCOUNT_CHANGED');
     return { accountKey: before.accountKey, snapshot };
   } catch { throw new Error('CODEX_ALLOWANCE_UNAVAILABLE'); }
-  finally { clearTimeout(timer); options.signal?.removeEventListener('abort', abort); }
+  finally {
+    clearTimeout(timer); options.signal?.removeEventListener('abort', abort);
+    if (lease) {
+      try { await lease.release(); }
+      catch { throw new Error('CODEX_ALLOWANCE_UNAVAILABLE'); }
+    }
+  }
 }

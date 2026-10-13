@@ -1,22 +1,50 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import type { ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { bundledCodexExecutable } from './codexRestrictedProfile';
-import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration } from './codexAppServerProcess';
+import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, CodexAppServerRpcError } from './codexAppServerProcess';
 import { admitCodexDirectory, readCodexRuntimeFile, writeCodexRuntimeFile } from './codexRuntimeFiles';
+import { CODEX_APP_SERVER_CONTRACT } from './codexProtocol';
 
 const log = createLogger('backend/services/model/adapters/codexRuntimeUpdate');
 const run = promisify(execFile);
 const DAY = 24 * 60 * 60 * 1000;
 const VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-type Receipt = { version: string; directory: string; sha256: string; previousDirectory?: string };
-type State = { checked: number; executable: string; updating?: Promise<void> };
+// Bump when the admitted catalogue/error schema or SDK argument contract changes.
+const QUALIFICATION_CONTRACT = 'flujo-codex-runtime-qualification-v2';
+export interface CodexRuntimeCompatibility {
+  cliVersion: string;
+  sdkVersion: string;
+  protocolContract: string;
+}
+type Receipt = {
+  version: string; directory: string; sha256: string; previousDirectory?: string;
+  compatibility?: CodexRuntimeCompatibility & { qualificationContract: string };
+};
+type State = {
+  checked: number; executable: string; admitted?: string; updating?: Promise<void>;
+  admissionFailure?: { key: string; retryAt: number; cliVersion: string };
+};
 const states = new Map<string, State>();
+
+function admissionKey(receipt: Receipt, sdkVersion: string): string {
+  return JSON.stringify([receipt.directory, receipt.version, receipt.sha256, sdkVersion,
+    CODEX_APP_SERVER_CONTRACT, QUALIFICATION_CONTRACT]);
+}
+
+function qualifiedReceipt(receipt: Receipt, sdkVersion: string): boolean {
+  const compatibility = receipt.compatibility;
+  return compatibility?.cliVersion === receipt.version && compatibility.sdkVersion === sdkVersion
+    && compatibility.protocolContract === CODEX_APP_SERVER_CONTRACT
+    && compatibility.qualificationContract === QUALIFICATION_CONTRACT;
+}
 
 export function newerCodexVersion(candidate: string, current: string): boolean {
   if (!VERSION.test(candidate) || !VERSION.test(current)) return false;
@@ -48,6 +76,24 @@ export async function readOrdinaryCodexVersion(executable = bundledCodexExecutab
   return versionOf(executable, getWorkspaceDataDir());
 }
 
+async function installedSdkVersion(): Promise<string> {
+  // The SDK exposes only its public ESM entry, not package.json. Resolve the
+  // installed package with Node's ESM-aware resolver, also in bundled servers.
+  const findPackageJSON: typeof nodeModule.findPackageJSON = Reflect.get(nodeModule, 'findPackageJSON');
+  const manifest = findPackageJSON('@openai/codex-sdk', path.join(process.cwd(), 'package.json'));
+  if (!manifest) throw new Error('Codex SDK version is unavailable');
+  const value = JSON.parse((await readPlainFile(manifest, { maxBytes: 64 * 1024 })).toString()) as { name?: unknown; version?: unknown };
+  if (value.name !== '@openai/codex-sdk' || typeof value.version !== 'string' || !VERSION.test(value.version)) {
+    throw new Error('Invalid Codex SDK version');
+  }
+  return value.version;
+}
+
+export async function readCodexRuntimeCompatibility(executable = bundledCodexExecutable()): Promise<CodexRuntimeCompatibility> {
+  return { cliVersion: await readOrdinaryCodexVersion(executable), sdkVersion: await installedSdkVersion(),
+    protocolContract: CODEX_APP_SERVER_CONTRACT };
+}
+
 async function digest(executable: string): Promise<string> {
   const hash = createHash('sha256');
   await readPlainFile(executable, { maxBytes: 512 * 1024 * 1024,
@@ -55,26 +101,74 @@ async function digest(executable: string): Promise<string> {
   return hash.digest('hex');
 }
 
-/** No threads or inference: qualify stdio framing, initialization and paged model listing. */
-export async function qualifyCodexUpdate(executable: string, home: string): Promise<void> {
+/** Parse the options used by the installed public SDK without starting a turn.
+ * --experimental-json is the SDK 0.162.1 spelling; it can be a hidden CLI alias.
+ * Help must accept the actual argument vector, not just mention four flags.
+ */
+async function qualifySdkExecution(executable: string, home: string, signal: AbortSignal): Promise<void> {
+  const thread = {
+    model: 'flujo_codex_qualification', threadSource: 'sdk', sandboxMode: 'read-only',
+    workingDirectory: home, additionalDirectories: [home], skipGitRepoCheck: true,
+    modelReasoningEffort: 'high', networkAccessEnabled: false, webSearchMode: 'disabled', approvalPolicy: 'never',
+  } satisfies ThreadOptions;
+  const turn = { cyberAccessProgram: 'standard', outputSchema: { type: 'object' }, signal } satisfies TurnOptions;
+  const args = ['exec', '--experimental-json', '--model', thread.model, '--sandbox', thread.sandboxMode,
+    '--cd', thread.workingDirectory, '--add-dir', thread.additionalDirectories[0], '--skip-git-repo-check',
+    '--output-schema', path.join(home, 'qualification-schema.json'), '--cyber-access-program', turn.cyberAccessProgram,
+    '--config', `model_reasoning_effort="${thread.modelReasoningEffort}"`,
+    '--config', `sandbox_workspace_write.network_access=${thread.networkAccessEnabled}`,
+    '--config', `web_search="${thread.webSearchMode}"`, '--config', `approval_policy="${thread.approvalPolicy}"`,
+    '--config', 'service_tier="default"'];
+  for (const resumed of [false, true]) {
+    const { stdout } = await run(executable, [...args,
+      ...(resumed ? ['resume', '00000000-0000-0000-0000-000000000000'] : ['--thread-source', thread.threadSource]),
+      '--image', path.join(home, 'qualification-image.png'), '--help'], {
+      cwd: home, env: codexUpdateEnvironment(home), timeout: 10000, signal: turn.signal,
+      maxBuffer: 128 * 1024, windowsHide: true,
+    });
+    if (!/\bUsage:\s+codex exec\b/.test(String(stdout))) throw new Error('Codex SDK execution flags changed');
+  }
+}
+
+/** No threads or inference: qualify stdio framing, errors, all catalogue pages and SDK parsing. */
+export async function qualifyCodexUpdate(executable: string, home: string): Promise<CodexRuntimeCompatibility> {
+  const compatibility = { cliVersion: await versionOf(executable, home), sdkVersion: await installedSdkVersion(),
+    protocolContract: CODEX_APP_SERVER_CONTRACT };
+  const signal = AbortSignal.timeout(20000);
   const owner = Object.freeze({});
   const child = await startOwnedCodexAppServer({
-    executable, args: ['app-server'], cwd: home, env: codexUpdateEnvironment(home), owner,
-    signal: AbortSignal.timeout(20000), onNotification: () => {},
+    executable, args: ['app-server', '--listen', 'stdio://'], cwd: home, env: codexUpdateEnvironment(home), owner,
+    signal, onNotification: () => {},
     register: async registration => { assertCodexOwnedProcessRegistration(registration, owner); },
   });
   try {
     await child.request('initialize', { clientInfo: { name: 'flujo_codex_update', version: '1' } }, 10000);
     child.notify('initialized');
-    const value = await child.request('model/list', { limit: 100, includeHidden: false }, 10000) as { data?: unknown };
-    if (!value || !Array.isArray(value.data) || !value.data.length
-      || !value.data.every(row => row && typeof row.model === 'string')) throw new Error('Codex model protocol changed');
-    const { stdout } = await run(executable, ['exec', '--help'], {
-      env: codexUpdateEnvironment(home), timeout: 10000, maxBuffer: 128 * 1024, windowsHide: true,
-    });
-    if (!['--json', '--model', '--skip-git-repo-check', '--config'].every(flag => stdout.includes(flag))) {
-      throw new Error('Codex SDK execution flags changed');
-    }
+    let cursor: string | undefined, count = 0, pages = 0;
+    const cursors = new Set<string>();
+    do {
+      if (++pages > 32) throw new Error('Codex model catalogue exceeds qualification bounds');
+      const value = await child.request('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, 10000) as { data?: unknown; nextCursor?: unknown };
+      if (!value || !Array.isArray(value.data) || value.data.length > 100 || count + value.data.length > 1024
+        || !value.data.every(row => row && typeof row.model === 'string' && row.model.length > 0 && row.model.length <= 256)) {
+        throw new Error('Codex model protocol changed');
+      }
+      count += value.data.length;
+      const next = value.nextCursor;
+      if (next != null && (typeof next !== 'string' || !next || next.length > 4096 || cursors.has(next))) {
+        throw new Error('Codex model cursor changed');
+      }
+      cursor = typeof next === 'string' ? next : undefined;
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    if (!count) throw new Error('Codex model catalogue is unavailable');
+    let rejected = false;
+    try { await child.request('model/list', { limit: 'invalid-qualification-limit' }, 10000); }
+    catch (error) { rejected = error instanceof CodexAppServerRpcError && [-32600, -32602].includes(error.code); }
+    if (!rejected) throw new Error('Codex JSON-RPC error protocol changed');
+    await qualifySdkExecution(executable, home, signal);
+    signal.throwIfAborted();
+    return compatibility;
   } finally { await child.stop(); }
 }
 
@@ -98,7 +192,11 @@ async function update(root: string, state: State): Promise<void> {
   const release = await response.json() as { version?: unknown };
   if (typeof release.version !== 'string' || !VERSION.test(release.version)) throw new Error('Invalid Codex release');
   const current = await versionOf(state.executable, root);
-  if (!newerCodexVersion(release.version, current)) return;
+  // A stale receipt can fail against a new SDK. Skip reinstallation of that
+  // exact rejected release, while still discovering a newer compatible CLI.
+  const rejected = state.admissionFailure?.cliVersion;
+  const baseline = rejected && newerCodexVersion(rejected, current) ? rejected : current;
+  if (!newerCodexVersion(release.version, baseline)) return;
   // Unique immutable candidate directories: another server cannot overwrite an active binary.
   const directory = await fs.mkdtemp(path.join(root, `release-${release.version}-`));
   let activated = false;
@@ -117,12 +215,16 @@ async function update(root: string, state: State): Promise<void> {
     await candidateGuard();
     const executable = bundledCodexExecutable(directory);
     if (await versionOf(executable, directory) !== release.version) throw new Error('Codex installed version mismatch');
-    await qualifyCodexUpdate(executable, directory);
+    const compatibility = await qualifyCodexUpdate(executable, directory);
+    if (compatibility.cliVersion !== release.version) throw new Error('Codex qualified version mismatch');
     const relativePrevious = path.relative(root, state.executable).split(path.sep)[0];
     const receipt: Receipt = { version: release.version, directory: path.basename(directory), sha256: await digest(executable),
+      compatibility: { ...compatibility, qualificationContract: QUALIFICATION_CONTRACT },
       ...(/^release-\d+\.\d+\.\d+-[A-Za-z0-9]+$/.test(relativePrevious) ? { previousDirectory: relativePrevious } : {}) };
     await writeCodexRuntimeFile(root, path.join(root, 'current.json'), JSON.stringify(receipt), guard);
     state.executable = executable;
+    state.admitted = admissionKey(receipt, compatibility.sdkVersion);
+    state.admissionFailure = undefined;
     activated = true;
     log.info('Codex runtime update qualified; future ordinary calls use the new CLI', { version: release.version });
   } finally {
@@ -203,9 +305,42 @@ export async function resolveOrdinaryCodexExecutable(options: { waitForUpdate?: 
     const directory = path.join(root, receipt.directory);
     await admitCodexDirectory(directory);
     const executable = bundledCodexExecutable(directory);
-    if (executable !== state.executable && (await digest(executable) !== receipt.sha256 || await versionOf(executable, root) !== receipt.version)) throw new Error('Codex receipt mismatch');
+    const sdkVersion = await installedSdkVersion();
+    const key = admissionKey(receipt, sdkVersion);
+    if (state.admitted !== key || !qualifiedReceipt(receipt, sdkVersion)) {
+      if (state.admissionFailure?.key === key && Date.now() < state.admissionFailure.retryAt) {
+        throw new Error('Codex qualification retry is pending');
+      }
+      if (await digest(executable) !== receipt.sha256 || await versionOf(executable, directory) !== receipt.version) {
+        throw new Error('Codex receipt mismatch');
+      }
+      if (!qualifiedReceipt(receipt, sdkVersion)) {
+        try {
+          const compatibility = await qualifyCodexUpdate(executable, directory);
+          if (compatibility.cliVersion !== receipt.version || compatibility.sdkVersion !== sdkVersion
+            || await digest(executable) !== receipt.sha256) throw new Error('Codex qualification identity changed');
+          // Do not overwrite a newer release published while qualification ran.
+          const published = JSON.parse((await readCodexRuntimeFile(root, path.join(root, 'current.json'), 4096, guard)).toString()) as Receipt;
+          if (published.directory !== receipt.directory || published.version !== receipt.version || published.sha256 !== receipt.sha256) {
+            throw new Error('Codex release changed during qualification');
+          }
+          receipt.compatibility = { ...compatibility, qualificationContract: QUALIFICATION_CONTRACT };
+          await writeCodexRuntimeFile(root, path.join(root, 'current.json'), JSON.stringify(receipt), guard);
+        } catch (error) {
+          state.admissionFailure = { key, retryAt: Date.now() + 60 * 60 * 1000, cliVersion: receipt.version };
+          log.warn('Managed Codex runtime requalification unavailable; using the bundled CLI');
+          throw error;
+        }
+      }
+      state.admitted = key;
+      state.admissionFailure = undefined;
+    }
     state.executable = executable;
-  } catch { /* A missing/unusable managed release falls back to the installed bundle. */ }
+  } catch {
+    // A previously admitted binary must not survive a changed or unusable receipt.
+    state.executable = bundledCodexExecutable();
+    state.admitted = undefined;
+  }
   if (!await fs.stat(state.executable).then(stat => stat.isFile(), () => false)) state.executable = bundledCodexExecutable();
   if (!state.updating && Date.now() - state.checked >= DAY) {
     state.checked = Date.now();

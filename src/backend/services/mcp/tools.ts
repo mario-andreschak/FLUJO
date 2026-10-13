@@ -1,7 +1,9 @@
+import { ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createLogger } from "@/utils/logger";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { normalizeToolArguments } from "./toolArguments";
+import { mcpProtocolError, isMcpRequestTimeout, mcpErrorStatus } from "./protocolErrors";
 import { resolveGlobalVars } from "@/backend/utils/resolveGlobalVars";
 import {
   MCPToolResponse as ToolResponse,
@@ -63,82 +65,14 @@ export interface ToolCallProgress {
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
- * Normalize tool arguments to ensure we don't pass undefined values to MCP servers
- * This function replaces undefined/null values with appropriate defaults based on expected types
- */
-function normalizeToolArguments(
-  args: Record<string, unknown>,
-  toolName: string,
-): Record<string, unknown> {
-  if (!args) return {};
-
-  // Only own parameters cross the tool boundary. fromEntries defines data
-  // properties, including __proto__, without invoking prototype setters.
-  const entries: Array<[string, unknown]> = [];
-  for (const [key, value] of Object.entries(args)) {
-    let normalized: unknown = value;
-
-    // Handle undefined or null values
-    if (value === undefined || value === null) {
-      log.debug(
-        `Normalizing undefined/null value for parameter '${key}' in tool '${toolName}'`,
-      );
-
-      // Try to infer the type from the key name
-      if (
-        key.includes("number") ||
-        key.endsWith("Count") ||
-        key.endsWith("Id") ||
-        key.endsWith("Limit")
-      ) {
-        normalized = 0;
-        log.debug(`Using default value 0 for likely number parameter: ${key}`);
-      } else if (
-        key.includes("bool") ||
-        key.startsWith("is") ||
-        key.startsWith("has") ||
-        key.startsWith("should")
-      ) {
-        normalized = false;
-        log.debug(
-          `Using default value false for likely boolean parameter: ${key}`,
-        );
-      } else if (
-        key.includes("array") ||
-        key.endsWith("s") ||
-        key.endsWith("List") ||
-        key.endsWith("Items")
-      ) {
-        normalized = [];
-        log.debug(`Using empty array for likely array parameter: ${key}`);
-      } else if (
-        key.includes("object") ||
-        key.endsWith("Options") ||
-        key.endsWith("Config") ||
-        key.endsWith("Settings")
-      ) {
-        normalized = {};
-        log.debug(`Using empty object for likely object parameter: ${key}`);
-      } else {
-        // Default to empty string for unknown types
-        normalized = "";
-        log.debug(`Using empty string for parameter with unknown type: ${key}`);
-      }
-    }
-    entries.push([key, normalized]);
-  }
-
-  return Object.fromEntries(entries);
-}
-
-/**
  * List tools available from an MCP server
  */
 export async function listServerTools(
   client: Client | undefined,
   serverName: string,
   audience: ToolListAudience = "model",
-): Promise<{ tools: ToolResponse[]; error?: string }> {
+  cursor?: string,
+): Promise<{ tools: ToolResponse[]; nextCursor?: string; error?: string }> {
   log.debug("Entering listServerTools method");
   if (!client) {
     log.warn(`Server ${serverName} not connected`);
@@ -147,7 +81,12 @@ export async function listServerTools(
 
   try {
     log.info(`Listing tools for server ${serverName}`);
-    const response = await listCompleteTools(client, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
+    const options = getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined;
+    const response = cursor === undefined ? await listCompleteTools(client, options)
+      : isBetaClient(client) ? await client.listTools({ cursor }, options)
+      // SDK1 listTools replaces its validator cache with a single page. Raw
+      // validated cursor reads preserve the already complete dispatch cache.
+      : await client.request({ method: 'tools/list', params: { cursor } }, ListToolsResultSchema, options);
     const tools = response.tools.map((tool) => ({
       // Preserve the complete SDK-validated definition so newer standard
       // display and execution metadata (title, icons, outputSchema, execution)
@@ -160,7 +99,7 @@ export async function listServerTools(
 
     const visibleTools = filterToolsForAudience(tools, audience);
     log.verbose(`Processed tools for ${audience} audience:`, visibleTools);
-    return { tools: visibleTools };
+    return { tools: visibleTools, ...(response.nextCursor === undefined ? {} : { nextCursor: response.nextCursor }) };
   } catch (error) {
     if (error instanceof BundledFlujoWorkloadError) throw error;
     log.warn(`Failed to list tools for server ${serverName}:`, error);
@@ -279,16 +218,16 @@ export async function callTool(
         ? (resolvedArgs as Record<string, unknown>)
         : {};
 
-    // Normalize undefined/null values based on parameter types
-    // This ensures we don't pass undefined values to MCP servers
+    // Preserve explicit null and omit undefined members without guessing defaults.
     const normalizedArgs = privateExecution ? normalizeExecutionToolArguments(executionExtensionContext!, toolName, argsRecord)
-      : normalizeToolArguments(argsRecord, toolName);
+      : normalizeToolArguments(argsRecord);
     if (!privateExecution && !isolated && !trustedHost) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
 
     log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
     const callOptions = {
       timeout: timeoutMs,
       resetTimeoutOnProgress: true,
+      maxTotalTimeout: timeoutMs,
       ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
         if (!privateExecution) {
@@ -346,7 +285,7 @@ export async function callTool(
       ? getTasksExtensionSession(client) : undefined;
     if (modernTaskCall && !modernTasks) throw new Error('Modern MCP Tasks session retired before submission');
     const response = modernTasks
-      ? await modernTasks.callTool(JSON.parse(JSON.stringify(requestParams)), extensionDispatchOptions(callOptions))
+      ? await modernTasks.callTool(JSON.parse(JSON.stringify(requestParams)), { ...extensionDispatchOptions(callOptions), expectedConversationId: trustedConversationId })
       : isBetaClient(client)
       ? await (
           client.callTool as unknown as (
@@ -480,7 +419,7 @@ export async function callTool(
     // handling, so the server has been told to stop; just map it to the
     // standardized timeout response shape.
     if (error instanceof TasksExtensionRequestTimeoutError ||
-        (error instanceof McpError && error.code === ErrorCode.RequestTimeout)) {
+        isMcpRequestTimeout(error)) {
       const timeoutSeconds = Math.round(timeoutMs / 1000);
       log.warn(
         `Tool ${toolName} execution timed out after ${timeoutSeconds} seconds`,
@@ -555,20 +494,10 @@ export async function callTool(
       errorMessage = `Tool endpoint not found (404). This may indicate OAuth authentication issues or the server may not be properly configured.`;
     }
 
-    if (error instanceof McpError) {
-      errorMessage = `Failed to call tool: ${errorMessage} (Code: ${error.code})`;
-
-      // Map MCP error codes to HTTP status codes
-      if (error.code === -32601) {
-        // Method not found
-        statusCode = 404;
-      } else if (error.code === -32602) {
-        // Invalid params
-        statusCode = 400;
-      } else if (error.code === -32603) {
-        // Internal error
-        statusCode = 500;
-      }
+    const protocolError = mcpProtocolError(error);
+    if (protocolError) {
+      errorMessage = `Failed to call tool: ${errorMessage} (Code: ${protocolError.code})`;
+      statusCode = mcpErrorStatus(protocolError.code);
     } else {
       errorMessage = `Failed to call tool: ${errorMessage}`;
     }
@@ -577,6 +506,7 @@ export async function callTool(
       success: false,
       error: errorMessage,
       statusCode,
+      ...(protocolError ? { protocolError } : {}),
     };
   }
 }

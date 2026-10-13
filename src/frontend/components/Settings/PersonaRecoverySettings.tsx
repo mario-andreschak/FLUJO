@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Paper, TextField, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 import { getSelectedWorkspace, isValidWorkspaceName, onWorkspaceChanged, workspacePageUrl } from '@/frontend/utils/workspaceSelection';
 import { PERSONA_RECOVERY_MAX_ARCHIVE_BYTES, type PersonaRecoveryBackupSummary, type PersonaRecoveryRestorePreview } from '@/shared/types/personaRecovery';
 
@@ -11,8 +12,25 @@ const dialogActionsSx = {
   '& .MuiButton-root': { minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'normal' },
 } as const;
 
+const failureKeys = {
+  capture: 'settings.personaRecovery.captureFailed',
+  inspect: 'settings.personaRecovery.inspectFailed',
+  restore: 'settings.personaRecovery.restoreFailed',
+} as const;
+type RecoveryAction = keyof typeof failureKeys;
+// Recognize the existing API diagnostics without displaying backend text or
+// losing the different next actions for a collision and an outdated review.
+const restoreFailureKeys = new Map<string, TranslationKey>([
+  ['The recovery destination already exists; choose a new workspace name.', 'settings.personaRecovery.destinationExists'],
+  ['A case-equivalent recovery workspace already exists.', 'settings.personaRecovery.destinationExists'],
+  ['The destination contains a different recovery or existing workspace.', 'settings.personaRecovery.destinationExists'],
+  ['Recovery preview changed; inspect the archive and destination again.', 'settings.personaRecovery.previewChanged'],
+]);
+/** Only messages translated by this UI may be presented as recovery errors. */
+class RecoveryUiError extends Error {}
+
 export default function PersonaRecoverySettings() {
-  const { t } = useI18n();
+  const { t, formatDate } = useI18n();
   const [workspace, setWorkspace] = useState(getSelectedWorkspace);
   const [file, setFile] = useState<File | null>(null);
   const [destination, setDestination] = useState('');
@@ -25,6 +43,7 @@ export default function PersonaRecoverySettings() {
   const prepareRef = useRef<HTMLButtonElement>(null);
   const inspectRef = useRef<HTMLButtonElement>(null);
   const restoredLinkRef = useRef<HTMLAnchorElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const dialogWorkspaceRef = useRef<string | null>(null);
   const requestRef = useRef<{ controller: AbortController; generation: number } | null>(null);
   const generation = useRef(0);
@@ -40,48 +59,59 @@ export default function PersonaRecoverySettings() {
     return () => { unsubscribe(); generation.current++; requestRef.current?.controller.abort(); };
   }, []);
 
-  const run = async (task: (signal: AbortSignal, current: () => boolean) => Promise<void>) => {
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+
+  const run = async (action: RecoveryAction, task: (signal: AbortSignal, current: () => boolean) => Promise<void>) => {
     requestRef.current?.controller.abort();
     const request = { controller: new AbortController(), generation: ++generation.current };
     requestRef.current = request;
     const current = () => generation.current === request.generation && getSelectedWorkspace() === workspace;
     setBusy(true); setError(null); setRestored(null);
     try { await task(request.controller.signal, current); }
-    catch (reason) { if (current() && !request.controller.signal.aborted) setError(reason instanceof Error ? reason.message : t('settings.personaRecovery.failed')); }
+    catch (reason) {
+      if (current() && !request.controller.signal.aborted) {
+        setError(reason instanceof RecoveryUiError ? reason.message : t(failureKeys[action]));
+      }
+    }
     finally { if (current()) setBusy(false); }
   };
-  const checkResponse = async (response: Response) => {
+  const checkResponse = async (response: Response, action: RecoveryAction) => {
     if (!response.ok) {
-      const value = await response.json().catch(() => ({})) as { error?: string };
-      throw new Error(value.error || t('settings.personaRecovery.failed'));
+      const result = await response.json().catch(() => null) as { error?: unknown } | null;
+      const specificKey = action === 'restore' && typeof result?.error === 'string'
+        ? restoreFailureKeys.get(result.error) : undefined;
+      const key = response.status === 423 ? 'settings.personaRecovery.locked'
+        : response.status === 403 ? 'settings.personaRecovery.localOnly'
+          : response.status === 413 ? 'settings.personaRecovery.fileLimit' : specificKey ?? failureKeys[action];
+      throw new RecoveryUiError(t(key));
     }
   };
   const endpoint = `/api/persona-recovery?workspace=${encodeURIComponent(workspace)}`;
-  const prepare = () => run(async (signal, current) => {
+  const prepare = () => run('capture', async (signal, current) => {
     const response = await fetch(endpoint, { method: 'POST', headers: { 'x-persona-recovery-action': 'capture' }, signal });
-    await checkResponse(response);
+    await checkResponse(response, 'capture');
     const summary = JSON.parse(decodeURIComponent(response.headers.get('x-flujo-persona-recovery-summary') ?? '')) as PersonaRecoveryBackupSummary;
     const blob = await response.blob();
-    if (summary.sourceWorkspace !== workspace || blob.size !== summary.archiveBytes) throw new Error(t('settings.personaRecovery.failed'));
+    if (summary.sourceWorkspace !== workspace || blob.size !== summary.archiveBytes) throw new RecoveryUiError(t('settings.personaRecovery.captureFailed'));
     if (current()) { dialogWorkspaceRef.current = workspace; setBackup({ blob, summary }); }
   });
-  const inspect = () => run(async (signal, current) => {
-    if (!file || !file.size || file.size > PERSONA_RECOVERY_MAX_ARCHIVE_BYTES) throw new Error(t('settings.personaRecovery.fileLimit'));
+  const inspect = () => run('inspect', async (signal, current) => {
+    if (!file || !file.size || file.size > PERSONA_RECOVERY_MAX_ARCHIVE_BYTES) throw new RecoveryUiError(t('settings.personaRecovery.fileLimit'));
     const response = await fetch(`${endpoint}&destination=${encodeURIComponent(destination)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/zip', 'x-persona-recovery-action': 'inspect' }, body: file, signal,
     });
-    await checkResponse(response);
+    await checkResponse(response, 'inspect');
     const next = await response.json() as PersonaRecoveryRestorePreview;
     if (current()) { dialogWorkspaceRef.current = workspace; setPreview(next); }
   });
-  const restore = () => run(async (signal, current) => {
+  const restore = () => run('restore', async (signal, current) => {
     if (!file || !preview) return;
     const response = await fetch(`${endpoint}&destination=${encodeURIComponent(preview.destinationWorkspace)}`, {
       method: 'POST', headers: {
         'Content-Type': 'application/zip', 'x-persona-recovery-action': 'restore', 'x-persona-recovery-preview': preview.previewToken,
       }, body: file, signal,
     });
-    await checkResponse(response);
+    await checkResponse(response, 'restore');
     const result = await response.json() as { workspace: string };
     if (current()) { setRestored(result.workspace); setPreview(null); }
   });
@@ -99,7 +129,7 @@ export default function PersonaRecoverySettings() {
     tasks: counts['persona-work-items'] ?? 0, conversations: counts.conversations ?? 0, flows: counts.flows ?? 0,
   });
   const source = (value: { sourceWorkspace: string; capturedAt: number }) => t('settings.personaRecovery.source', {
-    workspace: value.sourceWorkspace, date: new Date(value.capturedAt).toLocaleString(),
+    workspace: value.sourceWorkspace, date: formatDate(value.capturedAt, { dateStyle: 'medium', timeStyle: 'medium' }),
   });
   const destinationValid = isValidWorkspaceName(destination) && destination.toLowerCase() !== workspace.toLowerCase();
   // Preparing a preview disables its trigger during the request, so the browser
@@ -133,7 +163,7 @@ export default function PersonaRecoverySettings() {
       <CircularProgress size={20} aria-label={t('settings.personaRecovery.working')} />
       <Typography>{t('settings.personaRecovery.working')}</Typography>
     </Box>}
-    {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+    {error && !preview && <Alert ref={errorRef} tabIndex={-1} severity="error" sx={{ mt: 2 }}>{error}</Alert>}
     {restored && <Alert severity="success" sx={{ mt: 2, overflowWrap: 'anywhere' }}>
       {t('settings.personaRecovery.success', { workspace: restored })}
       <Box sx={{ mt: 1 }}><Button ref={restoredLinkRef} href={workspacePageUrl(restored)}>{t('settings.personaRecovery.open')}</Button></Box>
@@ -163,7 +193,7 @@ export default function PersonaRecoverySettings() {
           <Typography sx={{ mt: 2 }}>{t('settings.personaRecovery.connections', { models: preview.requiredModelIds.length, apps: preview.requiredAppNames.length })}</Typography>
         </>}
         {busy && <Typography role="status" sx={{ mt: 2 }}>{t('settings.personaRecovery.working')}</Typography>}
-        {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+        {error && preview && <Alert ref={errorRef} tabIndex={-1} severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       </DialogContent>
       <DialogActions disableSpacing sx={dialogActionsSx}><Button disabled={busy} onClick={() => setPreview(null)}>{t('common.cancel')}</Button><Button disabled={busy} variant="contained" onClick={() => void restore()}>{t('settings.personaRecovery.restore')}</Button></DialogActions>
     </Dialog>

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { ProtocolError, ProtocolErrorCode, type Tool } from '@modelcontextprotocol/client';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import type { Client, Transport, JSONRPCMessage } from '@modelcontextprotocol/client';
 import {
   createSessionPortFromClient,
@@ -13,6 +15,7 @@ import {
 import { isJsonValue, type JsonValue } from '@modelcontextprotocol/ext-tasks/core';
 import {
   CallToolResultV2Schema,
+  InputRequiredCallToolResultV2Schema,
   CancelTaskResultV2Schema,
   CreateTaskResultV2Schema,
   ErrorV2Schema,
@@ -48,6 +51,7 @@ export interface TasksExtensionClientIdentity {
 }
 
 export interface HostTasksDispatchOptions extends DispatchOptions {
+  readonly expectedConversationId?: string;
   readonly context?: NonNullable<DispatchOptions['context']> & {
     readonly onprogress?: (progress: { progress: number; total?: number; message?: string }) => void;
   };
@@ -59,6 +63,7 @@ export interface TasksExtensionSession {
   readonly signal: AbortSignal;
   callTool(params: Readonly<Record<string, JsonValue>>, options?: HostTasksDispatchOptions): Promise<CreateTaskResultV2 | CallToolResultV2>;
   getTask(taskId: string, options?: DispatchOptions): Promise<GetTaskResultV2>;
+  validateToolResult(taskId: string, result: { structuredContent?: unknown; isError?: boolean }): boolean;
   cancelTask(taskId: string, options?: DispatchOptions): Promise<void>;
   updateTask(taskId: string, inputResponses: InputResponsesV2, options?: DispatchOptions): Promise<void>;
 }
@@ -176,6 +181,7 @@ class RawTasksChannel {
     return new Promise<JsonRpcResponse>((resolve, reject) => {
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout>;
+      const totalTimer = setTimeout(() => finish(undefined, new TasksExtensionRequestTimeoutError()), timeoutMs);
       const arm = (): void => {
         clearTimeout(timer);
         timer = setTimeout(() => finish(undefined, new TasksExtensionRequestTimeoutError()), timeoutMs);
@@ -184,6 +190,7 @@ class RawTasksChannel {
       const finish = (response?: JsonRpcResponse, error?: unknown): void => {
         if (!this.pending.delete(id)) return;
         clearTimeout(timer);
+        clearTimeout(totalTimer);
         options.signal?.removeEventListener('abort', onAbort);
         // Retire a per-request HTTP stream as soon as its answer is observed.
         controller.abort();
@@ -275,7 +282,7 @@ export function getTasksExtensionSession(clientObject: object): TasksExtensionSe
     catch (error) {
       // The official port wraps transport exceptions. Preserve the caller's
       // cancellation sentinel so existing host lifecycle abort handling works.
-      if (options?.signal?.aborted) throw abortReason(options.signal);
+      if (options?.signal?.aborted && !sessionController.signal.aborted) throw abortReason(options.signal);
       const timeout = localRequestTimeout(error);
       if (timeout) throw timeout;
       throw error;
@@ -288,18 +295,69 @@ export function getTasksExtensionSession(clientObject: object): TasksExtensionSe
       headers: { ...Object.fromEntries(Object.entries(options?.context?.headers ?? {}).filter(([name]) => name.toLowerCase() !== 'mcp-name')), 'Mcp-Name': taskId },
     },
   });
+  const outputValidators = new Map<string, ReturnType<typeof taskToolOutputValidator>>();
   registration.bundle = {
     session,
     signal: sessionController.signal,
     async callTool(params, options) {
-      const value = await dispatch('tools/call', { ...params }, options);
-      const task = CreateTaskResultV2Schema.safeParse(value);
-      return task.success ? task.data : CallToolResultV2Schema.parse(value);
+      const deadline = new AbortController();
+      const timeoutMs = options?.context?.requestTimeoutMs ?? 60_000;
+      const timer = setTimeout(() => deadline.abort(new TasksExtensionRequestTimeoutError()), timeoutMs);
+      const signal = AbortSignal.any([sessionController.signal, deadline.signal, ...(options?.signal ? [options.signal] : [])]);
+      try {
+        await checkAuthority();
+        if (outputValidators.size >= 1000) throw new DispatchError('MCP Tasks output validation capacity exceeded');
+        const listed = await client.listTools(undefined, { signal, timeout: timeoutMs, maxTotalTimeout: timeoutMs });
+        const tool = listed.tools.find(tool => tool.name === params.name);
+        const validateOutput = taskToolOutputValidator(tool);
+        const headers = {
+          ...Object.fromEntries(Object.entries(options?.context?.headers ?? {}).filter(([name]) => !name.toLowerCase().startsWith('mcp-param-'))),
+          ...taskToolHeaders(tool, params.arguments),
+        };
+        let roundParams = params;
+        let previousState: string | undefined;
+        for (let round = 0; round <= 32; round++) {
+          signal.throwIfAborted();
+          const value = await dispatch('tools/call', { ...roundParams }, { ...options, signal, context: { ...options?.context, headers } });
+          const input = InputRequiredCallToolResultV2Schema.safeParse(value);
+          if (input.success) {
+            if (round === 32 || (!input.data.inputRequests && input.data.requestState === previousState)) {
+              throw new DispatchError('MCP Tasks initial input did not converge');
+            }
+            previousState = input.data.inputRequests ? undefined : input.data.requestState;
+            const responses = Object.fromEntries(await Promise.all(Object.entries(input.data.inputRequests ?? {}).map(async ([key, request]) =>
+              [key, await handleTasksInputRequest(client, request, signal, options?.expectedConversationId)] as const)));
+            roundParams = { ...params,
+              ...(input.data.requestState === undefined ? {} : { requestState: input.data.requestState }),
+              ...(Object.keys(responses).length ? { inputResponses: InputResponsesV2Schema.parse(responses) } : {}),
+            };
+            continue;
+          }
+          const task = CreateTaskResultV2Schema.safeParse(value);
+          if (task.success) {
+            outputValidators.set(task.data.taskId, validateOutput);
+            return task.data;
+          }
+          const complete = CallToolResultV2Schema.parse(value);
+          if (complete.resultType !== 'complete') throw new DispatchError('MCP Tasks completion is not a completed tool result');
+          validateOutput(complete);
+          return complete;
+        }
+        throw new DispatchError('MCP Tasks initial input did not converge');
+      } finally { clearTimeout(timer); }
     },
     async getTask(taskId, options) {
       const task = GetTaskResultV2Schema.parse(await dispatch('tasks/get', { taskId }, taskOptions(taskId, options)));
       if (task.taskId !== taskId) throw new DispatchError('MCP Tasks response identity mismatch');
+      if (['failed', 'cancelled'].includes(task.status)) outputValidators.delete(taskId);
       return task;
+    },
+    validateToolResult(taskId, result) {
+      const validate = outputValidators.get(taskId);
+      if (!validate) return false;
+      try { validate(result); }
+      finally { outputValidators.delete(taskId); }
+      return true;
     },
     async cancelTask(taskId, options) {
       CancelTaskResultV2Schema.parse(await dispatch('tasks/cancel', { taskId }, taskOptions(taskId, options)));
@@ -313,6 +371,7 @@ export function getTasksExtensionSession(clientObject: object): TasksExtensionSe
     registration.retired = true;
     sessionController.abort();
     channel.retire();
+    outputValidators.clear();
     try { await session.close(); } finally { port[Symbol.dispose](); }
   };
   port.onInvalidated(() => { void registration.close?.().catch(() => {}); });
@@ -399,4 +458,67 @@ function isBoundedTaskJson(value: unknown): boolean {
     seen.delete(item); return true;
   };
   return visit(value, 0);
+}
+
+const validator = new AjvJsonSchemaValidator();
+const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const excluded = new Set(['items', 'prefixItems', 'contains', 'additionalProperties', 'unevaluatedProperties', 'unevaluatedItems', 'propertyNames', 'patternProperties', 'dependentSchemas', 'oneOf', 'anyOf', 'allOf', 'not', 'if', 'then', 'else', '$defs', 'definitions']);
+
+/** SEP-2243 parameter headers for the extension's raw tools/call path. */
+export function taskToolHeaders(tool: Tool | undefined, args: unknown): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const names = new Set<string>();
+  let entries = 0;
+  const invalid = (): never => { throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Invalid MCP parameter header declaration'); };
+  const visit = (node: unknown, path: string[], reachable: boolean, depth: number): void => {
+    if (++entries > 10_000 || depth > 32) invalid();
+    if (node === null || typeof node !== 'object') return;
+    const schema = node as Record<string, unknown>;
+    if (Object.hasOwn(schema, 'x-mcp-header')) {
+      const name = schema['x-mcp-header'];
+      if (!reachable || !path.length || typeof name !== 'string' || !token.test(name)
+          || !['string', 'integer', 'boolean'].includes(String(schema.type)) || names.has(name.toLowerCase())) invalid();
+      const headerName = name as string;
+      names.add(headerName.toLowerCase());
+      let value = args;
+      for (const key of path) value = value !== null && typeof value === 'object' && Object.hasOwn(value, key)
+        ? (value as Record<string, unknown>)[key] : undefined;
+      if (value !== undefined && value !== null) {
+        if ((schema.type === 'string' && typeof value !== 'string')
+            || (schema.type === 'boolean' && typeof value !== 'boolean')
+            || (schema.type === 'integer' && !Number.isSafeInteger(value))) invalid();
+        const text = String(value);
+        const inline = text.length > 0 && text === text.trim() && /^[\x09\x20-\x7e]*$/.test(text)
+          && !(text.startsWith('=?base64?') && text.endsWith('?='));
+        headers['Mcp-Param-' + headerName] = inline ? text : '=?base64?' + Buffer.from(text, 'utf8').toString('base64') + '?=';
+      }
+    }
+    if (schema.properties && typeof schema.properties === 'object') {
+      for (const [key, child] of Object.entries(schema.properties)) visit(child, [...path, key], reachable, depth + 1);
+    }
+    for (const key of excluded) {
+      const child = schema[key];
+      if (Array.isArray(child)) child.forEach(item => visit(item, path, false, depth + 1));
+      else if (child && typeof child === 'object') {
+        if (['patternProperties', 'dependentSchemas', '$defs', 'definitions'].includes(key)) {
+          Object.values(child).forEach(item => visit(item, path, false, depth + 1));
+        } else visit(child, path, false, depth + 1);
+      }
+    }
+  };
+  if (tool) visit(tool.inputSchema, [], true, 0);
+  return headers;
+}
+
+/** Bind validation to the declaration observed before submission, including scalar JSON. */
+export function taskToolOutputValidator(tool: Tool | undefined): (result: { structuredContent?: unknown; isError?: boolean }) => void {
+  if (!tool?.outputSchema) return () => {};
+  let validate: ReturnType<AjvJsonSchemaValidator['getValidator']>;
+  try { validate = validator.getValidator(tool.outputSchema); }
+  catch { throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'MCP tool output schema is invalid'); }
+  return result => {
+    if (result.isError) return;
+    if (result.structuredContent === undefined) throw new ProtocolError(ProtocolErrorCode.InvalidRequest, 'MCP tool did not return required structured content');
+    if (!validate(result.structuredContent).valid) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'MCP tool output does not match its schema');
+  };
 }

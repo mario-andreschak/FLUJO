@@ -74,3 +74,13 @@ screenshots, upgrade preservation, external client auth migration, the complete
 matrix above, agreed novice/pilot observations and independent reassessment remain
 separate gates. Schedule heavy checks with the coordinator. Do not treat source
 test counts as feature adoption or an A- outcome.
+
+
+## MCP protocol adapters (#1093)
+
+The [October 12 support matrix](../mcp-conformance-1093-2026-10-12.md) records the
+legacy/modern boundaries, source repairs and focused qualification. Release retains
+real OAuth/provider sampling, strict HTTP/MRTR/subscription traces, Apps browser
+origin/CSP/consent/teardown and separate installed Windows/Linux identities. Current
+Windows packaged listing passed on #1056; #1050's original intermittent cause remains
+unidentified. A later pass cannot establish its historical cause.

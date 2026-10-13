@@ -606,6 +606,7 @@ export function createTransport(
 
       // Always set the OAuth provider - let the transport handle the OAuth flow
       transportoptions.authProvider = oauthProvider;
+      transportoptions.fetch = oauthProvider.oauthFetch;
 
       // Check if we have stored tokens, for logging purposes only - actual freshness/expiry
       // is resolved async by oauthProvider.tokens() when the transport uses it.
