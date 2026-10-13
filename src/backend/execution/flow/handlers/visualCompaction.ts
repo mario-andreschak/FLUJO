@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { deflateSync } from 'zlib';
 import { writeRunResource } from '@/backend/services/runResources';
 import type { Model } from '@/shared/types/model';
+import { isRecoveryAnchor } from './emergencyContextRefit';
 import type {
   VisionInputCapability,
   VisualArchiveCandidate,
@@ -192,8 +193,12 @@ function completeChunks(messages: OpenAI.ChatCompletionMessageParam[], eligibleE
         continue;
       }
     }
-    const text = messageText(message);
-    chunks.push({ start: index, end: index + 1, toolPair: false, text, exactStrings: findExactStrings(text) });
+    // Incomplete/boundary-crossing calls and orphan results cannot become a
+    // standalone image: that would detach the surviving half of the exchange.
+    if (message.role !== 'tool' && !(message.role === 'assistant' && message.tool_calls?.length)) {
+      const text = messageText(message);
+      chunks.push({ start: index, end: index + 1, toolPair: false, text, exactStrings: findExactStrings(text) });
+    }
     index += 1;
   }
   return chunks;
@@ -206,6 +211,9 @@ export function selectVisualArchiveCandidate(
   const eligibleEnd = Math.max(0, messages.length - RECENT_MESSAGE_FLOOR);
   if (eligibleEnd === 0) return { reason: 'no-eligible-range' };
   const chunks = completeChunks(messages, eligibleEnd)
+    .filter(chunk => messages.slice(chunk.start, chunk.end)
+      .every(message => message.role !== 'system' && message.role !== 'developer' && message.role !== 'user'
+        && !(message.role === 'assistant' && isRecoveryAnchor(message))))
     .filter((chunk) => !toolResultsOnly || chunk.toolPair)
     .sort((a, b) => b.text.length - a.text.length);
   const selected = chunks[0];
@@ -416,7 +424,9 @@ export async function compactMessagesVisually(input: {
   const provisionalManifest = manifestText(selected.candidate, 'flujo://run/pending', sha256);
   const estimates = estimateVisualRoutes(selected.candidate.originalCharacters, provisionalManifest.length, pages, input.model.provider);
   pages.forEach((page) => { page.metadata.imageTokens = estimateVisualPageTokens(input.model.provider, page.metadata); });
-  if (!(estimates.netSavings > 0)) {
+  // Images must beat the existing resource-backed text route, not just the
+  // unshortened source. These are route estimates, not measured provider cost.
+  if (!(estimates.selectedTokens < Math.min(estimates.rawTextTokens, estimates.compactedTextTokens))) {
     return finish({
       candidate: selected.candidate,
       estimates,
