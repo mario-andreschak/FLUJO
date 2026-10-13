@@ -3,6 +3,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { readCodexAuthForTransfer } from './codexAuth';
+import { MESSAGE_NORMALIZATION_POLICY_VERSION } from './messageNormalization';
 
 interface ToolFingerprint {
   name: string;
@@ -55,6 +56,7 @@ export function computeCodexPrefixHash(
   const hash = createHash('sha256');
   hash.update(stableStringify({
     ...configuration,
+    projectionPolicy: MESSAGE_NORMALIZATION_POLICY_VERSION,
     systemPrompt: systemPrompt ?? '',
     tools: [...tools]
       .sort((left, right) => left.name.localeCompare(right.name))

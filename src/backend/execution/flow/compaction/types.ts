@@ -1,6 +1,6 @@
 export const COMPACTION_ARTIFACT_SCHEMA_VERSION = 1 as const;
 export const COMPACTION_PROJECTION_VERSION = 1 as const;
-export const COMPACTION_POLICY_VERSION = 'summary-v1' as const;
+export const COMPACTION_POLICY_VERSION = 'summary-v2-protected' as const;
 
 export interface CompactionProjectionIdentity {
   /** Canonical conversation whose projected transcript produced this artifact. */
@@ -11,6 +11,8 @@ export interface CompactionProjectionIdentity {
   /** Handoff plumbing is stripped before artifact digesting/materialization. */
   handoffPolicy: 'strip-v1';
   version: typeof COMPACTION_PROJECTION_VERSION;
+  /** Model/tools/effective-policy fingerprint; incompatible requests cannot reuse an anchor. */
+  configDigest?: string;
 }
 
 export interface WireSummaryArtifact {

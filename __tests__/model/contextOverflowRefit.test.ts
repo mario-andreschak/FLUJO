@@ -15,6 +15,14 @@
  */
 import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
 import type OpenAI from 'openai';
+import { COMPACTION_SUMMARY_SECTIONS } from '@/backend/execution/flow/handlers/summarizingCompaction';
+
+const loadItemMock = jest.fn();
+jest.mock('@/utils/storage/backend', () => ({
+  ...jest.requireActual('@/utils/storage/backend'),
+  loadItem: (...args: unknown[]) => loadItemMock(...args),
+}));
+jest.mock('@/backend/execution/flow/persistConversationState', () => ({ persistConversationState: jest.fn(async () => undefined) }));
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
@@ -32,10 +40,16 @@ jest.mock('@/backend/services/model', () => ({
 const listRunResourcesMock = jest.fn();
 const writeRunResourceMock = jest.fn();
 const getRunResourceSettingsMock = jest.fn();
+const readRunResourceBoundedMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   listRunResources: (...a: unknown[]) => listRunResourcesMock(...(a as [])),
   writeRunResource: (...a: unknown[]) => writeRunResourceMock(...(a as [])),
   getRunResourceSettings: (...a: unknown[]) => getRunResourceSettingsMock(...(a as [])),
+  readRunResourceBounded: (...a: unknown[]) => readRunResourceBoundedMock(...a),
+  parseRunResourceUri: (uri: string) => {
+    const match = /^flujo:\/\/run\/([\w-]+)\/([\w-]+)$/.exec(uri);
+    return match ? { conversationId: match[1], id: match[2] } : null;
+  },
 }));
 
 const OVERFLOW_MESSAGE =
@@ -63,6 +77,7 @@ const createCompletionMock = jest.fn((input: { messages: OpenAI.ChatCompletionMe
     },
   });
 });
+const defaultCreateCompletion = createCompletionMock.getMockImplementation()!;
 jest.mock('@/backend/services/model/adapters', () => ({
   getCompletionAdapter: () => ({ createCompletion: createCompletionMock }),
 }));
@@ -117,9 +132,11 @@ const toolContentOf = (msgs: OpenAI.ChatCompletionMessageParam[]): string => {
 };
 
 beforeEach(() => {
+  readRunResourceBoundedMock.mockReset();
+  loadItemMock.mockReset().mockImplementation(async (_key: unknown, fallback: unknown) => fallback);
   conversationStates.clear();
   calls = [];
-  createCompletionMock.mockClear();
+  createCompletionMock.mockReset().mockImplementation(defaultCreateCompletion);
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
   listRunResourcesMock.mockReset().mockResolvedValue([]); // no prior captures → no markers
@@ -138,7 +155,167 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => jest.restoreAllMocks());
+
+describe('runtime compaction policy settings', () => {
+  const runtime = ModelHandler as unknown as {
+    getCompactionGlobalSettings: () => Promise<{ compactionEnabled?: boolean; compactionThresholdPercent?: number }>;
+    maybeCompactWire: (...args: unknown[]) => Promise<unknown>;
+    generateCompletion: (...args: unknown[]) => Promise<{ success: true; value: { content: string } }>;
+  };
+
+  it('loads a saved percentage and keeps the documented disabled policy after a settings error', async () => {
+    loadItemMock.mockResolvedValueOnce({ experimental: { compactionThresholdPercent: 60 } });
+    expect(await runtime.getCompactionGlobalSettings()).toMatchObject({ compactionThresholdPercent: 60 });
+    loadItemMock.mockRejectedValueOnce(new Error('settings unavailable'));
+    expect(await runtime.getCompactionGlobalSettings()).toMatchObject({ compactionEnabled: false });
+  });
+
+  it('uses the model percentage and current tools/new history despite an old tiny prompt count', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20,
+      compactionThresholdPercent: 90 } });
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({
+      success: true, value: { content: summary },
+    });
+    const source = [
+      { id: 'old-user', role: 'user', content: 'No enviar correo.', timestamp: 1 },
+      { id: 'old-prose', role: 'assistant', content: 'x'.repeat(6_000), timestamp: 2 },
+      { id: 'last-usage', role: 'assistant', content: 'ok', timestamp: 3, usage: { promptTokens: 1 } },
+      { id: 'new-user', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [{ type: 'function', function: {
+      name: 'read', description: 'schema '.repeat(700), parameters: { type: 'object', properties: {} },
+    } }];
+    const model = { id: 'model-1', contextWindow: 5_000, compactionThresholdPercent: 20 };
+    const result = await runtime.maybeCompactWire(source, 'settings-test', 'node-1', 'full-history', model,
+      100, undefined, {}, tools);
+    expect(result).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(1);
+    generate.mockClear();
+    await runtime.maybeCompactWire(source, 'settings-test', 'node-1', 'full-history',
+      { ...model, compactionThresholdPercent: undefined }, 100, undefined, {}, tools);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('reuses an unchanged old prefix as the recent tail grows and invalidates an edited prefix', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 100 } });
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({
+      success: true, value: { content: summary },
+    });
+    const state = seedState('prefix-test');
+    const source = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'x'.repeat(6_000), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+      { id: 'u-tail', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    const model = { id: 'model-1', contextWindow: 5_000, compactionThresholdPercent: 20 };
+    const first = await runtime.maybeCompactWire(source, 'prefix-test', 'node-1', 'full-history', model, 100);
+    expect(first).not.toBeNull();
+    const appended = [...source, { id: 'u-new', role: 'user', content: 'Next.', timestamp: 5 }];
+    const reused = await runtime.maybeCompactWire(appended, 'prefix-test', 'node-1', 'full-history', model, 100);
+    expect(reused).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(1);
+    const edited = appended.map(message => message.id === 'a-old' ? { ...message, content: 'changed '.repeat(1_000) } : message);
+    await runtime.maybeCompactWire(edited, 'prefix-test', 'node-1', 'full-history', model, 100);
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(state.compactionState?.artifacts).toHaveLength(1);
+  });
+
+  it('refuses provider-truncated summaries even when all five section headings are present', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: {
+      content: summary, fullResponse: { choices: [{ finish_reason: 'length' }] },
+    } } as unknown as Awaited<ReturnType<typeof runtime.generateCompletion>>);
+    const source = [
+      { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: 'x'.repeat(8_000), timestamp: 2 },
+      { id: 'a2', role: 'assistant', content: 'recent', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    expect(await runtime.maybeCompactWire(source, 'truncated-test', 'node-1', 'full-history',
+      { id: 'model-1', compactionThreshold: 1_000 }, 100)).toBeNull();
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('context-length overflow refit', () => {
+  it('provides a scoped in-loop executor for a reader armed after native call preparation', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-codex', provider: 'codex',
+      adapter: 'codex-cli', contextWindow: 10_000, maxTokens: 100 });
+    const uri = 'flujo://run/late-reader/res-1';
+    writeRunResourceMock.mockResolvedValue({ uri, size: HUGE.length, kind: 'text', mimeType: 'text/plain',
+      producedBy: { toolCallId: 'call-1' } });
+    readRunResourceBoundedMock.mockResolvedValue({ entry: { uri, kind: 'text', size: HUGE.length },
+      content: 'tail receipt', truncated: false, range: { startChar: 390_000, endChar: 390_012 } });
+    createCompletionMock.mockImplementationOnce(async (input: { messages: OpenAI.ChatCompletionMessageParam[];
+      tools?: OpenAI.ChatCompletionFunctionTool[];
+      localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>> }) => {
+      calls.push(input.messages);
+      expect(input.tools?.some(tool => tool.function.name === 'read_resource')).toBe(true);
+      expect(await input.localToolExecutors!.read_resource({ uri, start_char: 390_000, max_chars: 100 }))
+        .toMatchObject({ content: 'tail receipt' });
+      return { completion: { id: 'cmpl-native-recovery', object: 'chat.completion', created: 1, model: 'test-codex',
+        choices: [{ index: 0, finish_reason: 'stop', logprobs: null,
+          message: { role: 'assistant', content: 'recovered', refusal: null } }] } };
+    });
+    seedState('late-reader');
+    const result = await callModel('late-reader');
+    if (!result.success) throw new Error(result.error.message);
+    expect(result).toMatchObject({ success: true });
+    expect(readRunResourceBoundedMock).toHaveBeenCalledWith(uri,
+      expect.objectContaining({ startChar: 390_000, maxChars: 100 }));
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry by discarding an observation when its exact capture fails', async () => {
+    seedState('capture-failed');
+    writeRunResourceMock.mockRejectedValue(new Error('resource disk unavailable'));
+    const result = await callModel('capture-failed');
+    expect(result.success).toBe(false);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(toolContentOf(calls[0])).toBe(HUGE);
+  });
+
+  it('retains the reader for captured small results introduced only by the emergency receipt', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 6_100, maxTokens: 100 });
+    listRunResourcesMock.mockResolvedValue(Array.from({ length: 8 }, (_, index) => ({
+      uri: 'flujo://run/small-receipt/resource-' + index, kind: 'text', size: 1_500,
+      producedBy: { source: 'tool-result', toolCallId: 'call-' + index, payloadRole: 'tool-message' },
+    })));
+    let offered: OpenAI.ChatCompletionFunctionTool[] | undefined;
+    createCompletionMock.mockImplementationOnce(async (input: { messages: OpenAI.ChatCompletionMessageParam[];
+      tools?: OpenAI.ChatCompletionFunctionTool[] }) => {
+      calls.push(input.messages);
+      offered = input.tools;
+      return { completion: { id: 'cmpl-small-recovery', object: 'chat.completion', created: 1, model: 'test-model',
+        choices: [{ index: 0, finish_reason: 'stop', logprobs: null,
+          message: { role: 'assistant', content: 'continued', refusal: null } }] } };
+    });
+    const messages = [
+      { role: 'user', content: 'Do not repeat any completed action.', id: 'u-old', timestamp: 1 },
+      ...Array.from({ length: 8 }, (_, index) => [
+        { role: 'assistant', content: '', id: 'a-' + index, timestamp: 2 + index,
+          tool_calls: [{ id: 'call-' + index, type: 'function', function: { name: 'read', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'call-' + index, content: 'x'.repeat(1_500), id: 't-' + index, timestamp: 2 + index },
+      ]).flat(),
+      { role: 'user', content: 'Continue.', id: 'u-now', timestamp: 20 },
+    ];
+    seedState('small-receipt');
+    const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
+      tools: [{ type: 'function', function: { name: 'optional', description: 'schema '.repeat(8_000),
+        parameters: { type: 'object', properties: {} } } }],
+      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-receipt',
+    } as Parameters<typeof ModelHandler.callModel>[0]);
+    if (!result.success) throw new Error(result.error.message);
+    expect(JSON.stringify(calls[0])).toContain('flujo://run/small-receipt/');
+    expect(offered?.map(tool => tool.function.name)).toEqual(['read_resource']);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+  });
+
   it('retries once, shrinking the oversized recent tool result to a size-naming URI marker', async () => {
     seedState('conv-of');
     const result = await callModel('conv-of');

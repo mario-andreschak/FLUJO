@@ -369,6 +369,8 @@ export interface ExperimentalSettings {
    * `compactionEnabled`. Missing ⇒ 19000 (~15% of 128k context, targets 30-60% usage).
    */
   compactionKeepTokens?: number;
+  /** Optional 1–100 percent context threshold; per-model settings take precedence. */
+  compactionThresholdPercent?: number;
   /**
    * Opt in to wire-time visual archives for old bulky context (#356). Missing
    * values are migrated lazily to false, preserving byte-identical behaviour.

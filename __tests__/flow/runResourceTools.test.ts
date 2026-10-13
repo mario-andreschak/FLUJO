@@ -15,7 +15,7 @@ const readRunResourceMock = jest.fn();
 const getRunResourceLocalPathMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
-  readRunResource: (...args: unknown[]) => readRunResourceMock(...args),
+  readRunResourceBounded: (...args: unknown[]) => readRunResourceMock(...args),
   getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPathMock(...args),
   parseRunResourceUri: (uri: unknown) => {
     const SCHEME = 'flujo://run/';
@@ -108,7 +108,7 @@ describe('read_resource execution (#168)', () => {
     readRunResourceMock.mockReset();
     readRunResourceMock.mockResolvedValue({
       entry: { uri, name: 'evidence', mimeType: 'text/plain', size: 12, kind: 'text' },
-      contents: { contents: [{ uri, mimeType: 'text/plain', text: 'FULL CONTENT' }] },
+      content: 'FULL CONTENT', truncated: false, range: { startChar: 0, endChar: 12 },
     });
   });
 
@@ -121,7 +121,7 @@ describe('read_resource execution (#168)', () => {
     );
     expect(readRunResourceMock).toHaveBeenCalledWith(
       uri,
-      expect.objectContaining({ source: 'tool-read', nodeId: 'proc-1' }),
+      expect.objectContaining({ startChar: 0, access: expect.objectContaining({ source: 'tool-read', nodeId: 'proc-1' }) }),
     );
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({
       type: 'resource:read', server: 'flujo', uri, source: 'tool-read',
@@ -133,7 +133,7 @@ describe('read_resource execution (#168)', () => {
     const localPath = 'C:\\data\\run-resources\\conv-1\\res-9.dat';
     readRunResourceMock.mockResolvedValue({
       entry: { uri, name: 'clip', mimeType: 'video/mp4', size: 42, kind: 'blob' },
-      contents: { contents: [{ uri, mimeType: 'video/mp4', blob: 'AAAA' }] },
+      content: 'binary resource', truncated: false, range: { startChar: 0, endChar: 15 },
     });
     getRunResourceLocalPathMock.mockResolvedValue(localPath);
 
@@ -186,6 +186,23 @@ describe('read_resource execution (#168)', () => {
     const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri }, { conversationId: 'conv-1' });
     expect(outcome.success).toBe(false);
     expect(outcome.error).toContain('not found');
+  });
+
+  it('passes the bounded range and verification identity without a full-read fallback', async () => {
+    await executeRunResourceTool(READ_RESOURCE_TOOL_NAME,
+      { uri, start_char: 900_000, max_chars: 80, expected_sha256: 'abc' }, { conversationId: 'conv-1' });
+    expect(readRunResourceMock).toHaveBeenCalledWith(uri,
+      expect.objectContaining({ startChar: 900_000, maxChars: 80, expectedSha256: 'abc' }));
+  });
+
+  it('refuses invalid offsets and a failed payload verification', async () => {
+    const invalid = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri, start_char: -1 }, { conversationId: 'conv-1' });
+    expect(invalid.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+    readRunResourceMock.mockResolvedValue({ entry: { uri }, content: 'wrong', verification: { ok: false } });
+    const mismatched = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri, expected_sha256: 'abc' }, { conversationId: 'conv-1' });
+    expect(mismatched).toMatchObject({ success: false, error: expect.stringContaining('SHA-256') });
+    expect(mismatched).not.toHaveProperty('data');
   });
 });
 

@@ -1,4 +1,8 @@
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import { retainSummaryArtifacts, validateCompactionState } from '@/backend/execution/flow/compaction/state';
+import { emergencyRefitMessages } from '@/backend/execution/flow/handlers/emergencyContextRefit';
+import { refitCodexMessagesForInputLimit } from '@/backend/services/model/adapters/codexInputCompaction';
+import { toApiMessages } from '@/backend/execution/flow/buildNodeContext';
 import {
   buildCompactionPrompt,
   splitHistoryForCompaction,
@@ -8,6 +12,7 @@ import {
   COMPACTION_SUMMARY_MARKER,
   COMPACTION_SUMMARY_SECTIONS,
   estimateTokens,
+  validateCompactionSummary,
   type CompactHistoryOptions,
 } from '@/backend/execution/flow/handlers/summarizingCompaction';
 
@@ -28,6 +33,8 @@ const toolResult = (callId: string, content: string, o: Record<string, unknown> 
   msg({ role: 'tool', tool_call_id: callId, content, ...o });
 
 const bulk = (n: number) => 'x'.repeat(n);
+const anchored = (detail: string) => COMPACTION_SUMMARY_SECTIONS
+  .map((section, index) => section + '\n' + (index === 1 ? detail : '- None.')).join('\n\n');
 
 beforeEach(() => {
   seq = 0;
@@ -177,7 +184,7 @@ describe('compactHistory orchestrator (issue #248)', () => {
 
   it('builds a wire-only artifact without mutating canonical input', async () => {
     const messages = longHistory();
-    const d = deps('## Objective\n- ship it');
+    const d = deps(anchored('- ship it'));
     const before = JSON.parse(JSON.stringify(messages));
     const result = await compactHistory(messages, options({ nodeId: 'node-x' }), d);
 
@@ -213,11 +220,12 @@ describe('compactHistory orchestrator (issue #248)', () => {
   it('passes the previous summary to the model (update-previous-summary) and embeds an anchor URI', async () => {
     const messages = [
       assistant(`${COMPACTION_SUMMARY_MARKER}\n\nold facts`),
+      assistant(bulk(4_000)),
       user(bulk(4000)),
       assistant(bulk(4000)),
       user('recent'),
     ];
-    const summarize = jest.fn(async (_m: FlujoChatMessage[], _p: { system: string; user: string }) => 'merged anchor');
+    const summarize = jest.fn(async (_m: FlujoChatMessage[], _p: { system: string; user: string }) => anchored('merged anchor'));
     const writeAnchor = jest.fn(async (_text: string) => 'flujo://run/conv1/anchor-1');
     const result = await compactHistory(messages, options(), {
       summarize,
@@ -236,7 +244,7 @@ describe('compactHistory orchestrator (issue #248)', () => {
   it('does not lose facts across two consecutive compactions (fact carried through)', async () => {
     // First compaction produces a head containing FACT_A.
     const first = await compactHistory(longHistory(), options(), {
-      summarize: jest.fn(async () => '## Important Details\n- FACT_A: /etc/config.yaml'),
+      summarize: jest.fn(async () => anchored('- FACT_A: /etc/config.yaml')),
       now: () => 1,
       uuid: () => 'sum1',
     });
@@ -245,13 +253,13 @@ describe('compactHistory orchestrator (issue #248)', () => {
 
     // Second compaction over history that starts with the first summary head.
     const second = await compactHistory(
-      [firstSummary, user(bulk(4000)), assistant(bulk(4000)), user('recent')],
+      [firstSummary, assistant(bulk(4000)), user(bulk(4000)), assistant(bulk(4000)), user('recent')],
       options({ sourceDigest: 'source-digest-2' }),
       {
         // A well-behaved model preserves the still-true fact from <previous-summary>.
         summarize: jest.fn(async (_m: FlujoChatMessage[], prompt: { system: string; user: string }) => {
           expect(prompt.user).toContain('FACT_A: /etc/config.yaml');
-          return '## Important Details\n- FACT_A: /etc/config.yaml\n- FACT_B: new';
+          return anchored('- FACT_A: /etc/config.yaml\n- FACT_B: new');
         }),
         now: () => 2,
         uuid: () => 'sum2',
@@ -259,6 +267,111 @@ describe('compactHistory orchestrator (issue #248)', () => {
     );
     expect(summaryOf(second!).content).toContain('FACT_A: /etc/config.yaml');
     expect(summaryOf(second!).content).toContain('FACT_B: new');
+  });
+
+  it('rejects incomplete or non-reducing summaries before persisting an artifact', async () => {
+    expect(validateCompactionSummary('## Objective\n- only one section')).toBe(false);
+    const writeAnchor = jest.fn(async () => 'flujo://run/conv1/source');
+    const incomplete = await compactHistory(longHistory(), options(),
+      { summarize: async () => '## Objective\n- incomplete', writeAnchor });
+    const inflated = await compactHistory(longHistory(), options(),
+      { summarize: async () => anchored(bulk(20_000)), writeAnchor });
+    expect(incomplete).toBeNull();
+    expect(inflated).toBeNull();
+    expect(writeAnchor).not.toHaveBeenCalled();
+  });
+
+  it('retains developer instructions in their original role outside narrative summaries', async () => {
+    const instruction = msg({ role: 'developer', content: 'Never publish without approval.' });
+    const source = [instruction, assistant(bulk(8_000)), user('Continue.'), assistant('Recent.')];
+    const result = await compactHistory(source, options(), { summarize: async () => anchored('Narrative.') });
+    expect(result).not.toBeNull();
+    expect(result!.wireMessages[0]).toBe(instruction);
+    expect(result!.summarizedMessageIds).not.toContain(instruction.id);
+  });
+
+  it('retains Spanish prohibitions and successive corrections through ten projection compactions', async () => {
+    const original = user('No envíes correo. El pedido exacto es pedido-ñ-001.');
+    const correction = user('Corrijo: usa pedido-ñ-002. Sigue sin enviar correo.');
+    let wire = [original, assistant(bulk(8_000)), correction, assistant(bulk(8_000)), user('Continúa.')];
+    for (let round = 0; round < 10; round++) {
+      const source = [...wire, assistant(bulk(8_000)), user('Continúa.')];
+      const before = JSON.stringify(source);
+      const result = await compactHistory(source, options({ sourceDigest: 'round-' + round }),
+        { summarize: async () => anchored('Narrative omits every exact instruction.') });
+      expect(result).not.toBeNull();
+      expect(JSON.stringify(source)).toBe(before);
+      expect(result!.wireMessages).toEqual(expect.arrayContaining([original, correction]));
+      expect(result!.summarizedMessageIds).not.toContain(original.id);
+      expect(result!.summarizedMessageIds).not.toContain(correction.id);
+      const users = result!.wireMessages.filter(message => message.role === 'user');
+      expect(users.findIndex(message => message.id === original.id))
+        .toBeLessThan(users.findIndex(message => message.id === correction.id));
+      wire = result!.wireMessages;
+    }
+  });
+
+  it('archives complete tool observations and keeps exact execution receipt identifiers', async () => {
+    const call = asstCall('', 'send-pedido-ñ-002');
+    const receipt = toolResult('send-pedido-ñ-002', bulk(8_000));
+    const source = [user('Never send twice.'), call, receipt, assistant(bulk(8_000)), user('Continue.')];
+    const writeAnchor = jest.fn(async (_text: string) => 'flujo://run/conv1/receipt-source');
+    const result = await compactHistory(source, options(), { summarize: async () => anchored('Done.'), writeAnchor });
+    expect(result).not.toBeNull();
+    expect(summaryOf(result!).content).toContain('send-pedido-ñ-002');
+    expect(summaryOf(result!).content).toContain('result-observed');
+    expect(summaryOf(result!).content).toContain('flujo://run/conv1/receipt-source');
+    expect(JSON.parse(writeAnchor.mock.calls[0][0])).toEqual(expect.arrayContaining([call, receipt]));
+    const withoutArchive = await compactHistory(source, options(), { summarize: async () => anchored('Done.') });
+    expect(withoutArchive).toBeNull();
+  });
+
+  it('keeps the canonical wire for unresolved calls or persistence failures', async () => {
+    const summarize = jest.fn(async () => anchored('Done.'));
+    const pending = [user('Do not repeat.'), asstCall('', 'pending-1'), assistant(bulk(8_000)), user('Continue.')];
+    expect(await compactHistory(pending, options(), { summarize })).toBeNull();
+    expect(summarize).not.toHaveBeenCalled();
+    const failed = await compactHistory(longHistory(), options(), {
+      summarize, writeAnchor: async () => { throw new Error('disk unavailable'); },
+    });
+    expect(failed).toBeNull();
+  });
+
+  it('retains a bounded current projection cache without accumulating each summary generation', async () => {
+    const result = await compactHistory(longHistory(), options(), deps(anchored('Current.')));
+    let artifacts = [result!.artifact];
+    for (let index = 0; index < 200; index++) {
+      artifacts = retainSummaryArtifacts(artifacts, { ...result!.artifact,
+        nodeId: 'node-' + (index % 100), artifactId: 'artifact-' + index });
+    }
+    expect(artifacts.length).toBeLessThanOrEqual(64);
+    expect(artifacts.reduce((sum, artifact) => sum + artifact.summaryText.length, 0)).toBeLessThanOrEqual(1_048_576);
+    artifacts = retainSummaryArtifacts(artifacts, { ...result!.artifact, nodeId: 'node-99', artifactId: 'latest' });
+    expect(artifacts.filter(artifact => artifact.nodeId === 'node-99')).toHaveLength(1);
+    expect(artifacts.at(-1)?.artifactId).toBe('latest');
+    const restored = validateCompactionState({ schemaVersion: 1, artifacts: Array.from({ length: 300 }, (_, index) => ({
+      ...result!.artifact, nodeId: 'node-' + (index % 100), artifactId: 'legacy-' + index,
+      sourceStartId: undefined, sourceEndId: undefined,
+    })) }, 'conv1', []);
+    expect(restored!.artifacts.length).toBeLessThanOrEqual(64);
+    expect(new Set(restored!.artifacts.map(artifact => artifact.nodeId)).size).toBe(restored!.artifacts.length);
+  });
+
+  it('keeps summary execution receipts and recovery anchors through generic and Codex refits', async () => {
+    const source = [user('Never send twice.'), asstCall('', 'send-once-exact'),
+      toolResult('send-once-exact', bulk(20_000)), assistant(bulk(20_000)), user('Continue.')];
+    const result = await compactHistory(source, options(), { summarize: async () => anchored('Done.'),
+      writeAnchor: async () => 'flujo://run/conv1/receipt-source' });
+    const wire = toApiMessages([...result!.wireMessages,
+      ...Array.from({ length: 6 }, () => assistant(bulk(12_000))), user('Check the receipt.'), user('Continue.')]);
+    const generic = emergencyRefitMessages(wire, { target: 2_000, keepRecentMessages: 2,
+      measure: messages => JSON.stringify(messages).length });
+    const codex = refitCodexMessagesForInputLimit(wire, { targetCharacters: 8_192, keepRecentMessages: 2 });
+    for (const fitted of [generic, codex]) {
+      expect(fitted.capacityExceeded).toBe(false);
+      expect(JSON.stringify(fitted.messages)).toContain('send-once-exact');
+      expect(JSON.stringify(fitted.messages)).toContain('flujo://run/conv1/receipt-source');
+    }
   });
 });
 
