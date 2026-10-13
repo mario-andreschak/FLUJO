@@ -1,0 +1,20 @@
+{
+  "liveGithubMcpRead": true,
+  "intake": {
+    "totalCount": 10,
+    "rejectionCandidateSelected": false,
+    "note": "Current queue is legitimate existing product work; no issue was selected for a rejection write."
+  },
+  "replayIssue": {
+    "number": 513,
+    "state": "closed",
+    "state_reason": "completed",
+    "labels": [
+      "classification: WONTFIX"
+    ],
+    "updated_at": "2026-09-07T18:04:48Z",
+    "closed_at": "2026-09-07T18:04:48Z"
+  },
+  "replayWrites": 0,
+  "replayComments": 0
+}
