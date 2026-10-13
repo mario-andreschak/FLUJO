@@ -15,6 +15,7 @@ import type OpenAI from 'openai';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -1410,6 +1411,74 @@ describe('CodexAdapter — tool bridging', () => {
 });
 
 describe('CodexAdapter — SDK thread reuse', () => {
+  it.each(['known', 'missing', 'corrupt', 'oversized', 'incomplete', 'regressed', 'changed thread',
+    'invalid completed plain event', 'invalid completed compressed event'])
+  ('preserves the answer/context and reports only known invocation usage (%s baseline)', async (condition) => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-sdk-compressed-usage-'));
+    const directory = path.join(home, 'sessions/2026/10/13');
+    await fs.mkdir(directory, { recursive: true });
+    const threadId = '01a0ba76-e5e0-7a12-823b-5eed320794ca';
+    const secondId = condition === 'changed thread' ? '01a0ba76-e5e0-7a12-823b-5eed320794cb' : threadId;
+    const rollout = (id: string) => path.join(directory, `rollout-2026-10-13T00-00-00-${id}.jsonl`);
+    const firstUsage = { input_tokens: 10, output_tokens: 2, cached_input_tokens: 3,
+      cache_write_input_tokens: 0, reasoning_output_tokens: 1 };
+    const secondUsage = { input_tokens: 30, output_tokens: 6, cached_input_tokens: 9,
+      cache_write_input_tokens: 0, reasoning_output_tokens: 2 };
+    const line = (total: Record<string, number>, prompt: number, output: number) => JSON.stringify({
+      timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', info: {
+        total_token_usage: total, last_token_usage: { input_tokens: prompt, output_tokens: output,
+          total_tokens: prompt + output }, model_context_window: 258400,
+      } },
+    }) + '\n';
+    const reader = jest.requireActual<typeof import('@/backend/services/model/adapters/codexContextUsage')>(
+      '@/backend/services/model/adapters/codexContextUsage').readCodexTokenSnapshot;
+    readTokenSnapshotMock.mockImplementation((_runtimeHome: string, id: string) => reader(home, id));
+    runStreamedMock
+      .mockImplementationOnce(async () => {
+        await fs.writeFile(rollout(threadId), line(firstUsage, 10, 2));
+        return { events: eventStream([threadStarted(threadId), agentMessage('FIRST'), turnCompleted(firstUsage)])() };
+      })
+      .mockImplementationOnce(async () => {
+        await fs.writeFile(rollout(secondId), line(secondUsage, 20, 4));
+        return { events: eventStream([threadStarted(secondId), agentMessage('SECOND'), turnCompleted(secondUsage)])() };
+      });
+    const identity = { conversationId: 'compressed-usage-' + condition, nodeId: 'process', sessionResume: true };
+    try {
+      const first = await new CodexAdapter().createCompletion(baseInput(identity));
+      expect(first.completion.usage).toMatchObject({ prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 });
+      let encoded = zstdCompressSync(await fs.readFile(rollout(threadId)));
+      if (condition === 'corrupt') encoded = Buffer.from('corrupt');
+      if (condition === 'oversized') encoded = Buffer.alloc(8 * 1024 * 1024 + 1);
+      if (condition === 'incomplete') encoded = zstdCompressSync(line({ input_tokens: 10 }, 10, 2));
+      if (condition === 'regressed') encoded = zstdCompressSync(line({ ...firstUsage, input_tokens: 31, output_tokens: 7 }, 10, 2));
+      if (condition.startsWith('invalid completed')) {
+        const invalid = JSON.parse(line({ ...firstUsage, input_tokens: 20, output_tokens: 4 }, 20, 4));
+        invalid.payload.info.last_token_usage.total_tokens = 1;
+        const body = (await fs.readFile(rollout(threadId), 'utf8')) + JSON.stringify(invalid) + '\n';
+        if (condition === 'invalid completed plain event') await fs.writeFile(rollout(threadId), body);
+        else encoded = zstdCompressSync(body);
+      }
+      if (condition !== 'invalid completed plain event') {
+        if (condition !== 'missing') await fs.writeFile(rollout(threadId) + '.zst', encoded);
+        await fs.rm(rollout(threadId));
+      }
+      const result = await new CodexAdapter().createCompletion(baseInput({ ...identity, messages: [
+        { role: 'user', content: 'hi' }, { role: 'assistant', content: 'FIRST' }, { role: 'user', content: 'next' },
+      ] }));
+      expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+      expect(result.transcript?.some(message => message.role === 'assistant' && message.content === 'SECOND')).toBe(true);
+      expect(result.completion.choices[0].message.content).toBe('SECOND');
+      expect(result.contextUsage).toMatchObject({ promptTokens: 20, completionTokens: 4, totalTokens: 24,
+        contextWindow: 258400, contextWindowSource: 'runtime' });
+      if (condition === 'known') expect(result.completion.usage).toMatchObject({
+        prompt_tokens: 20, completion_tokens: 4, total_tokens: 24,
+        prompt_tokens_details: { cached_tokens: 6, cache_write_tokens: 0 },
+        completion_tokens_details: { reasoning_tokens: 1 },
+      });
+      else expect(result.completion).not.toHaveProperty('usage');
+    } finally { await fs.rm(home, { recursive: true, force: true }); }
+  });
+
   it.each([false, true])('subtracts previous native totals on resume (final snapshot missing: %s)', async (missingFinalSnapshot) => {
     const threadId = '01a0ba76-e5e0-7a12-823b-5eed320794ca';
     const firstUsage = { input_tokens: 5000, cached_input_tokens: 4000, output_tokens: 100 };
