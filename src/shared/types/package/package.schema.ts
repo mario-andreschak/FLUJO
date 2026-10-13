@@ -101,6 +101,7 @@ export const packagedModelSchema = z
     maxTurns: z.number().optional(),
     maxTokens: z.number().optional(),
     compactionThreshold: z.number().optional(),
+    compactionThresholdPercent: z.number().min(1).max(100).optional(),
     folder: z.string().optional(),
     favorite: z.boolean().optional(),
     apiKeyRef: packageApiKeyRefSchema,

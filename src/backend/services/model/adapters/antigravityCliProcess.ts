@@ -1,8 +1,19 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as nodeModule from 'node:module';
+import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { AntigravityCliEventDecoder, type AntigravityCliEvent } from './antigravityCliEvents';
 import { ANTIGRAVITY_CLI_VERSION, ANTIGRAVITY_CLI_TIMEOUT_MS, ANTIGRAVITY_LOGIN_INSTRUCTIONS, type AntigravityCliRuntime } from './antigravityCliRuntime';
+
+export function isAntigravityCliInstalled(): boolean {
+  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
+  try {
+    const runtime = nativeCreateRequire(path.join(process.cwd(), 'package.json'))('@flujo-ai/antigravity-cli') as {
+      paths?: () => { binary: string };
+    };
+    return typeof runtime.paths === 'function' && lstatSync(runtime.paths().binary).isFile();
+  } catch { return false; }
+}
 
 export async function resolveAntigravityCliEntry(): Promise<string> {
   const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
@@ -51,6 +62,54 @@ function terminateOwnedTree(child: ChildProcessWithoutNullStreams, force = false
     child.kill(force ? 'SIGKILL' : 'SIGTERM');
   }
   return Promise.resolve();
+}
+
+/** Closed, separate diagnostic/catalog commands. Never put quota or model
+ * commands into the active conversation stream. Output/errors are bounded. */
+export async function readAntigravityCliCommand(
+  runtime: AntigravityCliRuntime, command: 'version' | 'models', signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw antigravityCliAbortError();
+  const binary = await resolveAntigravityCliEntry();
+  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
+  const requirePackage = nativeCreateRequire(path.join(process.cwd(), 'package.json'));
+  const entry = command === 'version' ? binary : process.execPath;
+  const args = command === 'version' ? ['--version']
+    : [requirePackage.resolve('@flujo-ai/antigravity-cli/bin.cjs'), 'models', '--output-format', 'json'];
+  if (signal?.aborted) throw antigravityCliAbortError();
+  return new Promise((resolve, reject) => {
+    const child = spawn(entry, args, { cwd: runtime.workingDirectory, env: runtime.env as NodeJS.ProcessEnv,
+      shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    let output = '', bytes = 0, stderrBytes = 0;
+    let failure: Error | undefined;
+    let stopped: Promise<void> | undefined;
+    const stop = (error: Error) => { failure ??= error; stopped ??= terminateOwnedTree(child, true); };
+    const abort = () => stop(antigravityCliAbortError());
+    const deadline = setTimeout(() => stop(new Error('Antigravity model discovery timed out. Retry when the runtime is ready.')), 15_000);
+    deadline.unref();
+    signal?.addEventListener('abort', abort, { once: true });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 1024 * 1024) stop(new Error('Antigravity model catalog exceeded its limit.'));
+      else if (!failure) output += chunk;
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 64 * 1024) stop(new Error('Antigravity diagnostic output exceeded its limit.'));
+    });
+    child.on('error', () => stop(new Error('The verified Antigravity runtime could not start. Reinstall or update FLUJO.')));
+    child.stdin.on('error', () => stop(new Error('Antigravity diagnostic input failed.')));
+    child.stdin.end();
+    child.on('close', async code => {
+      clearTimeout(deadline); signal?.removeEventListener('abort', abort);
+      await stopped;
+      if (failure) reject(failure);
+      else if (code !== 0) reject(new Error('Antigravity model discovery failed. Check the connection authentication and runtime.'));
+      else resolve(output);
+    });
+    if (signal?.aborted) abort();
+  });
 }
 
 export async function runAntigravityCli(options: {

@@ -92,6 +92,20 @@ describe('Persona recovery owner review', () => {
     expect(screen.queryByText('persona-backup.zip')).not.toBeInTheDocument();
   });
 
+  it('refocuses the same local validation message on every retry', async () => {
+    render(<PersonaRecoverySettings />); chooseFile(0);
+    const inspect = screen.getByRole('button', { name: 'Preview recovery' });
+    inspect.focus(); fireEvent.click(inspect);
+    const message = translate('en', 'settings.personaRecovery.fileLimit');
+    expect((await screen.findByText(message)).closest('[role="alert"]')).toHaveFocus();
+
+    inspect.focus();
+    await act(async () => { fireEvent.click(inspect); });
+    expect(screen.getByText(message).closest('[role="alert"]')).toHaveFocus();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'New workspace name' })).toHaveValue('restored-workspace');
+  });
+
   it('shows a backup summary before creating a download', async () => {
     const blob = new Blob(['zip']);
     fetchMock.mockResolvedValueOnce({ ok: true, blob: async () => blob, headers: { get: () => encodeURIComponent(JSON.stringify({

@@ -21,7 +21,7 @@ import {
 
 const extension = 'io.modelcontextprotocol/tasks';
 const clientInfo = { name: 'flujo-wire-test', version: '1' };
-const clientCapabilities = { roots: { listChanged: true }, extensions: { 'test/other': {} } };
+const clientCapabilities = { elicitation: { form: {} }, roots: { listChanged: true }, extensions: { 'test/other': {} } };
 const metadata = { flowTicket: 'synthetic-owner-ticket', 'flujo/private-app': { id: 'synthetic-app' } };
 const timestamp = '2026-10-09T12:00:00.000Z';
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
@@ -37,14 +37,14 @@ class ReferenceServer extends Server {
  * with a schema-validating 2026 Tasks reference peer at the extension boundary.
  * The core SDK deliberately does not serve extension tools/call result shapes.
  */
-async function connectPeer(legacy = false, authorizeLateTaskCancellation?: (taskId: string) => boolean | Promise<boolean>, isAuthorityCurrent?: () => boolean | Promise<boolean>) {
+async function connectPeer(legacy = false, authorizeLateTaskCancellation?: (taskId: string) => boolean | Promise<boolean>, isAuthorityCurrent?: () => boolean | Promise<boolean>, handleInputRequest?: import('@/backend/services/mcp/tasksExtensionSession').TasksExtensionClientIdentity['handleInputRequest']) {
   const [transport, peer] = InMemoryTransport.createLinkedPair();
   const server = new ReferenceServer({ name: 'tasks-reference', version: '1' }, {
     capabilities: { tools: {}, extensions: { [extension]: {} } },
     supportedProtocolVersions: ['2026-07-28', '2025-11-25'],
   });
   if (!legacy) server.serveModern();
-  server.setRequestHandler('tools/list', () => ({ tools: [{ name: 'ordinary', inputSchema: { type: 'object' } }] }));
+  server.setRequestHandler('tools/list', () => ({ tools: [{ name: 'ordinary', inputSchema: { type: 'object' } }, { name: 'header-tool', inputSchema: { type: 'object', properties: { tenant: { type: 'string', 'x-mcp-header': 'Tenant' } } }, outputSchema: { type: 'array', items: { type: 'integer' } } }] }));
   server.setRequestHandler('tools/call', () => ({ content: [{ type: 'text', text: 'ordinary SDK response' }] }));
   await server.connect(peer);
   const previous = peer.onmessage;
@@ -56,6 +56,24 @@ async function connectPeer(legacy = false, authorizeLateTaskCancellation?: (task
     requests.push(message);
     if (!('method' in message) || !('id' in message)) { previous?.(message, extra); return; }
     const params = message.params ?? {};
+    if (message.method === 'tools/call' && (params.name === 'initial-input' || params.name === 'initial-input-task')) {
+      const response = params.inputResponses === undefined
+        ? { resultType: 'input_required', requestState: 'opaque +/ state', inputRequests: {
+            question: { method: 'elicitation/create', params: { mode: 'form', message: 'Proceed?', requestedSchema: { type: 'object' } } },
+          } }
+        : { resultType: 'complete', content: [{ type: 'text', text: 'initial input completed' }] };
+      if (params.name === 'initial-input-task' && params.inputResponses !== undefined) {
+        const taskId = 'initial-task';
+        const task = { resultType: 'task', taskId, status: 'working', createdAt: timestamp, lastUpdatedAt: timestamp, ttlMs: 60_000 };
+        tasks.set(taskId, GetTaskResultV2Schema.parse({ ...task, resultType: 'complete' }));
+        void peer.send({ jsonrpc: '2.0', id: message.id, result: task });
+      } else void peer.send({ jsonrpc: '2.0', id: message.id, result: response });
+      return;
+    }
+    if (message.method === 'tools/call' && params.name === 'header-tool') {
+      void peer.send({ jsonrpc: '2.0', id: message.id, result: { resultType: 'complete', content: [], structuredContent: (params.arguments as Record<string, unknown> | undefined)?.invalid ? 'wrong' : [7] } });
+      return;
+    }
     if (message.method === 'tools/call' && params.name === 'delayed-task') { waiting.push(message); return; }
     if (message.method === 'tools/call' && params.name === 'task') {
       const id = `task-${++count}`;
@@ -93,7 +111,7 @@ async function connectPeer(legacy = false, authorizeLateTaskCancellation?: (task
   const client = new Client(clientInfo, { capabilities: clientCapabilities, versionNegotiation: { mode: legacy ? 'legacy' : 'auto' } });
   const errors = jest.fn();
   client.onerror = errors;
-  registerTasksExtensionClient(client, { endpointId: 'synthetic-reference-endpoint', clientInfo, clientCapabilities, authorizeLateTaskCancellation, isAuthorityCurrent });
+  registerTasksExtensionClient(client, { endpointId: 'synthetic-reference-endpoint', clientInfo, clientCapabilities, authorizeLateTaskCancellation, isAuthorityCurrent, handleInputRequest });
   await client.connect(transport);
   return { client, transport, peer, server, requests, tasks, waiting, errors,
     async close() { await closeTasksExtensionSession(client); await client.close(); await server.close(); },
@@ -335,12 +353,12 @@ describe('2026 MCP Tasks extension session', () => {
   });
 
   test('authority is checked again before returning a real remote result', async () => {
-    const authority = jest.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    const authority = jest.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
     const fixture = await connectPeer(false, undefined, authority);
     try {
       const bundle = getTasksExtensionSession(fixture.client)!;
       await expect(bundle.callTool({ name: 'task' })).rejects.toThrow(/authority/);
-      expect(authority).toHaveBeenCalledTimes(2);
+      expect(authority).toHaveBeenCalledTimes(3);
       expect(fixture.requests.filter(message => 'method' in message && message.method === 'tools/call')).toHaveLength(1);
       expect(fixture.requests.filter(message => 'method' in message && message.method === 'tasks/cancel')).toHaveLength(0);
       expect(getTasksExtensionSession(fixture.client)).toBeUndefined();
@@ -426,4 +444,64 @@ describe('2026 MCP Tasks extension session', () => {
     current = false; reply?.({ action: 'accept' });
     await rejected;
   });
+});
+
+
+test('initial modern input is fulfilled with opaque state and fresh request IDs', async () => {
+  const input = jest.fn().mockResolvedValue({ action: 'accept', content: { answer: 'yes' } });
+  const fixture = await connectPeer(false, undefined, undefined, input);
+  try {
+    const result = await getTasksExtensionSession(fixture.client)!.callTool({ name: 'initial-input', arguments: { ownerId: null } }, { expectedConversationId: 'conversation' });
+    expect(result).toMatchObject({ resultType: 'complete', content: [{ text: 'initial input completed' }] });
+    const rounds = fixture.requests.filter(message => 'method' in message && message.method === 'tools/call' && message.params?.name === 'initial-input');
+    expect(rounds).toHaveLength(2);
+    expect(rounds[0]).not.toMatchObject({ id: (rounds[1] as { id: unknown }).id });
+    expect(rounds[1]).toMatchObject({ params: { requestState: 'opaque +/ state', arguments: { ownerId: null }, inputResponses: { question: { action: 'accept', content: { answer: 'yes' } } } } });
+    expect(input.mock.calls[0][2]).toBe('conversation');
+  } finally { await fixture.close(); }
+});
+
+test('cancellation while initial input waits terminates without a retry', async () => {
+  const input = jest.fn(() => new Promise<never>(() => {}));
+  const fixture = await connectPeer(false, undefined, undefined, input);
+  try {
+    const controller = new AbortController();
+    const pending = getTasksExtensionSession(fixture.client)!.callTool({ name: 'initial-input' }, { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    for (let attempt = 0; attempt < 20 && !input.mock.calls.length; attempt++) await tick();
+    expect(input).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await rejected;
+    expect(fixture.requests.filter(message => 'method' in message && message.method === 'tools/call')).toHaveLength(1);
+  } finally { await fixture.close(); }
+});
+
+
+test('initial input can create exactly one task after the authorized response', async () => {
+  const fixture = await connectPeer(false, undefined, undefined, async () => ({ action: 'accept', content: { answer: 'yes' } }));
+  try {
+    const answer = await getTasksExtensionSession(fixture.client)!.callTool({ name: 'initial-input-task' });
+    expect(answer).toMatchObject({ resultType: 'task', taskId: 'initial-task' });
+    expect(fixture.tasks.size).toBe(1);
+    const calls = fixture.requests.filter(message => 'method' in message && message.method === 'tools/call');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ params: { requestState: 'opaque +/ state', inputResponses: { question: { action: 'accept' } } } });
+  } finally { await fixture.close(); }
+});
+
+test('raw Tasks wire dispatch mirrors declared headers and validates structured output', async () => {
+  const fixture = await connectPeer();
+  const headers: Record<string, string>[] = [];
+  const previous = fixture.transport.send.bind(fixture.transport);
+  fixture.transport.send = async (message, options) => {
+    if ('method' in message && message.method === 'tools/call' && message.params?.name === 'header-tool') headers.push({ ...(options as { headers?: Record<string, string> } | undefined)?.headers });
+    return previous(message, options);
+  };
+  try {
+    const bundle = getTasksExtensionSession(fixture.client)!;
+    await expect(bundle.callTool({ name: 'header-tool', arguments: { tenant: ' a\né ' } })).resolves.toMatchObject({ structuredContent: [7] });
+    expect(headers[0]).toMatchObject({ 'Mcp-Param-Tenant': '=?base64?' + Buffer.from(' a\né ').toString('base64') + '?=' });
+    await expect(bundle.callTool({ name: 'header-tool', arguments: { tenant: 'safe', invalid: true } })).rejects.toThrow('does not match its schema');
+    expect(headers).toHaveLength(2);
+  } finally { await fixture.close(); }
 });

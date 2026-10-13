@@ -1,9 +1,7 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
-import { loadItem } from '@/utils/storage/backend';
-import { StorageKey } from '@/shared/types/storage';
-import { Flow } from '@/frontend/types/flow/flow';
+import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { createLogger } from '@/utils/logger';
 
@@ -16,8 +14,8 @@ async function GET_handler(_request: Request) {
   try {
     log.info('Fetching flows and models for models endpoint');
 
-    // Load all flows directly from storage
-    const flows = await loadItem<Flow[]>(StorageKey.FLOWS, []);
+    // Use the same collection/migration path as saved agents and execution.
+    const flows = await flowService.loadFlows();
     log.debug('Flows loaded successfully', { count: flows.length });
 
     // Transform flows into the required format

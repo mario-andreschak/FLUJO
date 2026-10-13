@@ -109,7 +109,7 @@ describe('proxyListTools', () => {
     const r = await proxyListTools('srv');
     expect(r.tools).toHaveLength(1);
     expect(r.tools[0].name).toBe('echo');
-    expect(svc.listServerTools).toHaveBeenCalledWith('srv', 'all');
+    expect(svc.listServerTools).toHaveBeenCalledWith('srv', 'all', undefined);
   });
 
   it('throws when the downstream connection fails', async () => {
@@ -314,4 +314,27 @@ describe('proxy MCP Apps capability forwarding', () => {
     svc.getClient.mockReturnValue({ getServerCapabilities: () => ({}) });
     await expect(getProxyAppsCapability('srv')).resolves.toBeUndefined();
   });
+});
+
+
+test('proxy forwards explicit catalog cursors and the response continuation', async () => {
+  svc.connectServer.mockResolvedValue({ success: true });
+  svc.listServerTools.mockResolvedValue({ tools: [], nextCursor: 'opaque-next' });
+  svc.listServerResources.mockResolvedValue({ resources: [], nextCursor: 'opaque-next' });
+  svc.listServerResourceTemplates.mockResolvedValue({ resourceTemplates: [], nextCursor: 'opaque-next' });
+  expect(await proxyListTools('srv', 'opaque')).toEqual({ tools: [], nextCursor: 'opaque-next' });
+  expect(await proxyListResources('srv', 'opaque')).toEqual({ resources: [], nextCursor: 'opaque-next' });
+  expect(await proxyListResourceTemplates('srv', 'opaque')).toEqual({ resourceTemplates: [], nextCursor: 'opaque-next' });
+  expect(svc.listServerTools).toHaveBeenCalledWith('srv', 'all', 'opaque');
+  expect(svc.listServerResources).toHaveBeenCalledWith('srv', 'opaque');
+  expect(svc.listServerResourceTemplates).toHaveBeenCalledWith('srv', 'opaque');
+});
+
+test('proxy carries cancellation/progress and preserves protocol error code/data', async () => {
+  svc.connectServer.mockResolvedValue({ success: true });
+  svc.callTool.mockResolvedValue({ success: false, error: 'invalid arguments', protocolError: { code: -32602, data: { field: 'message' } } });
+  const controller = new AbortController();
+  const onProgress = jest.fn();
+  await expect(proxyCallTool('srv', 'echo', {}, { signal: controller.signal, onProgress })).rejects.toMatchObject({ code: -32602, data: { field: 'message' } });
+  expect(svc.callTool.mock.calls[0].slice(4, 7)).toEqual([onProgress, undefined, controller.signal]);
 });

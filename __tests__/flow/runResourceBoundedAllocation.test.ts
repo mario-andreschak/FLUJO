@@ -114,6 +114,39 @@ it('streams the complete SHA-256 while retaining only the requested prefix', asy
   ]);
 });
 
+it('recovers a verified fact near the tail without retaining the skipped text', async () => {
+  const prefix = 'á😀'.repeat(200_000);
+  const text = prefix + 'pedido-ñ-002: NO enviar correo.';
+  await fs.writeFile(filename, text);
+  const expectedSha256 = createHash('sha256').update(text).digest('hex');
+  const counts = instrumentPayload();
+  const result = await readRunResourceBounded(entry.uri,
+    { startChar: prefix.length, maxChars: 200, expectedSha256, access });
+  expect(result).toMatchObject({ content: 'pedido-ñ-002: NO enviar correo.', truncated: false,
+    range: { startChar: prefix.length, endChar: text.length }, verification: { ok: true } });
+  expect(counts.maxBufferBytes).toBeLessThanOrEqual(64 * 1024);
+  expect(counts.wholeFilePayloadBytes).toBe(0);
+  expect(counts.closed).toBe(counts.opened);
+});
+
+it('returns navigable consecutive UTF-16 ranges without missing bytes at decoder boundaries', async () => {
+  const text = 'a'.repeat(65_533) + '😀é終' + 'b'.repeat(10);
+  await fs.writeFile(filename, text);
+  const first = await readRunResourceBounded(entry.uri, { startChar: 65_530, maxChars: 7, access });
+  expect(first?.content).toBe(text.slice(65_530, 65_537));
+  expect(first?.range.nextChar).toBe(65_537);
+  const second = await readRunResourceBounded(entry.uri, { startChar: first!.range.nextChar!, maxChars: 100, access });
+  expect(first!.content + second!.content).toBe(text.slice(65_530));
+  expect(second?.truncated).toBe(false);
+  expect(second?.range.nextChar).toBeUndefined();
+});
+
+it.each([-1, 0.5, NaN, Infinity])('refuses an invalid targeted offset %s before payload allocation', async startChar => {
+  const counts = instrumentPayload();
+  await expect(readRunResourceBounded(entry.uri, { startChar, maxChars: 30, access })).rejects.toThrow('offset');
+  expect(counts.opened).toBe(0);
+});
+
 it.each([65_535, 65_536, 65_537, 65_538, 65_539])(
   'preserves UTF-8 chunk boundaries and UTF-16 slicing at %i characters', async maxChars => {
     const bytes = Buffer.concat([Buffer.from('a'.repeat(65_535) + '😀é'), Buffer.from([0xff])]);

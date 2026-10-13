@@ -70,7 +70,25 @@ describe('provider-neutral message normalization', () => {
     );
 
     expect(normalized.text).toContain('<conversation_history>');
-    expect(normalized.text).toContain('[prior action] lookup\narguments: {"q":"x"}');
-    expect(normalized.text).toContain('[prior action result] lookup\nfound');
+    expect(normalized.text).toContain('[prior action] lookup (call_id: call_1)\narguments: {"q":"x"}');
+    expect(normalized.text).toContain('[prior action result] lookup (call_id: call_1)\nfound');
+  });
+
+  it('retains developer instructions and exact unarchived tool payloads/identifiers', () => {
+    const instruction = 'No publicar sin aprobación. '.repeat(300);
+    const argumentsText = JSON.stringify({ path: 'C:/pedido-ñ-002', content: 'A'.repeat(8_000) });
+    const resultText = 'receipt-ñ-002 ' + 'R'.repeat(12_000);
+    const input = normalizeMessageInput([
+      { role: 'developer', content: instruction },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'send-once-002', type: 'function',
+        function: { name: 'send', arguments: argumentsText } }] },
+      { role: 'tool', tool_call_id: 'send-once-002', content: resultText },
+    ]);
+    expect(input.systemPrompt).toContain(instruction);
+    expect(input.systemPrompt).toContain('<developer_instructions>');
+    expect(input.text).toContain(argumentsText);
+    expect(input.text).toContain(resultText);
+    expect(input.text.match(/call_id: send-once-002/g)).toHaveLength(2);
+    expect(input.text).not.toContain('[truncated');
   });
 });

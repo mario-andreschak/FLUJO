@@ -40,3 +40,18 @@ it('preserves the saved ID during discovery failure and does not replace it with
   await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
   expect(screen.getByRole('combobox', { name: 'Technical name' })).toHaveValue('saved-model');
 });
+
+it('discovers Antigravity account models without a key, retains a custom slug and exposes no unverified effort', async () => {
+  mockDiscover.mockResolvedValue([{ id: 'future/custom-model', name: 'Custom model' }]);
+  const save = jest.fn(async (_model: Model) => ({ success: true }));
+  render(<ThemeProvider theme={createTheme()}><ModelModal open model={{ ...model, provider: 'antigravity-cli', adapter: 'antigravity-cli', name: 'saved/custom' }} onSave={save} onClose={jest.fn()} /></ThemeProvider>);
+  await waitFor(() => expect(mockDiscover).toHaveBeenCalledWith('', 'subscription', undefined, '', 'antigravity-cli'));
+  const name = screen.getByRole('combobox', { name: 'Technical name' });
+  fireEvent.change(name, { target: { value: 'future/custom-model' } });
+  fireEvent.keyDown(name, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: /Custom model future\/custom-model/ }));
+  expect(screen.queryByRole('combobox', { name: 'Effort' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][0]).toMatchObject({ name: 'future/custom-model', ApiKey: '' });
+});
