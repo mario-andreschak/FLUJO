@@ -15,7 +15,7 @@ jest.mock('@/backend/services/mcp/tasksProtocol', () => ({ cancelRemoteTask: jes
 }) }));
 jest.mock('@/backend/services/mcp/elicitationContext', () => ({ getElicitationContext: jest.fn() }));
 jest.mock('@/backend/services/mcp/taskInputRegistry', () => ({ clearTaskInputState: jest.fn(), getTaskInputState: jest.fn(), outstandingTaskInputKeys: () => [] }));
-jest.mock('@/backend/services/mcp/tasksExtensionSession', () => ({ getTasksExtensionSession: jest.fn(), handleTasksInputRequest: jest.fn(), wasModernTasksExtensionClient: () => false }));
+jest.mock('@/backend/services/mcp/tasksExtensionSession', () => ({ getTasksExtensionSession: jest.fn(), handleTasksInputRequest: jest.fn(), wasModernTasksExtensionClient: () => false, taskToolOutputValidator: jest.requireActual('@/backend/services/mcp/tasksExtensionSession').taskToolOutputValidator }));
 
 import { runRemoteTaskLifecycle } from '@/backend/services/mcp/clientTasks';
 import { acquirePollSlot, createRemoteTaskRecord, getMcpRemoteTaskSettings, patchRemoteTaskRecord } from '@/backend/services/mcp/remoteTaskStore';
@@ -26,7 +26,7 @@ import { getTasksExtensionSession, handleTasksInputRequest } from '@/backend/ser
 const release = jest.fn();
 const updateTask = jest.fn();
 const transport = {};
-const client = { transport } as unknown as Client;
+const client = { transport, listTools: jest.fn() } as unknown as Client;
 const attended = { conversationId: 'conversation-owner', getUnattended: () => false };
 const baseTask: McpTask = { generation: '2026-07-28', taskId: 'remote-task', status: 'working', ttl: null, pollInterval: 10 };
 const inputTask: McpTask = { ...baseTask, status: 'input_required', inputRequests: {
@@ -43,6 +43,7 @@ async function advance(ms = 50) { await jest.advanceTimersByTimeAsync(ms); }
 beforeEach(() => {
   jest.clearAllMocks(); jest.useFakeTimers();
   Object.assign(client, { transport });
+  jest.mocked(client.listTools).mockResolvedValue({ tools: [{ name: 'task-tool', inputSchema: { type: 'object' } }] });
   jest.mocked(acquirePollSlot).mockResolvedValue({ release });
   jest.mocked(getMcpRemoteTaskSettings).mockResolvedValue({ minPollIntervalMs: 1, maxPollIntervalMs: 100,
     defaultPollIntervalMs: 10, fallbackTtlMs: 10_000, inputRequiredTimeoutMs: 200,
@@ -243,4 +244,14 @@ test('legacy poll sleep is abort-aware and preserves the once-only cancellation 
 test('a completed tool-level error preserves ordinary RPC success and the original isError/content payload', async () => {
   const failedTool = { ...result, isError: true };
   expect(await run({ ...baseTask, status: 'completed', result: failedTool })).toMatchObject({ success: true, data: failedTool });
+});
+
+
+test('restart output validation rejects a schema mismatch while retaining remote completion', async () => {
+  jest.mocked(client.listTools).mockResolvedValue({ tools: [{ name: 'task-tool', inputSchema: { type: 'object' }, outputSchema: { type: 'array', items: { type: 'integer' } } }] } as never);
+  const payload = { resultType: 'complete', content: [], structuredContent: 'wrong' };
+  const answer = await run({ ...baseTask, status: 'completed', result: payload });
+  expect(answer).toMatchObject({ success: false, errorType: 'task-protocol-invalid', statusCode: 502 });
+  expect(patchRemoteTaskRecord).toHaveBeenLastCalledWith('record', expect.objectContaining({ resultRetrieved: false, diagnostic: 'protocol-invalid' }));
+  expect(cancelRemoteTask).not.toHaveBeenCalled();
 });

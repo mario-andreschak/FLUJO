@@ -1,4 +1,4 @@
-import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationMixed } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
@@ -46,15 +46,20 @@ export function matchesOAuthState(
 export class MCPOAuthClientProvider implements OAuthClientProvider {
   private config: MCPStreamableConfig;
   private _redirectUrl: string;
-  private _clientMetadata: OAuthClientMetadata;
+  private _clientMetadata: OAuthClientMetadata & { application_type: 'native' | 'web' };
+  private discovery?: OAuthDiscoveryState;
+  private observedIssuer?: string;
+  private issuerResponseSupported?: boolean;
 
-  constructor(config: MCPStreamableConfig, redirectUrl: string) {
+  constructor(config: MCPStreamableConfig, redirectUrl: string, authorizationDiscovery?: OAuthDiscoveryState) {
     this.config = config;
+    this.discovery = authorizationDiscovery;
     this._redirectUrl = redirectUrl;
     
     // Build client metadata from config
     this._clientMetadata = {
       redirect_uris: [redirectUrl],
+      application_type: ['localhost', '127.0.0.1', '[::1]'].includes(new URL(redirectUrl).hostname) ? 'native' : 'web',
       client_name: `FLUJO MCP Client - ${config.name}`,
       client_uri: 'https://github.com/mario-andreschak/FLUJO',
       grant_types: ['authorization_code', 'refresh_token'],
@@ -81,8 +86,38 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     this.config.oauthState = state;
     this.config.oauthStateWorkspace = getCurrentWorkspace();
     this.config.oauthStateCreatedAt = Date.now();
+    this.config.oauthStateDiscovery = this.discovery;
     return state;
   }
+
+  /** Preserve RFC9207 metadata also when the SDK's OIDC schema strips extra fields. */
+  readonly oauthFetch: typeof fetch = async (input, init) => {
+    const response = await fetch(input, init);
+    if (response.ok && response.headers.get('content-type')?.includes('json')) {
+      try {
+        const metadata = await response.clone().json() as Record<string, unknown>;
+        if (typeof metadata.issuer === 'string' && typeof metadata.authorization_endpoint === 'string'
+            && typeof metadata.token_endpoint === 'string') {
+          this.observedIssuer = metadata.issuer;
+          this.issuerResponseSupported = metadata.authorization_response_iss_parameter_supported === true;
+        }
+      } catch { /* SDK parsing remains authoritative for malformed responses. */ }
+    }
+    return response;
+  };
+
+  /** Keep discovery only for the current transaction, never as a cross-issuer cache. */
+  saveDiscoveryState(state: OAuthDiscoveryState): void {
+    if (state.authorizationServerMetadata?.issuer !== undefined
+        && state.authorizationServerMetadata.issuer !== String(state.authorizationServerUrl)) {
+      throw new Error('OAuth authorization metadata issuer does not match discovery');
+    }
+    this.discovery = this.observedIssuer === state.authorizationServerMetadata?.issuer
+      ? { ...state, authorizationServerMetadata: { ...state.authorizationServerMetadata, authorization_response_iss_parameter_supported: this.issuerResponseSupported } } as OAuthDiscoveryState
+      : state;
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined { return this.discovery; }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
     const storedClient = await readOAuthClientInformation(this.config);
@@ -182,9 +217,9 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       update.oauthState = undefined;
       update.oauthStateWorkspace = undefined;
       update.oauthStateCreatedAt = undefined;
+      update.oauthStateDiscovery = undefined;
     }
-    // Note: scope 'discovery' is a no-op — FLUJO does not cache OAuth discovery state;
-    // the SDK's auth() re-discovers (RFC 9728) on each call, so there is nothing to clear.
+    if (scope === 'all' || scope === 'discovery') this.discovery = undefined;
 
     await this.persist(update);
   }
@@ -288,7 +323,8 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
  */
 export function createOAuthClientProvider(
   config: MCPStreamableConfig,
-  redirectUrl: string = 'http://localhost:4200/api/oauth/callback'
+  redirectUrl: string = 'http://localhost:4200/api/oauth/callback',
+  authorizationDiscovery?: OAuthDiscoveryState,
 ): MCPOAuthClientProvider {
-  return new MCPOAuthClientProvider(config, redirectUrl);
+  return new MCPOAuthClientProvider(config, redirectUrl, authorizationDiscovery);
 }

@@ -4,6 +4,14 @@ Audit target: [SEP-1865, stable revision `2026-01-26`](https://github.com/modelc
 
 Audited FLUJO revision: `a3612f93dcb83ac3d909698bdeae34c26ee31ef8` on `main`. The protocol host implementation originated in `eb190553a0c4895ecdd0817d15305903a1cf8174`. Commit `fdd591816c3a3a61f892c8597077224dffc6f89e` later added the MCP Apps management dashboard, and `a3612f93dcb83ac3d909698bdeae34c26ee31ef8` changed unattended-mode flow tooling; neither changed the mapped host protocol paths or compliance tests.
 
+October 12 reconciliation: the current outer iframe uses `allow-scripts
+allow-same-origin` on a distinct sandbox origin. The inner View receives the
+intersection of requested and owner-granted permissions; CSP continues to restrict
+network/frame/resource domains. The current candidate pins Apps 2.0.3 and uses the 2026-01-26 wire protocol.
+This package version does not replace candidate browser acceptance. Historical automated results
+below are not a current browser/deployment certification. Current consent/origin/CSP/
+teardown browser acceptance remains release pre-flight under #1093.
+
 Outcomes use these meanings:
 
 - **Compliant** — the applicable stable host requirement is implemented and has automated evidence.
@@ -24,7 +32,7 @@ Outcomes use these meanings:
 | App-only tools never enter the model's list | Model-facing filtering in `src/backend/services/mcp/tools.ts` and `appsProtocol.ts` | `__tests__/mcp/toolVisibility.test.ts`, `__tests__/mcp/toolNamespace.test.ts` | **Compliant.** |
 | Apps may call only app-visible tools from the same server connection | App-call authorization in `appsProtocol.ts` and `src/backend/services/mcp/index.ts`; tool API route | `__tests__/mcp/mcpAppToolRoute.test.ts`, `__tests__/mcp/toolVisibility.test.ts` | **Compliant.** Cross-server and model-only calls are rejected. |
 | Web host uses a different-origin Sandbox proxy | Sandbox listener/proxy in `src/backend/mcpApps/sandboxServer.ts`; bootstrap route `src/app/api/mcp/app-sandbox/route.ts`; frame host in `McpAppFrame.tsx` | `__tests__/mcp/sandboxRelay.test.ts`, `__tests__/mcp/sandboxCsp.test.ts`, `McpAppFrameCompliance.test.ts` | **Compliant security boundary.** Deployment must provide a distinct origin; startup fails closed for invalid production configuration. |
-| Sandbox/View iframe is restricted and communication stays under host control | Proxy relay filtering in `sandboxServer.ts`; iframe policy in `McpAppFrame.tsx` | `sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts` | **Intentional restriction.** FLUJO grants scripts but omits `allow-same-origin`, forms, popups, and top navigation. This is stricter than the stable proxy example and does not broaden App authority. |
+| Sandbox/View iframe is restricted and communication stays under host control | Proxy relay filtering in `sandboxServer.ts`; iframe policy in `McpAppFrame.tsx` | `sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts` | **Source-supported boundary.** The outer proxy has required `allow-scripts allow-same-origin` on a separate origin; the inner View gets only consented permissions and declared CSP. Current browser/runtime qualification remains pending. |
 | Sandbox readiness/resource readiness and reserved messages are not exposed to the View | Relay lifecycle and reserved-prefix filtering in `sandboxServer.ts` and `McpAppFrame.tsx` | `__tests__/mcp/sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts` | **Compliant.** Host messages are held until initialization completes. |
 | CSP is derived from declared domains with restrictive defaults and no undeclared-domain widening | CSP normalization in `src/shared/utils/mcpApps.ts`; response CSP and `frame-ancestors` in `sandboxServer.ts` | `__tests__/mcp/sandboxCsp.test.ts`, `__tests__/mcp/mcpApps.test.ts`, `McpAppFrameCompliance.test.ts` | **Compliant.** Invalid schemes/origins are discarded; objects and undeclared frames/connections remain blocked. |
 | Requested permissions are host-controlled and effective grants are reported | Permission normalization and iframe `allow` construction in `mcpApps.ts`/`McpAppFrame.tsx`; host capabilities from the bridge | `McpAppFrameCompliance.test.ts`, `sandboxCsp.test.ts` | **Compliant.** Camera, microphone, geolocation, and clipboard-write are deny-by-default and require declaration plus host approval. |

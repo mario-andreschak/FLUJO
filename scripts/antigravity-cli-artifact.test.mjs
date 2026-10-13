@@ -16,7 +16,7 @@ test('the pinned production native executable verifies its receipt and launches 
   assert.ok(!application.dependencies['@google/gemini-cli'], 'The replaced Gemini CLI must not ship');
   const { wrapper, packageRoot } = assertPackagedBinary(path.join(root, 'package.json'));
   const artifacts = JSON.parse(readFileSync(path.join(packageRoot, 'artifacts.json'), 'utf8'));
-  assert.equal(wrapper.version, '1.2.13');
+  assert.equal(wrapper.version, '1.3.3');
   assert.deepEqual(Object.keys(artifacts.platforms).sort(), [
     'darwin_amd64', 'darwin_arm64', 'linux_amd64', 'linux_amd64_musl',
     'linux_arm64', 'linux_arm64_musl', 'windows_amd64', 'windows_arm64',

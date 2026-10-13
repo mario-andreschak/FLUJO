@@ -25,6 +25,19 @@ const codexCtorMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
   acquireOrdinaryCodexExecutable: jest.fn(async () => ({ executable: undefined, release: jest.fn(async () => {}) })),
   readOrdinaryCodexVersion: jest.fn(async () => '0.162.1'),
+  readCodexRuntimeCompatibility: jest.fn(async () => ({ cliVersion: '0.162.1', sdkVersion: '0.162.1', protocolContract: 'flujo-codex-app-server-v1' })),
+}));
+// Existing SDK/private/native contract regressions retain the explicit fallback.
+// Ordinary RPC lifecycle is exercised separately in codexAppServerThread.test.ts.
+const previousAppServer = process.env.FLUJO_CODEX_APP_SERVER;
+beforeEach(() => { process.env.FLUJO_CODEX_APP_SERVER = '0'; });
+afterAll(() => {
+  if (previousAppServer === undefined) delete process.env.FLUJO_CODEX_APP_SERVER;
+  else process.env.FLUJO_CODEX_APP_SERVER = previousAppServer;
+});
+jest.mock('@/backend/services/model/adapters/codexSessionStore', () => ({
+  ...jest.requireActual('@/backend/services/model/adapters/codexSessionStore'),
+  codexSessionAccountScope: jest.fn(async () => 'test-account'),
 }));
 const startThreadMock = jest.fn();
 const resumeThreadMock = jest.fn();
@@ -264,9 +277,7 @@ describe('CodexAdapter — thread setup', () => {
     const runtime = (jest.requireMock('@/backend/services/model/adapters/codexRuntimeHome') as {
       prepareCodexRuntimeEnvironment: jest.Mock;
     }).prepareCodexRuntimeEnvironment;
-    const catalog = (jest.requireMock('@/backend/services/model/adapters/codexModelCatalog') as {
-      resolveCodexModelCatalogPath: jest.Mock;
-    }).resolveCodexModelCatalogPath;
+    const catalog = prepareModelCatalogMock;
     runtime.mockClear();
     catalog.mockClear();
 

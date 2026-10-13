@@ -1,10 +1,13 @@
-# MCP Skills (experimental)
+# MCP Skills
 
-FLUJO implements the draft MCP Skills extension identified by
-`io.modelcontextprotocol/skills`. The wire adapter is frozen to SEP-2640 pull
-request head `a3e147ca2710f68214247aecc729731ee1ae8d03` (updated 2026-08-29).
-Because the SEP remains a draft, a future revision may require a compatibility
-update.
+FLUJO's optional `io.modelcontextprotocol/skills` adapter is reconciled with
+[Final SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/b0a66b133ddfaf193a70b526a31bc2aa7172f28a/seps/2640-skills-extension.md).
+The retained methods, entries, digests, 512-file/16MiB limits, nested skill consent,
+and direct `skills/get` retrieval agree with the Final contract. SDK1 and split-SDK
+clients advertise the extension only under the server's explicit Skills opt-in.
+An empty/partial listing does not prevent direct URI retrieval. Browser and installed
+qualification remain separate from source/fixture results; see
+[MCP conformance qualification](mcp-conformance-1093-2026-10-12.md).
 
 ## Enabling Skills
 
@@ -13,7 +16,7 @@ individual server card. FLUJO then reconnects that server, inspects its
 server-side extension capability, and calls `skills/list` or `skills/get`
 only when both the local opt-in and the advertised extension are present.
 When Skills are enabled for a server, FLUJO also advertises the client-side
-`io.modelcontextprotocol/skills` extension during initialization. Servers that
+`io.modelcontextprotocol/skills` extension during initialization or on modern request metadata. Servers that
 require mutual extension negotiation can then accept its Skills requests.
 
 The server details dialog has a Skills tab. Discovery does not load or activate

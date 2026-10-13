@@ -62,6 +62,13 @@ describe('resolveEffectiveCompaction (issue #248)', () => {
     expect(resolveEffectiveCompaction(undefined, undefined, { compactionBufferTokens: 30000 }).bufferTokens).toBe(30000);
     expect(resolveEffectiveCompaction().bufferTokens).toBe(DEFAULT_COMPACTION_BUFFER_TOKENS);
   });
+
+  it('uses the saved model percentage before the global percentage and ignores invalid values', () => {
+    expect(resolveEffectiveCompaction(undefined, { compactionThresholdPercent: 40 },
+      { compactionThresholdPercent: 75 }).thresholdPercent).toBe(40);
+    expect(resolveEffectiveCompaction(undefined, { compactionThresholdPercent: 101 },
+      { compactionThresholdPercent: 60 }).thresholdPercent).toBe(60);
+  });
 });
 
 describe('resolveEffectiveVisualCompaction (issue #356)', () => {

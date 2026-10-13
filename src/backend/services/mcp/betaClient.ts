@@ -1,6 +1,7 @@
 import { registerTaskInputHandler, dispatchTaskInputRequest } from './taskInputHandlers';
 import { getCurrentWorkspace, bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { registerTasksExtensionClient } from './tasksExtensionSession';
+import { MCP_SKILLS_EXTENSION_ID } from '@/shared/types/mcp';
 import { FEATURES } from '@/config/features';
 import { InputResponseV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
 import { getElicitationContext } from './elicitationContext';
@@ -122,7 +123,7 @@ export function isBetaClient(client: Client): boolean {
  * Returned typed as the v1 Client so it can live in the shared connection map;
  * see the module comment for why that cast is sound.
  */
-export function createNewBetaClient(config: MCPServerConfig): Client {
+export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?: () => void): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
@@ -143,6 +144,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
             }
           : {}),
         extensions: {
+          ...(config.enableMcpSkills === true ? { [MCP_SKILLS_EXTENSION_ID]: {} } : {}),
           ...(serverHasStdioOAuth
             ? { [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY }
             : {}),
@@ -157,6 +159,13 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   };
   const client = new BetaClient(clientInfo, {
       capabilities: clientCapabilities,
+      // The SDK opens modern listen streams, validates acknowledgment/correlation,
+      // invalidates catalog caches, and closes streams with this generation.
+      listChanged: {
+        tools: { autoRefresh: false, onChanged: () => {} },
+        prompts: { autoRefresh: false, onChanged: () => {} },
+        resources: { autoRefresh: false, onChanged: () => onResourcesChanged?.() },
+      },
       // 'auto': probe for a 2026-07-28 server, fall back to the classic
       // initialize handshake on anything else. Never 'pin' — FLUJO must keep
       // working against every existing server.
@@ -174,15 +183,20 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   registerTaskInputHandler(client, 'roots/list', rootsHandler);
   if (samplingHandler) registerTaskInputHandler(client, 'sampling/createMessage', samplingHandler);
   if (elicitationHandler) registerTaskInputHandler(client, 'elicitation/create', elicitationHandler);
-  client.setRequestHandler("roots/list", rootsHandler);
+  client.setRequestHandler("roots/list", async (_request, context) => {
+    context.mcpReq.signal.throwIfAborted();
+    const result = await rootsHandler();
+    context.mcpReq.signal.throwIfAborted();
+    return result;
+  });
   if (serverHasSampling) {
-    client.setRequestHandler("sampling/createMessage", async (request) =>
-      samplingHandler!(request),
+    client.setRequestHandler("sampling/createMessage", async (request, context) =>
+      samplingHandler!(request, { signal: context.mcpReq.signal }),
     );
   }
   if (serverHasStdioOAuth || serverHasElicitation) {
-    client.setRequestHandler("elicitation/create", async (request) =>
-      elicitationHandler!(request),
+    client.setRequestHandler("elicitation/create", async (request, context) =>
+      elicitationHandler!(request, { signal: context.mcpReq.signal }),
     );
   }
 
@@ -300,8 +314,9 @@ export function createBetaTransport(
     ) {
       // Both patched SDKs carry issuer on saved credentials. This provider keeps
       // one credential set and deliberately ignores v2's optional issuer context.
-      const provider: BetaOAuthClientProvider = createOAuthClientProvider(streamableConfig);
-      options.authProvider = provider;
+      const provider = createOAuthClientProvider(streamableConfig);
+      options.fetch = provider.oauthFetch;
+      options.authProvider = provider as BetaOAuthClientProvider;
     }
     const transport = new BetaStreamableHTTPClientTransport(
       new URL(streamableConfig.serverUrl),

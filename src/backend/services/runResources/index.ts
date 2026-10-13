@@ -611,27 +611,38 @@ export async function getRunResourceLocalPath(uri: string): Promise<string | nul
  */
 export async function readRunResourceBounded(
   uri: string,
-  options: { maxChars?: number; expectedSha256?: string; access: RunResourceAccess },
+  options: { maxChars?: number; startChar?: number; expectedSha256?: string; access: RunResourceAccess },
 ): Promise<{
   entry: RunResourceEntry;
   content: string;
   truncated: boolean;
   verification?: { expectedSha256: string; actualSha256: string; ok: boolean };
+  range: { startChar: number; endChar: number; nextChar?: number };
 } | null> {
   const parsed = parseRunResourceUri(uri);
   if (!parsed) return null;
   const entries = await loadIndex(parsed.conversationId);
   const entry = entries.find((candidate) => candidate.id === parsed.id);
-  if (!entry || entry.kind === 'link') return null;
+  if (!entry) return null;
   const requestedMax = typeof options.maxChars === 'number' && !Number.isNaN(options.maxChars)
     ? options.maxChars : 50_000;
   const maxChars = Math.max(1, Math.min(200_000, Math.floor(requestedMax)));
+  const startChar = options.startChar ?? 0;
+  if (!Number.isSafeInteger(startChar) || startChar < 0 || startChar > Number.MAX_SAFE_INTEGER - maxChars) {
+    throw new Error('Invalid run-resource text offset.');
+  }
   const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
+  if (entry.kind === 'link' && expectedSha256) throw new Error('A resource link has no immutable payload to verify.');
   let projection: Awaited<ReturnType<typeof readPayloadProjection>>;
   try {
-    projection = await readPayloadProjection(payloadPath(parsed.conversationId, parsed.id), {
-      text: entry.encoding === 'utf8', maxChars, hash: Boolean(expectedSha256),
-    });
+    if (entry.kind === 'link') {
+      const text = `Run resource link → ${entry.origin ? `${entry.origin.server}: ${entry.origin.uri}` : 'unknown origin'}`;
+      projection = { text: text.slice(startChar, startChar + maxChars), truncated: text.length > startChar + maxChars };
+    } else {
+      projection = await readPayloadProjection(payloadPath(parsed.conversationId, parsed.id), {
+        text: entry.encoding === 'utf8', maxChars, startChar, hash: Boolean(expectedSha256),
+      });
+    }
   } catch (error) {
     log.error(`Run-resource payload missing for ${uri}`, error);
     return null;
@@ -639,7 +650,7 @@ export async function readRunResourceBounded(
   const verification = expectedSha256
     ? { expectedSha256, actualSha256: projection.sha256!, ok: expectedSha256 === projection.sha256 }
     : undefined;
-  const raw = entry.encoding === 'utf8'
+  const raw = entry.kind === 'link' || entry.encoding === 'utf8'
     ? projection.text
     : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`;
   const content = raw.slice(0, maxChars);
@@ -666,7 +677,10 @@ export async function readRunResourceBounded(
   } catch (error) {
     log.warn(`Failed to persist bounded read lineage for ${uri}`, error);
   }
-  return { entry: structuredClone(entry), content, truncated: projection.truncated || raw.length > content.length, verification };
+  const truncated = projection.truncated || raw.length > content.length;
+  const endChar = startChar + content.length;
+  return { entry: structuredClone(entry), content, truncated, verification,
+    range: { startChar, endChar, ...(truncated ? { nextChar: endChar } : {}) } };
 }
 
 /** Remove a conversation's resources (called from conversation DELETE). */

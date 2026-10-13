@@ -72,3 +72,33 @@ and production use remain **HOLD**. The earlier v1 single-attempt contract in
 is separate: it limits retries and calls an owner claim hook, but FLUJO still
 holds the local API key and sends the request itself. It must not be reported as
 owner-sent transport or as evidence that the v2 adoption gates have passed.
+
+## October 12, 2026 source integration
+
+PR #739 incorporates main `ee0a9673675b59fba44a62555e1886369725eec7`, including
+the delivered Codex lifecycle, MCP conformance, Antigravity 1.3.3, phone World,
+and compaction/recovery changes. The MCP joins retain protected pending-client
+identity alongside beta resource invalidation, owner-bound sampling refusal
+alongside output-token caps, and ordinary cursor/protected-context tool listing
+without losing the requested page on reconnect. The admission test continues
+to reject a bound Codex call before its current catalog snapshot helper or SDK
+setup. These are composition repairs to the existing transport contract.
+
+The downstream #748 catalog/admission and #753 slot work remains separately
+owned; this integration does not introduce their implementations. Current
+source checks and a non-container application build qualify the merged source
+before publication. The configured production owner adapter, physical sender
+and durable journal remain absent, so PR #739 stays draft and the adoption
+hold above remains in force. No provider credential work or release/remote CI
+is performed by this source repair.
+
+Qualification covered application/test tree `0339e23f5f9ad61650688d4bb7516e1ea7f41f5e`: local typecheck,
+whole-source and changed-file lint, and 24 distinct focused suites passed;
+the nine suites affected by the current main integration passed 280 cases.
+The inspected non-container application build passed in 431.445 seconds,
+measured separately from its lease wait. Seven built HTTP checks passed,
+including saved-model connection/catalog refusal and normal/streaming
+completion refusal of serialized authority, with zero physical provider
+requests. The public completion probes use the model alias exposed by
+`/v1/models`. This evidence qualifies source admission only; the production
+owner transport and journal hold remains unchanged.

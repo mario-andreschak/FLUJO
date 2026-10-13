@@ -119,6 +119,17 @@ export class AntigravityCliAdapter implements CompletionAdapter {
     const maxTurns = Number.isFinite(input.maxTurns) && (input.maxTurns ?? 0) > 0
       ? Math.floor(input.maxTurns!) : DEFAULT_AGENTIC_MAX_TURNS;
     const deadlineAt = Date.now() + ANTIGRAVITY_CLI_TIMEOUT_MS;
+    const closingTools = new AbortController();
+    const toolSignal = AbortSignal.any([abortController.signal, closingTools.signal, AbortSignal.timeout(ANTIGRAVITY_CLI_TIMEOUT_MS)]);
+    const awaitTool = <T>(task: () => Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+      if (toolSignal.aborted) { reject(antigravityCliAbortError()); return; }
+      const aborted = () => { reject(antigravityCliAbortError()); };
+      toolSignal.addEventListener('abort', aborted, { once: true });
+      Promise.resolve().then(() => {
+        if (toolSignal.aborted) throw antigravityCliAbortError();
+        return task();
+      }).then(resolve, reject).finally(() => toolSignal.removeEventListener('abort', aborted));
+    });
     let bridgeDispatches = 0;
     const seenSteps = new Set<string>();
     let endedByCaller = false;
@@ -139,6 +150,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
     // ids, streamed live as produced, returned for persistence.
     const transcript: FlujoChatMessage[] = [];
     const unansweredTools = new Set<string>();
+    const pendingToolCalls = new Map<string, { call: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>; messageId: string }>();
     const baseTs = Date.now();
     let txSeq = 0;
     // Every invocation has unique ids; streamed drafts and durable transcript
@@ -161,6 +173,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
       messageId?: string,
     ): void => {
+      pendingToolCalls.delete(ti.id);
       unansweredTools.add(ti.id);
       recordMessage({
         role: 'assistant',
@@ -179,13 +192,15 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       // Reserve the tool boundary before paced argument projection yields.
       unansweredTools.add(ti.id);
       const messageId = getStreamMessageId(`toolcall_${ti.id}`);
-      await paceToolCallArguments({
+      pendingToolCalls.set(ti.id, { call: ti, messageId });
+      await awaitTool(() => paceToolCallArguments({
         messageId,
         callId: ti.id,
         name: ti.name,
         argsJson: ti.argsJson,
-        onModelDelta,
-      });
+        onModelDelta: onModelDelta ? delta => { if (!toolSignal.aborted) onModelDelta(delta); } : undefined,
+      }));
+      if (toolSignal.aborted) throw antigravityCliAbortError();
       recordToolCall(ti, messageId);
     };
     const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
@@ -214,7 +229,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       resolveRejectedUi?: (reason: string) => Promise<ToolUi | undefined>,
     ): Promise<CallToolResult | null> => {
       if (!requestToolApproval) return null;
-      const approved = await requestToolApproval({ id: callId, name, args });
+      const approved = await awaitTool(() => requestToolApproval({ id: callId, name, args }));
       if (approved && !abortController.signal.aborted && !shouldEndAgenticTurn?.()) return null;
       const rejectionText = 'tool denied';
       const ui = await resolveRejectedUi?.(rejectionText);
@@ -249,7 +264,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
             inputSchema,
             handler: async (args) => {
               if (abortController.signal.aborted || shouldEndAgenticTurn?.()) return endedToolResult();
-              if (requestToolApproval && !await requestToolApproval({ id: `call_${uuidv4()}`, name: fnName, args: args ?? {} })) {
+              if (requestToolApproval && !await awaitTool(() => requestToolApproval({ id: `call_${uuidv4()}`, name: fnName, args: args ?? {} }))) {
                 return { content: [{ type: 'text', text: 'tool denied' }], isError: true };
               }
               await checkToolFence();
@@ -306,10 +321,11 @@ export class AntigravityCliAdapter implements CompletionAdapter {
               let resultContent: string;
               let isError = false;
               try {
-                resultContent = JSON.stringify(await localExec(args ?? {})) ?? 'null';
-                await afterToolDispatch?.();
+                resultContent = JSON.stringify(await awaitTool(() => localExec(args ?? {}, { signal: toolSignal }))) ?? 'null';
+                if (toolSignal.aborted) throw antigravityCliAbortError();
+                if (afterToolDispatch) await awaitTool(afterToolDispatch);
               } catch (err) {
-                if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
+                if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost' || (err as Error)?.name === 'AbortError') throw err;
                 resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
                 isError = true;
               }
@@ -377,10 +393,10 @@ export class AntigravityCliAdapter implements CompletionAdapter {
             );
             if (denied) return denied;
             await checkToolFence();
-            await authorizePersonaCoreMcp?.(server, callerNodeId);
+            if (authorizePersonaCoreMcp) await awaitTool(() => authorizePersonaCoreMcp(server, callerNodeId));
             log.debug('Antigravity CLI tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
-            const result = await mcpService.callTool(
+            const result = await awaitTool(() => mcpService.callTool(
               server,
               originalTool,
               effectiveArgs,
@@ -395,7 +411,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                   })
                 : undefined,
               callerNodeId,
-              abortController.signal,
+              toolSignal,
               'model',
               // Issue #413: the self-orchestrating adapters must derive the SAME
               // run owner key as the normal ModelHandler path. Without it a
@@ -403,8 +419,9 @@ export class AntigravityCliAdapter implements CompletionAdapter {
               // never released when the run ended.
               ownerScopeForRun({ runId, conversationId }),
               conversationId ? { conversationId } : undefined,
-            );
-            await afterToolDispatch?.();
+            ));
+            if (toolSignal.aborted) throw antigravityCliAbortError();
+            if (afterToolDispatch) await awaitTool(afterToolDispatch);
             if (runId) {
               const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
               recordStatisticsEvent(createStatisticsEvent({
@@ -497,22 +514,25 @@ export class AntigravityCliAdapter implements CompletionAdapter {
 
 
     const checkToolFence = async (): Promise<void> => {
-      if (abortController.signal.aborted) throw antigravityCliAbortError();
+      if (toolSignal.aborted) throw antigravityCliAbortError();
       if (shouldEndAgenticTurn?.()) throw new Error('This agentic turn has ended.');
-      await beforeToolDispatch?.();
-      if (abortController.signal.aborted) throw antigravityCliAbortError();
+      if (beforeToolDispatch) await awaitTool(beforeToolDispatch);
+      if (toolSignal.aborted) throw antigravityCliAbortError();
       if (shouldEndAgenticTurn?.()) throw new Error('This agentic turn has ended.');
     };
     let activeToolCount = 0;
     let onToolsIdle: (() => void) | undefined;
     const waitForTools = async (): Promise<void> => {
-      if (activeToolCount) await new Promise<void>(resolve => { onToolsIdle = resolve; });
+      if (activeToolCount && !toolSignal.aborted) {
+        try { await awaitTool(() => new Promise<void>(resolve => { onToolsIdle = resolve; })); }
+        catch (error) { if ((error as Error)?.name !== 'AbortError') throw error; }
+      }
     };
     const bridgeTools: BridgeTool[] = unguardedBridgeTools.map(tool => ({
       ...tool,
       handler: async args => {
         flushText();
-        if (endSpawning || abortController.signal.aborted || shouldEndAgenticTurn?.()) return endedToolResult();
+        if (endSpawning || toolSignal.aborted || shouldEndAgenticTurn?.()) return endedToolResult();
         if (handoffCalls.length && !isHandoffName(tool.name)) {
           endSpawning = true;
           activeChild?.abort();
@@ -561,7 +581,11 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       pendingMessageId = getStreamMessageId(`text_${uuidv4()}`);
     };
     const settlePendingTools = (reason: string): void => {
-      for (const id of unansweredTools) recordToolResult({ id, resultContent: reason });
+      for (const id of unansweredTools) {
+        const pending = pendingToolCalls.get(id);
+        if (pending) recordToolCall(pending.call, pending.messageId);
+        recordToolResult({ id, resultContent: reason });
+      }
     };
     const source = steeringSource(input);
     let steeringDelivery: SteeringDelivery | undefined;
@@ -580,7 +604,9 @@ export class AntigravityCliAdapter implements CompletionAdapter {
     });
     let runtime: AntigravityCliRuntime | undefined;
     let bridge: Awaited<ReturnType<typeof startCodexToolBridge>> | undefined;
-    const usage = mapAntigravityCliUsage(undefined);
+    const usage = mapAntigravityCliUsage({ input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, thinking_tokens: 0 })!;
+    let usageKnown = true;
+    const reportedUsage: Array<Record<string, number>> = [];
     const runMessages: OpenAI.ChatCompletionMessageParam[] = [...messages];
     try {
       if (abortController.signal.aborted) throw antigravityCliAbortError();
@@ -660,21 +686,30 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                     pendingText += suffix;
                     if (suffix) onModelDelta?.({ messageId: pendingMessageId, contentDelta: suffix });
                   }
+                  reportedUsage.push(Object.fromEntries(Object.entries(event.result.usage ?? {})
+                    .filter(([key, value]) => ['total_tokens', 'input_tokens', 'output_tokens', 'thinking_tokens', 'cache_read_tokens'].includes(key)
+                      && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)));
                   const turnUsage = mapAntigravityCliUsage(event.result.usage);
+                  if (!turnUsage) { usageKnown = false; return; }
                   usage.prompt_tokens += turnUsage.prompt_tokens;
                   usage.completion_tokens += turnUsage.completion_tokens;
                   usage.total_tokens += turnUsage.total_tokens;
                   usage.prompt_tokens_details!.cached_tokens! += turnUsage.prompt_tokens_details?.cached_tokens ?? 0;
-                  usage.completion_tokens_details!.reasoning_tokens! += turnUsage.completion_tokens_details?.reasoning_tokens ?? 0;
+                  if (turnUsage.completion_tokens_details?.reasoning_tokens === undefined) delete usage.completion_tokens_details;
+                  else if (usage.completion_tokens_details) usage.completion_tokens_details.reasoning_tokens! += turnUsage.completion_tokens_details.reasoning_tokens;
+                  if (!Number.isSafeInteger(usage.total_tokens)) usageKnown = false;
                   if (event.result.status !== 'SUCCESS') streamError = true;
                 }
               },
             }));
+            if (activeToolCount && finalResult) throw new Error('Antigravity CLI ended before pending FLUJO tools completed.');
             if (!finalResult || finalResult.status !== 'SUCCESS' || streamError) throw new Error(`Antigravity CLI failed to complete a valid response. Check model access and your Google account login or Gemini API key.${antigravityCliFailureHint(finalResult?.error ?? '')}`);
             if (!producedAssistantOutput && bridgeDispatches === dispatchesBeforeRun && !handoffCalls.length && !endedByCaller) {
               throw new Error('Antigravity CLI failed to complete a valid response: no assistant output or tool dispatch was returned.');
             }
           } catch (error) {
+            if (!steeringDelivery) closingTools.abort();
+            if (!finalResult) usageKnown = false;
             if (fatalError) throw fatalError;
             if (abortController.signal.aborted) throw antigravityCliAbortError();
             // Plain handoffs now require normal native finalization. Preserve
@@ -700,6 +735,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
         }
       }
     } finally {
+      closingTools.abort();
       await watcher.stop();
       signal?.removeEventListener('abort', onExternalAbort);
       activeChild?.abort();
@@ -722,7 +758,8 @@ export class AntigravityCliAdapter implements CompletionAdapter {
         id: `antigravity_cli_${uuidv4()}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: model.name,
         choices: [{ index: 0, finish_reason: finalToolCalls ? 'tool_calls' : 'stop', logprobs: null,
           message: { role: 'assistant', content: resultText || null, refusal: null, ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}) } }],
-        usage,
+        ...(usageKnown && reportedUsage.length ? { usage } : {}),
+        ...(reportedUsage.length ? { flujo_antigravity_usage: { reported: reportedUsage, complete: usageKnown } } : {}),
       },
       transcript, liveMessageId, contextUsage: null,
     };

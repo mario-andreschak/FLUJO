@@ -1,0 +1,239 @@
+{
+  "id": "pkg-software-dev-pkg-softwaredev-cc9947b8-84e1-409f-a17-179846a9",
+  "name": "ap-32-code-explore",
+  "description": "Reusable code exploration agent designed to be invoked as an isolated subflow. Input: a plain-text exploration brief (what to find/understand, plus the repo or directory path). It agentically searches and reads the codebase via the filesystem MCP server and PowerShell (git grep / ripgrep) to locate relevant files, trace symbols, and understand structure, then emits a structured findings report (summary, key files with paths, relevant code excerpts, call/data flow, and answer to the brief). Keeps the caller's context clean via isolated input and a final-only synthesized report.",
+  "folder": "Software Development",
+  "createdAt": 1785290606050,
+  "updatedAt": 1787332067601,
+  "nodes": [
+    {
+      "id": "d612bebd-8bdc-4a74-ad0b-bffaeeb8f227",
+      "type": "start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Exploration brief",
+        "type": "start",
+        "properties": {
+          "promptTemplate": "You are a code exploration agent. You receive a plain-text brief describing what to find or understand in a codebase, along with a repository or directory path. Your job is READ-ONLY: never modify, create, move, or delete files. Locate the relevant code, understand how it works, and report precisely with concrete file paths and line references. Do not guess about code you have not opened — verify by reading it."
+        }
+      },
+      "measured": {
+        "width": 210,
+        "height": 188
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "2c505479-5c54-4048-9bcc-1542f2a46001",
+      "type": "process",
+      "position": {
+        "x": 0,
+        "y": 308
+      },
+      "data": {
+        "label": "Search & read codebase",
+        "type": "process",
+        "description": "Agentically explores the codebase: lists directories, greps for symbols/strings, reads the relevant files, and traces how the target functionality is implemented. Accumulates raw evidence (paths, excerpts, findings).",
+        "properties": {
+          "maxTurns": 255,
+          "inputMode": "full-history",
+          "modelName": "gpt-5.6-luna",
+          "boundModel": "b8ef6805-e9df-4ef5-9897-d9d12a7339d9",
+          "outputMode": "full-conversation",
+          "isolatedPrompt": "",
+          "promptTemplate": "Explore the codebase to satisfy the brief.\nthe local path is \"./userdata/software-dev/repositories/<repo name>\"  for repo ${global:softwaredev_repositoryurl}\nStrategy:\n1. If a path is given, start there; otherwise ask the filesystem server for allowed directories and orient with a directory tree.\n2. Use bash (git grep / ripgrep / Select-String) and filesystem search_files to find candidate files by symbol, function, string, or filename.\n3. Read the most relevant files (read_text_file / read_multiple_files) to confirm behavior. Trace definitions, callers, imports, and data flow across files as needed.\n4. Keep going until you can answer the brief with concrete evidence — don't stop at the first hit (**but also dont blindly scan the whole codebase!**).\n*But keep a reasonable limit of <40 tool calls*\nStay strictly READ-ONLY. Do not run commands that mutate the repo.\n\nCollect for each relevant finding: the exact file path, the key symbols/lines, and a short note on what it does and why it matters to the brief.\n\n**FINAL OUTPUT:**\nUsing the exploration evidence, write a structured, self-contained findings report that answers the original brief. Do not invent anything not supported by the evidence.\n\nOutput format (Markdown):\n## Summary\nA few sentences directly answering the brief.\n\n## Key files\n- `path/to/file` — what it contains / its role (with line refs where known)\n\n## How it works\nConcise explanation of the relevant flow (definitions, callers, data/control flow) with file/symbol references.\n\n## Relevant excerpts\nShort, clearly-labeled code snippets that support the answer.\n\n## Notes / open questions\nAnything uncertain or worth follow-up.",
+          "captureResource": "EXPLORATION_EVIDENCE",
+          "allowCallerPrompt": true,
+          "excludeModelPrompt": false,
+          "excludeSystemPrompt": false,
+          "excludeStartNodePrompt": false
+        },
+        "id": "2c505479-5c54-4048-9bcc-1542f2a46001"
+      },
+      "dragging": false,
+      "measured": {
+        "width": 210,
+        "height": 485
+      },
+      "selected": false
+    },
+    {
+      "id": "657b48ec-b8ce-45eb-be75-512eb364db4c",
+      "type": "mcp",
+      "position": {
+        "x": 350,
+        "y": 308
+      },
+      "data": {
+        "label": "filesystem",
+        "type": "mcp",
+        "properties": {
+          "roots": [
+            "./userdata/software-development/repositories"
+          ],
+          "boundServer": "filesystem",
+          "enabledTools": [
+            "read_file",
+            "search",
+            "list_dir",
+            "dir_tree"
+          ]
+        }
+      },
+      "dragging": false,
+      "measured": {
+        "width": 210,
+        "height": 171
+      },
+      "selected": false
+    },
+    {
+      "id": "d838e304-e1e3-4e69-8ca7-f6f2eb601e3a",
+      "type": "mcp",
+      "position": {
+        "x": 350,
+        "y": 599
+      },
+      "data": {
+        "label": "bash",
+        "type": "mcp",
+        "properties": {
+          "boundServer": "bash",
+          "enabledTools": [
+            "run",
+            "start",
+            "status",
+            "wait",
+            "write_stdin",
+            "kill",
+            "list_sessions"
+          ],
+          "roots": [
+            "./userdata/software-dev/repositories/"
+          ]
+        }
+      },
+      "dragging": false,
+      "measured": {
+        "width": 210,
+        "height": 171
+      },
+      "selected": false
+    },
+    {
+      "id": "51a2685e-9eb7-4b06-b272-7e4877e81f01",
+      "type": "finish",
+      "position": {
+        "x": 0,
+        "y": 913
+      },
+      "data": {
+        "label": "Finish Node",
+        "type": "finish",
+        "properties": {}
+      },
+      "dragging": false,
+      "measured": {
+        "width": 210,
+        "height": 97
+      },
+      "selected": true
+    }
+  ],
+  "edges": [
+    {
+      "id": "d612bebd-8bdc-4a74-ad0b-bffaeeb8f227:start-bottom->2c505479-5c54-4048-9bcc-1542f2a46001:process-top",
+      "source": "d612bebd-8bdc-4a74-ad0b-bffaeeb8f227",
+      "target": "2c505479-5c54-4048-9bcc-1542f2a46001",
+      "data": {
+        "edgeType": "standard"
+      },
+      "type": "custom",
+      "animated": true,
+      "sourceHandle": "start-bottom",
+      "targetHandle": "process-top"
+    },
+    {
+      "id": "2c505479-5c54-4048-9bcc-1542f2a46001:process-right-mcp->657b48ec-b8ce-45eb-be75-512eb364db4c:mcp-left",
+      "source": "2c505479-5c54-4048-9bcc-1542f2a46001",
+      "target": "657b48ec-b8ce-45eb-be75-512eb364db4c",
+      "data": {
+        "edgeType": "mcp"
+      },
+      "type": "mcpEdge",
+      "style": {
+        "stroke": "#1976d2",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#1976d2",
+        "width": 20,
+        "height": 20
+      },
+      "markerStart": {
+        "type": "arrowclosed",
+        "color": "#1976d2",
+        "width": 20,
+        "height": 20
+      },
+      "sourceHandle": "process-right-mcp",
+      "targetHandle": "mcp-left"
+    },
+    {
+      "id": "2c505479-5c54-4048-9bcc-1542f2a46001:process-right-mcp->d838e304-e1e3-4e69-8ca7-f6f2eb601e3a:mcp-left",
+      "source": "2c505479-5c54-4048-9bcc-1542f2a46001",
+      "target": "d838e304-e1e3-4e69-8ca7-f6f2eb601e3a",
+      "data": {
+        "edgeType": "mcp"
+      },
+      "type": "mcpEdge",
+      "style": {
+        "stroke": "#1976d2",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#1976d2",
+        "width": 20,
+        "height": 20
+      },
+      "markerStart": {
+        "type": "arrowclosed",
+        "color": "#1976d2",
+        "width": 20,
+        "height": 20
+      },
+      "sourceHandle": "process-right-mcp",
+      "targetHandle": "mcp-left"
+    },
+    {
+      "id": "2c505479-5c54-4048-9bcc-1542f2a46001:process-bottom->51a2685e-9eb7-4b06-b272-7e4877e81f01:finish-top",
+      "source": "2c505479-5c54-4048-9bcc-1542f2a46001",
+      "target": "51a2685e-9eb7-4b06-b272-7e4877e81f01",
+      "type": "custom",
+      "animated": true,
+      "style": {
+        "stroke": "#606A84",
+        "strokeWidth": 2
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "width": 20,
+        "height": 20,
+        "color": "#606A84"
+      },
+      "sourceHandle": "process-bottom",
+      "targetHandle": "finish-top",
+      "data": {
+        "edgeType": "standard"
+      }
+    }
+  ]
+}

@@ -1842,6 +1842,7 @@ async function installModel(
     ...(model.maxTurns !== undefined ? { maxTurns: model.maxTurns } : {}),
     ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
     ...(model.compactionThreshold !== undefined ? { compactionThreshold: model.compactionThreshold } : {}),
+    ...(model.compactionThresholdPercent !== undefined ? { compactionThresholdPercent: model.compactionThresholdPercent } : {}),
     folder: packageFolder,
     ApiKey: apiKey,
   };

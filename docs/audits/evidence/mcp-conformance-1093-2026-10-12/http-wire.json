@@ -1,0 +1,14 @@
+{
+  "result": "passed",
+  "sdk": "2.3.1",
+  "protocol": "2026-07-28",
+  "framing": {
+    "method": "tools/call",
+    "name": "wire",
+    "parameter": "=?base64?IGEKw6kg?="
+  },
+  "scalarArrayValidation": true,
+  "explicitNull": true,
+  "missingAndMismatchedHeadersRejected": true,
+  "effects": 2
+}

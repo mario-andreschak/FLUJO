@@ -159,6 +159,8 @@ export interface CompletionInput {
   sessionResume?: boolean;
   /** Persisted Codex thread metadata supplied by the conversation owner. */
   codexSession?: CodexSessionMetadata;
+  /** Released Codex app-server structured-output constraint for this turn. */
+  outputSchema?: Record<string, unknown>;
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
@@ -202,7 +204,7 @@ export interface CompletionInput {
    * in-loop via the provided executor, since their tool calls never surface to
    * the caller. Without an executor such tools are silently dropped there.
    */
-  localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+  localToolExecutors?: Record<string, (args: Record<string, unknown>, context?: { signal: AbortSignal }) => Promise<unknown>>;
   /**
    * Cooperative successful-stop predicate for adapters that own an internal
    * model/tool loop. Once true, no further tools may be dispatched and the

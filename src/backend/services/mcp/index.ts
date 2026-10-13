@@ -1,3 +1,4 @@
+import { subscribeModernResource, retireModernSubscriptions } from './modernSubscriptions';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { executionApprovalFailure } from './executionApproval';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -511,6 +512,8 @@ export class MCPService {
    * reconnect against ourselves.
    */
   private deregisterClient(serverName: string): void {
+    const retiredClient = this.clients.get(serverName);
+    if (retiredClient) retireModernSubscriptions(retiredClient);
     this.clients.delete(serverName);
     this.activeTransports.delete(serverName);
     clearExternalAuthorizationState(serverName);
@@ -561,6 +564,7 @@ export class MCPService {
     try {
       const client = this.getClient(serverName);
       if (!client) return;
+      if (await subscribeModernResource(client, uri)) return;
       const caps = client.getServerCapabilities?.();
       if (!caps?.resources?.subscribe) return;
       await client.subscribeResource({ uri });
@@ -1155,7 +1159,9 @@ export class MCPService {
       // existing servers keep working either way).
       await assertBundledFlujoWorkloadEffectCurrent();
       assertMcpRuntimeAuthorityRetired(config.name);
-      client = useBeta ? createNewBetaClient(config) : createNewClient(config);
+      client = useBeta ? createNewBetaClient(config, bindToCurrentWorkspace(() => {
+        if (this.getClient(config.name) === client) this.onResourceListChanged(config.name);
+      })) : createNewClient(config);
       if (executionExtensionContext) pendingProtectedClient = client;
       const transport = useBeta
         ? createBetaTransport(config, transportOptions)
@@ -1195,14 +1201,14 @@ export class MCPService {
         ).setNotificationHandler?.bind(client);
         if (betaSetNotification) {
           betaSetNotification("notifications/resources/list_changed", bindToCurrentWorkspace(() => {
-            this.onResourceListChanged(config.name);
+            if (this.getClient(config.name) === client) this.onResourceListChanged(config.name);
           }));
           betaSetNotification(
             "notifications/resources/updated",
             bindToCurrentWorkspace((notification: unknown) => {
               const uri = (notification as { params?: { uri?: string } })
                 ?.params?.uri;
-              if (uri) this.onResourceUpdated(config.name, uri);
+              if (uri && this.getClient(config.name) === client) this.onResourceUpdated(config.name, uri);
             }),
           );
         }
@@ -2202,8 +2208,11 @@ export class MCPService {
   async listServerTools(
     serverName: string,
     audience: ToolListAudience = "model",
-    executionExtensionContext?: ExecutionExtensionContext,
-  ): Promise<{ tools: ToolResponse[]; error?: string }> {
+    cursorOrExecutionContext?: string | ExecutionExtensionContext,
+    cursor?: string,
+  ): Promise<{ tools: ToolResponse[]; nextCursor?: string; error?: string }> {
+    const executionExtensionContext = typeof cursorOrExecutionContext === 'string' ? undefined : cursorOrExecutionContext;
+    const pageCursor = typeof cursorOrExecutionContext === 'string' ? cursorOrExecutionContext : cursor;
     log.debug(
       `listServerTools: Entering method for server ${serverName}, audience ${audience}`,
     );
@@ -2251,7 +2260,7 @@ export class MCPService {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
 
-    let result = await listTools(client, serverName, audience);
+    let result = await listTools(client, serverName, audience, pageCursor);
     if (executionExtensionContext) {
       await assertExecutionExtensionCurrent(executionExtensionContext);
       if (this.getClient(serverName) !== protectedClient) {
@@ -2276,7 +2285,7 @@ export class MCPService {
       }
 
       client = this.clients.get(serverName);
-      result = await listTools(client, serverName, audience);
+      result = await listTools(client, serverName, audience, pageCursor);
 
       if (result.error) {
         log.warn(
@@ -2722,10 +2731,11 @@ export class MCPService {
    */
   async listServerResources(
     serverName: string,
-  ): Promise<{ resources: MCPResource[]; error?: string }> {
+    cursor?: string,
+  ): Promise<{ resources: MCPResource[]; nextCursor?: string; error?: string }> {
     if (isProtectedExecutionServer(serverName)) return { resources: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(`listServerResources: Entering method for server ${serverName}`);
-    return this.listWithReconnect(serverName, listResources, { resources: [] });
+    return this.listWithReconnect<{ resources: MCPResource[]; nextCursor?: string; error?: string }>(serverName, (client, name) => listResources(client, name, cursor), { resources: [] });
   }
 
   /**
@@ -2733,12 +2743,13 @@ export class MCPService {
    */
   async listServerResourceTemplates(
     serverName: string,
-  ): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
+    cursor?: string,
+  ): Promise<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string; error?: string }> {
     if (isProtectedExecutionServer(serverName)) return { resourceTemplates: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(
       `listServerResourceTemplates: Entering method for server ${serverName}`,
     );
-    return this.listWithReconnect(serverName, listResourceTemplates, {
+    return this.listWithReconnect<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string; error?: string }>(serverName, (client, name) => listResourceTemplates(client, name, cursor), {
       resourceTemplates: [],
     });
   }

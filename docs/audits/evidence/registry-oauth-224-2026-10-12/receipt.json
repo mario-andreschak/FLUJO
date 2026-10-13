@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "issue": 224,
+  "time": "2026-10-12T22:08:57.7921076Z",
+  "application": {
+    "sourceTree": "7272bc39bb7123e5fef7bbce8f21ecd9505ccb1e",
+    "tree": "357fb00c19edbcf2098fd9e33c0f4c7295e5be69",
+    "inputs": {
+      "nextConfig": "796250b9c6179b4b1f3c6a654194266247a13f5a",
+      "registryService": "d4a2756926a2a7d61fd0876c742f57480e661af3",
+      "lock": "5b5dc7983c4e9f16393ed246914d16407bc2a2e6",
+      "registryRoutes": "1344f5ec79b4475251ee1cda0e0bc47318c0f10d",
+      "package": "2b28f40c6bb074632e7640074b0fce2485a58d1d",
+      "accountPanel": "050d9338b4fe01c15c2f5b9a0a2854b46d47ef2c"
+    },
+    "node": "v22.23.3",
+    "version": "3.46.3",
+    "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+    "build": {
+      "seconds": 542.2631437,
+      "kind": "application-and-five-MCP-build",
+      "exitCode": 0,
+      "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+      "buildId": "dKOX9ytD2yyrWSQ-090Jl"
+    },
+    "next": "16.4.0"
+  },
+  "registry": {
+    "time": "2026-10-12T22:08:15.8862306Z",
+    "version": "0.1.0",
+    "machine": "2870740b7d7678",
+    "name": "flujo-registry",
+    "node": "v24.18.0",
+    "image": "sha256:2db54857b703cd224df3be8b60f0d5fcec70cb443f4a10fa01c32475f51c37a9"
+  },
+  "browser": {
+    "time": "2026-10-12T22:07:16.365Z",
+    "acceptedAttempt": 2,
+    "fullyBrowserRoundtrip": true,
+    "callbackSuccessParameterObserved": true,
+    "workspacePreserved": true,
+    "postReloadSignedIn": true,
+    "successBannerClearedAfterReload": true,
+    "selectedAccount": "mario-andreschak",
+    "requestedScope": "user:email",
+    "locale": "de",
+    "desktop": {
+      "width": 1280,
+      "height": 720,
+      "pageWidth": 1270
+    },
+    "phone": {
+      "width": 390,
+      "height": 844,
+      "pageWidth": 380
+    },
+    "earlierAttempt": {
+      "browserFailure": "ERR_BLOCKED_BY_CLIENT / inspector",
+      "manualCallbackStatus": 500,
+      "cause": "not established",
+      "qualified": false
+    },
+    "browserEngineVersion": "not exposed by allowed APIs"
+  },
+  "initiation": {
+    "registryOrigin": "https://registry.flujo.com.co",
+    "callbackOrigin": "http://127.0.0.1:4232",
+    "callbackPath": "/api/registry/oauth/callback",
+    "workspaceBound": true,
+    "pkce": "S256"
+  },
+  "guardControls": {
+    "crossOriginInitiate": 403,
+    "callbackSuffix": 403,
+    "exactCallbackAllowsProviderOrigin": true,
+    "invalidStateRefused": true
+  },
+  "lockControl": {
+    "cause": "owned operator secret mount temporarily unavailable",
+    "initiate": 423,
+    "callback": 423
+  },
+  "storage": {
+    "signedIn": true,
+    "hasToken": true,
+    "tokenMask": "********",
+    "linkedProvider": "github",
+    "accessTokenEncrypted": true,
+    "refreshTokenEncrypted": true,
+    "rawJwtInRecord": false,
+    "credentialsInStatus": false,
+    "recordSha256": "fbe95d840c135695201ea6b6c7696cde668b2fdc605df499928d525ea5668ab0"
+  },
+  "checks": {
+    "install": {
+      "kind": "install",
+      "exitCode": 0,
+      "seconds": 359.3338876,
+      "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5"
+    },
+    "serviceAndWorkspace": {
+      "suites": 4,
+      "measurement": {
+        "seconds": 5.1349641,
+        "exitCode": 0,
+        "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+        "kind": "registry-service-and-workspace-focused"
+      },
+      "tests": 61
+    },
+    "typecheck": {
+      "seconds": 97.72177,
+      "kind": "typecheck",
+      "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+      "exitCode": 0
+    },
+    "lint": {
+      "seconds": 195.4567861,
+      "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+      "exitCode": 0,
+      "kind": "lint"
+    },
+    "routesAndUI": {
+      "suites": 5,
+      "measurement": {
+        "seconds": 30.9361056,
+        "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+        "exitCode": 0,
+        "kind": "registry-focused"
+      },
+      "tests": 55
+    }
+  },
+  "independentReview": {
+    "revision": "d3e5c64ec52f08de16c221140d99d7ea788d80c5",
+    "reviewer": "/root/registry_acceptance_review",
+    "scope": "Read-only existing issue224 source, routes, account panel and focused test coverage",
+    "actionableDefects": [],
+    "requiredRuntimeProofAtReview": [
+      "Live provider roundtrip",
+      "Production initiate/callback state sharing for tested deployment",
+      "Encrypted stored tokens and masked browser status",
+      "Cross-origin403 and valid-state locked423"
+    ],
+    "note": "No invented restart, multireplica, Google-provider or visible token control requirement.",
+    "evidenceReview": "Closure criteria met; source/input hashes and receipt claims consistent; public GitHub login wording corrected."
+  },
+  "scope": {
+    "providerSettingsChanged": false,
+    "sourceChanges": false,
+    "packagePublished": false,
+    "remoteCI": false,
+    "release": false,
+    "paidModelCalls": 0,
+    "containerBuild": false,
+    "fullSuites": false
+  },
+  "privateEvidence": {
+    "desktopScreenshot": "registry-account-desktop.png",
+    "priorProbe": "provider-first-attempt.json",
+    "rawHttpReceipt": "registry-http.json",
+    "browserState": "browser-signed-in.txt",
+    "phoneScreenshot": "registry-account-phone.png"
+  }
+}

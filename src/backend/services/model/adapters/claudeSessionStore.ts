@@ -29,6 +29,7 @@
 
 import { createHash } from 'crypto';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { MESSAGE_NORMALIZATION_POLICY_VERSION } from './messageNormalization';
 
 /** A session the adapter may be able to resume on a later turn. */
 export interface StoredSession {
@@ -93,6 +94,9 @@ export function computePrefixHash(
   toolNames: readonly string[],
 ): string {
   const h = createHash('sha256');
+  h.update('projection\0');
+  h.update(MESSAGE_NORMALIZATION_POLICY_VERSION);
+  h.update('\0');
   h.update('sys\0');
   h.update(systemPrompt ?? '');
   h.update('\0tools\0');

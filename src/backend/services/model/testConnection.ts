@@ -13,6 +13,7 @@ import {
 import type { OpenRouterMediaKind } from './adapters';
 import { fromResponse } from './adapters/openaiResponsesAdapter';
 import { testModelToolConnection } from './testToolConnection';
+import { inspectAntigravityRuntime } from './adapters/antigravityCliDiscovery';
 
 const log = createLogger('backend/services/model/testConnection');
 
@@ -481,7 +482,10 @@ async function testModelTransports(params: ModelTestParams): Promise<ModelTestRe
   // Native SDKs and Azure need their own transport/auth conventions. Both
   // OpenAI HTTP protocols can use the independent SDK + axios cross-check.
   if (adapter && adapter !== 'openai' && adapter !== 'openai-responses' && model) {
-    const sdk = await attemptViaAdapter(model, apiKey);
+    const antigravityRuntime = adapter === 'antigravity-cli' ? await inspectAntigravityRuntime() : undefined;
+    const sdk: ModelTestAttempt = antigravityRuntime && !antigravityRuntime.verified
+      ? { ok: false, durationMs: 0, error: { message: 'The configured Antigravity runtime is missing, changed or unsupported. Reinstall or update FLUJO.' } }
+      : await attemptViaAdapter(model, apiKey);
     const naAxios: ModelTestAttempt = {
       ok: false,
       skipped: true,
@@ -507,7 +511,8 @@ async function testModelTransports(params: ModelTestParams): Promise<ModelTestRe
       provider,
       sdk,
       axios: naAxios,
-      diagnosis,
+      diagnosis: antigravityRuntime ? `${diagnosis} Antigravity configured ${antigravityRuntime.configuredVersion}; installed ${antigravityRuntime.installed ? 'yes' : 'no'}; checksum/version verified ${antigravityRuntime.verified ? 'yes' : 'no'}; actual version ${antigravityRuntime.actualVersion ?? 'unavailable'}.` : diagnosis,
+      ...(antigravityRuntime ? { antigravityRuntime } : {}),
       adapterRoute,
       adapter: sdk,
     };
