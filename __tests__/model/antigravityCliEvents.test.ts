@@ -24,5 +24,13 @@ test('bounds records and includes cached input without double counting thinking'
     prompt_tokens: 170, completion_tokens: 20, total_tokens: 190,
     prompt_tokens_details: { cached_tokens: 70 }, completion_tokens_details: { reasoning_tokens: 15 },
   });
-  expect(mapAntigravityCliUsage({ input_tokens: -1, output_tokens: NaN, thinking_tokens: 9, cache_read_tokens: -900 }).total_tokens).toBe(0);
+  expect(mapAntigravityCliUsage({ input_tokens: -1, output_tokens: NaN, thinking_tokens: 9, cache_read_tokens: -900 })).toBeUndefined();
+});
+
+test('distinguishes absent/partial usage from an explicitly reported zero', () => {
+  expect(mapAntigravityCliUsage(undefined)).toBeUndefined();
+  expect(mapAntigravityCliUsage({ input_tokens: 7 })).toBeUndefined();
+  expect(mapAntigravityCliUsage({ input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1, cache_read_tokens: 0 })).toBeUndefined();
+  expect(mapAntigravityCliUsage({ input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 })?.total_tokens).toBe(0);
+  expect(mapAntigravityCliUsage({ input_tokens: 3, output_tokens: 2, cache_read_tokens: 0 })?.completion_tokens_details).toBeUndefined();
 });
