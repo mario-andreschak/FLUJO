@@ -1,6 +1,10 @@
 import OpenAI from 'openai';
 import type { ToolResourceMarker } from './types';
-import { extractImageParts, extractText, type ImagePart, truncateForPrompt } from './messageUtils';
+import { extractImageParts, extractText, type ImagePart } from './messageUtils';
+
+/** Bump when projected roles, identifiers or payload-retention semantics change.
+ * Delta-only SDK resume must never retain a history from an older projection. */
+export const MESSAGE_NORMALIZATION_POLICY_VERSION = 'native-history-v2';
 
 const TOOL_RESULT_MAX_CHARS = 4000;
 const TOOL_ARGS_MAX_CHARS = 2000;
@@ -57,9 +61,9 @@ export function normalizeMessageInput(
   }
 
   for (const msg of messages) {
-    if (msg.role === 'system') {
+    if (msg.role === 'system' || msg.role === 'developer') {
       const text = extractText(msg.content);
-      if (text) systemParts.push(text);
+      if (text) systemParts.push(msg.role === 'developer' ? `<developer_instructions>\n${text}\n</developer_instructions>` : text);
       continue;
     }
     if (msg.role === 'tool') {
@@ -69,11 +73,11 @@ export function normalizeMessageInput(
       const entry = resourceMarkers?.get(msg.tool_call_id)?.result;
       if (entry && fullResult.length > TOOL_RESULT_MAX_CHARS) {
         lines.push(
-          `[prior action result] ${name}\n${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
+          `[prior action result] ${name} (call_id: ${msg.tool_call_id})\n${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
             `[full content stored as run resource ${entry.uri} — call read_resource with this uri to read it]`,
         );
       } else {
-        lines.push(`[prior action result] ${name}\n${truncateForPrompt(fullResult, TOOL_RESULT_MAX_CHARS)}`);
+        lines.push(`[prior action result] ${name} (call_id: ${msg.tool_call_id})\n${fullResult}`);
       }
       continue;
     }
@@ -94,12 +98,12 @@ export function normalizeMessageInput(
         const argsEntry = resourceMarkers?.get(tc.id)?.args;
         if (argsEntry && fullArgs.length > TOOL_ARGS_MAX_CHARS) {
           lines.push(
-            `[prior action] ${tc.function.name}\narguments: ${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
+            `[prior action] ${tc.function.name} (call_id: ${tc.id})\narguments: ${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
               `[full arguments stored as run resource ${argsEntry.uri} — call read_resource with this uri to read them]`,
           );
         } else {
           lines.push(
-            `[prior action] ${tc.function.name}\narguments: ${truncateForPrompt(fullArgs, TOOL_ARGS_MAX_CHARS)}`,
+            `[prior action] ${tc.function.name} (call_id: ${tc.id})\narguments: ${fullArgs}`,
           );
         }
       }

@@ -116,6 +116,8 @@ export interface ModelTestResult {
   adapter?: ModelTestAttempt;
   /** Synthetic FLUJO tool using the production schema/adapter conversion path. */
   tool?: ModelTestAttempt;
+  /** Package-owned runtime status; no executable or credential paths. */
+  antigravityRuntime?: { configuredVersion: string; installed: boolean; verified: boolean; actualVersion: string | null };
 }
 
 /**

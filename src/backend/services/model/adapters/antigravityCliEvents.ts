@@ -54,13 +54,20 @@ function count(value: unknown): number {
 }
 
 /** Antigravity excludes cached input and includes thinking in its output counter. */
-export function mapAntigravityCliUsage(stats: AntigravityCliStats | undefined): OpenAI.CompletionUsage {
+export function mapAntigravityCliUsage(stats: AntigravityCliStats | undefined): OpenAI.CompletionUsage | undefined {
+  // Absence/invalid primary counters are unknown, not free inference. Optional
+  // cached/thinking detail stays bounded by the provider's known totals.
+  if (!stats || !Number.isSafeInteger(stats.input_tokens) || stats.input_tokens! < 0
+      || !Number.isSafeInteger(stats.output_tokens) || stats.output_tokens! < 0
+      || !Number.isSafeInteger(stats.cache_read_tokens) || stats.cache_read_tokens! < 0) return undefined;
   const cached = count(stats?.cache_read_tokens);
   const prompt = count(stats?.input_tokens) + cached;
   const completion = count(stats?.output_tokens);
+  if (!Number.isSafeInteger(prompt) || !Number.isSafeInteger(prompt + completion)) return undefined;
   return {
     prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion,
     prompt_tokens_details: { cached_tokens: cached },
-    completion_tokens_details: { reasoning_tokens: Math.min(completion, count(stats?.thinking_tokens)) },
+    ...(Number.isSafeInteger(stats.thinking_tokens) && stats.thinking_tokens! >= 0
+      ? { completion_tokens_details: { reasoning_tokens: Math.min(completion, stats.thinking_tokens!) } } : {}),
   };
 }

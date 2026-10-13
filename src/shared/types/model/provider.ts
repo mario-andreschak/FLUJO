@@ -412,20 +412,13 @@ export const GEMINI_NATIVE_GUIDED_MODELS = [
 /** FLUJO sentinel: omit --model and let the CLI select its configured default. */
 export const ANTIGRAVITY_CLI_DEFAULT_MODEL = 'default';
 
-/** Account model slugs verified by `agy models` on the packaged 1.2.13 CLI. */
+/** Fallback membership observed with the verified 1.3.3 account catalog.
+ * Native discovery is authoritative; membership does not prove entitlement. */
 export const ANTIGRAVITY_CLI_MODELS = [
   ANTIGRAVITY_CLI_DEFAULT_MODEL,
   'gemini-3.8-flash-high',
   'gemini-3.8-flash-medium',
   'gemini-3.8-flash-low',
-  'gemini-3.7-flash-high',
-  'gemini-3.7-flash-medium',
-  'gemini-3.7-flash-low',
-  'gemini-3.6-flash-high',
-  'gemini-3.6-flash-medium',
-  'gemini-3.6-flash-low',
-  'gemini-3.1-pro-high',
-  'gemini-3.1-pro-low',
   'claude-sonnet-4-6',
   'claude-opus-4-6-thinking',
   'gpt-oss-120b-medium',
@@ -451,7 +444,7 @@ export const ANTIGRAVITY_CLI_API_KEY_MODELS = [
 export const ANTIGRAVITY_CLI_GUIDED_MODELS = [
   ANTIGRAVITY_CLI_DEFAULT_MODEL,
   'gemini-3.8-flash-medium',
-  'gemini-3.1-pro-high',
+  'gemini-3.8-flash-high',
 ] as const;
 
 const ANTIGRAVITY_CLI_MODEL_LABELS: Record<string, string> = {
@@ -717,7 +710,7 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'Antigravity CLI',
     baseUrl: '',
     showBaseUrl: false,
-    supportsModelDiscovery: false,
+    supportsModelDiscovery: true,
     defaultModels: [...ANTIGRAVITY_CLI_MODELS],
   },
   {

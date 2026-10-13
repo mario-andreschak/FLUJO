@@ -1,0 +1,26 @@
+{
+  "phase": "after",
+  "flowId": "pkg-software-dev-pkg-softwaredev-cc9947b8-84e1-409f-a17-179846a9",
+  "startedAt": "2026-10-13T00:10:53Z",
+  "httpStatus": 200,
+  "status": "completed",
+  "conversationId": "4079fa2c-dd51-46f7-8d7b-b35bc08e97d1",
+  "usage": {
+    "prompt_tokens": 115767,
+    "completion_tokens": 2180,
+    "total_tokens": 117947
+  },
+  "elapsedSeconds": 56.913,
+  "toolNames": [
+    "flujo__list_flows",
+    "flujo__list_flows",
+    "flujo__read_flow",
+    "flujo__read_flow"
+  ],
+  "inspectionTargets": [
+    "ap-10-planner-wave",
+    "ap-11-planning-agent"
+  ],
+  "inspectedWavesExecuted": false,
+  "githubWrites": 0
+}

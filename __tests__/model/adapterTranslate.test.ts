@@ -449,8 +449,8 @@ describe('claude subscription buildUserMessage', () => {
     expect(text).toContain('Assistant: Let me check.');
     // The tool CALL and its RESULT are now rendered (previously dropped), in the
     // non-invocable `[prior action]` form (#296).
-    expect(text).toContain('[prior action] mcp_get_weather_abc\narguments: {"city":"Berlin"}');
-    expect(text).toContain('[prior action result] mcp_get_weather_abc\n{"tempC":18}');
+    expect(text).toContain('[prior action] mcp_get_weather_abc (call_id: call_1)\narguments: {"city":"Berlin"}');
+    expect(text).toContain('[prior action result] mcp_get_weather_abc (call_id: call_1)\n{"tempC":18}');
     // The old call-expression form is gone — it was what models imitated.
     expect(text).not.toContain('[tool call]');
   });
@@ -481,11 +481,11 @@ describe('claude subscription buildUserMessage', () => {
     ];
     const { content } = buildUserMessage(convo);
     const text = content as string;
-    expect(text).toContain('[prior action] list_files\narguments: {}');
-    expect(text).toContain('[prior action result] list_files\na.txt\nb.txt');
+    expect(text).toContain('[prior action] list_files (call_id: c1)\narguments: {}');
+    expect(text).toContain('[prior action result] list_files (call_id: c1)\na.txt\nb.txt');
   });
 
-  it('truncates oversized tool results and args with a marker', () => {
+  it('keeps unarchived oversized tool results and arguments exact', () => {
     const bigArgs = JSON.stringify({ content: 'A'.repeat(5000) });
     const bigResult = 'R'.repeat(9000);
     const convo: OpenAI.ChatCompletionMessageParam[] = [
@@ -501,14 +501,11 @@ describe('claude subscription buildUserMessage', () => {
     ];
     const { content } = buildUserMessage(convo);
     const text = content as string;
-    // Args truncated at 2000, result at 4000; both carry the byte marker.
-    // (bigResult is exactly 9000 chars → 9000-4000 = 5000 truncated.)
-    expect(text).toMatch(/\[truncated 5000 chars\]/);
-    // The args payload is truncated too (its exact count depends on JSON overhead).
-    expect(text).toMatch(/\[prior action\] write_file\narguments: \{"content":"A+…\[truncated \d+ chars\]/);
-    // The whole oversized payloads are not present verbatim.
-    expect(text).not.toContain('R'.repeat(9000));
-    expect(text).not.toContain('A'.repeat(5000));
+    expect(text).toContain(bigArgs);
+    expect(text).toContain(bigResult);
+    expect(text).toContain('(call_id: c1)');
+    expect(text).not.toContain('[truncated');
+
   });
 
   it('is byte-identical to a raw single user message for a tool-free single turn', () => {

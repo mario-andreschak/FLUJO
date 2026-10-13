@@ -388,6 +388,25 @@ describe('protected Process preparation has no foreign MCP effects', () => {
     expect(reconnect).not.toHaveBeenCalled();
   });
 
+  test('ordinary and protected tool pages retain their cursors without replacing the approved client', async () => {
+    const { state } = setup();
+    const config = { name: 'protected-fixture', transport: 'websocket', websocketUrl: 'wss://current.example/mcp' };
+    const request = jest.fn(async (_request: unknown) => ({ tools: [{ name: 'echo', inputSchema: { type: 'object' } }], nextCursor: 'next-page' }));
+    const client = { request, __flujoProtectedConfigFingerprint: protectedConfigFingerprint(config as never) };
+    jest.spyOn(mcpService, 'loadServerConfigs').mockResolvedValue([config as never]);
+    jest.spyOn(mcpService, 'isServerDisabled').mockResolvedValue(false);
+    jest.spyOn(mcpService, 'getClient').mockReturnValue(client as never);
+    const reconnect = jest.spyOn(mcpService, 'forceReconnect');
+
+    await expect(mcpService.listServerTools('ordinary-server', 'all', 'ordinary-page')).resolves.toMatchObject({ nextCursor: 'next-page' });
+    await expect(mcpService.listServerTools('protected-fixture', 'model', state.executionExtensionContext, 'protected-page')).resolves.toMatchObject({ nextCursor: 'next-page' });
+    expect(request.mock.calls.map(call => call[0])).toEqual([
+      { method: 'tools/list', params: { cursor: 'ordinary-page' } },
+      { method: 'tools/list', params: { cursor: 'protected-page' } },
+    ]);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
   test('revocation while loading protected connection config stops before transport creation', async () => {
     const { state, run } = setup();
     const transport = mcpConnection.createTransport as jest.Mock;

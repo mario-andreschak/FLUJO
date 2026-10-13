@@ -2208,11 +2208,11 @@ export class MCPService {
   async listServerTools(
     serverName: string,
     audience: ToolListAudience = "model",
-    contextOrCursor?: ExecutionExtensionContext | string,
+    cursorOrExecutionContext?: string | ExecutionExtensionContext,
     cursor?: string,
   ): Promise<{ tools: ToolResponse[]; nextCursor?: string; error?: string }> {
-    const executionExtensionContext = typeof contextOrCursor === 'string' ? undefined : contextOrCursor;
-    const pageCursor = typeof contextOrCursor === 'string' ? contextOrCursor : cursor;
+    const executionExtensionContext = typeof cursorOrExecutionContext === 'string' ? undefined : cursorOrExecutionContext;
+    const pageCursor = typeof cursorOrExecutionContext === 'string' ? cursorOrExecutionContext : cursor;
     log.debug(
       `listServerTools: Entering method for server ${serverName}, audience ${audience}`,
     );

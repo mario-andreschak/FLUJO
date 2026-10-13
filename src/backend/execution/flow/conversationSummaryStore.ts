@@ -11,15 +11,12 @@ import {
 import type { SharedState } from './types';
 import { deriveLastErrorFromLastResponse } from './normalizeError';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import { CONVERSATION_SUMMARY_VERSION as SUMMARY_VERSION } from '@/shared/types/conversationSummary';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 import { commitExecutionExtensionMutation, isExecutionProtectedState } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
-// Sidebar titles for automation conversations are now derived from their output
-// instead of their trigger prompt. Rebuild older sidecars so existing automation
-// rows stop exposing the appended run-info block too.
-const SUMMARY_VERSION = 10;
 const SUMMARY_READ_CONCURRENCY = 32;
 const summaryRuntime = globalThis as typeof globalThis & {
   __flujoSummaryReads?: Map<string, Promise<ConversationSummary[]>>;
