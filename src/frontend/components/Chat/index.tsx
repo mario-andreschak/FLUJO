@@ -535,9 +535,15 @@ const Chat: React.FC = () => {
   const drainingRef = useRef<boolean>(false);
   // Keep this failure as a key so changing language also updates a visible
   // pending-input error. Its recovery belongs to the current input controls.
-  const pendingInputErrorKey = 'chat.page.inputResponseFailed' as const;
+  const pendingInputErrorKeys = {
+    'question-answer': 'chat.page.inputResponseFailed',
+    'question-decline': 'chat.page.inputDeclineFailed',
+    'elicitation-submit': 'chat.page.inputSubmitFailed',
+    'elicitation-cancel': 'chat.page.inputCancelFailed',
+  } as const;
   const [pendingInputErrorRevision, setPendingInputErrorRevision] = useState(0);
   const [error, setError] = useState<string | null>(null); // General error display
+  const pendingInputErrorKey = Object.values(pendingInputErrorKeys).find(key => key === error);
   // Issue #383: normalized error (message + code/status/class/redacted
   // details) kept alongside `error` rather than replacing it, so this stays a
   // small additive diff across a ~5100-line file. `error` (the plain string)
@@ -4316,7 +4322,7 @@ const Chat: React.FC = () => {
         // A fast repeated failure can batch with the clear above. Remount its
         // live alert so the identical guidance is announced again, once.
         setPendingInputErrorRevision(revision => revision + 1);
-        setError(pendingInputErrorKey);
+        setError(pendingInputErrorKeys[body.action]);
       }
     } finally {
       // Accepted input may reveal another concurrent mailbox. Invalid or stale

@@ -21,7 +21,7 @@ describe('Persona creation copy', () => {
       ...Object.entries(rolesMessageRows),
       ...Object.entries(personasMessageRows),
       ...Object.entries(mcpMessageRows).filter(([key]) => key.startsWith('mcp.presets.')),
-      ...Object.entries(chatMessageRows).filter(([key]) => key.startsWith('chat.page.loading') || key === 'chat.page.inputResponseFailed' || key === 'chat.question.answerLabel'),
+      ...Object.entries(chatMessageRows).filter(([key]) => key.startsWith('chat.page.loading') || key.startsWith('chat.page.input') || key === 'chat.question.answerLabel'),
       ...Object.entries(settingsMessageRows).filter(([key]) => key.startsWith('settings.personaRecovery.') || key === 'settings.backup.personaScope'),
     ];
     const fields = (message: string) => [...message.matchAll(/\{([^}]+)\}/g)].map(match => match[1]).sort();

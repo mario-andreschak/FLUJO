@@ -670,11 +670,11 @@ describe('Talk conversation Agent switch terminology', () => {
   });
 
   it.each([
-    ['Answer pending question', 'question-answer', { questionId: 'pending-question', answers: [['Retained answer']] }],
-    ['Decline pending question', 'question-decline', { questionId: 'pending-question' }],
-    ['Submit pending form', 'elicitation-submit', { elicitationId: 'pending-form', content: { note: 'Retained form' } }],
-    ['Cancel pending form', 'elicitation-cancel', { elicitationId: 'pending-form' }],
-  ])('retries %s through the current mailbox and clears the failure after success', async (name, action, payload) => {
+    ['Answer pending question', 'question-answer', { questionId: 'pending-question', answers: [['Retained answer']] }, 'chat.page.inputResponseFailed'],
+    ['Decline pending question', 'question-decline', { questionId: 'pending-question' }, 'chat.page.inputDeclineFailed'],
+    ['Submit pending form', 'elicitation-submit', { elicitationId: 'pending-form', content: { note: 'Retained form' } }, 'chat.page.inputSubmitFailed'],
+    ['Cancel pending form', 'elicitation-cancel', { elicitationId: 'pending-form' }, 'chat.page.inputCancelFailed'],
+  ] as const)('retries %s through the current mailbox and clears the failure after success', async (name, action, payload, errorKey) => {
     const originalFetch = globalThis.fetch;
     let succeed = false;
     const responses: unknown[] = [];
@@ -688,7 +688,7 @@ describe('Talk conversation Agent switch terminology', () => {
     try {
       const control = await screen.findByRole('button', { name: String(name) });
       fireEvent.click(control);
-      expect(await screen.findByText(translate('en', 'chat.page.inputResponseFailed'))).toBeInTheDocument();
+      expect(await screen.findByText(translate('en', errorKey))).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
       succeed = true;
       const empty = { ...pendingConversation, pendingInputs: { nextSeq: 2, questions: [], elicitations: [] } };
