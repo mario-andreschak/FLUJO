@@ -1,0 +1,33 @@
+{
+  "phase": "before",
+  "flowId": "pkg-software-dev-pkg-softwaredev-cc9947b8-84e1-409f-a17-179846a9",
+  "startedAt": "2026-10-13T00:06:12Z",
+  "httpStatus": 200,
+  "status": "completed",
+  "conversationId": "2a0d4e6a-e36a-497e-8b3c-745a3febeaa4",
+  "usage": {
+    "prompt_tokens": 496326,
+    "completion_tokens": 3431,
+    "total_tokens": 499757
+  },
+  "elapsedSeconds": 59.779,
+  "toolNames": [
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run",
+    "bash__run"
+  ],
+  "inspectionTargets": [
+    "ap-10-planner-wave",
+    "ap-11-planning-agent"
+  ],
+  "inspectedWavesExecuted": false,
+  "githubWrites": 0
+}
