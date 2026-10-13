@@ -29,7 +29,14 @@ if(mode==='pre-admission'){
 process.stdin.on('end',()=>process.exit(0));
 readline.createInterface({input:process.stdin}).on('line',line=>{
   fs.appendFileSync(log,line+'\\n');
-  const m=JSON.parse(line);if(m.id===undefined)return;
+  const m=JSON.parse(line);if(m.id===undefined || m.method===undefined)return;
+  if(mode==='incoming-terminal' && m.method==='turn/interrupt'){
+    process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+JSON.stringify({method:'turn/completed',params:{threadId:'thread-1',turn:{id:'turn-1',status:'interrupted'}}})+'\\n');return;
+  }
+  if(mode==='incoming' || mode==='incoming-resolved' || mode==='incoming-terminal'){
+    process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+JSON.stringify({id:'input-1',method:'item/tool/requestUserInput',params:{threadId:'thread-1',turnId:'turn-1',questions:[]}})+'\\n'+
+      (mode==='incoming-resolved' ? JSON.stringify({method:'serverRequest/resolved',params:{threadId:'thread-1',requestId:'input-1'}})+'\\n' : ''));return;
+  }
   if(mode==='silent')return;
   if(mode==='malformed'){process.stdout.write('{invalid\\n');return;}
   if(mode==='unknown'){process.stdout.write(JSON.stringify({id:m.id+100,result:{}})+'\\n');return;}
@@ -120,6 +127,54 @@ it('holds repeated birth uncertainty and closes the child without registration o
   unavailableBirthReads=3;await expect(startOwnedCodexAppServer(options())).rejects.toThrow('uncertain birth');
   expect(birthReads).toBe(3);expect(registrations).toHaveLength(0);expect(await wire()).toBe('');
   expect(()=>process.kill(lastBirthPid,0)).toThrow();
+});
+
+it('keeps native/default admission requests refused without an input callback',async()=>{
+  const child=await startOwnedCodexAppServer(options('incoming'));children.push(child);
+  await child.request('initialize',{});
+  for(let attempt=0;attempt<40;attempt++) {
+    if((await wire()).includes('input-1'))break;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  expect((await wire()).trim().split('\n').map(line=>JSON.parse(line)).at(-1)).toEqual({id:'input-1',error:{code:-32601,message:'Server action is not authorized by this transport'}});
+});
+
+it('responds once through the explicitly installed ordinary input callback',async()=>{
+  let accepted!:()=>void;const seen=new Promise<void>(resolve=>{accepted=resolve;});
+  const callback=jest.fn(async()=>{accepted();return {answers:{choice:{answers:['Blue']}}};});
+  const child=await startOwnedCodexAppServer({...options('incoming'),onRequest:callback});children.push(child);
+  await child.request('initialize',{});await seen;
+  for(let attempt=0;attempt<40;attempt++) {
+    if((await wire()).includes('input-1'))break;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  expect(callback).toHaveBeenCalledTimes(1);
+  expect((await wire()).trim().split('\n').map(line=>JSON.parse(line)).at(-1)).toEqual({id:'input-1',result:{answers:{choice:{answers:['Blue']}}}});
+});
+
+it('does not dispatch or answer an input already cleared in the same frame batch',async()=>{
+  const callback=jest.fn(async()=>({answers:{}}));
+  const notification=jest.fn();
+  const child=await startOwnedCodexAppServer({...options('incoming-resolved'),onRequest:callback,onNotification:notification});children.push(child);
+  await child.request('initialize',{});
+  await new Promise(resolve=>setTimeout(resolve,40));
+  expect(notification).toHaveBeenCalledWith(expect.objectContaining({method:'serverRequest/resolved'}));
+  expect(callback).not.toHaveBeenCalled();
+  expect((await wire()).trim().split('\n')).toHaveLength(1);
+});
+
+it('aborts a deferred matching input on terminal arrival and never writes its stale answer',async()=>{
+  let started!:()=>void;const seen=new Promise<void>(resolve=>{started=resolve;});
+  const callback=jest.fn(async(_request,signal:AbortSignal)=>{
+    started();await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}));
+    return {answers:{choice:{answers:['Blue']}}};
+  });
+  const child=await startOwnedCodexAppServer({...options('incoming-terminal'),onRequest:callback});children.push(child);
+  await child.request('initialize',{});await seen;
+  await child.request('turn/interrupt',{threadId:'thread-1',turnId:'turn-1'});
+  await new Promise(resolve=>setTimeout(resolve,40));
+  expect(callback.mock.calls[0][1].aborted).toBe(true);
+  expect((await wire()).trim().split('\n').map(line=>JSON.parse(line)).some(message=>message.id==='input-1')).toBe(false);
 });
 
 it('registers the born child before writing and brands it for only its owner',async()=>{

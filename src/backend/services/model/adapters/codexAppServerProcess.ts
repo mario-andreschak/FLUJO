@@ -34,6 +34,11 @@ export class CodexAppServerRpcError extends Error {
     this.name = 'CodexAppServerRpcError';
   }
 }
+/** Only explicit, locally constructed refusals are returned to server requests. */
+export class CodexAppServerRequestError extends Error {
+  constructor(readonly code: number, message: string) { super(message); }
+}
+export type CodexAppServerRequest = Readonly<{ id: number | string; method: string; params: unknown }>;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 32;
 const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'turn/start', 'turn/steer', 'turn/interrupt']);
@@ -45,6 +50,7 @@ export async function startOwnedCodexAppServer(input: {
   executable: string; args?: string[]; env: NodeJS.ProcessEnv; cwd: string; owner: object;
   register(process: CodexOwnedProcessRegistration): Promise<void>;
   signal?: AbortSignal; onNotification(message: Readonly<Message>): void;
+  onRequest?(request: CodexAppServerRequest, signal: AbortSignal): Promise<unknown>;
   admissionTimeoutMs?: number;
 }) {
   input.signal?.throwIfAborted();
@@ -56,6 +62,11 @@ export async function startOwnedCodexAppServer(input: {
   let exited = false, closed = false, stopping = false, registered = false, sequence = 0;
   let frame = Buffer.alloc(0);
   const pending = new Map<number, Pending>();
+  const incoming = new Map<number | string, { controller: AbortController; threadId: unknown; turnId: unknown }>();
+  const clearIncoming = () => {
+    for (const entry of incoming.values()) entry.controller.abort();
+    incoming.clear();
+  };
   const unavailable = () => new Error('Owned Codex app-server transport is unavailable.');
   const rejectPending = (error: unknown) => {
     for (const entry of pending.values()) {clearTimeout(entry.timer);entry.reject(error);}
@@ -65,10 +76,10 @@ export async function startOwnedCodexAppServer(input: {
     child.once('exit', (code, signal) => {exited=true;resolve(Object.freeze({code,signal}));});
   });
   const close = new Promise<void>(resolve => child.once('close', () => {
-    closed=true;rejectPending(unavailable());input.signal?.removeEventListener('abort', abort);resolve();
+    closed=true;clearIncoming();rejectPending(unavailable());input.signal?.removeEventListener('abort', abort);resolve();
   }));
   const requestStop = () => {
-    stopping=true;
+    stopping=true;clearIncoming();
     if (!exited && !closed) child.kill();
   };
   const abort = () => {rejectPending(unavailable());requestStop();};
@@ -116,10 +127,52 @@ export async function startOwnedCodexAppServer(input: {
         }
         else entry.resolve(message.result);
       } else if (message.id !== undefined && message.method) {
-        // An unimplemented server request must never acquire owner authority.
-        try {write({id:message.id,error:{code:-32601,message:'Server action is not authorized by this transport'}});}
-        catch {requestStop();}
+        if ((typeof message.id !== 'string' || !message.id || message.id.length > 256)
+          && (typeof message.id !== 'number' || !Number.isSafeInteger(message.id))) {
+          rejectPending(unavailable());requestStop();return;
+        }
+        if (typeof message.method !== 'string' || Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')
+          || incoming.has(message.id) || incoming.size >= 8) { rejectPending(unavailable());requestStop();return; }
+        // Native admission hosts do not install this optional ordinary-input callback.
+        if (!input.onRequest) {
+          try {write({id:message.id,error:{code:-32601,message:'Server action is not authorized by this transport'}});}
+          catch {requestStop();}
+          continue;
+        }
+        const requestId = message.id;
+        const controller = new AbortController();
+        const params = message.params as { threadId?: unknown; turnId?: unknown } | null;
+        const entry = { controller, threadId: params?.threadId, turnId: params?.turnId };
+        incoming.set(requestId, entry);
+        // Yield so a preceding turn/start acknowledgement installs its turn id first.
+        void Promise.resolve().then(() => {
+          if (incoming.get(requestId) !== entry || controller.signal.aborted) throw unavailable();
+          return input.onRequest!(Object.freeze({ id: requestId,
+            method: message.method!, params: message.params }), controller.signal);
+        }).then(result => {
+          if (incoming.get(requestId) === entry && !controller.signal.aborted) write({ id: requestId, result });
+        }, error => {
+          if (incoming.get(requestId) !== entry || controller.signal.aborted) return;
+          if (error instanceof CodexAppServerRequestError) write({ id: requestId, error: { code: error.code, message: error.message } });
+          else { rejectPending(unavailable()); requestStop(); }
+        }).catch(() => { rejectPending(unavailable()); requestStop(); }).finally(() => {
+          if (incoming.get(requestId) === entry) incoming.delete(requestId);
+        });
       } else if (typeof message.method==='string') {
+        if (message.method === 'turn/completed') {
+          const params = message.params as { threadId?: unknown; turn?: { id?: unknown } } | null;
+          for (const [requestId, entry] of incoming) if (entry.threadId === params?.threadId
+            && typeof entry.turnId === 'string' && entry.turnId === params?.turn?.id) {
+            incoming.delete(requestId);entry.controller.abort();
+          }
+        }
+        if (message.method === 'serverRequest/resolved') {
+          const params = message.params as { requestId?: number | string; threadId?: unknown } | null;
+          const entry = params?.requestId !== undefined ? incoming.get(params.requestId) : undefined;
+          if (entry && entry.threadId === params?.threadId) {
+            incoming.delete(params!.requestId!);entry.controller.abort();
+          }
+        }
         try {input.onNotification(Object.freeze(message));}
         catch {rejectPending(unavailable());requestStop();return;}
       } else {rejectPending(unavailable());requestStop();return;}
@@ -132,7 +185,7 @@ export async function startOwnedCodexAppServer(input: {
   };
   const stop = async () => {
     if (closed) return;
-    stopping=true;child.stdin.end();
+    stopping=true;clearIncoming();child.stdin.end();
     if (!await waitClose(2000)) {requestStop();if(!await waitClose(5000))throw new Error('Owned Codex process close remains unconfirmed.');}
   };
   try {

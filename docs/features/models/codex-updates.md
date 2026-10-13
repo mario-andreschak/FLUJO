@@ -83,9 +83,33 @@ Uncertain ordinary submissions fail without an automatic replacement turn.
 `FLUJO_CODEX_APP_SERVER=0` selects the retained SDK route for an intentional
 rollback; API-key, restricted and Native routes still use their admitted paths.
 
+Ordinary flows expose filesystem and other operations through FLUJO's MCP
+bridge. Current CodeModeOnly models use Codex's computational wrapper to call
+those offered tools. Native shell, agent, browser and computer feature flags are
+disabled at startup; unsupported operations and server requests are refused.
+The effective tool policy participates in session compatibility.
+Ordinary instructions also require code-mode scripts to emit the relevant
+returned tool content after awaiting it, including when a long call yields and
+resumes. This keeps the actual result available for the model's final response.
+
+A Process node with `allowQuestion` enabled can receive typed native Codex
+questions through its existing question executor and tool-approval policy.
+Questions requiring secret-entry semantics are refused. MCP servers with
+elicitation explicitly enabled continue to present their form schemas.
+Current models can publish an asynchronous question instead of a blocking RPC.
+FLUJO interrupts that exact turn and requires its matching terminal before
+presenting the question. Only the actual answer and a fresh execution-authority
+check permit continuation. An explicit decline ends without another provider
+turn and invalidates session reuse so later input includes canonical history.
+Stop, connection loss and missing terminal proof prohibit continuation.
+Pending questions and forms belong to the current workspace and conversation.
+A browser reload or reconnect restores prompts while the application is still
+waiting. Invalid answers retain the prompt for correction; resolved, stopped or
+obsolete requests reject later answers. An application restart discards pending
+mailboxes and clears stale forms without replaying the submitted turn.
+
 The ordinary lifecycle batch does not claim issue #1097 complete. Native fork,
-direct protocol questions/elicitation, advertised service-tier controls, and
-native compaction integration have separate implementation and acceptance
-criteria. Existing FLUJO question tools continue through their current bridge.
+advertised service-tier controls, native compaction integration and packaged
+runtime acceptance retain their separate criteria.
 
 Protocol reference: [Codex app-server models](https://learn.chatgpt.com/docs/app-server).

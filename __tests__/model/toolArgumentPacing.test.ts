@@ -103,4 +103,20 @@ describe('progressive tool-argument pacing (#337)', () => {
       deltas.map(delta => delta.toolCallDelta?.argumentsDelta ?? '').join(''),
     ).toBe(JSON.stringify({ query: 'y'.repeat(400) }));
   });
+
+  it('emits no more argument fragments after request cancellation', async () => {
+    const controller = new AbortController(), deltas: ModelStreamDelta[] = [];
+    await expect(paceToolCallArguments({ messageId: 'm', callId: 'call-1', name: 'question',
+      argsJson: 'x'.repeat(800), chunkChars: 64, delayMs: 0, signal: controller.signal,
+      onModelDelta: delta => { deltas.push(delta); if (delta.toolCallDelta?.argumentsDelta) controller.abort(); },
+    })).rejects.toBeDefined();
+    expect(deltas).toHaveLength(2);
+  });
+
+  it('does not publish an already-cancelled request', async () => {
+    const controller = new AbortController(), onModelDelta = jest.fn(); controller.abort();
+    await expect(paceToolCallArguments({ messageId: 'm', callId: 'call-1', name: 'question',
+      argsJson: '{}', signal: controller.signal, onModelDelta })).rejects.toBeDefined();
+    expect(onModelDelta).not.toHaveBeenCalled();
+  });
 });

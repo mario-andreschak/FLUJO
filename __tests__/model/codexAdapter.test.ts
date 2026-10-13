@@ -19,7 +19,10 @@ import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/mod
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { registerPendingApproval, listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { hidePresetParameters } from '@/utils/shared/toolParameterPresets';
+import { executeQuestionTool } from '@/backend/execution/flow/handlers/runQuestionTool';
+import { declinePendingQuestion } from '@/backend/services/questionRegistry';
 
 const codexCtorMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
@@ -31,6 +34,38 @@ jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
 // Ordinary RPC lifecycle is exercised separately in codexAppServerThread.test.ts.
 const previousAppServer = process.env.FLUJO_CODEX_APP_SERVER;
 beforeEach(() => { process.env.FLUJO_CODEX_APP_SERVER = '0'; });
+
+it('cancels only a direct question approval when its individual request is revoked', async () => {
+  const controller = new AbortController(), conversationId = 'direct-question-approval';
+  const sibling = { id: 'sibling', type: 'function' as const, function: { name: 'sibling', arguments: '{}' } };
+  const siblingResolved = jest.fn(), execute = jest.fn();
+  const transcript: FlujoChatMessage[] = [];
+  let registered!: () => void; const seen = new Promise<void>(resolve => { registered = resolve; });
+  registerPendingApproval(conversationId, sibling, siblingResolved);
+  runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+    await capturedBridgeTools[0].handler({ questions: [{ prompt: 'Color?', options: ['Blue'] }] }, undefined, controller.signal);
+  })() }));
+  const running = new CodexAdapter().createCompletion(baseInput({ conversationId,
+    onTranscriptMessage: message => { transcript.push(message); },
+    tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+    localToolExecutors: { question: execute },
+    requestToolApproval: call => new Promise<boolean>(resolve => {
+      registerPendingApproval(conversationId, { id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } }, resolve);
+      registered();
+    }),
+  }));
+  try {
+    await seen;
+    expect(listPendingToolCalls(conversationId)).toHaveLength(2);
+    controller.abort();
+    await expect(running).rejects.toThrow();
+    expect(execute).not.toHaveBeenCalled();
+    expect(transcript.filter(message => message.role === 'tool')).toHaveLength(1);
+    expect(transcript.find(message => message.role === 'tool')?.content).toContain('no answer was submitted');
+    expect(listPendingToolCalls(conversationId)).toEqual([sibling]);
+    expect(siblingResolved).not.toHaveBeenCalled();
+  } finally { clearPendingApprovals(conversationId); }
+});
 afterAll(() => {
   if (previousAppServer === undefined) delete process.env.FLUJO_CODEX_APP_SERVER;
   else process.env.FLUJO_CODEX_APP_SERVER = previousAppServer;
@@ -42,6 +77,10 @@ jest.mock('@/backend/services/model/adapters/codexSessionStore', () => ({
 const startThreadMock = jest.fn();
 const resumeThreadMock = jest.fn();
 const runStreamedMock = jest.fn();
+const appServerThreadMock = jest.fn();
+jest.mock('@/backend/services/model/adapters/codexAppServerThread', () => ({
+  createCodexAppServerThread: (...args: unknown[]) => appServerThreadMock(...args),
+}));
 const readTokenSnapshotMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexContextUsage', () => ({
   readCodexTokenSnapshot: (...args: unknown[]) => readTokenSnapshotMock(...args),
@@ -164,6 +203,10 @@ beforeEach(() => {
   startThreadMock.mockReset();
   resumeThreadMock.mockReset();
   runStreamedMock.mockReset();
+  appServerThreadMock.mockReset().mockImplementation(() => ({
+    runStreamed: runStreamedMock, close: jest.fn(async () => {}),
+    usage: () => undefined, canSteer: () => false, steer: jest.fn(async () => false),
+  }));
   readTokenSnapshotMock.mockReset().mockResolvedValue(undefined);
   modelCatalogCleanupMock.mockReset().mockResolvedValue(undefined);
   prepareModelCatalogMock.mockReset().mockResolvedValue({
@@ -198,7 +241,93 @@ beforeEach(() => {
   }));
 });
 
+it.each([false, true])('allows the MCP computation host while denying native operations with ordinary questions enabled=%s', async enabled => {
+  process.env.FLUJO_CODEX_APP_SERVER = '1';
+  await new CodexAdapter().createCompletion(baseInput({ apiKey: '',
+    ...(enabled ? {
+      tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+      localToolExecutors: { question: jest.fn(async () => 'Blue') },
+    } : {}),
+  }));
+  expect(codexCtorMock).not.toHaveBeenCalled();
+  const options = appServerThreadMock.mock.calls[0][0];
+  expect(options.config.features).toMatchObject({ shell_tool: false, unified_exec: false,
+    code_mode_host: true, code_mode: false, multi_agent: false,
+    default_mode_request_user_input: enabled });
+  expect(options.config.tools).toMatchObject({ view_image: false,
+    experimental_request_user_input: { enabled } });
+  expect(options.config.web_search).toBe('disabled');
+  expect(typeof options.onQuestion === 'function').toBe(enabled);
+  expect(typeof options.onAsyncQuestion === 'function').toBe(enabled);
+});
+
 describe('CodexAdapter — catalog snapshot lifetime', () => {
+  it.each(['pacing', 'fence'])('settles an individually cancelled question once during %s', async phase => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    const controller = new AbortController(), transcript: FlujoChatMessage[] = [], execute = jest.fn();
+    appServerThreadMock.mockImplementationOnce(options => ({
+      runStreamed: async () => ({ events: (async function* () {
+        await options.onQuestion([{ id: 'choice', header: 'Color', question: 'Choose a color. ' + 'x'.repeat(500),
+          isSecret: false, isOther: true, options: [{ label: 'Blue' }, { label: 'Green' }] }], controller.signal);
+      })() }), close: jest.fn(async () => {}), canSteer: () => false, usage: () => undefined,
+    }));
+    await expect(new CodexAdapter().createCompletion(baseInput({ apiKey: '',
+      tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+      localToolExecutors: { question: execute }, requestToolApproval: async () => true,
+      beforeToolDispatch: async () => { if (phase === 'fence') controller.abort(); },
+      onModelDelta: delta => { if (phase === 'pacing' && delta.toolCallDelta?.argumentsDelta) controller.abort(); },
+      onTranscriptMessage: message => { transcript.push(message); },
+    }))).rejects.toBeDefined();
+    expect(execute).not.toHaveBeenCalled();
+    expect(transcript.filter(message => message.tool_calls?.length)).toHaveLength(1);
+    const results = transcript.filter(message => message.role === 'tool');
+    expect(results).toHaveLength(1); expect(results[0].content).toContain('no answer was submitted');
+  });
+
+  it('invalidates the reusable session when an async question is explicitly declined', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    const conversationId = 'declined-native-session', onCodexSessionChange = jest.fn();
+    appServerThreadMock.mockImplementationOnce(options => ({
+      runStreamed: async () => ({ events: (async function* () {
+        yield { type: 'thread.started', thread_id: 'declined-thread' };
+        expect(await options.onAsyncQuestion([{ title: 'Which color?', options: ['Blue', 'Green'] }], new AbortController().signal))
+          .toEqual({ action: 'decline' });
+        yield turnCompleted({ input_tokens: 100, output_tokens: 20 });
+      })() }), close: jest.fn(async () => {}), canSteer: () => false, usage: () => ({ input_tokens: 100, output_tokens: 20 }),
+    }));
+    await new CodexAdapter().createCompletion(baseInput({ apiKey: '', conversationId, nodeId: 'process',
+      sessionResume: true, onCodexSessionChange,
+      tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+      localToolExecutors: { question: args => executeQuestionTool(args, { conversationId,
+        emit: event => { if (event.type === 'run:awaiting_question') declinePendingQuestion(conversationId, event.questionId); },
+      }) },
+    }));
+    expect(onCodexSessionChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('retains executable and snapshot until a failed ordinary close receives actual close proof', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    let closed!: () => void;
+    const proof = new Promise<void>(resolve => { closed = resolve; });
+    const failure = new Error('Owned closure remains unconfirmed');
+    appServerThreadMock.mockReturnValueOnce({ runStreamed: runStreamedMock,
+      close: jest.fn(async () => { throw failure; }), whenClosed: () => proof,
+      canSteer: () => false, usage: () => undefined });
+    await expect(new CodexAdapter().createCompletion(baseInput({ apiKey: '' }))).rejects.toBe(failure);
+    const acquired = await jest.requireMock('@/backend/services/model/adapters/codexRuntimeUpdate').acquireOrdinaryCodexExecutable.mock.results.at(-1).value;
+    expect(modelCatalogCleanupMock).not.toHaveBeenCalled(); expect(acquired.release).not.toHaveBeenCalled();
+    closed();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1); expect(acquired.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the current model-dispatch fence into ordinary answer continuations', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    const beforeModelDispatch = jest.fn(async () => {});
+    await new CodexAdapter().createCompletion(baseInput({ apiKey: '', beforeModelDispatch }));
+    expect(appServerThreadMock.mock.calls[0][0].beforeContinuation).toBe(beforeModelDispatch);
+  });
+
   it('keeps the snapshot through lazy SDK iteration and cleans up only after termination', async () => {
     runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
       expect(modelCatalogCleanupMock).not.toHaveBeenCalled();

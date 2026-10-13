@@ -6,6 +6,9 @@ import { promises as fs } from 'fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { bindToCurrentWorkspace } from '@/utils/workspace';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
@@ -31,6 +34,7 @@ import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { acquireOrdinaryCodexExecutable, readCodexRuntimeCompatibility } from './codexRuntimeUpdate';
 import { createCodexAppServerThread } from './codexAppServerThread';
+import { answerCodexUserInput, answerCodexAsyncUserInput } from './codexUserInput';
 import { mapCodexUsage, subtractCodexUsage, type CodexUsageLike } from './codexUsage';
 import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
 import {
@@ -324,18 +328,20 @@ export class CodexAdapter implements CompletionAdapter {
     // message. Presentation only — approval and execution keep using `argsJson`.
     const streamToolCall = async (
       ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+      requestSignal?: AbortSignal,
     ): Promise<void> => {
+      requestSignal?.throwIfAborted();
       // Reserve the tool boundary before paced argument projection yields.
       unansweredTools.add(ti.id);
       const messageId = getStreamMessageId(`toolcall_${ti.id}`);
-      await paceToolCallArguments({
+      try { await paceToolCallArguments({
         messageId,
         callId: ti.id,
         name: ti.name,
         argsJson: ti.argsJson,
         onModelDelta,
-      });
-      recordToolCall(ti, messageId);
+        signal: requestSignal,
+      }); } finally { recordToolCall(ti, messageId); }
     };
     const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
       recordMessage({
@@ -364,9 +370,28 @@ export class CodexAdapter implements CompletionAdapter {
       name: string,
       args: Record<string, unknown>,
       resolveRejectedUi?: (reason: string) => Promise<ToolUi | undefined>,
+      requestSignal?: AbortSignal,
     ): Promise<CallToolResult | null> => {
+      requestSignal?.throwIfAborted();
       if (!requestToolApproval) return null;
-      const approved = await requestToolApproval({ id: callId, name, args });
+      const cancelApproval = bindToCurrentWorkspace(() => {
+        if (conversationId && resolvePendingApproval(conversationId, callId, false)) {
+          executionEventBus.emitterFor(conversationId)({ type: 'run:awaiting_approval',
+            pendingToolCalls: listPendingToolCalls(conversationId) });
+        }
+      });
+      requestSignal?.addEventListener('abort', cancelApproval, { once: true });
+      let approved: boolean;
+      try {
+        const approval = requestToolApproval({ id: callId, name, args });
+        if (requestSignal?.aborted) cancelApproval();
+        approved = await approval;
+        requestSignal?.throwIfAborted();
+      } catch (error) {
+        if (requestSignal?.aborted) recordToolResult({ id: callId,
+          resultContent: 'The user input request ended before approval; no answer was submitted.' });
+        throw error;
+      } finally { requestSignal?.removeEventListener('abort', cancelApproval); }
       if (approved) return null;
       const rejectionText = 'tool denied';
       const ui = await resolveRejectedUi?.(rejectionText);
@@ -440,47 +465,56 @@ export class CodexAdapter implements CompletionAdapter {
             name: fnName,
             description,
             inputSchema,
-            handler: async (args) => {
+            handler: async (args, _requestIdentity, requestSignal) => {
+              requestSignal?.throwIfAborted();
               if (shouldEndAgenticTurn?.()) return endedToolResult();
               if (executionExtensionContext) {
                 await assertExecutionModelTool(executionExtensionContext, fnName, decoded);
               }
               const callId = `call_${uuidv4()}`;
               const argsJson = JSON.stringify(args ?? {});
-              // The bridge receives a call only after Codex has assembled its
-              // arguments. Surface it immediately, before approval or execution,
-              // so the existing UI renders a live pending tool card whose
-              // arguments stream in (#337) instead of appearing all at once.
-              await streamToolCall({ id: callId, name: fnName, argsJson });
-              const denied = await gate(callId, fnName, args ?? {});
-              if (denied) return denied;
-              await beforeToolDispatch?.();
-              log.debug('Codex local tool call', { tool: fnName });
-              const toolStartedAt = Date.now();
-              let resultContent: string;
-              let isError = false;
               try {
-                resultContent = JSON.stringify(await localExec(args ?? {}));
-              } catch (err) {
-                if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
-                resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
-                isError = true;
+                // The bridge receives a call only after Codex has assembled its
+                // arguments. Surface it immediately, before approval or execution,
+                // so the existing UI renders a live pending tool card whose
+                // arguments stream in (#337) instead of appearing all at once.
+                await streamToolCall({ id: callId, name: fnName, argsJson }, requestSignal);
+                const denied = await gate(callId, fnName, args ?? {}, undefined, requestSignal);
+                if (denied) return denied;
+                await beforeToolDispatch?.();
+                requestSignal?.throwIfAborted();
+                log.debug('Codex local tool call', { tool: fnName });
+                const toolStartedAt = Date.now();
+                let resultContent: string;
+                let isError = false;
+                try {
+                  resultContent = JSON.stringify(await localExec(args ?? {}));
+                } catch (err) {
+                  if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
+                  resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+                  isError = true;
+                }
+                requestSignal?.throwIfAborted();
+                recordToolResult({ id: callId, resultContent });
+                if (runId) {
+                  recordStatisticsEvent(createStatisticsEvent({
+                    type: 'tool.invocation',
+                    runId,
+                    node: nodeId ? { id: nodeId } : undefined,
+                    tool: { id: fnName, name: fnName, kind: 'synthetic' },
+                    outcome: isError ? 'error' : 'completed',
+                    durationMs: Math.max(0, Date.now() - toolStartedAt),
+                    errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
+                  }));
+                }
+                return isError
+                  ? { content: [{ type: 'text', text: resultContent }], isError: true }
+                  : { content: [{ type: 'text', text: resultContent }] };
+              } catch (error) {
+                if (requestSignal?.aborted && unansweredTools.has(callId)) recordToolResult({ id: callId,
+                  resultContent: 'The user input request ended before completion; no answer was submitted.' });
+                throw error;
               }
-              recordToolResult({ id: callId, resultContent });
-              if (runId) {
-                recordStatisticsEvent(createStatisticsEvent({
-                  type: 'tool.invocation',
-                  runId,
-                  node: nodeId ? { id: nodeId } : undefined,
-                  tool: { id: fnName, name: fnName, kind: 'synthetic' },
-                  outcome: isError ? 'error' : 'completed',
-                  durationMs: Math.max(0, Date.now() - toolStartedAt),
-                  errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
-                }));
-              }
-              return isError
-                ? { content: [{ type: 'text', text: resultContent }], isError: true }
-                : { content: [{ type: 'text', text: resultContent }] };
             },
           };
         }
@@ -727,6 +761,11 @@ export class CodexAdapter implements CompletionAdapter {
     let inputSystemPrompt = systemPrompt;
     const ordinaryThreadPath = !nativeToolPort && !executionExtensionContext && !nativeOriginalProcessHost && !apiKey
       && process.env.FLUJO_CODEX_APP_SERVER !== '0';
+    if (ordinaryThreadPath) configuration.developerInstructions +=
+      '\nWhen calling FLUJO MCP tools from code-mode exec, capture the result and emit the relevant returned content with text(...) or image(...) for image blocks. Put that emission after await in the same exec script, including calls that yield and resume with wait. Use the emitted result to produce the requested final response.';
+    const ordinaryQuestion = ordinaryThreadPath ? bridgeTools.find(tool => tool.name === 'question') : undefined;
+    if (ordinaryQuestion) configuration.developerInstructions +=
+      '\nFLUJO enables request_user_input and request_user_input_async for short user questions through the same flow question policy and approval gate as the question tool. After asking, end your turn; FLUJO will deliver the actual user response. Do not use clock or collaboration tools to wait for an answer.';
     // Flattened history → Codex stdin input. Keep the dynamic system prompt out of
     // Codex SDK config: the SDK serializes config values into CLI arguments,
     // which can exceed Windows' command-line limit for flow-generation prompts.
@@ -787,6 +826,7 @@ export class CodexAdapter implements CompletionAdapter {
       if (sessionResume && sessionRegistryKey) {
         configuration.accountScope = await codexSessionAccountScope(apiKey);
         configuration.runtimeIdentity = JSON.stringify({ transport: ordinaryThreadPath ? 'app-server' : 'sdk-exec',
+          ...(ordinaryThreadPath ? { toolPolicy: 'flujo-ordinary-tools-v3' } : {}),
           ...(await readCodexRuntimeCompatibility(codexExecutable)) });
         configuration.workingDirectory = runtime.workingDirectory;
       }
@@ -875,12 +915,18 @@ export class CodexAdapter implements CompletionAdapter {
         service_tier: model.serviceTier ?? 'default',
         developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
         ...(ordinaryThreadPath ? { web_search: 'disabled' } : {}),
+        ...(ordinaryThreadPath ? { tools: { view_image: false,
+          experimental_request_user_input: { enabled: Boolean(ordinaryQuestion) } } } : {}),
         // Do not expose Codex's built-in shell. FLUJO filesystem operations
         // must go through the bridged MCP tools so they remain observable and
         // subject to FLUJO's approval setting.
         features: {
           shell_tool: false,
-          ...(ordinaryThreadPath ? { multi_agent: false, apps: false, plugins: false } : {}),
+          // Current CodeModeOnly models need the computational host to call
+          // the offered MCP tools. Native shell/agents/apps remain disabled.
+          ...(ordinaryThreadPath ? { ...RESTRICTED_CODEX_CONFIG.features,
+            code_mode_host: true,
+            default_mode_request_user_input: Boolean(ordinaryQuestion) } : {}),
         },
         ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_CONFIG : {}),
         ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
@@ -926,8 +972,20 @@ export class CodexAdapter implements CompletionAdapter {
       }) : undefined;
       ordinaryThread = ordinaryThreadPath ? createCodexAppServerThread({
         executable: codexExecutable!, env: nativeCodexEnvironment(runtime.env), config,
-        options: threadOptions, resumeThreadId, outputSchema: input.outputSchema,
-        developerInstructions: [CODEX_FLUJO_INSTRUCTIONS, systemPrompt].filter(Boolean).join('\n\n'),
+        options: threadOptions, resumeThreadId, outputSchema: input.outputSchema, maxTurns: input.maxTurns,
+        beforeContinuation: input.beforeModelDispatch,
+        developerInstructions: [configuration.developerInstructions, systemPrompt].filter(Boolean).join('\n\n'),
+        ...(ordinaryQuestion ? {
+          onQuestion: (questions: unknown, signal: AbortSignal) =>
+            answerCodexUserInput(questions, signal, args => ordinaryQuestion.handler(args, undefined, signal)),
+          onAsyncQuestion: async (questions: unknown, signal: AbortSignal) => {
+            const result = await answerCodexAsyncUserInput(questions, signal, args => ordinaryQuestion.handler(args, undefined, signal));
+            // The declined result did not enter the Codex conversation. Rebuild
+            // from canonical history next time instead of sending only a delta.
+            if (result.action === 'decline') ordinarySessionCompatible = false;
+            return result;
+          },
+        } : {}),
         onUsage: (total, context) => { protocolTotal = total; usage = protocolBaseline ? subtractCodexUsage(total, protocolBaseline) : total; contextUsage = context; },
       }) : undefined;
       const thread = ownedThread ?? ordinaryThread ?? (resumeThreadId
@@ -1313,13 +1371,26 @@ export class CodexAdapter implements CompletionAdapter {
             usage = subtractCodexUsage(usage, baselineSnapshot.totalUsage);
           }
         }
-        if (scratchDir) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
+        if (scratchDir && !ordinaryClosureFailure) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
       } finally {
         try {
           await privateRuntimeCleanup?.();
         } finally {
-          await modelCatalogCleanup?.().catch(() => log.warn('Failed to remove Codex model catalog snapshot'));
-          await codexLeaseCleanup?.().catch(() => log.warn('Failed to release Codex CLI lease'));
+          const retireOrdinaryResources = async () => {
+            await modelCatalogCleanup?.().catch(() => log.warn('Failed to remove Codex model catalog snapshot'));
+            await codexLeaseCleanup?.().catch(() => log.warn('Failed to release Codex CLI lease'));
+          };
+          if (!ordinaryClosureFailure) await retireOrdinaryResources();
+          else {
+            // An unconfirmed child keeps its executable retirement protection
+            // and process-needed files. Only the owned close signal may retire them.
+            log.warn('Codex runtime resources retained pending confirmed owned process closure');
+            const proof = ordinaryThread?.whenClosed();
+            if (proof) void proof.then(async () => {
+              if (scratchDir) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
+              await retireOrdinaryResources();
+            }).catch(() => log.warn('Codex owned process closure remains unconfirmed'));
+          }
         }
       }
       if (ordinaryClosureFailure) throw ordinaryClosureFailure;

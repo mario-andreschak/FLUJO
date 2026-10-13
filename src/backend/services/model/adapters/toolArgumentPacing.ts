@@ -80,6 +80,8 @@ export interface PaceToolCallArgumentsOptions {
   /** Set to 0 to emit every chunk without waiting (used by tests). */
   delayMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Stop projecting a request once its owner has cancelled it. */
+  signal?: AbortSignal;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -102,7 +104,9 @@ export async function paceToolCallArguments(
     chunkChars,
     delayMs = DEFAULT_TOOL_ARGUMENT_DELAY_MS,
     sleep = defaultSleep,
+    signal,
   } = options;
+  signal?.throwIfAborted();
   if (!onModelDelta) return;
 
   // A consumer fault must never abort the tool call: the durable transcript
@@ -119,7 +123,9 @@ export async function paceToolCallArguments(
 
   const chunks = chunkToolArguments(argsJson, chunkChars);
   for (let i = 0; i < chunks.length; i += 1) {
+    signal?.throwIfAborted();
     emit({ messageId, toolCallDelta: { index, argumentsDelta: chunks[i] } });
     if (delayMs > 0 && i < chunks.length - 1) await sleep(delayMs);
   }
+  signal?.throwIfAborted();
 }
