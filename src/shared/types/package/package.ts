@@ -73,6 +73,7 @@ export interface PackagedModel {
   maxTurns?: number;
   maxTokens?: number;
   compactionThreshold?: number;
+  compactionThresholdPercent?: number;
   folder?: string;
   favorite?: boolean;
   apiKeyRef: PackageApiKeyRef;

@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readStableFile } from '@/utils/readStableFile';
 
-export const ANTIGRAVITY_CLI_VERSION = '1.2.13';
+export const ANTIGRAVITY_CLI_VERSION = '1.3.3';
 export const ANTIGRAVITY_CLI_TIMEOUT_MS = 5 * 60 * 1000;
 export const ANTIGRAVITY_LOGIN_INSTRUCTIONS = 'Run `flujo-agy` (or the standalone `agy`) as the FLUJO server or worker OS user and complete Google sign-in, then retry. Headless runs use that user’s native keyring or official local account cache. Alternatively, configure a Gemini API key in this connection.';
 export const ANTIGRAVITY_NATIVE_DENIES = ['read_file(*)', 'write_file(*)', 'command(*)', 'unsandboxed(*)', 'read_url(*)', 'execute_url(*)'];
@@ -71,8 +71,9 @@ async function seedAccountCache(destination: string): Promise<void> {
 
 /** Only the official single account cache may enter otherwise private configuration. */
 export async function prepareAntigravityCliRuntime(options: {
-  model: string; maxTurns: number; apiKey: string; bridge?: AntigravityBridge;
+  model: string; maxTurns: number; apiKey: string; bridge?: AntigravityBridge; diagnosticsOnly?: boolean;
 }): Promise<AntigravityCliRuntime> {
+  if (options.apiKey.includes('${global:')) throw new Error('Could not resolve the selected Antigravity API key.');
   if (options.bridge) {
     const url = new URL(options.bridge.url);
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1'
@@ -119,7 +120,7 @@ export async function prepareAntigravityCliRuntime(options: {
       fs.writeFile(path.join(gitDir, 'config'), '[core]\nrepositoryformatversion = 0\nbare = false\n', { mode: 0o600 }),
       fs.writeFile(gitConfig, '', { mode: 0o600 }),
     ]);
-    if (!options.apiKey) await seedAccountCache(cliDir);
+    if (!options.apiKey && !options.diagnosticsOnly) await seedAccountCache(cliDir);
     const env = Object.fromEntries(Object.entries(process.env)
       .filter((entry): entry is [string, string] => entry[1] !== undefined)
       .filter(([key]) => !/^(?:GOOGLE_|GEMINI_|GCLOUD_|CLOUDSDK_|AGY_|ANTIGRAVITY_|JETSKI_|GIT_|OPENAI_|ANTHROPIC_|AZURE_|VERTEX_|NODE_OPTIONS$|NODE_PATH$|BROWSER$|NO_BROWSER$|OAUTH_CALLBACK_)/i.test(key)));

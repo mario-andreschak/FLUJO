@@ -53,11 +53,12 @@ import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import {
   compactHistory,
+  splitHistoryForCompaction,
   COMPACTION_SUMMARY_MARKER,
-  estimateTokens,
   type CompactHistoryResult,
 } from './summarizingCompaction';
 import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
+import { retainSummaryArtifacts } from '../compaction/state';
 import {
   COMPACTION_ARTIFACT_SCHEMA_VERSION,
   COMPACTION_POLICY_VERSION,
@@ -513,6 +514,7 @@ export class ModelHandler {
     compactionEnabled?: boolean;
     compactionBufferTokens?: number;
     compactionKeepTokens?: number;
+    compactionThresholdPercent?: number;
     visualCompactionEnabled?: boolean;
     visualCompactionToolResultsOnly?: boolean;
     visualCompactionEvaluationMode?: boolean;
@@ -524,13 +526,14 @@ export class ModelHandler {
         compactionEnabled: exp?.compactionEnabled,
         compactionBufferTokens: exp?.compactionBufferTokens,
         compactionKeepTokens: exp?.compactionKeepTokens,
+        compactionThresholdPercent: exp?.compactionThresholdPercent,
         visualCompactionEnabled: exp?.visualCompactionEnabled,
         visualCompactionToolResultsOnly: exp?.visualCompactionToolResultsOnly,
         visualCompactionEvaluationMode: exp?.visualCompactionEvaluationMode,
       };
     } catch (err) {
       log.warn('Failed to read compaction settings; defaulting to disabled', { err });
-      return {};
+      return { compactionEnabled: false, visualCompactionEnabled: false };
     }
   }
 
@@ -546,10 +549,11 @@ export class ModelHandler {
     conversationId: string | undefined,
     nodeId: string | undefined,
     projectionView: CompactionProjectionIdentity['view'],
-    model: { id: string; adapter?: ModelAdapter; provider?: ModelProvider; contextWindow?: number; compactionThreshold?: number },
+    model: { id: string; name?: string; adapter?: ModelAdapter; provider?: ModelProvider; contextWindow?: number; compactionThreshold?: number; compactionThresholdPercent?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
+    tools?: OpenAI.ChatCompletionFunctionTool[],
     modelCatalogAdmission?: ModelCatalogAdmission,
   ): Promise<CompactHistoryResult | null> {
     try {
@@ -559,21 +563,10 @@ export class ModelHandler {
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
-      let lastPromptTokens: number | undefined;
-      for (let i = source.length - 1; i >= 0; i--) {
-        const message = source[i];
-        const promptTokens = message.contextUsage !== undefined
-          ? message.contextUsage?.promptTokens
-          : isSelfOrchestratingAdapter(resolveModelAdapter(model.provider, model.adapter))
-            ? undefined
-            : message.usage?.promptTokens;
-        if (typeof promptTokens === 'number' && promptTokens > 0) {
-          lastPromptTokens = promptTokens;
-          break;
-        }
-        if (message.contextUsage !== undefined || message.usage) break;
-      }
-      const estimate = lastPromptTokens ?? estimateTokens(source);
+      // Previous usage excludes newly appended observations, instructions and
+      // tool schemas. Budget the current provider projection every time.
+      const estimate = ModelHandler.estimateOutgoingInputTokens(toApiMessages(source), tools,
+        model.provider ? { provider: model.provider, adapter: model.adapter, name: model.name ?? '' } : undefined);
       // Some CLI/provider catalogues do not publish a context window. The
       // opt-in summarizer must still be useful for them, so use a conservative
       // provider-neutral trigger instead of silently disabling compaction.
@@ -591,8 +584,14 @@ export class ModelHandler {
         view: projectionView,
         handoffPolicy: 'strip-v1',
         version: COMPACTION_PROJECTION_VERSION,
+        configDigest: createHash('sha256').update(JSON.stringify({ model, eff, effectiveMaxTokens, tools })).digest('hex'),
       };
-      const sourceDigest = digestProjectedMessages(source);
+      // Only an unchanged archived prefix needs the same summary. Appending to
+      // the verbatim recent tail must not regenerate that prefix or add another
+      // retained anchor. Check the complete projection again after generation.
+      const fullSourceDigest = digestProjectedMessages(source);
+      const split = splitHistoryForCompaction(source, eff.keepTokens);
+      const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
       const projectionDigest = digestProjectionIdentity(projection);
 
       const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
@@ -623,7 +622,9 @@ export class ModelHandler {
           durableContext,
         });
         await assertFlowExecutionCurrent(durableContext);
-        return response.success ? (response.value.content ?? '') : '';
+        if (!response.success) return '';
+        const finishReason = response.value.fullResponse?.choices?.[0]?.finish_reason;
+        return !finishReason || finishReason === 'stop' ? (response.value.content ?? '') : '';
       };
 
       const writeAnchor = async (
@@ -661,7 +662,7 @@ export class ModelHandler {
       if (!result) return null;
 
       await assertFlowExecutionCurrent(durableContext);
-      if (digestProjectedMessages(source) !== sourceDigest) {
+      if (digestProjectedMessages(source) !== fullSourceDigest) {
         log.warn('Projected compaction source changed during generation; discarding artifact', { conversationId, nodeId });
         return null;
       }
@@ -670,7 +671,7 @@ export class ModelHandler {
         const previous = state.compactionState;
         state.compactionState = {
           schemaVersion: COMPACTION_ARTIFACT_SCHEMA_VERSION,
-          artifacts: [...(previous?.artifacts ?? []), result.artifact],
+          artifacts: retainSummaryArtifacts(previous?.artifacts ?? [], result.artifact),
         };
         try {
           const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
@@ -1188,6 +1189,8 @@ export class ModelHandler {
     let modelAdapter: ModelAdapter | undefined;
     let modelContextWindow: number | undefined;
     let modelCompactionThreshold: number | undefined;
+    let modelCompactionThresholdPercent: number | undefined;
+    let modelCompactionProvider: ModelProvider | undefined;
     const nodeDisplayName = nodeName;
     try {
       const model = input.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
@@ -1200,6 +1203,8 @@ export class ModelHandler {
         modelAdapter = resolveModelAdapter(model.provider, model.adapter);
         modelContextWindow = model.contextWindow;
         modelCompactionThreshold = model.compactionThreshold;
+        modelCompactionThresholdPercent = model.compactionThresholdPercent;
+        modelCompactionProvider = model.provider;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
@@ -1644,10 +1649,12 @@ export class ModelHandler {
       conversationId,
       nodeId,
       wireMessages ? 'node-projected' : 'full-history',
-      { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
+      { id: modelId, name: modelTechnicalName, provider: modelCompactionProvider, adapter: modelAdapter, contextWindow: modelContextWindow,
+        compactionThreshold: modelCompactionThreshold, compactionThresholdPercent: modelCompactionThresholdPercent },
       effectiveMaxTokens,
       { compactionMode, compactionKeepTokens },
       durableContext,
+      tools,
       input.modelCatalogAdmission,
     );
     const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
@@ -2253,8 +2260,9 @@ export class ModelHandler {
         const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
-          // Without an offered tool there is no usable read_resource path.
-          canUseTools: (effectiveTools?.length ?? 0) > 0,
+          // This caller arms read_resource immediately after shortening, even
+          // when this step originally offered no other tools.
+          canUseTools: true,
         });
         const changedIndexes = compactedMessages
           .map((message, index) => JSON.stringify(message) === JSON.stringify(beforeLosslessRefit[index]) ? -1 : index)
@@ -2294,6 +2302,11 @@ export class ModelHandler {
           resourceMarkers: opts?.runResourceMarkers,
           keepRecentMessages,
         });
+        if (codexRefit.capacityExceeded) {
+          return { success: false, error: createModelError('context_budget_exceeded',
+            'Your instructions and unrecoverable tool state exceed the Codex input limit. Choose a larger supported input window or shorten the instructions explicitly.',
+            modelId, undefined, { inputCharacters: codexRefit.finalCharacters }) };
+        }
         if (codexRefit.compacted) {
           const priorSourceIds = apiSourceIds;
           markModelInputMessages(
@@ -2405,7 +2418,8 @@ export class ModelHandler {
               opts.conversationId,
               apiMessages,
               budgetMarkers,
-              opts?.nodeId
+              opts?.nodeId,
+              opts?.durableContext,
             );
           }
           const refittedMessages = compactForWire(apiMessages, {
@@ -2455,18 +2469,19 @@ export class ModelHandler {
               target: inputBudget,
               measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools, model),
               keepRecentMessages,
+              resourceMarkers: budgetMarkers,
             });
             let emergencyTools = refittedTools;
 
-            // A pathological tool-definition block can exceed the budget even
-            // after the message history is minimized. A text-only turn is still
-            // useful and recoverable; a terminal client error is not.
+            // Shed bulky optional schemas while retaining the resource reader
+            // needed to recover every archived observation on this wire.
             if (emergency.after > inputBudget && (emergencyTools?.length ?? 0) > 0) {
-              emergencyTools = undefined;
+              emergencyTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
               emergency = emergencyRefitMessages(refittedMessages, {
                 target: inputBudget,
-                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined, model),
+                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, emergencyTools, model),
                 keepRecentMessages,
+                resourceMarkers: budgetMarkers,
               });
             }
 
@@ -2513,7 +2528,7 @@ export class ModelHandler {
                 success: false,
                 error: createModelError(
                   'context_budget_exceeded',
-                  `FLUJO could not produce a valid request inside the model's advertised ${inputBudget}-token input budget.`,
+                  `Your instructions and unrecoverable tool state cannot fit inside the model's ${inputBudget}-token input budget.`,
                   modelId,
                   undefined,
                   { estimatedInputTokens: emergency.after, inputBudget, contextWindow: model.contextWindow }
@@ -2758,15 +2773,32 @@ export class ModelHandler {
               opts.onToolProgress!(progress);
             }
           : undefined;
-        const localToolExecutors = opts?.localToolExecutors
+        // A resource reader can be armed by wire compaction after callModel
+        // built its initial virtual-tool map. Give ordinary native SDK loops
+        // the same scoped executor; sealed native/private inventories retain
+        // their own admitted ports and are never expanded here.
+        const recoveryExecutors = opts?.conversationId && !opts.nativeBrokerAuthority && !opts.executionExtensionContext
+          && attemptTools?.some(tool => tool.function.name === READ_RESOURCE_TOOL_NAME)
+          && !opts.localToolExecutors?.[READ_RESOURCE_TOOL_NAME]
+          ? { ...opts.localToolExecutors, [READ_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, args, {
+                conversationId: opts.conversationId,
+                node: opts.nodeId ? { nodeId: opts.nodeId, nodeType: 'process' } : undefined,
+                ...opts.durableContext,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
+              return outcome.data;
+            } }
+          : opts?.localToolExecutors;
+        const localToolExecutors = recoveryExecutors
           ? Object.fromEntries(
-              Object.entries(opts.localToolExecutors).map(([toolName, executor]) => [
+              Object.entries(recoveryExecutors).map(([toolName, executor]) => [
                 toolName,
                 async (args: Record<string, unknown>): Promise<unknown> => {
-                  await opts.beforeToolDispatch?.();
+                  await opts?.beforeToolDispatch?.();
                   attemptProducedOutput = true;
                   const result = await executor(args);
-                  await assertFlowExecutionCurrent(opts.durableContext ?? {});
+                  await assertFlowExecutionCurrent(opts?.durableContext ?? {});
                   return result;
                 },
               ])
@@ -3521,7 +3553,7 @@ export class ModelHandler {
           // tools the original request carried (#338).
           canUseTools: true,
           compactRecentToolResults: true,
-          allowLossyTruncation: true,
+          allowLossyTruncation: false,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
         });
         const reactiveChangedIndexes = refitMessages
@@ -3557,13 +3589,15 @@ export class ModelHandler {
             target: retryTarget,
             measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
             keepRecentMessages,
+            resourceMarkers: refitMarkers,
           });
           if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
-            retryTools = undefined;
+            retryTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
             emergency = emergencyRefitMessages(retryMessages, {
               target: retryTarget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined, model),
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
               keepRecentMessages,
+              resourceMarkers: refitMarkers,
             });
           }
           if (emergency.after <= retryTarget) {

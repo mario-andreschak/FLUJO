@@ -60,16 +60,13 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
-// MCP 2026-07-28 note: the new spec introduces `Mcp-Method` and `Mcp-Name` HTTP request
-// headers as advisory routing hints for load balancers and intermediate proxies. FLUJO
-// re-terminates every inbound MCP request (a fresh `Server` + Web-standard transport
-// is created per HTTP request), so routing is already handled by the URL path
-// (`/mcp-proxy/<server>`). The `Mcp-Method`/`Mcp-Name` headers are safely ignored by
-// the v1 Web-standard transport; no implementation is needed here.
+// This endpoint serves the legacy sessionless protocol. Modern routing headers
+// are mandatory on modern HTTP; ignoring them here does not confer modern support.
 function buildProxyServer(
   serverName: string,
   skillsCapability?: McpSkillsExtensionCapability,
   appsCapability?: Record<string, unknown>,
+  requestSignal?: AbortSignal,
 ): Server {
   const extensions = {
     ...(appsCapability
@@ -98,12 +95,19 @@ function buildProxyServer(
       },
     },
   );
-  server.setRequestHandler(ListToolsRequestSchema, () => proxyListTools(serverName));
-  server.setRequestHandler(CallToolRequestSchema, (req) =>
-    proxyCallTool(serverName, req.params.name, (req.params.arguments ?? {}) as Record<string, unknown>),
-  );
-  server.setRequestHandler(ListResourcesRequestSchema, () => proxyListResources(serverName));
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, () => proxyListResourceTemplates(serverName));
+  server.setRequestHandler(ListToolsRequestSchema, req => proxyListTools(serverName, req.params?.cursor));
+  server.setRequestHandler(CallToolRequestSchema, (req, extra) => {
+    const signal = requestSignal ? AbortSignal.any([extra.signal, requestSignal]) : extra.signal;
+    const progressToken = req.params._meta?.progressToken;
+    return proxyCallTool(serverName, req.params.name, (req.params.arguments ?? {}) as Record<string, unknown>, {
+      signal,
+      ...(progressToken === undefined ? {} : { onProgress: progress => {
+        void extra.sendNotification({ method: 'notifications/progress', params: { ...progress, progressToken } }).catch(() => {});
+      } }),
+    });
+  });
+  server.setRequestHandler(ListResourcesRequestSchema, req => proxyListResources(serverName, req.params?.cursor));
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, req => proxyListResourceTemplates(serverName, req.params?.cursor));
   server.setRequestHandler(ReadResourceRequestSchema, (req) =>
     proxyReadResource(serverName, req.params.uri),
   );
@@ -137,7 +141,7 @@ async function handle(request: Request, serverName: string): Promise<Response> {
 
   // One freshly authorized connection supplies both negotiated extensions.
   const { skillsCapability, appsCapability } = await getProxyCapabilities(serverName);
-  const server = buildProxyServer(serverName, skillsCapability, appsCapability);
+  const server = buildProxyServer(serverName, skillsCapability, appsCapability, request.signal);
 
   try {
     return await handleStatelessMcpRequest(server, request);

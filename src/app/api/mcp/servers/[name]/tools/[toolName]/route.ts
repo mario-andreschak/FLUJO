@@ -33,7 +33,7 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
     const source = body?.source;
     const rawOwnerScope = body?.ownerScope;
 
-    if (!args || typeof args !== 'object') {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
       return json({ success: false, error: 'Missing tool arguments ("args")' }, 400);
     }
     if (
@@ -47,7 +47,7 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
 
     const result = source === 'app'
       ? await mcpService.callToolFromApp(name, toolName, args, timeout, request.signal, ownerScope)
-      : await mcpService.callTool(name, toolName, args, timeout);
+      : await mcpService.callTool(name, toolName, args, timeout, undefined, undefined, request.signal);
     return json(result, result.statusCode || (result.success ? 200 : 500));
   } catch (error) {
     log.error('Error handling POST request', error);

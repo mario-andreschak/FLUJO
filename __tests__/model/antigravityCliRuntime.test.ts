@@ -68,3 +68,9 @@ test('API-key mode ignores account cache and rejects remote/unbound bridge confi
   const runtime = await prepareAntigravityCliRuntime({ model: 'default', apiKey: 'key', maxTurns: 1 }); await runtime.cleanup();
   await expect(prepareAntigravityCliRuntime({ model: 'default', apiKey: 'key', maxTurns: 1, bridge: { url: 'https://remote/mcp', tools: ['bound'] } })).rejects.toThrow(/private Antigravity tool bridge/);
 });
+
+test('unresolved authentication bindings fail before an invocation or authentication fallback', async () => {
+  await expect(prepareAntigravityCliRuntime({ model: 'default', apiKey: '${global:UNDEFINED_KEY}', maxTurns: 1 }))
+    .rejects.toThrow('Could not resolve the selected Antigravity API key.');
+  await expect(fs.access(mockDataDir)).rejects.toThrow();
+});

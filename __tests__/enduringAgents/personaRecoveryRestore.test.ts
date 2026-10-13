@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { persistConversationSummaryStrict } from '@/backend/execution/flow/conversationSummaryStore';
+import type { SharedState } from '@/backend/execution/flow/types';
 import { capturePersonaRecovery } from '@/backend/services/enduringAgents/personaRecoveryCapture';
 import { planPersonaRecoveryRestore } from '@/backend/services/enduringAgents/personaRecoveryPlan';
 import { restorePersonaRecovery, type PersonaRecoveryRestoreCheckpoint } from '@/backend/services/enduringAgents/personaRecoveryRestore';
@@ -48,6 +50,28 @@ async function fixture() {
 }
 
 describe('frozen Persona recovery publication', () => {
+  it('restores current-summary conversations as readable archives and recaptures their source evidence', async () => fresh(async () => {
+    const { persona, destination } = await fixture();
+    const state = await loadCollectionItem<SharedState | null>('conversations', 'recovery_conversation', null);
+    expect(state).not.toBeNull();
+    await persistConversationSummaryStrict('recovery_conversation', state!);
+    const capture = await capturePersonaRecovery();
+    expect(capture.manifest.counts['conversation-summaries']).toBe(1);
+    const plan = planPersonaRecoveryRestore(capture.bytes, destination);
+    await restorePersonaRecovery(capture.bytes, destination, plan.preview.previewToken);
+    await runWithWorkspace(destination, async () => {
+      const conversation = await loadCollectionItem<SharedState | null>('conversations', 'recovery_conversation', null);
+      expect(conversation).toMatchObject({ conversationId: 'recovery_conversation', personaArchived: true, messages: state!.messages });
+      expect(conversation!.codexSessions).toBeUndefined();
+      await expect(fs.access(path.join(getWorkspaceDataDir(), 'db/conversation-summaries/recovery_conversation.json'))).rejects.toThrow();
+      expect((await getPersona(persona.id))?.lifecycleState).toBe('disabled');
+      const recaptured = await capturePersonaRecovery();
+      const archive = validatePersonaRecoveryArchive(decodePersonaRecoveryZip(recaptured.bytes));
+      expect(archive.manifest.counts.recoverySourceArchives).toBe(1);
+      expect(archive.files.find(file => file.path === 'evidence/recovery-source.zip')?.bytes).toEqual(capture.bytes);
+    });
+  }));
+
   it('restores supported legacy Personas without inventing an incomplete composition', async () => fresh(async () => {
     const { persona, destination } = await fixture();
     await saveCollectionItem(c.personas, persona.id, { ...persona, composition: undefined });

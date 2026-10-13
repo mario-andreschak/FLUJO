@@ -4,6 +4,7 @@ import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { fetchCodexModels } from './adapters/codexDiscovery';
+import { fetchAntigravityCliModels } from './adapters/antigravityCliDiscovery';
 import { 
   ModelServiceResponse, 
   ModelOperationResponse, 
@@ -509,6 +510,17 @@ class ModelService {
       const usesNativeGemini = provider === 'gemini' && adapter === 'gemini';
       const usesCodex = provider === 'codex' && adapter === 'codex-cli';
 
+      if (provider === 'antigravity-cli' && adapter === 'antigravity-cli') {
+        if (baseUrl.trim()) return [];
+        const supplied = apiKey !== undefined && apiKey !== MASKED_API_KEY;
+        if (!supplied && storedModel && storedModel.provider !== 'antigravity-cli') return [];
+        const selected = supplied ? apiKey : storedModel?.ApiKey;
+        const key = selected?.trim() ? await resolveAndDecryptApiKey(selected) : '';
+        if (selected?.trim() && (!key?.trim() || key.includes('${global:'))) throw new Error('Could not resolve the selected Antigravity API key.');
+        const models = await fetchAntigravityCliModels(key || '');
+        return searchTerm?.trim() ? filterModels(models, searchTerm) : models;
+      }
+
       if (usesCodex) {
         // Subscription discovery cannot send a stored key to an edited endpoint.
         if (baseUrl.trim()) return [];
@@ -676,6 +688,9 @@ class ModelService {
       throw new Error('Model name is required to run a test');
     }
     adapter = resolveModelAdapter(provider, adapter);
+    if (adapter === 'antigravity-cli' && resolvedApiKey?.includes('${global:')) {
+      throw new Error('Could not resolve the selected Antigravity API key.');
+    }
     if (!resolvedApiKey) {
       const configuredKey = apiKey !== undefined && apiKey !== MASKED_API_KEY ? apiKey : storedModel?.ApiKey;
       // Empty-key CLI models use the operator's local login. A failed key

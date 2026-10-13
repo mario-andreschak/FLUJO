@@ -4,15 +4,19 @@ import { StringDecoder } from 'node:string_decoder';
 
 const READ_CHUNK_BYTES = 64 * 1024;
 
-/** Read a text prefix and, when requested, hash the complete opened snapshot.
- * The buffer and retained decoded prefix do not grow with the payload file.
+/** Read a bounded UTF-16 text range and optionally hash the complete snapshot.
+ * The buffer and retained decoded range do not grow with the payload file.
  * A pathname replacement cannot change which file supplies the bytes. */
 export async function readPayloadProjection(
   filename: string,
-  options: { text: boolean; maxChars: number; hash: boolean },
+  options: { text: boolean; maxChars: number; startChar?: number; hash: boolean },
 ): Promise<{ text: string; truncated: boolean; sha256?: string }> {
   if (!Number.isInteger(options.maxChars) || options.maxChars < 1 || options.maxChars > 200_000) {
     throw new Error('Invalid run-resource text prefix limit.');
+  }
+  const startChar = options.startChar ?? 0;
+  if (!Number.isSafeInteger(startChar) || startChar < 0 || startChar > Number.MAX_SAFE_INTEGER - options.maxChars) {
+    throw new Error('Invalid run-resource text offset.');
   }
   // Nonblocking open lets fstat refuse a substituted FIFO rather than waiting
   // for a writer. Windows does not expose O_NONBLOCK.
@@ -26,6 +30,7 @@ export async function readPayloadProjection(
     const decoder = options.text ? new StringDecoder('utf8') : undefined;
     const chunks: string[] = [];
     let prefixChars = 0;
+    let decodedChars = 0;
     let truncated = false;
     let offset = 0;
     // Binary summaries without verification need existence/type checks only.
@@ -33,9 +38,11 @@ export async function readPayloadProjection(
       const buffer = Buffer.alloc(Math.min(READ_CHUNK_BYTES, initial.size));
       const retain = (text: string) => {
         const remaining = options.maxChars - prefixChars;
-        if (text.length > remaining) truncated = true;
+        const skip = Math.max(0, Math.min(text.length, startChar - decodedChars));
+        decodedChars += text.length;
+        if (text.length - skip > remaining) truncated = true;
         if (remaining > 0) {
-          const prefix = text.slice(0, remaining);
+          const prefix = text.slice(skip, skip + remaining);
           if (prefix) chunks.push(prefix);
           prefixChars += prefix.length;
         }
@@ -47,7 +54,7 @@ export async function readPayloadProjection(
         const bytes = buffer.subarray(0, bytesRead);
         hasher?.update(bytes);
         if (decoder && !truncated) retain(decoder.write(bytes));
-        // Once truncation is known, a prefix-only fetch has no reason to scan
+        // Once truncation is known, a range-only fetch has no reason to scan
         // the remaining bytes. Verification still hashes the complete snapshot.
         if (truncated && !hasher) break;
       }
