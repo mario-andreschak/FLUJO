@@ -88,6 +88,8 @@ import {
   PATCH,
 } from '@/app/v1/chat/conversations/[conversationId]/route';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
+import { registerPendingQuestion, clearPendingQuestions } from '@/backend/services/questionRegistry';
+import { registerPendingElicitation, clearPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 
 function seedConversation(id: string, status: SharedState['status']) {
   stored[`conversations/${id}`] = {
@@ -143,6 +145,56 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
       source: 'snapshot' as const,
     }));
     privateFixture = await installPrivateProfileFixture(metadata => { Object.assign(stored, { encryption_key: metadata }); });
+  });
+
+  it('hydrates only currently owned input mailboxes and removes cancelled prompts on the next read', async () => {
+    const conversationId = 'conv-pending-inputs';
+    seedConversation(conversationId, 'running');
+    const question = registerPendingQuestion(conversationId, 'live-question', [{ prompt: 'Pick', options: ['A'], custom: false }]);
+    const elicitation = registerPendingElicitation('live-form', undefined, {
+      conversationId, message: 'Information', requestedSchema: { type: 'object', properties: {} },
+    });
+    const sibling = registerPendingElicitation('sibling-form', undefined, {
+      conversationId: 'conv-pending-sibling', message: 'Other conversation', requestedSchema: { type: 'object', properties: {} },
+    });
+    const read = async () => (await GET(new NextRequest(`http://localhost/v1/chat/conversations/${conversationId}`, {
+      headers: { host: 'localhost', origin: 'http://localhost' },
+    }), { params: Promise.resolve({ conversationId }) })).json();
+    try {
+      const live = await read();
+      expect(live.pendingInputs).toEqual({
+        nextSeq: expect.any(Number),
+        questions: [expect.objectContaining({ questionId: 'live-question' })],
+        elicitations: [expect.objectContaining({ elicitationId: 'live-form' })],
+      });
+      clearPendingQuestions(conversationId); clearPendingElicitations(conversationId);
+      await Promise.all([question, elicitation]);
+      const cancelled = await read();
+      expect(cancelled.pendingInputs.questions).toEqual([]);
+      expect(cancelled.pendingInputs.elicitations).toEqual([]);
+    } finally {
+      clearPendingQuestions(conversationId); clearPendingElicitations(conversationId); clearPendingElicitations('conv-pending-sibling');
+      await Promise.all([question, elicitation, sibling]);
+    }
+  });
+
+  it.each(['completed', 'error', 'capped'] as const)('does not restore orphaned input cards after a %s run', async (status) => {
+    const conversationId = 'conv-orphan-inputs';
+    seedConversation(conversationId, status);
+    const question = registerPendingQuestion(conversationId, 'orphan-question', [{ prompt: 'Pick', options: ['A'], custom: false }]);
+    const form = registerPendingElicitation('orphan-form', undefined, {
+      conversationId, message: 'Pick', requestedSchema: { type: 'object', properties: {} },
+    });
+    try {
+      const response = await GET(new NextRequest(`http://localhost/v1/chat/conversations/${conversationId}`, {
+        headers: { host: 'localhost', origin: 'http://localhost' },
+      }), { params: Promise.resolve({ conversationId }) });
+      expect(response.status).toBe(200);
+      expect((await response.json()).pendingInputs).toEqual({ nextSeq: expect.any(Number), questions: [], elicitations: [] });
+    } finally {
+      clearPendingQuestions(conversationId); clearPendingElicitations(conversationId);
+      await Promise.all([question, form]);
+    }
   });
 
   it('hydrates a bounded suffix from the automatically recovered durable transcript', async () => {

@@ -4,7 +4,10 @@ import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import {
   registerPendingQuestion,
   QuestionSpec,
+  declinePendingQuestion,
+  type QuestionResolution,
 } from '@/backend/services/questionRegistry';
+import { bindToCurrentWorkspace } from '@/utils/workspace';
 
 /**
  * The synthetic `question` tool (issue #258).
@@ -31,6 +34,22 @@ import {
  */
 
 const log = createLogger('backend/flow/execution/handlers/runQuestionTool');
+
+interface QuestionObserver {
+  callback: (result: QuestionResolution) => void;
+  signal?: AbortSignal;
+}
+const questionObservers = new WeakMap<Record<string, unknown>, QuestionObserver>();
+
+/** In-process data observation; serialized callers cannot supply an observer. */
+export function observeQuestionResolution(
+  args: Record<string, unknown>,
+  callback: (result: QuestionResolution) => void,
+  signal?: AbortSignal,
+): Record<string, unknown> {
+  questionObservers.set(args, { callback, signal });
+  return args;
+}
 
 export const QUESTION_TOOL_NAME = 'question';
 
@@ -135,6 +154,7 @@ function parseQuestions(args: Record<string, unknown>): { questions: QuestionSpe
   }
   const questions: QuestionSpec[] = [];
   for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { error: 'each question requires an object.' };
     const q = item as { prompt?: unknown; options?: unknown; multiple?: unknown; custom?: unknown };
     const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
     if (!prompt) return { error: 'each question requires a non-empty "prompt".' };
@@ -178,6 +198,19 @@ export async function executeQuestionTool(
   args: Record<string, unknown>,
   ctx: QuestionToolContext,
 ): Promise<QuestionToolOutcome> {
+  const observer = questionObservers.get(args);
+  try {
+    return await executeQuestionToolImpl(args, ctx, observer);
+  } finally {
+    questionObservers.delete(args);
+  }
+}
+
+async function executeQuestionToolImpl(
+  args: Record<string, unknown>,
+  ctx: QuestionToolContext,
+  observer?: QuestionObserver,
+): Promise<QuestionToolOutcome> {
   if (!ctx.conversationId) {
     return { success: false, error: 'The question tool is not available in this run.' };
   }
@@ -205,19 +238,26 @@ export async function executeQuestionTool(
   const questionId = crypto.randomUUID();
   log.info('Suspending for question', { conversationId: ctx.conversationId, questionId, count: questions.length });
 
-  ctx.emit?.({
-    type: 'run:awaiting_question',
-    node: ctx.node,
-    questionId,
-    questions,
-  });
-
-  const result = await registerPendingQuestion(
-    ctx.conversationId,
-    questionId,
-    questions,
-    ctx.timeoutMs,
-  );
+  let result: QuestionResolution;
+  let installed = false;
+  const conversationId = ctx.conversationId;
+  const cancel = bindToCurrentWorkspace(() => installed && declinePendingQuestion(conversationId, questionId));
+  try {
+    // The mailbox must exist before a synchronous event listener can answer.
+    const pending = registerPendingQuestion(conversationId, questionId, questions, ctx.timeoutMs, { node: ctx.node });
+    installed = true;
+    observer?.signal?.addEventListener('abort', cancel, { once: true });
+    if (observer?.signal?.aborted) cancel();
+    else ctx.emit?.({ type: 'run:awaiting_question', node: ctx.node, questionId, questions });
+    result = await pending;
+  } catch (error) {
+    cancel();
+    return { success: false, error: error instanceof Error ? error.message : 'Unable to ask the question.' };
+  } finally {
+    observer?.signal?.removeEventListener('abort', cancel);
+  }
+  try { observer?.callback(result); }
+  catch (error) { log.warn('Question resolution observer failed', { error }); }
 
   if (result.action === 'answer') {
     const prose = formatAnswers(questions, result.answers);

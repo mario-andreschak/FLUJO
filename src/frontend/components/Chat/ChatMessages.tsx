@@ -1711,7 +1711,7 @@ const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, 
       <Typography variant="h6" sx={{ mb: 1 }}>{t('chat.elicitation.title')}</Typography>
       <Typography variant="body2" sx={{ mb: 2 }}>{message}</Typography>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-        {fieldNames.map((key) => {
+        {fieldNames.map((key, fieldIndex) => {
           const f = schemaProps[key];
           const label = f.title || key;
           const val = values[key];
@@ -1733,10 +1733,13 @@ const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, 
           }
 
           if (f.enum && f.enum.length > 0) {
+            const selectId = `${elicitationId}-${fieldIndex}`;
             return (
               <FormControl key={key} size="small" sx={{ minWidth: 200 }}>
-                <InputLabel>{label}</InputLabel>
+                <InputLabel id={`${selectId}-label`}>{label}</InputLabel>
                 <Select
+                  id={selectId}
+                  labelId={`${selectId}-label`}
                   label={label}
                   value={String(val ?? '')}
                   onChange={(e) => patch(key, e.target.value)}
@@ -2355,6 +2358,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       {/* Display Pending Elicitation Form */}
       {pendingElicitation && (
         <ElicitationFormCard
+          key={pendingElicitation.elicitationId}
           elicitation={pendingElicitation}
           onSubmit={onSubmitElicitation}
           onCancel={onCancelElicitation}
@@ -2364,6 +2368,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       {/* Display Pending Question (issue #258) */}
       {pendingQuestion && (
         <QuestionCard
+          key={pendingQuestion.questionId}
           question={pendingQuestion}
           onAnswer={onAnswerQuestion}
           onDecline={onDeclineQuestion}
